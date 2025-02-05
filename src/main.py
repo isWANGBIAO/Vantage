@@ -39,6 +39,14 @@ def cursor():
     # golbal_model = 'deepseek-ai/DeepSeek-V3'
     # golbal_model = 'Qwen/Qwen2.5-Coder-32B-Instruct'
     # golbal_model = 'Qwen/Qwen2.5-72B-Instruct-128K'
+
+    # 使用DeepSeek的API Key和URL
+    print("Using DeepSeek API Key and URL")
+    api_key = os.getenv('DEEPSEEK_API_KEY')
+    url = os.getenv('DEEPSEEK_API_BASE_URL')
+    golbal_model = 'deepseek-chat'
+    golbal_model = 'deepseek-reasoner'
+
     # 检查API Key和URL是否成功加载
     if not api_key or not url:
         raise ValueError("API_KEY or API_BASE_URL not found in .env file")
