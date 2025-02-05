@@ -3,6 +3,8 @@
 
 # 忽略logs/photos/文件夹
 logs/photos/
+# 忽略logs/photos/文件夹
+logs/screenshots/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -4,8 +4,47 @@ import cv2
 import os
 import json
 from datetime import datetime
-
+import time
+from .get_best_photo import capture_best_photo
 KNOWLEDGE_BASE = 'knowledge_base.json'
+
+
+def set_max_camera_resolution(cam):
+    # 常见分辨率列表，从高到低排列
+    resolutions = [
+        (7680, 4320),  # 8K UHD
+        (5120, 2880),  # 5K
+        (3840, 2160),  # 4K UHD
+        (2560, 1600),  # WQXGA
+        (2560, 1440),  # QHD
+        (2048, 1080),  # 2K
+        (1920, 1200),  # WUXGA
+        (1920, 1080),  # 1080p
+        (1600, 900),   # HD+
+        (1440, 900),   # WXGA+
+        (1366, 768),   # FWXGA
+        (1280, 800),   # WXGA
+        (1280, 720),   # 720p
+        (1024, 768),   # XGA
+        (800, 600),    # SVGA
+        (640, 480),    # VGA
+        (320, 240)     # QVGA
+    ]
+
+    # 从高到低尝试设置最大支持分辨率
+    for width, height in resolutions:
+        cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        actual_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if actual_width == width and actual_height == height:
+            print(f"Camera resolution set to {width}x{height}")
+            return (width, height)
+    # 如果无法匹配到任何分辨率，使用默认分辨率
+    default_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
+    default_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"Using default camera resolution {default_width}x{default_height}")
+    return (default_width, default_height)
 
 
 def take_photo():
@@ -17,18 +56,21 @@ def take_photo():
         print('Failed to open camera.')
         return
 
-    # 读取一帧图像
-    ret, frame = cam.read()
+    # 自动调整到摄像头最高的清晰度
+    set_max_camera_resolution(cam)
 
-    # 检查是否成功读取图像
-    if ret:
+    # 获取最清晰的一帧图像
+    best_frame = capture_best_photo(cam)
+
+    # 检查是否成功获取最佳图像
+    if best_frame is not None:
         # 生成当前时间的时间戳
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
         # 构建照片文件名
         photo_name = f'photo_{timestamp}.png'
 
-        # TODO 按照年月日创建三级文件夹，然后把当天的照片放到当天的文件夹的下面
+        # 按照年月日创建四级文件夹，然后把当天的照片放到当天的文件夹的下面
         now = datetime.now()
         year = now.strftime('%Y')
         month = now.strftime('%m')
@@ -40,7 +82,7 @@ def take_photo():
         photo_path = os.path.join(daily_folder, photo_name)
 
         # 保存捕获的图像到指定路径
-        cv2.imwrite(photo_path, frame)
+        cv2.imwrite(photo_path, best_frame)
         print(f'Photo taken and saved as {photo_path}')
 
         # 更新知识库文件
@@ -73,8 +115,8 @@ def take_photo():
             print(f'Error decoding JSON from {KNOWLEDGE_BASE}. The file might be corrupted.')
             return
     else:
-        # 如果未能捕获图像，打印错误信息
-        print('Failed to capture image.')
+        # 如果未能捕获清晰图像，打印错误信息
+        print('Failed to capture a clear image.')
 
     # 释放摄像头资源
     cam.release()

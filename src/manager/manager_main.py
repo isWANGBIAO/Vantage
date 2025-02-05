@@ -1,10 +1,16 @@
-from .take_photo import take_photo
+from .take_photo.take_a_photo import take_photo
+from .screenshot.take_a_screenshot import take_and_save_screenshots
 import os
 import json
 import schedule
 from datetime import datetime
 import cv2
 import time
+
+
+def monitor():
+    take_photo()
+    take_and_save_screenshots()
 
 
 def manager():
@@ -22,8 +28,8 @@ def manager():
             json.dump({}, f)
 
     # 设置定时拍照
-    schedule.every(60).seconds.do(take_photo)  # 每秒拍一张
-    # schedule.every(60).seconds.do(screenshoot)  # 每秒拍一张
+    monitor()  # 运行时立即拍摄一张照片
+    schedule.every(60).seconds.do(monitor)  # 每60秒同时拍一张照片和截图
     # TODO：能够实现建立本地知识库，查找信息的时候，能够给出答案，并且同时指出答案的来源。（文件名，pdf的第几页，缩略图）
     # TODO：实现操控电脑，写代码，写文档的功能，能自动取扫描电脑的文件，并且组成一个知识库，
     # TODO: 自动对定时拍照的照片进行识别，记录在日志库中，记录自己什么时候在做什么事情，像那个
@@ -36,4 +42,3 @@ def manager():
     print("Personal Assistant started. Monitoring... Press Ctrl+C to stop.")
     while True:
         schedule.run_pending()
-        time.sleep(1)
