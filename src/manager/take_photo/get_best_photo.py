@@ -3,10 +3,10 @@ import cv2
 import time
 
 
-def capture_best_photo(cam, frame_count=10, min_focus_change=5):
+def capture_best_photo(cam, frame_count=1, min_focus_change=5):
 
     # 等待摄像头自动调整曝光和对焦
-    time.sleep(2)
+    time.sleep(1)
 
     best_frame = None
     max_focus_measure = 0

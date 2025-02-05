@@ -33,7 +33,7 @@ def take_and_save_screenshots():
                 screenshot_name = f'screenshot_{timestamp}_monitor_{i}.png'
                 screenshot_path = os.path.join(daily_folder, screenshot_name)
                 img.save(screenshot_path)
-                print(f'Screenshot for monitor {i} saved as {screenshot_path}')
+                # print(f'Screenshot for monitor {i} saved as {screenshot_path}')
 
     except Exception as e:
         print(f'Failed to capture and save the screens: {e}')
