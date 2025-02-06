@@ -172,7 +172,7 @@ class MainWindow(QWidget):
 
     # 正常输出
     def append_text(self, text):
-        self.text_edit.append(f"{text}")
+        self.text_edit.append(f"<span style='color:black;'>{text}</span>")
         self.text_edit.moveCursor(self.text_edit.textCursor().End)
 
     # 错误输出（用红色标识）

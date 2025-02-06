@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 import mss
 from PIL import Image
+import sys
 
 
 def take_and_save_screenshots():
@@ -37,7 +38,7 @@ def take_and_save_screenshots():
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Screenshot for monitor {i} saved as {screenshot_path}")
 
     except Exception as e:
-        print(f'Failed to capture and save the screens: {e}')
+        print(f'Failed to capture and save the screens: {e}', file=sys.stderr)
 
 
 if __name__ == '__main__':

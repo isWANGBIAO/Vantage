@@ -11,6 +11,7 @@ import cv2
 import piexif
 import asyncio
 from winrt.windows.devices.geolocation import Geolocator
+import sys
 
 
 def set_max_camera_resolution(cam):
@@ -133,7 +134,7 @@ def take_photo():
 
     # 检查摄像头是否成功打开
     if not cam.isOpened():
-        print('Failed to open camera.')
+        print('Failed to open camera.', file=sys.stderr)
         return
 
     # 自动调整到摄像头最高的清晰度
@@ -171,7 +172,7 @@ def take_photo():
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Photo taken and saved as {photo_path}")
     else:
         # 如果未能捕获清晰图像，打印错误信息
-        print('Failed to capture a clear image.')
+        print('Failed to capture a clear image.', file=sys.stderr)
 
     # 释放摄像头资源
     cam.release()
