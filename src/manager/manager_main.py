@@ -15,8 +15,11 @@ import time
 
 
 class ManagerMain:
+    def __init__(self, refresh_interval):
+        self.refresh_interval = refresh_interval  # 保存间隔
+
     def run_task(self):
-        manager()
+        manager(self.refresh_interval)
 
 
 def monitor():
@@ -33,7 +36,7 @@ def threaded_monitor():
     threading.Thread(target=monitor).start()
 
 
-def manager():
+def manager(refresh_interval):
     """
     基本管家功能：提供日程提醒、天气查询等基础功能。
     摄像头调用：使用摄像头定时拍照,并将照片保存到本地。
@@ -50,10 +53,9 @@ def manager():
         with open(KNOWLEDGE_BASE, 'w') as f:
             json.dump({}, f)
 
+    # 定时任务
     scheduler = BackgroundScheduler()
-    # scheduler.add_job(threaded_monitor, 'interval', seconds=60)
-    # 设置为每分钟的第0秒执行
-    scheduler.add_job(threaded_monitor, 'cron', minute='*', second=0)
+    scheduler.add_job(threaded_monitor, 'interval', seconds=refresh_interval)
     scheduler.start()
     try:
         while True:
@@ -70,3 +72,5 @@ def manager():
     # todo 截图
     # TODO 加入微软TODO的功能
     # TODO 加入界面可以后台运行
+    # TODO 拍照照片加入 设备 位置 信息
+    # TODO 加入自动识别照片功能，对于无意义照片删除

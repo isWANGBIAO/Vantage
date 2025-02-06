@@ -1,12 +1,16 @@
 # 该代码用于从摄像头捕获照片，并将其保存到指定的文件夹中。同时，将照片的信息（包括时间戳和路径）更新到一个JSON格式的知识库文件中。
 
+import threading
 import cv2
 import os
 import json
 from datetime import datetime
 import time
 from .get_best_photo import capture_best_photo
-KNOWLEDGE_BASE = 'knowledge_base.json'
+import cv2
+import piexif
+import asyncio
+from winrt.windows.devices.geolocation import Geolocator
 
 
 def set_max_camera_resolution(cam):
@@ -49,6 +53,77 @@ def set_max_camera_resolution(cam):
     return (default_width, default_height)
 
 
+# 同步获取经纬度
+
+
+def get_location():
+    time.sleep(1)  # 确保定位服务已启动
+
+    async def fetch_location():
+        try:
+            locator = Geolocator()
+            position = await locator.get_geoposition_async()
+            latitude = position.coordinate.point.position.latitude
+            longitude = position.coordinate.point.position.longitude
+            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Location: {latitude}, {longitude}")
+            return latitude, longitude
+        except Exception as e:
+            print(f"⚠️ 获取定位信息失败：{e}")
+            return None, None
+
+    def run_async_in_thread(result_holder):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        latitude, longitude = loop.run_until_complete(fetch_location())
+        result_holder['latitude'] = latitude
+        result_holder['longitude'] = longitude
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():  # 如果事件循环已在运行（如在 GUI 程序中）
+            result_holder = {}
+            thread = threading.Thread(target=run_async_in_thread, args=(result_holder,))
+            thread.start()
+            thread.join()  # 等待子线程完成
+            latitude = result_holder.get('latitude')
+            longitude = result_holder.get('longitude')
+        else:
+            latitude, longitude = loop.run_until_complete(fetch_location())
+    except RuntimeError:  # 如果没有事件循环
+        latitude, longitude = asyncio.run(fetch_location())
+
+    time.sleep(1)
+    return latitude, longitude
+
+
+# 将十进制度数转换为EXIF格式 (度, 分, 秒)
+def convert_to_exif_coords(value):
+    deg = int(value)
+    min_float = abs((value - deg) * 60)
+    min = int(min_float)
+    sec = int((min_float - min) * 6000)
+    return ((deg, 1), (min, 1), (sec, 100))
+
+
+# 保存图片并写入EXIF GPS信息
+def save_image_with_gps(photo_path, frame, latitude, longitude):
+    # 保存图像
+    cv2.imwrite(photo_path, frame)
+
+    # 准备GPS EXIF数据
+    gps_ifd = {
+        piexif.GPSIFD.GPSLatitudeRef: 'N' if latitude >= 0 else 'S',
+        piexif.GPSIFD.GPSLatitude: convert_to_exif_coords(abs(latitude)),
+        piexif.GPSIFD.GPSLongitudeRef: 'E' if longitude >= 0 else 'W',
+        piexif.GPSIFD.GPSLongitude: convert_to_exif_coords(abs(longitude)),
+    }
+
+    # 写入EXIF信息
+    exif_dict = {"GPS": gps_ifd}
+    exif_bytes = piexif.dump(exif_dict)
+    piexif.insert(exif_bytes, photo_path)
+
+
 def take_photo():
     # TODO: 如无需要，勿增实体。等到这里成为性能瓶颈再优化代码，提高拍照的效率,使得每次拍照尽量清晰以及对齐时间间隔
     # 打开摄像头
@@ -65,6 +140,9 @@ def take_photo():
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution")
     set_max_camera_resolution(cam)
 
+    # 获取经纬度信息
+    latitude, longitude = get_location()
+
     # 获取最清晰的一帧图像
     best_frame = capture_best_photo(cam)
 
@@ -74,7 +152,7 @@ def take_photo():
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
         # 构建照片文件名
-        photo_name = f'photo_{timestamp}.png'
+        photo_name = f'photo_{timestamp}.jpg'
 
         # 按照年月日创建四级文件夹，然后把当天的照片放到当天的文件夹的下面
         now = datetime.now()
@@ -88,38 +166,9 @@ def take_photo():
         photo_path = os.path.join(daily_folder, photo_name)
 
         # 保存捕获的图像到指定路径
-        cv2.imwrite(photo_path, best_frame)
+        save_image_with_gps(photo_path, best_frame, latitude, longitude)
+
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Photo taken and saved as {photo_path}")
-
-        # 更新知识库文件
-        try:
-            # 检查知识库文件是否存在
-            if os.path.exists(KNOWLEDGE_BASE):
-                # 以读写模式打开知识库文件
-                with open(KNOWLEDGE_BASE, 'r+') as f:
-                    # 尝试加载现有的JSON数据
-                    data = json.load(f)
-
-                    # 更新数据，添加新的照片信息
-                    data[timestamp] = {'photo': photo_path}
-
-                    # 将文件指针移动到文件开头
-                    f.seek(0)
-
-                    # 将更新后的数据写回文件
-                    json.dump(data, f, indent=4)
-
-                    # 截断文件，删除多余的内容
-                    f.truncate()
-            else:
-                # 如果知识库文件不存在，创建并写入新的数据
-                with open(KNOWLEDGE_BASE, 'w') as f:
-                    data = {timestamp: {'photo': photo_path}}
-                    json.dump(data, f, indent=4)
-        except json.JSONDecodeError:
-            # 捕获JSON解码错误，提示文件可能已损坏
-            print(f'Error decoding JSON from {KNOWLEDGE_BASE}. The file might be corrupted.')
-            return
     else:
         # 如果未能捕获清晰图像，打印错误信息
         print('Failed to capture a clear image.')

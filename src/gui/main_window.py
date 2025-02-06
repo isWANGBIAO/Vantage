@@ -11,6 +11,8 @@ from gui.worker import WorkerThread
 from manager.manager_main import ManagerMain
 from cursor.code_runner import CodeRunner
 from datetime import datetime
+from PyQt5.QtCore import QTimer, QDateTime
+import shutil
 
 
 class EmittingStream(QObject):
@@ -31,7 +33,8 @@ class MainWindow(QWidget):
         self.setWindowTitle('任务管理器')
         self.main_window_size = (800, 800)
         self.resize_window()  # 调整窗口大小并且居中显示
-
+        self.refresh_interval = 30  # 刷新间隔秒数
+        self.manager_main = ManagerMain(self.refresh_interval)  # 传递间隔给ManagerMain
         # 🖼️ 托盘图标设置
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon('icon.png'))  # 替换成你的图标路径
@@ -54,6 +57,11 @@ class MainWindow(QWidget):
         # 创建主布局
         main_layout = QVBoxLayout()
         main_layout.addWidget(self.text_edit)
+
+        # 添加时钟插件
+        self.time_label = self.create_clock_widget()
+        main_layout.addWidget(self.time_label)
+
         # 创建一个水平布局，放置两个子窗口（显示照片和截图）
         photo_and_screenshot_layout = QHBoxLayout()
 
@@ -112,7 +120,20 @@ class MainWindow(QWidget):
         # 启动定时器，每 60 秒刷新图片
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_images)
-        self.timer.start(60 * 1000)
+        self.timer.start(self.refresh_interval * 1000)
+
+    def create_clock_widget(self):
+        clock_label = QLabel()
+        clock_label.setStyleSheet("font-size: 24px; color: blue;")
+
+        timer = QTimer(self)
+        timer.timeout.connect(lambda: clock_label.setText(QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")))
+        timer.start(1000)
+
+        # 初始化显示时间
+        clock_label.setText(QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+
+        return clock_label
 
     def resize_window(self):
         screen = QApplication.primaryScreen()
@@ -136,7 +157,8 @@ class MainWindow(QWidget):
 
     # 运行 manager 任务
     def run_manager_task(self):
-        self.start_thread(ManagerMain().run_task)
+        # 启动 manager 任务并传入刷新间隔
+        self.start_thread(self.manager_main.run_task)
 
     # 运行 cursor 任务
     def run_cursor_task(self):
@@ -203,8 +225,26 @@ class MainWindow(QWidget):
         self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
 
     def update_images(self):
-        self.display_latest_image('./logs/photos/', self.photo_label, self.photo_filename_label)
-        self.display_latest_image('./logs/screenshots/', self.screenshot_label, self.screenshot_filename_label)
+        latest_photo_size = self.display_latest_image('./logs/photos/', self.photo_label, self.photo_filename_label)
+        latest_screenshot_size = self.display_latest_image('./logs/screenshots/', self.screenshot_label, self.screenshot_filename_label)
+        # 计算 logs 文件夹大小
+        logs_size = self.get_folder_size('./logs')
+
+        # 获取磁盘剩余空间
+        disk_free_space = self.get_disk_free_space('.')
+
+        # 计算还能存多少组照片和截图
+        total_group_size = latest_photo_size + latest_screenshot_size
+        if total_group_size > 0:
+            max_groups = disk_free_space // total_group_size
+        else:
+            max_groups = 0
+
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 一组照片和截图大小: {total_group_size / (1024 ** 2):.2f} MB")
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} logs 文件夹大小: {logs_size / (1024 ** 3):.2f} GB = {logs_size / (1024 ** 2):.2f} MB")
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 磁盘剩余空间: {disk_free_space / (1024 ** 3):.2f} GB = {disk_free_space / (1024 ** 2):.2f} MB")
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 还能存储的最大组数: {max_groups}")
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 按照{self.refresh_interval}秒一组，还能存储的最大天数: {max_groups * self.refresh_interval / (60* 60 * 24):.0f} 天")
 
     def display_latest_image(self, folder_path, label, filename_label):
         if os.path.exists(folder_path):
@@ -218,6 +258,8 @@ class MainWindow(QWidget):
                 # 显示文件名
                 filename = os.path.basename(latest_file)
                 filename_label.setText(filename)  # 设置文件名到对应的标签
+                file_size = os.path.getsize(latest_file)  # 获取最新文件大小（字节）
+                return file_size
 
     def get_files_from_subdirectories(self, folder_path):
         files = []
@@ -227,3 +269,16 @@ class MainWindow(QWidget):
                 if os.path.isfile(file_path):  # 确保是文件而非目录
                     files.append(file_path)
         return files
+
+    def get_folder_size(self, folder_path):
+        total_size = 0
+        for dirpath, dirnames, filenames in os.walk(folder_path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                if os.path.isfile(fp):
+                    total_size += os.path.getsize(fp)
+        return total_size
+
+    def get_disk_free_space(self, path):
+        total, used, free = shutil.disk_usage(path)
+        return free

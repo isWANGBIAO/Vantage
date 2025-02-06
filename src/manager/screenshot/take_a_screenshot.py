@@ -30,7 +30,7 @@ def take_and_save_screenshots():
 
             # 保存所有截图
             for i, img in screenshots:
-                screenshot_name = f'screenshot_{timestamp}_monitor_{i}.png'
+                screenshot_name = f'screenshot_{timestamp}_monitor_{i}.jpg'
                 screenshot_path = os.path.join(daily_folder, screenshot_name)
                 img.save(screenshot_path)
 
