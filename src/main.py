@@ -65,7 +65,7 @@ def cursor():
 
 
 def main():
-    cursor()
+    # cursor()
     manager()
     # 设计程序每日最多1GB的内容。
 

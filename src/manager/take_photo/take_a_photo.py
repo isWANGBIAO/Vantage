@@ -81,14 +81,14 @@ def take_photo():
         month = now.strftime('%m')
         day = now.strftime('%d')
         hour = now.strftime('%H')
-        daily_folder = os.path.join('./logs/photos', year, month, day, hour)
+        daily_folder = os.path.join('..', 'logs', 'photos', year, month, day, hour)
         if not os.path.exists(daily_folder):
             os.makedirs(daily_folder)
         photo_path = os.path.join(daily_folder, photo_name)
 
         # 保存捕获的图像到指定路径
         cv2.imwrite(photo_path, best_frame)
-        # print(f'Photo taken and saved as {photo_path}')
+        print("Time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "Photo taken and saved as", photo_path)
 
         # 更新知识库文件
         try:

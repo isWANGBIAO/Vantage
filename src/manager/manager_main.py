@@ -32,7 +32,10 @@ def manager():
     """
 
     # 创建知识库文件
-    KNOWLEDGE_BASE = 'knowledge_base.json'
+
+    # 获取当前运行路径（CWD）
+    BASE_DIR = os.getcwd()
+    KNOWLEDGE_BASE = os.path.join(BASE_DIR, '..', 'logs', 'knowledge_base.json')
     if not os.path.exists(KNOWLEDGE_BASE):
         with open(KNOWLEDGE_BASE, 'w') as f:
             json.dump({}, f)
