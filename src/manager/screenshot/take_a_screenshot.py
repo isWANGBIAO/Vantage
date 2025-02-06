@@ -25,7 +25,7 @@ def take_and_save_screenshots():
             month = now.strftime('%m')
             day = now.strftime('%d')
             hour = now.strftime('%H')
-            daily_folder = os.path.join('..', 'logs', 'screenshots', year, month, day, hour)
+            daily_folder = os.path.join('.', 'logs', 'screenshots', year, month, day, hour)
             os.makedirs(daily_folder, exist_ok=True)
 
             # 保存所有截图
@@ -33,7 +33,8 @@ def take_and_save_screenshots():
                 screenshot_name = f'screenshot_{timestamp}_monitor_{i}.png'
                 screenshot_path = os.path.join(daily_folder, screenshot_name)
                 img.save(screenshot_path)
-                print("Time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "Screenshot for monitor", i, "saved as", screenshot_path)
+
+                print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Screenshot for monitor {i} saved as {screenshot_path}")
 
     except Exception as e:
         print(f'Failed to capture and save the screens: {e}')

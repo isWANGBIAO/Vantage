@@ -3,7 +3,10 @@
 
 # 忽略logs/photos/文件夹
 logs/photos/
-logs/knowledge_base.json
+
+#忽略所有文件夹下的knowledge_base.json
+**/knowledge_base.json
+
 # 忽略logs/photos/文件夹
 logs/screenshots/
 # 忽略test/文件夹

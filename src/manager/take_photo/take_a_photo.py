@@ -39,7 +39,8 @@ def set_max_camera_resolution(cam):
         actual_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
         if actual_width == width and actual_height == height:
-            print("Time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "Camera resolution set to", width, "x", height)
+            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Camera resolution set to {width} x {height}")
+
             return (width, height)
     # 如果无法匹配到任何分辨率，使用默认分辨率
     default_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -51,7 +52,8 @@ def set_max_camera_resolution(cam):
 def take_photo():
     # TODO: 如无需要，勿增实体。等到这里成为性能瓶颈再优化代码，提高拍照的效率,使得每次拍照尽量清晰以及对齐时间间隔
     # 打开摄像头
-    print("Time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "Opening camera...")
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Opening camera")
+
     cam = cv2.VideoCapture(0)
 
     # 检查摄像头是否成功打开
@@ -60,11 +62,10 @@ def take_photo():
         return
 
     # 自动调整到摄像头最高的清晰度
-    print("Time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "Setting camera resolution...")
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution")
     set_max_camera_resolution(cam)
 
     # 获取最清晰的一帧图像
-    print("Time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "Capturing best photo...")
     best_frame = capture_best_photo(cam)
 
     # 检查是否成功获取最佳图像
@@ -81,14 +82,14 @@ def take_photo():
         month = now.strftime('%m')
         day = now.strftime('%d')
         hour = now.strftime('%H')
-        daily_folder = os.path.join('..', 'logs', 'photos', year, month, day, hour)
+        daily_folder = os.path.join('.', 'logs', 'photos', year, month, day, hour)
         if not os.path.exists(daily_folder):
             os.makedirs(daily_folder)
         photo_path = os.path.join(daily_folder, photo_name)
 
         # 保存捕获的图像到指定路径
         cv2.imwrite(photo_path, best_frame)
-        print("Time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "Photo taken and saved as", photo_path)
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Photo taken and saved as {photo_path}")
 
         # 更新知识库文件
         try:

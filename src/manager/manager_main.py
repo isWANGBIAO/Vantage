@@ -10,13 +10,21 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import time
 import threading
 
+# manager/manager_main.py
+import time
+
+
+class ManagerMain:
+    def run_task(self):
+        manager()
+
 
 def monitor():
-    print("Time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "Taking photo...")
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking photo...")
     take_photo()
-    print("Time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "Taking screenshot...")
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking screenshot...")
     take_and_save_screenshots()
-    print("Time", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "Done...")
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Done.")
 
 
 def threaded_monitor():
@@ -32,10 +40,10 @@ def manager():
     """
 
     # 创建知识库文件
-
     # 获取当前运行路径（CWD）
     BASE_DIR = os.getcwd()
-    KNOWLEDGE_BASE = os.path.join(BASE_DIR, '..', 'logs', 'knowledge_base.json')
+    print("BASE_DIR", BASE_DIR)
+    KNOWLEDGE_BASE = os.path.join(BASE_DIR, '.', 'logs', 'knowledge_base.json')
     if not os.path.exists(KNOWLEDGE_BASE):
         with open(KNOWLEDGE_BASE, 'w') as f:
             json.dump({}, f)
