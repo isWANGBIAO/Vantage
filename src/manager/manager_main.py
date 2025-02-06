@@ -20,11 +20,13 @@ class ManagerMain:
 
 
 def monitor():
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---------------------------------------------")
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking photo...")
     take_photo()
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking screenshot...")
     take_and_save_screenshots()
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Done.")
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---------------------------------------------")
 
 
 def threaded_monitor():
@@ -42,15 +44,16 @@ def manager():
     # 创建知识库文件
     # 获取当前运行路径（CWD）
     BASE_DIR = os.getcwd()
-    print("BASE_DIR", BASE_DIR)
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} BASE_DIR: {BASE_DIR}")
     KNOWLEDGE_BASE = os.path.join(BASE_DIR, '.', 'logs', 'knowledge_base.json')
     if not os.path.exists(KNOWLEDGE_BASE):
         with open(KNOWLEDGE_BASE, 'w') as f:
             json.dump({}, f)
 
-    threaded_monitor()  # 运行时立即拍摄一张照片
     scheduler = BackgroundScheduler()
-    scheduler.add_job(threaded_monitor, 'interval', seconds=60)
+    # scheduler.add_job(threaded_monitor, 'interval', seconds=60)
+    # 设置为每分钟的第0秒执行
+    scheduler.add_job(threaded_monitor, 'cron', minute='*', second=0)
     scheduler.start()
     try:
         while True:
