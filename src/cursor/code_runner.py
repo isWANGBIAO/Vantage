@@ -1,5 +1,5 @@
 from output_model import print_model_name
-from manager.manager_main import manager
+from manager.manager_main import Monitor
 from dotenv import load_dotenv
 from openai import OpenAI
 import json

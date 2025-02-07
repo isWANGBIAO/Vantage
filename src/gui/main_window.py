@@ -1,3 +1,8 @@
+import subprocess
+import time
+from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QApplication, QWidget, QTextEdit, QLabel, QVBoxLayout, QHBoxLayout, QSizePolicy
 import os
 from PyQt5.QtGui import QFont, QPixmap, QIcon
 from PyQt5.QtWidgets import (
@@ -7,12 +12,13 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QObject, pyqtSignal, QEvent, QTimer
 from PyQt5.QtCore import Qt
 import sys
-from gui.worker import WorkerThread
-from manager.manager_main import ManagerMain
+from manager.manager_main import Monitor
 from cursor.code_runner import CodeRunner
 from datetime import datetime
 from PyQt5.QtCore import QTimer, QDateTime
 import shutil
+import cv2
+from .worker import WorkerThread
 
 
 class EmittingStream(QObject):
@@ -30,11 +36,83 @@ class EmittingStream(QObject):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
+
+        # 重定向 stdout 和 stderr
+        sys.stdout = EmittingStream()
+        # sys.stderr = EmittingStream()
+        sys.stdout.output_signal.connect(self.append_text)
+        # sys.stderr.output_signal.connect(self.append_error)
+
+        # 初始化界面
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 开始初始化")
+        self.init_ui()
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 初始化完成")
+
+        self.cam = cv2.VideoCapture(0)
+        # 检查摄像头是否成功打开
+        if not self.cam.isOpened():
+            print('Failed to open camera.', file=sys.stderr)
+            return False
+
+        # 自动调整到摄像头最高的清晰度
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution")
+        resolution = self.set_max_camera_resolution()
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution to {resolution}")
+
+        self.refresh_interval_seconds = 10  # 刷新间隔秒数
+        self.refresh_interval = self.refresh_interval_seconds * 1000  # 刷新间隔毫秒数
+
+        # 1️⃣ 线程处理 update_frame
+        self.frame_thread = WorkerThread(self.update_frame)
+        self.frame_thread.set_interval(15)
+        self.frame_thread.output_signal.connect(self.display_frame)
+        self.frame_thread.start()
+
+        # # 2️⃣ 线程处理 run_task 拍照截图
+        self.monitor = Monitor(self.cam)
+        self.task_thread = WorkerThread(self.monitor.run_task)
+        self.task_thread.set_interval(self.refresh_interval)
+        self.task_thread.output_signal.connect(self.display_task_result)
+        self.task_thread.start()
+
+        # 3️⃣ 线程处理 update_images 显示最新图片截图
+        self.image_thread = WorkerThread(self.update_images)
+        self.image_thread.set_interval(self.refresh_interval)
+        self.image_thread.output_signal.connect(self.display_images)
+        self.image_thread.start()
+
+    # 显示摄像头画面
+    def display_frame(self, frame):
+        # 将 OpenCV 图像转换为 PyQt 可以显示的格式
+        image = QImage(frame, frame.shape[1], frame.shape[0], QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(image)
+        self.camera_label.setPixmap(pixmap)
+
+    # 显示 run_task 处理结果
+    def display_task_result(self, result):
+        self.output_area.append(result)  # 显示到文本框中
+
+    # 显示最新图片
+    def display_images(self, images):
+        self.image_label.setPixmap(QPixmap.fromImage(images))
+
+    def update_frame(self):
+        ret, frame = self.cam.read()
+        if ret:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = frame.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            self.camera_label.setPixmap(QPixmap.fromImage(qt_image).scaled(
+                self.camera_label.size(),
+                aspectRatioMode=Qt.KeepAspectRatio  # 保持宽高比
+            ))
+
+    def init_ui(self):
         self.setWindowTitle('任务管理器')
         self.main_window_size = (800, 800)
         self.resize_window()  # 调整窗口大小并且居中显示
-        self.refresh_interval = 10  # 刷新间隔秒数
-        self.manager_main = ManagerMain(self.refresh_interval)  # 传递间隔给ManagerMain
+
         # 🖼️ 托盘图标设置
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon('icon.png'))  # 替换成你的图标路径
@@ -51,19 +129,38 @@ class MainWindow(QWidget):
         self.manager_button = QPushButton('运行 Manager 任务')
         self.cursor_button = QPushButton('运行 Cursor 任务')
 
-        self.manager_button.clicked.connect(self.run_manager_task)
-        self.cursor_button.clicked.connect(self.run_cursor_task)
+        # self.manager_button.clicked.connect(self.run_manager_task)
+        # self.cursor_button.clicked.connect(self.run_cursor_task)
 
         # 创建主布局
         main_layout = QVBoxLayout()
         main_layout.addWidget(self.text_edit)
 
-        # 添加时钟插件
-        self.time_label = self.create_clock_widget()
-        main_layout.addWidget(self.time_label)
-
         # 创建一个水平布局，放置两个子窗口（显示照片和截图）
         photo_and_screenshot_layout = QHBoxLayout()
+
+        # Bottom: Real-time camera, latest photo, latest screenshot
+        camera_layout = QVBoxLayout()
+        # 添加时钟插件
+        self.time_label = QLabel()
+        self.time_label.setStyleSheet("font-size: 24px; color: blue;")
+        self.time_label.setStyleSheet("border: 1px solid black;")  # 可以设置边框样式
+        self.time_label.setAlignment(Qt.AlignCenter)  # 设置文本居中显示
+        self.timer4 = QTimer(self)
+        self.timer4.timeout.connect(lambda: self.time_label.setText(QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")))
+        self.timer4.start(1000)
+
+        # 初始化显示时间
+        self.time_label.setText(QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+
+        camera_layout.addWidget(self.time_label)
+
+        # 创建左侧的窗口，显示实时摄像头
+        self.camera_label = QLabel('Real-time Camera')
+        self.camera_label.setFixedSize(self.main_window_size[0] * 0.3, self.main_window_size[1] * 0.6)  # 设置尺寸
+        self.camera_label.setStyleSheet("border: 1px solid black;")
+        self.camera_label.setScaledContents(False)  # 不自动拉伸
+        camera_layout.addWidget(self.camera_label)
 
         photo_layout = QVBoxLayout()
         # 创建左侧的标签，用于显示照片文件名
@@ -74,7 +171,7 @@ class MainWindow(QWidget):
 
         # 创建左侧的窗口，显示照片
         self.photo_label = QLabel(self)
-        self.photo_label.setFixedSize(self.main_window_size[0] * 0.5, self.main_window_size[1] * 0.6)  # 设置尺寸
+        self.photo_label.setFixedSize(self.main_window_size[0] * 0.3, self.main_window_size[1] * 0.6)  # 设置尺寸
         self.photo_label.setStyleSheet("border: 1px solid black;")
         photo_layout.addWidget(self.photo_label)
 
@@ -86,11 +183,12 @@ class MainWindow(QWidget):
         screenshot_layout.addWidget(self.screenshot_filename_label)
         # 创建右侧的窗口，显示截图
         self.screenshot_label = QLabel(self)
-        self.screenshot_label.setFixedSize(self.main_window_size[0] * 0.5, self.main_window_size[1] * 0.6)  # 设置尺寸
+        self.screenshot_label.setFixedSize(self.main_window_size[0] * 0.3, self.main_window_size[1] * 0.6)  # 设置尺寸
         self.screenshot_label.setStyleSheet("border: 1px solid black;")
         screenshot_layout.addWidget(self.screenshot_label)
 
         # 将左侧和右侧的布局添加到水平布局
+        photo_and_screenshot_layout.addLayout(camera_layout)
         photo_and_screenshot_layout.addLayout(photo_layout)
         photo_and_screenshot_layout.addLayout(screenshot_layout)
 
@@ -102,38 +200,11 @@ class MainWindow(QWidget):
 
         self.setLayout(main_layout)
 
-        # 重定向 stdout 和 stderr
-        sys.stdout = EmittingStream()
-        sys.stderr = EmittingStream()
-        sys.stdout.output_signal.connect(self.append_text)
-        sys.stderr.output_signal.connect(self.append_error)
-
         # 监听最小化和关闭事件
         self.installEventFilter(self)
 
         # 双击托盘图标恢复窗口
         self.tray_icon.activated.connect(self.on_tray_icon_activated)
-
-        # 🚀 窗口打开时自动运行 Manager 任务
-        self.run_manager_task()
-
-        # 启动定时器，每 60 秒刷新图片
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_images)
-        self.timer.start(self.refresh_interval * 1000)
-
-    def create_clock_widget(self):
-        clock_label = QLabel()
-        clock_label.setStyleSheet("font-size: 24px; color: blue;")
-
-        timer = QTimer(self)
-        timer.timeout.connect(lambda: clock_label.setText(QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")))
-        timer.start(1000)
-
-        # 初始化显示时间
-        clock_label.setText(QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
-
-        return clock_label
 
     def resize_window(self):
         screen = QApplication.primaryScreen()
@@ -154,21 +225,6 @@ class MainWindow(QWidget):
 
         # 移动窗口到居中位置
         self.move(x, y)
-
-    # 运行 manager 任务
-    def run_manager_task(self):
-        # 启动 manager 任务并传入刷新间隔
-        self.start_thread(self.manager_main.run_task)
-
-    # 运行 cursor 任务
-    def run_cursor_task(self):
-        self.start_thread(CodeRunner().run_code)
-
-    # 统一线程启动方法
-    def start_thread(self, func):
-        self.thread = WorkerThread(func)
-        self.thread.output_signal.connect(self.append_text)
-        self.thread.start()
 
     # 正常输出
     def append_text(self, text):
@@ -244,7 +300,7 @@ class MainWindow(QWidget):
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} logs 文件夹大小: {logs_size / (1024 ** 3):.2f} GB = {logs_size / (1024 ** 2):.2f} MB")
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 磁盘剩余空间: {disk_free_space / (1024 ** 3):.2f} GB = {disk_free_space / (1024 ** 2):.2f} MB")
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 还能存储的最大组数: {max_groups}")
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 按照{self.refresh_interval}秒一组，还能存储的最大天数: {max_groups * self.refresh_interval / (60* 60 * 24):.0f} 天")
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 按照{self.refresh_interval_seconds}秒一组，还能存储的最大天数: {max_groups * self.refresh_interval_seconds / (60* 60 * 24):.0f} 天")
 
     def display_latest_image(self, folder_path, label, filename_label):
         if os.path.exists(folder_path):
@@ -282,3 +338,56 @@ class MainWindow(QWidget):
     def get_disk_free_space(self, path):
         total, used, free = shutil.disk_usage(path)
         return free
+
+    def set_max_camera_resolution(self):
+        # 获取电脑型号
+        system_model = self.get_system_model()
+        if system_model == "MRGF-XX":
+            # MRGF-XX笔记本摄像头最大分辨率为1280x720
+            width = 1280
+            height = 720
+            self.cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            self.cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            return (width, height)
+        else:
+            # 常见分辨率列表，从高到低排列
+            resolutions = [
+                # (7680, 4320),  # 8K UHD
+                # (5120, 2880),  # 5K
+                (3840, 2160),  # 4K UHD
+                (1280, 720),   # 720p
+                (2560, 1600),  # WQXGA
+                (2560, 1440),  # QHD
+                (2048, 1080),  # 2K
+                (1920, 1200),  # WUXGA
+                (1920, 1080),  # 1080p
+                (1600, 900),   # HD+
+                (1440, 900),   # WXGA+
+                (1366, 768),   # FWXGA
+                (1280, 800),   # WXGA
+                (1280, 720),   # 720p
+                (1024, 768),   # XGA
+                (800, 600),    # SVGA
+                (640, 480),    # VGA
+                (320, 240)     # QVGA
+            ]
+
+            # 从高到低尝试设置最大支持分辨率
+            for width, height in resolutions:
+                self.cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                self.cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                actual_width = int(self.cam.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_height = int(self.cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                if actual_width == width and actual_height == height:
+                    return (width, height)
+            # 如果无法匹配到任何分辨率，使用默认分辨率
+            default_width = int(self.cam.get(cv2.CAP_PROP_FRAME_WIDTH))
+            default_height = int(self.cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            return (default_width, default_height)
+
+    def get_system_model(self):
+        try:
+            output = subprocess.check_output('wmic csproduct get name', shell=True)
+            return output.decode().split('\n')[1].strip()
+        except:
+            return "未知电脑型号"
