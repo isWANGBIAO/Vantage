@@ -9,6 +9,7 @@ import time
 from apscheduler.schedulers.background import BackgroundScheduler
 import time
 import threading
+from .get_location import get_location
 
 # manager/manager_main.py
 import time
@@ -24,10 +25,13 @@ class ManagerMain:
 
 def monitor():
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---------------------------------------------")
-    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking photo...")
-    take_photo()
-    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking screenshot...")
-    take_and_save_screenshots()
+    # 获取经纬度信息
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Getting location")
+    latitude, longitude = get_location()
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_photo()")
+    take_photo(latitude, longitude)
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_and_save_screenshots()")
+    take_and_save_screenshots(latitude, longitude)
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Done.")
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---------------------------------------------")
 

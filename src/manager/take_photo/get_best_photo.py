@@ -5,9 +5,11 @@ import time
 
 def capture_best_photo(cam, frame_count=1, min_focus_change=5):
 
+    # 直接拍照
+    ret, frame = cam.read()
+    return frame
     # 等待摄像头自动调整曝光和对焦
     time.sleep(1)
-
     best_frame = None
     max_focus_measure = 0
     last_focus_measure = 0

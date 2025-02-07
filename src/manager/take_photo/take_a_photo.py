@@ -8,13 +8,24 @@ from datetime import datetime
 import time
 from .get_best_photo import capture_best_photo
 import cv2
-import piexif
-import asyncio
-from winrt.windows.devices.geolocation import Geolocator
 import sys
+import subprocess
+from ..get_location import save_image_with_gps
+
+
+def get_system_model():
+    try:
+        output = subprocess.check_output('wmic csproduct get name', shell=True)
+        return output.decode().split('\n')[1].strip()
+    except:
+        return "未知电脑型号"
 
 
 def set_max_camera_resolution(cam):
+    # 获取电脑型号
+    system_model = get_system_model()
+    if system_model == "MRGF-XX":
+        return (1280, 720)  # MRGF-XX笔记本摄像头最大分辨率
     # 常见分辨率列表，从高到低排列
     resolutions = [
         # (7680, 4320),  # 8K UHD
@@ -54,83 +65,12 @@ def set_max_camera_resolution(cam):
     return (default_width, default_height)
 
 
-# 同步获取经纬度
-
-
-def get_location():
-    time.sleep(1)  # 确保定位服务已启动
-
-    async def fetch_location():
-        try:
-            locator = Geolocator()
-            position = await locator.get_geoposition_async()
-            latitude = position.coordinate.point.position.latitude
-            longitude = position.coordinate.point.position.longitude
-            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Location: {latitude}, {longitude}")
-            return latitude, longitude
-        except Exception as e:
-            print(f"⚠️ 获取定位信息失败：{e}")
-            return None, None
-
-    def run_async_in_thread(result_holder):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        latitude, longitude = loop.run_until_complete(fetch_location())
-        result_holder['latitude'] = latitude
-        result_holder['longitude'] = longitude
-
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():  # 如果事件循环已在运行（如在 GUI 程序中）
-            result_holder = {}
-            thread = threading.Thread(target=run_async_in_thread, args=(result_holder,))
-            thread.start()
-            thread.join()  # 等待子线程完成
-            latitude = result_holder.get('latitude')
-            longitude = result_holder.get('longitude')
-        else:
-            latitude, longitude = loop.run_until_complete(fetch_location())
-    except RuntimeError:  # 如果没有事件循环
-        latitude, longitude = asyncio.run(fetch_location())
-
-    time.sleep(1)
-    return latitude, longitude
-
-
-# 将十进制度数转换为EXIF格式 (度, 分, 秒)
-def convert_to_exif_coords(value):
-    deg = int(value)
-    min_float = abs((value - deg) * 60)
-    min = int(min_float)
-    sec = int((min_float - min) * 6000)
-    return ((deg, 1), (min, 1), (sec, 100))
-
-
-# 保存图片并写入EXIF GPS信息
-def save_image_with_gps(photo_path, frame, latitude, longitude):
-    # 保存图像
-    cv2.imwrite(photo_path, frame)
-
-    # 准备GPS EXIF数据
-    gps_ifd = {
-        piexif.GPSIFD.GPSLatitudeRef: 'N' if latitude >= 0 else 'S',
-        piexif.GPSIFD.GPSLatitude: convert_to_exif_coords(abs(latitude)),
-        piexif.GPSIFD.GPSLongitudeRef: 'E' if longitude >= 0 else 'W',
-        piexif.GPSIFD.GPSLongitude: convert_to_exif_coords(abs(longitude)),
-    }
-
-    # 写入EXIF信息
-    exif_dict = {"GPS": gps_ifd}
-    exif_bytes = piexif.dump(exif_dict)
-    piexif.insert(exif_bytes, photo_path)
-
-
-def take_photo():
+def take_photo(latitude, longitude):
     # TODO: 如无需要，勿增实体。等到这里成为性能瓶颈再优化代码，提高拍照的效率,使得每次拍照尽量清晰以及对齐时间间隔
+
     # 打开摄像头
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Opening camera")
-
-    cam = cv2.VideoCapture(0)
+    cam = cv2.VideoCapture(0, cv2.CAP_DSHOW)  # 强制使用 DirectShow 更底层更快速
 
     # 检查摄像头是否成功打开
     if not cam.isOpened():
@@ -141,12 +81,11 @@ def take_photo():
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution")
     set_max_camera_resolution(cam)
 
-    # 获取经纬度信息
-    latitude, longitude = get_location()
-
     # 获取最清晰的一帧图像
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking photo")
     best_frame = capture_best_photo(cam)
 
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Saving photo")
     # 检查是否成功获取最佳图像
     if best_frame is not None:
         # 生成当前时间的时间戳

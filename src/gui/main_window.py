@@ -33,7 +33,7 @@ class MainWindow(QWidget):
         self.setWindowTitle('任务管理器')
         self.main_window_size = (800, 800)
         self.resize_window()  # 调整窗口大小并且居中显示
-        self.refresh_interval = 30  # 刷新间隔秒数
+        self.refresh_interval = 10  # 刷新间隔秒数
         self.manager_main = ManagerMain(self.refresh_interval)  # 传递间隔给ManagerMain
         # 🖼️ 托盘图标设置
         self.tray_icon = QSystemTrayIcon(self)

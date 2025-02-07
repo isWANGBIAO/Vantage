@@ -1,11 +1,13 @@
 import os
 from datetime import datetime
 import mss
-from PIL import Image
 import sys
+from ..get_location import save_image_with_gps
+import numpy as np
+import cv2
 
 
-def take_and_save_screenshots():
+def take_and_save_screenshots(latitude, longitude):
     try:
         with mss.mss() as sct:
             monitors = sct.monitors  # 获取所有监视器的信息
@@ -14,7 +16,9 @@ def take_and_save_screenshots():
             # 截取所有屏幕并存储到内存
             for i, monitor in enumerate(monitors[1:], start=1):  # 跳过 monitors[0]（虚拟全屏）
                 screenshot = sct.grab(monitor)
-                img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
+                # 将 raw 数据转换为 numpy 数组（BGR 格式，适合 OpenCV）
+                img = np.array(screenshot)
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)  # 去掉 alpha 通道，转换为 BGR 格式
                 screenshots.append((i, img))  # 存储屏幕编号和图像对象
 
             # 生成当前时间的时间戳
@@ -33,7 +37,9 @@ def take_and_save_screenshots():
             for i, img in screenshots:
                 screenshot_name = f'screenshot_{timestamp}_monitor_{i}.jpg'
                 screenshot_path = os.path.join(daily_folder, screenshot_name)
-                img.save(screenshot_path)
+
+                # 保存捕获的图像到指定路径
+                save_image_with_gps(screenshot_path, img, latitude, longitude)
 
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Screenshot for monitor {i} saved as {screenshot_path}")
 
