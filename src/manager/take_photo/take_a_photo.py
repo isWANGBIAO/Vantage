@@ -25,44 +25,47 @@ def set_max_camera_resolution(cam):
     # 获取电脑型号
     system_model = get_system_model()
     if system_model == "MRGF-XX":
-        return (1280, 720)  # MRGF-XX笔记本摄像头最大分辨率
-    # 常见分辨率列表，从高到低排列
-    resolutions = [
-        # (7680, 4320),  # 8K UHD
-        # (5120, 2880),  # 5K
-        (3840, 2160),  # 4K UHD
-        (1280, 720),   # 720p
-        (2560, 1600),  # WQXGA
-        (2560, 1440),  # QHD
-        (2048, 1080),  # 2K
-        (1920, 1200),  # WUXGA
-        (1920, 1080),  # 1080p
-        (1600, 900),   # HD+
-        (1440, 900),   # WXGA+
-        (1366, 768),   # FWXGA
-        (1280, 800),   # WXGA
-        (1280, 720),   # 720p
-        (1024, 768),   # XGA
-        (800, 600),    # SVGA
-        (640, 480),    # VGA
-        (320, 240)     # QVGA
-    ]
-
-    # 从高到低尝试设置最大支持分辨率
-    for width, height in resolutions:
+        # MRGF-XX笔记本摄像头最大分辨率为1280x720
+        width = 1280
+        height = 720
         cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        actual_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if actual_width == width and actual_height == height:
-            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Camera resolution set to {width} x {height}")
+        return (width, height)
+    else:
+        # 常见分辨率列表，从高到低排列
+        resolutions = [
+            # (7680, 4320),  # 8K UHD
+            # (5120, 2880),  # 5K
+            (3840, 2160),  # 4K UHD
+            (1280, 720),   # 720p
+            (2560, 1600),  # WQXGA
+            (2560, 1440),  # QHD
+            (2048, 1080),  # 2K
+            (1920, 1200),  # WUXGA
+            (1920, 1080),  # 1080p
+            (1600, 900),   # HD+
+            (1440, 900),   # WXGA+
+            (1366, 768),   # FWXGA
+            (1280, 800),   # WXGA
+            (1280, 720),   # 720p
+            (1024, 768),   # XGA
+            (800, 600),    # SVGA
+            (640, 480),    # VGA
+            (320, 240)     # QVGA
+        ]
 
-            return (width, height)
-    # 如果无法匹配到任何分辨率，使用默认分辨率
-    default_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
-    default_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"Using default camera resolution {default_width}x{default_height}")
-    return (default_width, default_height)
+        # 从高到低尝试设置最大支持分辨率
+        for width, height in resolutions:
+            cam.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cam.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            actual_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
+            actual_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            if actual_width == width and actual_height == height:
+                return (width, height)
+        # 如果无法匹配到任何分辨率，使用默认分辨率
+        default_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
+        default_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        return (default_width, default_height)
 
 
 def take_photo(latitude, longitude):
@@ -79,7 +82,8 @@ def take_photo(latitude, longitude):
 
     # 自动调整到摄像头最高的清晰度
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution")
-    set_max_camera_resolution(cam)
+    resolution = set_max_camera_resolution(cam)
+    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution to {resolution}")
 
     # 获取最清晰的一帧图像
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking photo")
