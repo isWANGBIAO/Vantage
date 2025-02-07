@@ -59,7 +59,7 @@ class MainWindow(QWidget):
         resolution = self.set_max_camera_resolution()
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution to {resolution}")
 
-        self.refresh_interval_seconds = 10  # 刷新间隔秒数
+        self.refresh_interval_seconds = 5  # 刷新间隔秒数
         self.refresh_interval = self.refresh_interval_seconds * 1000  # 刷新间隔毫秒数
 
         # 1️⃣ 线程处理 update_frame
