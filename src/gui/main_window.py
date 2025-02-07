@@ -126,8 +126,10 @@ class MainWindow(QWidget):
         self.text_edit.setFont(font)
 
         # 控制按钮
-        self.manager_button = QPushButton('运行 Manager 任务')
-        self.cursor_button = QPushButton('运行 Cursor 任务')
+        self.manager_button = QPushButton('🚀 运行 Manager 任务')
+        self.cursor_button = QPushButton('🎯 运行 Cursor 任务')
+        self.manager_button.setIcon(QIcon('run_icon.png'))  # 添加图标
+        self.cursor_button.setIcon(QIcon('cursor_icon.png'))
 
         # self.manager_button.clicked.connect(self.run_manager_task)
         # self.cursor_button.clicked.connect(self.run_cursor_task)
@@ -157,9 +159,12 @@ class MainWindow(QWidget):
 
         # 创建左侧的窗口，显示实时摄像头
         self.camera_label = QLabel('Real-time Camera')
-        self.camera_label.setFixedSize(self.main_window_size[0] * 0.3, self.main_window_size[1] * 0.6)  # 设置尺寸
+        width_coff = 0.3
+        height_coff = 0.3
+        self.camera_label.setFixedSize(self.main_window_size[0] * width_coff, self.main_window_size[1] * height_coff)  # 设置尺寸
         self.camera_label.setStyleSheet("border: 1px solid black;")
-        self.camera_label.setScaledContents(False)  # 不自动拉伸
+        self.camera_label.setAlignment(Qt.AlignCenter)  # 图片居中
+        # self.camera_label.setScaledContents(True)       # 图片自适应缩放
         camera_layout.addWidget(self.camera_label)
 
         photo_layout = QVBoxLayout()
@@ -171,8 +176,10 @@ class MainWindow(QWidget):
 
         # 创建左侧的窗口，显示照片
         self.photo_label = QLabel(self)
-        self.photo_label.setFixedSize(self.main_window_size[0] * 0.3, self.main_window_size[1] * 0.6)  # 设置尺寸
+        self.photo_label.setFixedSize(self.main_window_size[0] * width_coff, self.main_window_size[1] * height_coff)  # 设置尺寸
         self.photo_label.setStyleSheet("border: 1px solid black;")
+        self.photo_label.setAlignment(Qt.AlignCenter)  # 图片居中
+        # self.photo_label.setScaledContents(True)       # 图片自适应缩放
         photo_layout.addWidget(self.photo_label)
 
         screenshot_layout = QVBoxLayout()
@@ -183,8 +190,10 @@ class MainWindow(QWidget):
         screenshot_layout.addWidget(self.screenshot_filename_label)
         # 创建右侧的窗口，显示截图
         self.screenshot_label = QLabel(self)
-        self.screenshot_label.setFixedSize(self.main_window_size[0] * 0.3, self.main_window_size[1] * 0.6)  # 设置尺寸
+        self.screenshot_label.setFixedSize(self.main_window_size[0] * width_coff, self.main_window_size[1] * height_coff)  # 设置尺寸
         self.screenshot_label.setStyleSheet("border: 1px solid black;")
+        self.screenshot_label.setAlignment(Qt.AlignCenter)  # 图片居中
+        # self.screenshot_label.setScaledContents(True)       # 图片自适应缩放
         screenshot_layout.addWidget(self.screenshot_label)
 
         # 将左侧和右侧的布局添加到水平布局
@@ -192,11 +201,15 @@ class MainWindow(QWidget):
         photo_and_screenshot_layout.addLayout(photo_layout)
         photo_and_screenshot_layout.addLayout(screenshot_layout)
 
-        # 将水平布局添加到主布局
-        main_layout.addLayout(photo_and_screenshot_layout)
+        # 按钮布局
+        button_layout = QVBoxLayout()
+        button_layout.addWidget(self.manager_button)
+        button_layout.addWidget(self.cursor_button)
+        button_layout.setSpacing(20)
 
-        main_layout.addWidget(self.manager_button)
-        main_layout.addWidget(self.cursor_button)
+        # 组合布局
+        main_layout.addLayout(photo_and_screenshot_layout)
+        main_layout.addLayout(button_layout)
 
         self.setLayout(main_layout)
 
