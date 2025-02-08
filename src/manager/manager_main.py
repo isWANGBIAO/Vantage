@@ -15,9 +15,11 @@ import time
 
 
 class Monitor:
-    def __init__(self, camera):
+    def __init__(self, camera, paths):
         # 初始化摄像头
         self.camera = camera
+        # 引用 MainWindow 的路径字典
+        self.paths = paths
         # 创建知识库文件
         # 获取当前运行路径（CWD）
         BASE_DIR = os.getcwd()
@@ -47,17 +49,24 @@ class Monitor:
         # TODO 加入自动识别照片功能，对于无意义照片删除
 
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---------------------------------------------")
-        # 获取经纬度信息
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Getting location")
-        latitude, longitude = get_location()
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_photo()")
-        # 有人在的时候才拍照截屏
-        # 返回变量，如果是True，说明有人在，如果是False，说明没人在
-        real_person = take_photo(self.camera, latitude, longitude)
-        if real_person:
-            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_and_save_screenshots()")
-            take_and_save_screenshots(latitude, longitude)
-            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Done.")
-        else:
-            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} No person detected.", file=sys.stderr)
+        try:
+            # 获取经纬度信息
+            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Getting location")
+            latitude, longitude = get_location()
+            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_photo()")
+            # 有人在的时候才拍照截屏
+            # 返回变量，如果是True，说明有人在，如果是False，说明没人在
+            real_person, photo_path = take_photo(self.camera, latitude, longitude)
+            if real_person:
+                print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_and_save_screenshots()")
+                screenshot_path = take_and_save_screenshots(latitude, longitude)
+
+                # 直接更新路径字典
+                self.paths['photo'] = photo_path
+                self.paths['screenshot'] = screenshot_path
+                print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Done.")
+            else:
+                print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} No person detected.", file=sys.stderr)
+        except Exception as e:
+            print(f"Task error: {e}", file=sys.stderr)
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---------------------------------------------")

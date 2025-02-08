@@ -39,9 +39,9 @@ class MainWindow(QWidget):
 
         # 重定向 stdout 和 stderr
         sys.stdout = EmittingStream()
-        # sys.stderr = EmittingStream()
+        sys.stderr = EmittingStream()
         sys.stdout.output_signal.connect(self.append_text)
-        # sys.stderr.output_signal.connect(self.append_error)
+        sys.stderr.output_signal.connect(self.append_error)
 
         # 初始化界面
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 开始初始化")
@@ -59,8 +59,17 @@ class MainWindow(QWidget):
         resolution = self.set_max_camera_resolution()
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution to {resolution}")
 
-        self.refresh_interval_seconds = 5  # 刷新间隔秒数
+        # 用于存储最新的照片和截图路径
+        self.paths = {
+            'photo': None,
+            'screenshot': None
+        }
+        self.refresh_interval_seconds = 10  # 刷新间隔秒数
         self.refresh_interval = self.refresh_interval_seconds * 1000  # 刷新间隔毫秒数
+
+        self.monitor = Monitor(self.cam, self.paths)  # 传入 paths 字典
+        self.monitor.run_task()  # 运行一次截图任务
+        self.update_images()  # 显示最新图片
 
         # 1️⃣ 线程处理 update_frame
         self.frame_thread = WorkerThread(self.update_frame)
@@ -69,7 +78,6 @@ class MainWindow(QWidget):
         self.frame_thread.start()
 
         # # 2️⃣ 线程处理 run_task 拍照截图
-        self.monitor = Monitor(self.cam)
         self.task_thread = WorkerThread(self.monitor.run_task)
         self.task_thread.set_interval(self.refresh_interval)
         self.task_thread.output_signal.connect(self.display_task_result)
@@ -77,7 +85,7 @@ class MainWindow(QWidget):
 
         # 3️⃣ 线程处理 update_images 显示最新图片截图
         self.image_thread = WorkerThread(self.update_images)
-        self.image_thread.set_interval(self.refresh_interval)
+        self.image_thread.set_interval(self.refresh_interval * 0.1)
         self.image_thread.output_signal.connect(self.display_images)
         self.image_thread.start()
 
@@ -294,8 +302,17 @@ class MainWindow(QWidget):
         self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
 
     def update_images(self):
-        latest_photo_size = self.display_latest_image('./logs/photos/', self.photo_label, self.photo_filename_label)
-        latest_screenshot_size = self.display_latest_image('./logs/screenshots/', self.screenshot_label, self.screenshot_filename_label)
+        # 获取路径
+        photo_path = self.paths.get('photo')
+        screenshot_path = self.paths.get('screenshot')
+        if not photo_path and not screenshot_path:
+            return
+
+        # 如果路径存在，显示图片并计算大小
+        latest_photo_size = self.display_image(photo_path, self.photo_label, self.photo_filename_label)
+
+        latest_screenshot_size = self.display_image(screenshot_path, self.screenshot_label, self.screenshot_filename_label)
+
         # 计算 logs 文件夹大小
         logs_size = self.get_folder_size('./logs')
 
@@ -315,29 +332,16 @@ class MainWindow(QWidget):
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 还能存储的最大组数: {max_groups}")
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 按照{self.refresh_interval_seconds}秒一组，还能存储的最大天数: {max_groups * self.refresh_interval_seconds / (60* 60 * 24):.0f} 天")
 
-    def display_latest_image(self, folder_path, label, filename_label):
-        if os.path.exists(folder_path):
-            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 正在查找最新图片...")
-            files = self.get_files_from_subdirectories(folder_path)
-            if files:
-                latest_file = max(files, key=os.path.getmtime)
-                pixmap = QPixmap(latest_file)
-                label.setPixmap(pixmap.scaled(label.size(), aspectRatioMode=True))
-                print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 显示最新图片：{latest_file}")
-                # 显示文件名
-                filename = os.path.basename(latest_file)
-                filename_label.setText(filename)  # 设置文件名到对应的标签
-                file_size = os.path.getsize(latest_file)  # 获取最新文件大小（字节）
-                return file_size
-
-    def get_files_from_subdirectories(self, folder_path):
-        files = []
-        for root, dirs, filenames in os.walk(folder_path):  # 使用os.walk递归遍历所有子目录
-            for filename in filenames:
-                file_path = os.path.join(root, filename)
-                if os.path.isfile(file_path):  # 确保是文件而非目录
-                    files.append(file_path)
-        return files
+    def display_image(self, file_path, label, filename_label):
+        if file_path and os.path.exists(file_path):
+            print(f"Time {QDateTime.currentDateTime().toString('yyyy-MM-dd HH:mm:ss')} 正在显示图片: {file_path}")
+            pixmap = QPixmap(file_path)
+            label.setPixmap(pixmap.scaled(label.size(), aspectRatioMode=True))
+            filename_label.setText(os.path.basename(file_path))  # 显示文件名
+            return os.path.getsize(file_path)  # 返回文件大小
+        else:
+            print(f"Time {QDateTime.currentDateTime().toString('yyyy-MM-dd HH:mm:ss')} 图片路径无效或不存在: {file_path}")
+            return 0
 
     def get_folder_size(self, folder_path):
         total_size = 0

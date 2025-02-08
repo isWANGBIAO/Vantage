@@ -20,7 +20,7 @@ def take_photo(cam, latitude, longitude):
     t1 = cv2.getTickCount()
     # 初始化MediaPipe人体检测
     mp_pose = mp.solutions.pose
-    pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5)
+    pose = mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.1)
     # 转换为RGB格式
     # 计算处理的时间
     image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -54,6 +54,6 @@ def take_photo(cam, latitude, longitude):
         save_image_with_gps(photo_path, frame, latitude, longitude)
 
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Photo taken and saved as {photo_path}")
-        return True
+        return True, photo_path
     else:
-        return False
+        return False, None

@@ -42,7 +42,7 @@ def take_and_save_screenshots(latitude, longitude):
                 save_image_with_gps(screenshot_path, img, latitude, longitude)
 
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Screenshot for monitor {i} saved as {screenshot_path}")
-
+            return screenshot_path
     except Exception as e:
         print(f'Failed to capture and save the screens: {e}', file=sys.stderr)
 
