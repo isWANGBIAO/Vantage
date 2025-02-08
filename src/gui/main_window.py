@@ -13,7 +13,7 @@ from PyQt5.QtCore import QObject, pyqtSignal, QEvent, QTimer
 from PyQt5.QtCore import Qt
 import sys
 from manager.manager_main import Monitor
-from cursor.code_runner import CodeRunner
+# from cursor.code_runner import CodeRunner
 from datetime import datetime
 from PyQt5.QtCore import QTimer, QDateTime
 import shutil
@@ -37,16 +37,16 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
 
+        # 初始化界面
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 开始初始化")
+        self.init_ui()
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 初始化完成")
+
         # 重定向 stdout 和 stderr
         sys.stdout = EmittingStream()
         sys.stderr = EmittingStream()
         sys.stdout.output_signal.connect(self.append_text)
         sys.stderr.output_signal.connect(self.append_error)
-
-        # 初始化界面
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 开始初始化")
-        self.init_ui()
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 初始化完成")
 
         self.cam = cv2.VideoCapture(0)
         # 检查摄像头是否成功打开
@@ -153,8 +153,7 @@ class MainWindow(QWidget):
         camera_layout = QVBoxLayout()
         # 添加时钟插件
         self.time_label = QLabel()
-        self.time_label.setStyleSheet("font-size: 24px; color: blue;")
-        self.time_label.setStyleSheet("border: 1px solid black;")  # 可以设置边框样式
+        self.time_label.setStyleSheet("font-size: 24px; color: blue; border: 1px solid black;")
         self.time_label.setAlignment(Qt.AlignCenter)  # 设置文本居中显示
         self.timer4 = QTimer(self)
         self.timer4.timeout.connect(lambda: self.time_label.setText(QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")))
