@@ -166,9 +166,10 @@ class MainWindow(QWidget):
 
         # 创建左侧的窗口，显示实时摄像头
         self.camera_label = QLabel('Real-time Camera')
-        width_coff = 0.3
-        height_coff = 0.3
-        self.camera_label.setFixedSize(self.main_window_size[0] * width_coff, self.main_window_size[1] * height_coff)  # 设置尺寸
+        width = int(self.main_window_size[0] * 0.3)
+        height = int(self.main_window_size[1] * 0.3)
+
+        self.camera_label.setFixedSize(width, height)  # 设置尺寸
         self.camera_label.setStyleSheet("border: 1px solid black;")
         self.camera_label.setAlignment(Qt.AlignCenter)  # 图片居中
         # self.camera_label.setScaledContents(True)       # 图片自适应缩放
@@ -183,7 +184,7 @@ class MainWindow(QWidget):
 
         # 创建左侧的窗口，显示照片
         self.photo_label = QLabel(self)
-        self.photo_label.setFixedSize(self.main_window_size[0] * width_coff, self.main_window_size[1] * height_coff)  # 设置尺寸
+        self.photo_label.setFixedSize(width, height)  # 设置尺寸
         self.photo_label.setStyleSheet("border: 1px solid black;")
         self.photo_label.setAlignment(Qt.AlignCenter)  # 图片居中
         # self.photo_label.setScaledContents(True)       # 图片自适应缩放
@@ -197,7 +198,7 @@ class MainWindow(QWidget):
         screenshot_layout.addWidget(self.screenshot_filename_label)
         # 创建右侧的窗口，显示截图
         self.screenshot_label = QLabel(self)
-        self.screenshot_label.setFixedSize(self.main_window_size[0] * width_coff, self.main_window_size[1] * height_coff)  # 设置尺寸
+        self.screenshot_label.setFixedSize(width, height)  # 设置尺寸
         self.screenshot_label.setStyleSheet("border: 1px solid black;")
         self.screenshot_label.setAlignment(Qt.AlignCenter)  # 图片居中
         # self.screenshot_label.setScaledContents(True)       # 图片自适应缩放
@@ -329,7 +330,7 @@ class MainWindow(QWidget):
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} logs 文件夹大小: {logs_size / (1024 ** 3):.2f} GB = {logs_size / (1024 ** 2):.2f} MB")
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 磁盘剩余空间: {disk_free_space / (1024 ** 3):.2f} GB = {disk_free_space / (1024 ** 2):.2f} MB")
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 还能存储的最大组数: {max_groups}")
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 按照{self.refresh_interval_seconds}秒一组，还能存储的最大天数: {max_groups * self.refresh_interval_seconds / (60* 60 * 24):.0f} 天")
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 按照{self.refresh_interval_seconds}秒一组，还能存储的最大天数: {max_groups * self.refresh_interval_seconds / (60 * 60 * 24):.0f} 天")
 
     def display_image(self, file_path, label, filename_label):
         if file_path and os.path.exists(file_path):
