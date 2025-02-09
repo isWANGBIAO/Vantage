@@ -8,26 +8,26 @@ import cv2
 import sys
 from ..get_location import save_image_with_gps
 from ultralytics import YOLO
-import mediapipe as mp
+# import mediapipe as mp
 
 
-def detect_person_media_pipe(frame):
-    # 打包成exe会出现问题，暂时不用
-    # 初始化MediaPipe人体检测
-    mp_pose = mp.solutions.pose
-    # 加载预训练的YOLOv11模型
-    pose = mp_pose.Pose(static_image_mode=False,        # 静态图像模式，只检测一次
-                        min_detection_confidence=0.1,  # 检测置信度
-                        model_complexity=1,            # 简化模型，减少反馈警告
-                        enable_segmentation=False)     # 如果不需要分割功能，禁用它
+# def detect_person_media_pipe(frame):
+#     # 打包成exe会出现问题，暂时不用
+#     # 初始化MediaPipe人体检测
+#     mp_pose = mp.solutions.pose
+#     # 加载预训练的YOLOv11模型
+#     pose = mp_pose.Pose(static_image_mode=False,        # 静态图像模式，只检测一次
+#                         min_detection_confidence=0.1,  # 检测置信度
+#                         model_complexity=1,            # 简化模型，减少反馈警告
+#                         enable_segmentation=False)     # 如果不需要分割功能，禁用它
 
-    # 转换为RGB格式
-    # 计算处理的时间
-    image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    person_count = 0
-    if pose.process(image_rgb).pose_landmarks:
-        person_count = 1
-    return person_count
+#     # 转换为RGB格式
+#     # 计算处理的时间
+#     image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+#     person_count = 0
+#     if pose.process(image_rgb).pose_landmarks:
+#         person_count = 1
+#     return person_count
 
 
 def detect_person_yolo11(image):
