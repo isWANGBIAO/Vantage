@@ -1,7 +1,9 @@
 
 import piexif
 import asyncio
-from winrt.windows.devices.geolocation import Geolocator
+# winrt最高支持到Python 3.9，Python 3.10及以上得使用winsdk，而且不会报com错误
+# from winrt.windows.devices.geolocation import Geolocator
+from winsdk.windows.devices.geolocation import Geolocator
 from datetime import datetime
 import cv2
 import threading
