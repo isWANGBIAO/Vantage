@@ -223,6 +223,9 @@ class MainWindow(QWidget):
 
         # 监听最小化和关闭事件
         self.installEventFilter(self)
+        # 只有当你的程序窗口处于活动状态（即窗口在最前面、已被点击或激活）时，按键事件才会被接收。
+        self.setFocusPolicy(Qt.StrongFocus)  # 强制窗口接收键盘事件
+        self.setFocus()                      # 主动获取焦点
 
         # 双击托盘图标恢复窗口
         self.tray_icon.activated.connect(self.on_tray_icon_activated)
@@ -277,6 +280,14 @@ class MainWindow(QWidget):
             event.ignore()
             self.hide()
             self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
+        elif event.type() == QEvent.KeyPress:  # 监听按键事件
+            if event.key() == Qt.Key_Space:
+                print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Simulating camera reconnect...", file=sys.stderr)
+                self.cam.release()
+                print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Old camera released.", file=sys.stderr)
+            elif event.key() == Qt.Key_Escape:
+                self.close()  # 手动关闭程序
+            return True  # 表示事件已处理
         return super().eventFilter(obj, event)
 
     # 恢复窗口
