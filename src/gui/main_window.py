@@ -287,6 +287,9 @@ class MainWindow(QWidget):
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Old camera released.", file=sys.stderr)
             elif event.key() == Qt.Key_Escape:
                 self.close()  # 手动关闭程序
+            elif event.key() == Qt.Key_W and event.modifiers() & Qt.ControlModifier:
+                self.hide()
+                self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
             return True  # 表示事件已处理
         return super().eventFilter(obj, event)
 
