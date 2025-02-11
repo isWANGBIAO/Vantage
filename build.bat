@@ -19,6 +19,8 @@ if errorlevel 1 (
 )
 
 pyinstaller --onefile --noconsole --icon=icon.ico --add-data "icon.png;." --distpath . ./src/main.py
+@REM pyinstaller --onedir --noconsole --icon=icon.ico --add-data "icon.png;." --distpath ./dist ./src/main.py
+
 
 :: 记录结束时间
 set "end_time=%time%"
