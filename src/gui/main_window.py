@@ -2,7 +2,7 @@ import subprocess
 import time
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QApplication, QWidget, QTextEdit, QLabel, QVBoxLayout, QHBoxLayout, QSizePolicy
+from PyQt5.QtWidgets import QApplication, QWidget, QTextEdit, QLabel, QVBoxLayout, QHBoxLayout, QSizePolicy, QInputDialog, QLineEdit, QMessageBox, QApplication, QMainWindow, QSystemTrayIcon, QMenu, QAction, QInputDialog, QMessageBox, QLineEdit
 import os
 from PyQt5.QtGui import QFont, QPixmap, QIcon
 from PyQt5.QtWidgets import (
@@ -121,10 +121,7 @@ class MainWindow(QWidget):
         self.main_window_size = (800, 800)
         self.resize_window()  # 调整窗口大小并且居中显示
 
-        # 🖼️ 托盘图标设置
-        self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(QIcon('icon.png'))  # 替换成你的图标路径
-        self.create_tray_menu()
+        self.init_tray_icon()
 
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
@@ -261,16 +258,20 @@ class MainWindow(QWidget):
         self.text_edit.moveCursor(self.text_edit.textCursor().End)
 
     # 托盘菜单
-    def create_tray_menu(self):
+    def init_tray_icon(self):
+        # 创建系统托盘图标
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(QIcon('icon.png'))  # 图标路径
+
+        # 创建托盘菜单
         tray_menu = QMenu()
         restore_action = QAction("恢复窗口", self)
+        restore_action.triggered.connect(self.request_password)
         quit_action = QAction("退出", self)
-
-        restore_action.triggered.connect(self.show_normal)
         quit_action.triggered.connect(QApplication.instance().quit)
-
         tray_menu.addAction(restore_action)
         tray_menu.addAction(quit_action)
+
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.show()
 
@@ -279,7 +280,7 @@ class MainWindow(QWidget):
         if event.type() == QEvent.Close:
             event.ignore()
             self.hide()
-            self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
+            # self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
         elif event.type() == QEvent.KeyPress:  # 监听按键事件
             if event.key() == Qt.Key_Space:
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Simulating camera reconnect...", file=sys.stderr)
@@ -289,11 +290,20 @@ class MainWindow(QWidget):
                 self.close()  # 手动关闭程序
             elif event.key() == Qt.Key_W and event.modifiers() & Qt.ControlModifier:
                 self.hide()
-                self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
+                # self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
             return True  # 表示事件已处理
         return super().eventFilter(obj, event)
 
+    def request_password(self):
+        # 弹出密码输入对话框
+        password, ok = QInputDialog.getText(self, "密码验证", "请输入密码：", QLineEdit.Password)
+        if ok:
+            if password == "789456":
+                self.show_normal()
+            else:
+                QMessageBox.warning(self, "错误", "密码错误，请重试。")
     # 恢复窗口
+
     def show_normal(self):
         self.showNormal()
         self.raise_()
@@ -307,13 +317,15 @@ class MainWindow(QWidget):
     # 托盘图标双击事件处理
     def on_tray_icon_activated(self, reason):
         if reason == QSystemTrayIcon.DoubleClick:
-            self.show_normal()
+            self.request_password()
+            # self.show_normal()
 
     # 关闭事件处理，最小化到托盘
+
     def closeEvent(self, event):
         event.ignore()
         self.hide()
-        self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
+        # self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
 
     def update_images(self):
         # 获取路径
