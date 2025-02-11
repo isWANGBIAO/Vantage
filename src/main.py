@@ -9,7 +9,7 @@ def main():
     # sys.argv 用于处理命令行参数，通常可以直接写成 QApplication([])。
     app = QApplication(sys.argv)
     window = MainWindow()
-    window.show() #注释后，程序启动时不会自动显示窗口
+    # window.show() #注释后，程序启动时不会自动显示窗口
     sys.exit(app.exec_())
 
 
