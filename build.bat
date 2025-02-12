@@ -18,7 +18,7 @@ if errorlevel 1 (
     pip install pyinstaller
 )
 
-pyinstaller --onefile --noconsole --icon=icon.ico --add-data "icon.png;." --distpath . ./src/main.py
+pyinstaller --onefile --noconsole --icon=icon.ico --add-data "icon.png;." --distpath . --exclude PyQt5 ./src/main.py
 @REM pyinstaller --onedir --noconsole --icon=icon.ico --add-data "icon.png;." --distpath ./dist ./src/main.py
 
 
