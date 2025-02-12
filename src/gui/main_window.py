@@ -1,21 +1,26 @@
+from PyQt6.QtWidgets import QApplication, QMainWindow
+from PyQt6.QtGui import QPalette, QColor
+from PyQt6.QtCore import QTimer, QTime
 import subprocess
 import time
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QApplication, QWidget, QTextEdit, QLabel, QVBoxLayout, QHBoxLayout, QSizePolicy, QInputDialog, QLineEdit, QMessageBox, QApplication, QMainWindow, QSystemTrayIcon, QMenu, QAction, QInputDialog, QMessageBox, QLineEdit
+from PyQt6.QtGui import QImage, QPixmap, QAction
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication, QWidget, QTextEdit, QLabel, QVBoxLayout, QHBoxLayout, QSizePolicy, QInputDialog, QLineEdit, QMessageBox, QApplication, QMainWindow, QSystemTrayIcon, QMenu, QInputDialog, QMessageBox, QLineEdit
 import os
-from PyQt5.QtGui import QFont, QPixmap, QIcon
-from PyQt5.QtWidgets import (
+from PyQt6.QtGui import QFont, QPixmap, QIcon, QTextCursor
+from PyQt6.QtWidgets import (
     QApplication, QWidget, QTextEdit, QPushButton, QVBoxLayout,
-    QSystemTrayIcon, QMenu, QAction, QHBoxLayout, QLabel
+    QSystemTrayIcon, QMenu, QHBoxLayout, QLabel
 )
-from PyQt5.QtCore import QObject, pyqtSignal, QEvent, QTimer
-from PyQt5.QtCore import Qt
+from PyQt6.QtGui import QAction
+
+from PyQt6.QtCore import QObject, pyqtSignal, QEvent, QTimer
+from PyQt6.QtCore import Qt
 import sys
 from manager.manager_main import Monitor
 # from cursor.code_runner import CodeRunner
 from datetime import datetime
-from PyQt5.QtCore import QTimer, QDateTime
+from PyQt6.QtCore import QTimer, QDateTime
 import shutil
 import cv2
 from .worker import WorkerThread
@@ -89,10 +94,24 @@ class MainWindow(QWidget):
         self.image_thread.output_signal.connect(self.display_images)
         self.image_thread.start()
 
+    def set_light_theme(self):
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(255, 255, 255))  # 白色背景
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))    # 黑色文本
+        QApplication.instance().setPalette(palette)
+        print("已切换到浅色主题")
+
+    def set_dark_theme(self):
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))     # 深灰色背景
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(255, 255, 255))  # 白色文本
+        QApplication.instance().setPalette(palette)
+        print("已切换到深色主题")
     # 显示摄像头画面
+
     def display_frame(self, frame):
         # 将 OpenCV 图像转换为 PyQt 可以显示的格式
-        image = QImage(frame, frame.shape[1], frame.shape[0], QImage.Format_RGB888)
+        image = QImage(frame, frame.shape[1], frame.shape[0], QImage.Format.Format_RGB8888)
         pixmap = QPixmap.fromImage(image)
         self.camera_label.setPixmap(pixmap)
 
@@ -110,13 +129,23 @@ class MainWindow(QWidget):
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = frame.shape
             bytes_per_line = ch * w
-            qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            self.camera_label.setPixmap(QPixmap.fromImage(qt_image).scaled(
-                self.camera_label.size(),
-                aspectRatioMode=Qt.KeepAspectRatio  # 保持宽高比
-            ))
+            qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+            # 获取标签的大小
+            label_size = self.camera_label.size()
+
+            # 使用scaled方法，调整顺序
+            scaled_image = QPixmap.fromImage(qt_image).scaled(
+                label_size,
+                Qt.AspectRatioMode.KeepAspectRatio,  # 保持宽高比
+                Qt.TransformationMode.FastTransformation  # 快速变换
+            )
+
+    # 设置到标签
+            self.camera_label.setPixmap(scaled_image)
 
     def init_ui(self):
+        # print("已切换到浅色主题")
+        # self.set_light_theme()
         self.setWindowTitle('任务管理器')
         self.main_window_size = (800, 800)
         self.resize_window()  # 调整窗口大小并且居中显示
@@ -151,7 +180,7 @@ class MainWindow(QWidget):
         # 添加时钟插件
         self.time_label = QLabel()
         self.time_label.setStyleSheet("font-size: 24px; color: blue; border: 1px solid black;")
-        self.time_label.setAlignment(Qt.AlignCenter)  # 设置文本居中显示
+        self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 设置文本居中显示
         self.timer4 = QTimer(self)
         self.timer4.timeout.connect(lambda: self.time_label.setText(QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")))
         self.timer4.start(1000)
@@ -168,7 +197,7 @@ class MainWindow(QWidget):
 
         self.camera_label.setFixedSize(width, height)  # 设置尺寸
         self.camera_label.setStyleSheet("border: 1px solid black;")
-        self.camera_label.setAlignment(Qt.AlignCenter)  # 图片居中
+        self.camera_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 图片居中
         # self.camera_label.setScaledContents(True)       # 图片自适应缩放
         camera_layout.addWidget(self.camera_label)
 
@@ -176,14 +205,14 @@ class MainWindow(QWidget):
         # 创建左侧的标签，用于显示照片文件名
         self.photo_filename_label = QLabel(self)
         self.photo_filename_label.setStyleSheet("border: 1px solid black;")  # 可以设置边框样式
-        self.photo_filename_label.setAlignment(Qt.AlignCenter)  # 设置文本居中显示
+        self.photo_filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 设置文本居中显示
         photo_layout.addWidget(self.photo_filename_label)
 
         # 创建左侧的窗口，显示照片
         self.photo_label = QLabel(self)
         self.photo_label.setFixedSize(width, height)  # 设置尺寸
         self.photo_label.setStyleSheet("border: 1px solid black;")
-        self.photo_label.setAlignment(Qt.AlignCenter)  # 图片居中
+        self.photo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 图片居中
         # self.photo_label.setScaledContents(True)       # 图片自适应缩放
         photo_layout.addWidget(self.photo_label)
 
@@ -191,13 +220,13 @@ class MainWindow(QWidget):
         # 创建右侧的标签，用于显示截图文件名
         self.screenshot_filename_label = QLabel(self)
         self.screenshot_filename_label.setStyleSheet("border: 1px solid black;")  # 可以设置边框样式
-        self.screenshot_filename_label.setAlignment(Qt.AlignCenter)  # 设置文本居中显示
+        self.screenshot_filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 设置文本居中显示
         screenshot_layout.addWidget(self.screenshot_filename_label)
         # 创建右侧的窗口，显示截图
         self.screenshot_label = QLabel(self)
         self.screenshot_label.setFixedSize(width, height)  # 设置尺寸
         self.screenshot_label.setStyleSheet("border: 1px solid black;")
-        self.screenshot_label.setAlignment(Qt.AlignCenter)  # 图片居中
+        self.screenshot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 图片居中
         # self.screenshot_label.setScaledContents(True)       # 图片自适应缩放
         screenshot_layout.addWidget(self.screenshot_label)
 
@@ -221,7 +250,7 @@ class MainWindow(QWidget):
         # 监听最小化和关闭事件
         self.installEventFilter(self)
         # 只有当你的程序窗口处于活动状态（即窗口在最前面、已被点击或激活）时，按键事件才会被接收。
-        self.setFocusPolicy(Qt.StrongFocus)  # 强制窗口接收键盘事件
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # 强制窗口接收键盘事件
         self.setFocus()                      # 主动获取焦点
 
         # 双击托盘图标恢复窗口
@@ -247,15 +276,26 @@ class MainWindow(QWidget):
         # 移动窗口到居中位置
         self.move(x, y)
 
+    def is_dark_mode(self):
+        # 检测全局调色板的文本颜色和背景颜色
+        palette = QApplication.palette()
+        text_color = palette.color(QPalette.ColorRole.Text)
+        background_color = palette.color(QPalette.ColorRole.Base)
+
+        # 如果文本颜色比背景色亮，通常是深色模式
+        return text_color.lightness() > background_color.lightness()
+
     # 正常输出
     def append_text(self, text):
-        self.text_edit.append(f"<span style='color:black;'>{text}</span>")
-        self.text_edit.moveCursor(self.text_edit.textCursor().End)
+        color = "white" if self.is_dark_mode() else "black"
+        self.text_edit.append(f"<span style='color:{color};'>{text}</span>")
+        self.text_edit.moveCursor(QTextCursor.MoveOperation.End)
 
-    # 错误输出（用红色标识）
+    # 错误输出
     def append_error(self, text):
-        self.text_edit.append(f"<span style='color:red;'>{text}</span>")
-        self.text_edit.moveCursor(self.text_edit.textCursor().End)
+        error_color = "#FF6666" if self.is_dark_mode() else "red"
+        self.text_edit.append(f"<span style='color:{error_color};'>{text}</span>")
+        self.text_edit.moveCursor(QTextCursor.MoveOperation.End)
 
     # 托盘菜单
     def init_tray_icon(self):
@@ -277,18 +317,18 @@ class MainWindow(QWidget):
 
     # 关闭时隐藏到托盘
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Close:
+        if event.type() == QEvent.Type.Close:
             event.ignore()
             self.hide()
             # self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
-        elif event.type() == QEvent.KeyPress:  # 监听按键事件
-            if event.key() == Qt.Key_Space:
+        elif event.type() == QEvent.Type.KeyPress:  # 监听按键事件
+            if event.key() == Qt.Key.Key_Space:
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Simulating camera reconnect...", file=sys.stderr)
                 self.cam.release()
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Old camera released.", file=sys.stderr)
-            elif event.key() == Qt.Key_Escape:
+            elif event.key() == Qt.Key.Key_Escape:
                 self.close()  # 手动关闭程序
-            elif event.key() == Qt.Key_W and event.modifiers() & Qt.ControlModifier:
+            elif event.key() == Qt.Key.Key_W and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 self.hide()
                 # self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
             return True  # 表示事件已处理
@@ -296,7 +336,7 @@ class MainWindow(QWidget):
 
     def request_password(self):
         # 弹出密码输入对话框
-        password, ok = QInputDialog.getText(self, "密码验证", "请输入密码：", QLineEdit.Password)
+        password, ok = QInputDialog.getText(self, "密码验证", "请输入密码：", QLineEdit.EchoMode.Password)
         if ok:
             if password == "789456":
                 self.show_normal()
@@ -316,7 +356,7 @@ class MainWindow(QWidget):
 
     # 托盘图标双击事件处理
     def on_tray_icon_activated(self, reason):
-        if reason == QSystemTrayIcon.DoubleClick:
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.request_password()
             # self.show_normal()
 
@@ -362,7 +402,9 @@ class MainWindow(QWidget):
         if file_path and os.path.exists(file_path):
             print(f"Time {QDateTime.currentDateTime().toString('yyyy-MM-dd HH:mm:ss')} 正在显示图片: {file_path}")
             pixmap = QPixmap(file_path)
-            label.setPixmap(pixmap.scaled(label.size(), aspectRatioMode=True))
+            # 使用正确的 scaled 方法
+            label.setPixmap(pixmap.scaled(label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation))
+
             filename_label.setText(os.path.basename(file_path))  # 显示文件名
             return os.path.getsize(file_path)  # 返回文件大小
         else:
