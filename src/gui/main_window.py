@@ -24,6 +24,7 @@ from PyQt6.QtCore import QTimer, QDateTime
 import shutil
 import cv2
 from .worker import WorkerThread
+from cv2_enumerate_cameras import enumerate_cameras
 
 
 class EmittingStream(QObject):
@@ -53,7 +54,16 @@ class MainWindow(QWidget):
         sys.stdout.output_signal.connect(self.append_text)
         sys.stderr.output_signal.connect(self.append_error)
 
-        self.cam = cv2.VideoCapture(0)
+        camera_index = 0
+        system_model = self.get_system_model()
+        if system_model == "MRGF-XX":
+            for camera_info in enumerate_cameras(cv2.CAP_MSMF):
+                print(f'{camera_info.index}: {camera_info.name}')
+                if "USB Camera" in camera_info.name:
+                    camera_index = camera_info.index
+            print(f"MRGF-XX 笔记本电脑默认打开内置摄像头 USB Camera, camera_index = {camera_index}")
+
+        self.cam = cv2.VideoCapture(camera_index)
         # 检查摄像头是否成功打开
         if not self.cam.isOpened():
             print('Failed to open camera.', file=sys.stderr)
