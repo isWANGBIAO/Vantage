@@ -17,9 +17,9 @@ if errorlevel 1 (
     echo 未检测到 PyInstaller，正在安装...
     pip install pyinstaller
 )
-
-pyinstaller --onefile --noconsole --icon=icon.ico --add-data "icon.png;." --distpath . --exclude PyQt5 ./src/main.py
-@REM pyinstaller --onedir --noconsole --icon=icon.ico --add-data "icon.png;." --distpath ./dist ./src/main.py
+set NUMEXPR_MAX_THREADS=16 # 设置最大线程数
+@REM pyinstaller --onefile --noconfirm --noconsole --icon=icon.ico --add-data "icon.png;." --distpath . --exclude PyQt5 ./src/main.py
+pyinstaller --onedir --noconfirm  --noconsole --icon=icon.ico --add-data "icon.png;." --distpath ./dist --exclude PyQt5 ./src/main.py 
 
 
 :: 记录结束时间
