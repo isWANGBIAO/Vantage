@@ -7,7 +7,7 @@ import numpy as np
 import cv2
 
 
-def take_and_save_screenshots(latitude, longitude):
+def take_and_save_screenshots(latitude, longitude, logs_path):
     try:
         with mss.mss() as sct:
             monitors = sct.monitors  # 获取所有监视器的信息
@@ -30,7 +30,7 @@ def take_and_save_screenshots(latitude, longitude):
             month = now.strftime('%m')
             day = now.strftime('%d')
             hour = now.strftime('%H')
-            daily_folder = os.path.join('.', 'logs', 'screenshots', year, month, day, hour)
+            daily_folder = os.path.join(logs_path, 'screenshots', year, month, day, hour)
             os.makedirs(daily_folder, exist_ok=True)
 
             # 保存所有截图

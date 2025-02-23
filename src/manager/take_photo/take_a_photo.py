@@ -58,7 +58,7 @@ def detect_person_yolo11(image):
     return person_count
 
 
-def take_photo(cam, latitude, longitude):
+def take_photo(cam, latitude, longitude, logs_path):
     # TODO: 如无需要，勿增实体。等到这里成为性能瓶颈再优化代码，提高拍照的效率,使得每次拍照尽量清晰以及对齐时间间隔
 
     # 获取最清晰的一帧图像
@@ -89,7 +89,7 @@ def take_photo(cam, latitude, longitude):
         month = now.strftime('%m')
         day = now.strftime('%d')
         hour = now.strftime('%H')
-        daily_folder = os.path.join('.', 'logs', 'photos', year, month, day, hour)
+        daily_folder = os.path.join(logs_path, 'photos', year, month, day, hour)
         if not os.path.exists(daily_folder):
             os.makedirs(daily_folder)
         photo_path = os.path.join(daily_folder, photo_name)

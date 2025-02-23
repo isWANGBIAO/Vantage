@@ -15,16 +15,14 @@ import time
 
 
 class Monitor:
-    def __init__(self, camera, paths):
-        # 初始化摄像头
+    def __init__(self, camera, paths, logs_path):
         self.camera = camera
-        # 引用 MainWindow 的路径字典
         self.paths = paths
+        self.logs_path = logs_path
         # 创建知识库文件
-        # 获取当前运行路径（CWD）
-        BASE_DIR = os.getcwd()
+        BASE_DIR = self.logs_path
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} BASE_DIR: {BASE_DIR}")
-        KNOWLEDGE_BASE = os.path.join(BASE_DIR, '.', 'logs', 'knowledge_base.json')
+        KNOWLEDGE_BASE = os.path.join(BASE_DIR, 'knowledge_base.json')
         if not os.path.exists(KNOWLEDGE_BASE):
             with open(KNOWLEDGE_BASE, 'w') as f:
                 json.dump({}, f)
@@ -56,10 +54,10 @@ class Monitor:
             print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_photo()")
             # 有人在的时候才拍照截屏
             # 返回变量，如果是True，说明有人在，如果是False，说明没人在
-            real_person, photo_path = take_photo(self.camera, latitude, longitude)
+            real_person, photo_path = take_photo(self.camera, latitude, longitude, self.logs_path)
             if real_person:
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_and_save_screenshots()")
-                screenshot_path = take_and_save_screenshots(latitude, longitude)
+                screenshot_path = take_and_save_screenshots(latitude, longitude, self.logs_path)
 
                 # 直接更新路径字典
                 self.paths['photo'] = photo_path

@@ -13,5 +13,26 @@
 
 程序后端在每隔指定秒数进行拍照和截图。
 
-
 程序可以托盘运行
+
+
+pip 加速
+
+pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+
+conda使用
+
+# 创建一个名为 myenv 的环境，并指定 Python 版本（可选）
+
+conda create --name myenv python=3.9
+
+激活环境
+
+# Windows
+
+conda activate myenv
+
+# macOS/Linux
+
+source activate myenv  # 或 conda activate myenv（新版）

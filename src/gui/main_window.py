@@ -82,7 +82,8 @@ class MainWindow(QWidget):
         self.refresh_interval_seconds = 10  # 刷新间隔秒数
         self.refresh_interval = self.refresh_interval_seconds * 1000  # 刷新间隔毫秒数
 
-        self.monitor = Monitor(self.cam, self.paths)  # 传入 paths 字典
+        self.logs_path = self.identify_logs_folder()
+        self.monitor = Monitor(self.cam, self.paths, self.logs_path)  # 传入 logs_path
         self.monitor.run_task()  # 运行一次截图任务
         self.update_images()  # 显示最新图片
 
@@ -103,6 +104,34 @@ class MainWindow(QWidget):
         self.image_thread.set_interval(self.refresh_interval * 0.1)
         self.image_thread.output_signal.connect(self.display_images)
         self.image_thread.start()
+
+        # Identify logs folder location
+        self.logs_path = self.identify_logs_folder()
+
+    def identify_logs_folder(self):
+        # 从环境变量中获取 OneDrive 路径
+        onedrive_path = None
+        # 可能的 OneDrive 路径列表
+        possible_paths = [
+            os.path.expanduser("~/OneDrive"),
+            os.path.expanduser("~/OneDrive - Personal"),
+            os.path.expanduser("~/OneDrive - Business")
+        ]
+
+        # 遍历可能的路径，找到第一个存在的路径
+        for path in possible_paths:
+            if os.path.exists(path):
+                onedrive_path = path
+                break
+
+        logs_path = './logs'  # 默认使用本地 logs 文件夹
+        if onedrive_path:
+            # 在 OneDrive 中构造 logs 路径
+            logs_path = os.path.join(onedrive_path, "Mine", "logs")
+            # 如果 logs 目录不存在则创建
+            if not os.path.exists(logs_path):
+                os.makedirs(logs_path)
+        return logs_path
 
     def set_light_theme(self):
         palette = QPalette()
@@ -390,7 +419,7 @@ class MainWindow(QWidget):
         latest_screenshot_size = self.display_image(screenshot_path, self.screenshot_label, self.screenshot_filename_label)
 
         # 计算 logs 文件夹大小
-        logs_size = self.get_folder_size('./logs')
+        logs_size = self.get_folder_size(self.logs_path)
 
         # 获取磁盘剩余空间
         disk_free_space = self.get_disk_free_space('.')
