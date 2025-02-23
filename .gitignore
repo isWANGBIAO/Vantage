@@ -1,6 +1,6 @@
 # 这是一个python库的gitignore文件
 # 用于忽略一些不需要提交到git的文件
-
+icon.ico
 main.exe
 # 忽略logs/photos/文件夹
 logs/photos/
