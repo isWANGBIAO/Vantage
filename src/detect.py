@@ -10,7 +10,9 @@ import time
 
 
 def detect_person_yolo(model, image):
-    results = model.predict(source=image, verbose=False, conf=0.5)
+
+    # 将置信度调低，提高一些人影的检测率，默认是0.25，这里调低到0.25*0.01
+    results = model.predict(source=image, verbose=False, conf=0.25 * 0.01)
     person_count = 0
     for result in results:
         for box in result.boxes:
@@ -108,13 +110,13 @@ def detect(photo_folder, temp_folder, logs_path):
         remaining_files = total_files - processed_files
         detection_rate = processed_files / elapsed_time
         remaining_time = remaining_files / detection_rate
-        print(f"已检测照片：{processed_files}/{total_files}，检测有人照片：{photos_with_people}，没人照片：{photos_without_people} 剩余照片：{remaining_files}，检测速率：{detection_rate:.2f} 张/秒，预计剩余时间：{remaining_time:.2f} 秒 = {remaining_time / 60:.2f} 分钟")
+        print(f"已检测照片：{processed_files}/{total_files}，检测有人照片：{photos_with_people}，没人照片：{photos_without_people} 剩余照片：{remaining_files}，检测速率：{detection_rate:.2f} 张/秒，预计剩余时间：{remaining_time:.2f} 秒 = {remaining_time / 60:.2f} 分钟, 已用时间：{elapsed_time / 60:.2f} 分钟")
 
 
 def main():
     # 设置日志文件夹路径
     logs_path = r'C:\Users\97012\OneDrive\Mine\logs'
-    # logs_path = os.path.join(os.path.expanduser('~'), 'Desktop', 'd')
+    # logs_path = os.path.join(os.path.expanduser('~'), 'Desktop', 'logs')
     # 设置照片文件夹路径
     photo_folder = os.path.join(logs_path, 'photos')
     # 设置临时文件夹路径
@@ -123,9 +125,9 @@ def main():
     detect(photo_folder, temp_folder, logs_path)
 
     # # 询问用户是否将文件移回原始文件夹
-    # move_back = input(f"是否要将文件移回原始文件夹？(y/n)：")
-    # if move_back.lower() == 'y':
-    # move_back_to_original_folder(temp_folder, logs_path)
+    move_back = input(f"是否要将文件移回原始文件夹？(y/n)：")
+    if move_back.lower() == 'y':
+        move_back_to_original_folder(temp_folder, logs_path)
 
 
 if __name__ == '__main__':
