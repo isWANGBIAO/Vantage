@@ -48,7 +48,7 @@ def move_to_temp_folder(file_paths, temp_folder):
 
 def move_back_to_original_folder(temp_folder, logs_path):
     for root, _, files in os.walk(temp_folder):
-        for file in files:
+        for file in sorted(files, reverse=False):
             temp_file_path = os.path.join(root, file)
             date_time_str = file.split('_')[1] + file.split('_')[2].split('.')[0]
             date_time = datetime.strptime(date_time_str, '%Y%m%d%H%M%S')
@@ -84,7 +84,9 @@ def detect(photo_folder, temp_folder, logs_path):
 
     # 遍历照片文件夹中的所有文件
     for idx, photo_path in enumerate(all_files):
-
+        # 确保这个文件还在
+        if not os.path.exists(photo_path):
+            continue
         # 使用YOLO模型检测图片中的人数
         person_count = detect_person_yolo(model, photo_path)
 
