@@ -403,8 +403,7 @@ class MainWindow(QWidget):
         logs_size = self.get_folder_size(self.photos_path) + self.get_folder_size(self.screenshots_path)
 
         # 获取磁盘剩余空间
-        disk_free_space = self.get_disk_free_space('.')
-
+        total, used, disk_free_space = shutil.disk_usage(self.photos_path)
         # 计算还能存多少组照片和截图
         total_group_size = latest_photo_size + latest_screenshot_size
         if total_group_size > 0:
@@ -412,11 +411,8 @@ class MainWindow(QWidget):
         else:
             max_groups = 0
 
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 一组照片和截图大小: {total_group_size / (1024 ** 2):.2f} MB")
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 照片和截图文件夹大小: {logs_size / (1024 ** 3):.2f} GB = {logs_size / (1024 ** 2):.2f} MB")
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 磁盘剩余空间: {disk_free_space / (1024 ** 3):.2f} GB = {disk_free_space / (1024 ** 2):.2f} MB")
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 还能存储的最大组数: {max_groups}")
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 按照{self.refresh_interval_seconds}秒一组，还能存储的最大天数: {max_groups * self.refresh_interval_seconds / (60 * 60 * 24):.0f} 天")
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 一组照片和截图大小: {total_group_size / (1024 ** 2):.2f} MB | 照片和截图文件夹大小: {logs_size / (1024 ** 3):.2f} GB | 磁盘剩余空间: {disk_free_space / (1024 ** 3):.2f} GB")
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 还能存储的最大组数: {max_groups} | 按照{self.refresh_interval_seconds}秒一组，还能存储的最大天数: {max_groups * self.refresh_interval_seconds / (60 * 60 * 24):.0f} 天")
 
     def display_image(self, file_path, label, filename_label):
         if file_path and os.path.exists(file_path):
@@ -439,10 +435,6 @@ class MainWindow(QWidget):
                 if os.path.isfile(fp):
                     total_size += os.path.getsize(fp)
         return total_size
-
-    def get_disk_free_space(self, path):
-        total, used, free = shutil.disk_usage(path)
-        return free
 
     def set_max_camera_resolution(self):
         # 获取电脑型号
