@@ -13,12 +13,14 @@ import platform
 # 同步获取经纬度
 def get_location():
     # 台式机就固定一个经纬度
-    if print(platform.node()) == "Biao":
+    if platform.node() == "Biao":
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 台式机为固定位置，只需要指定经纬度即可")
         latitude = 22.348769382455153
         longitude = 113.58774933243512
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Location: {latitude}, {longitude}")
         return latitude, longitude
+    else:
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 非指定台式机，需要调用定位服务获取定位信息")
 
     async def fetch_location():
         try:
