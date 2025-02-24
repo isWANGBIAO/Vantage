@@ -1,4 +1,6 @@
 # 这是一个python库的gitignore文件
+# 忽略 YOLO 训练得到的权重文件
+*.pt
 # 用于忽略一些不需要提交到git的文件
 icon.ico
 main.exe

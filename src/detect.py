@@ -78,7 +78,7 @@ def detect(photo_folder, temp_folder, logs_path):
     photos_without_people = 0
 
     # 加载YOLO模型进行人物检测
-    model = YOLO("yolo11n.pt")
+    model = YOLO("yolo12x.pt")
 
     start_time = time.time()
 

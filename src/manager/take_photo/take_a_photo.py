@@ -8,40 +8,11 @@ import cv2
 import sys
 from ..get_location import save_image_with_gps
 from ultralytics import YOLO
-# import mediapipe as mp
 
 
-# def detect_person_media_pipe(frame):
-#     # 打包成exe会出现问题，暂时不用
-#     # 初始化MediaPipe人体检测
-#     mp_pose = mp.solutions.pose
-#     # 加载预训练的YOLOv11模型
-#     pose = mp_pose.Pose(static_image_mode=False,        # 静态图像模式，只检测一次
-#                         min_detection_confidence=0.1,  # 检测置信度
-#                         model_complexity=1,            # 简化模型，减少反馈警告
-#                         enable_segmentation=False)     # 如果不需要分割功能，禁用它
-
-#     # 转换为RGB格式
-#     # 计算处理的时间
-#     image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-#     person_count = 0
-#     if pose.process(image_rgb).pose_landmarks:
-#         person_count = 1
-#     return person_count
-
-
-def detect_person_yolo11(image):
-    """
-    检测图像中是否有人。
-
-    参数：
-        image (str 或 numpy.ndarray): 图像的文件路径或图像数组。
-
-    返回：
-        bool: 如果检测到人，返回True；否则返回False。
-    """
-    # 加载预训练的YOLOv11模型
-    model = YOLO("yolo11n.pt")
+def detect_person_YOLO(image):
+    # 加载预训练的YOLO模型
+    model = YOLO("yolo12x.pt")
 
     # 对图像进行预测, verbose=False表示进行推理时禁用控制台输出
     results = model.predict(source=image, verbose=False)
@@ -66,8 +37,7 @@ def take_photo(cam, latitude, longitude, photos_path):
     # 直接拍照
     frame = capture_best_photo(cam)
     t1 = cv2.getTickCount()
-    # results = detect_person_media_pipe(frame)
-    results = detect_person_yolo11(frame)
+    results = detect_person_YOLO(frame)
     t2 = cv2.getTickCount()
     time = (t2 - t1) / cv2.getTickFrequency()
     fps = 1.0 / time
