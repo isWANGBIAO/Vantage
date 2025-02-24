@@ -15,12 +15,13 @@ import time
 
 
 class Monitor:
-    def __init__(self, camera, paths, logs_path):
+    def __init__(self, camera, paths, photos_path, screenshots_path):
         self.camera = camera
         self.paths = paths
-        self.logs_path = logs_path
+        self.photos_path = photos_path
+        self.screenshots_path = screenshots_path
         # 创建知识库文件
-        BASE_DIR = self.logs_path
+        BASE_DIR = self.photos_path
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} BASE_DIR: {BASE_DIR}")
         KNOWLEDGE_BASE = os.path.join(BASE_DIR, 'knowledge_base.json')
         if not os.path.exists(KNOWLEDGE_BASE):
@@ -54,10 +55,10 @@ class Monitor:
             print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_photo()")
             # 有人在的时候才拍照截屏
             # 返回变量，如果是True，说明有人在，如果是False，说明没人在
-            real_person, photo_path = take_photo(self.camera, latitude, longitude, self.logs_path)
+            real_person, photo_path = take_photo(self.camera, latitude, longitude, self.photos_path)
             if real_person:
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_and_save_screenshots()")
-                screenshot_path = take_and_save_screenshots(latitude, longitude, self.logs_path)
+                screenshot_path = take_and_save_screenshots(latitude, longitude, self.screenshots_path)
 
                 # 直接更新路径字典
                 self.paths['photo'] = photo_path

@@ -79,11 +79,13 @@ class MainWindow(QWidget):
             'photo': None,
             'screenshot': None
         }
+        # Identify folder location
+        self.photos_path, self.screenshots_path = self.identify_logs_folder()
+
         self.refresh_interval_seconds = 10  # 刷新间隔秒数
         self.refresh_interval = self.refresh_interval_seconds * 1000  # 刷新间隔毫秒数
 
-        self.logs_path = self.identify_logs_folder()
-        self.monitor = Monitor(self.cam, self.paths, self.logs_path)  # 传入 logs_path
+        self.monitor = Monitor(self.cam, self.paths, self.photos_path, self.screenshots_path)  # 传入 logs_path
         self.monitor.run_task()  # 运行一次截图任务
         self.update_images()  # 显示最新图片
 
@@ -105,33 +107,35 @@ class MainWindow(QWidget):
         self.image_thread.output_signal.connect(self.display_images)
         self.image_thread.start()
 
-        # Identify logs folder location
-        self.logs_path = self.identify_logs_folder()
-
     def identify_logs_folder(self):
-        # 从环境变量中获取 OneDrive 路径
-        onedrive_path = None
-        # 可能的 OneDrive 路径列表
-        possible_paths = [
-            os.path.expanduser("~/OneDrive"),
-            os.path.expanduser("~/OneDrive - Personal"),
-            os.path.expanduser("~/OneDrive - Business")
-        ]
 
-        # 遍历可能的路径，找到第一个存在的路径
-        for path in possible_paths:
-            if os.path.exists(path):
-                onedrive_path = path
+        # 先尝试环境变量
+        onedrive_path = os.environ.get("OneDrive", "")
+
+        # 如果环境变量未找到，再检查可能的路径
+        if not onedrive_path or not os.path.exists(onedrive_path):
+            possible_paths = [
+                os.path.expanduser("~/OneDrive"),
+                os.path.expanduser("~/OneDrive - Personal"),
+                os.path.expanduser("~/OneDrive - Business")
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    onedrive_path = path
                 break
 
-        logs_path = './logs'  # 默认使用本地 logs 文件夹
-        if onedrive_path:
-            # 在 OneDrive 中构造 logs 路径
-            logs_path = os.path.join(onedrive_path, "Mine", "logs")
-            # 如果 logs 目录不存在则创建
-            if not os.path.exists(logs_path):
-                os.makedirs(logs_path)
-        return logs_path
+        print("OneDrive 目录:", onedrive_path)
+
+        pictures_path = f"{onedrive_path}\\Pictures\\" if os.path.exists(f"{onedrive_path}\\Pictures") else f"{onedrive_path}\\图片"
+        screenshots_path = f"{pictures_path}\\Screenshots" if os.path.exists(f"{pictures_path}\\Screenshots") else f"{pictures_path}\\屏幕截图"
+
+        print("OneDrive 图片目录:", pictures_path)
+        print("OneDrive 截图目录:", screenshots_path)
+
+        # C:\Users\97012\OneDrive\图片\本机照片
+        photos_path = pictures_path + "\\本机照片"
+
+        return photos_path, screenshots_path
 
     def set_light_theme(self):
         palette = QPalette()
@@ -418,8 +422,7 @@ class MainWindow(QWidget):
 
         latest_screenshot_size = self.display_image(screenshot_path, self.screenshot_label, self.screenshot_filename_label)
 
-        # 计算 logs 文件夹大小
-        logs_size = self.get_folder_size(self.logs_path)
+        logs_size = self.get_folder_size(self.photos_path) + self.get_folder_size(self.screenshots_path)
 
         # 获取磁盘剩余空间
         disk_free_space = self.get_disk_free_space('.')
@@ -432,7 +435,7 @@ class MainWindow(QWidget):
             max_groups = 0
 
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 一组照片和截图大小: {total_group_size / (1024 ** 2):.2f} MB")
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} logs 文件夹大小: {logs_size / (1024 ** 3):.2f} GB = {logs_size / (1024 ** 2):.2f} MB")
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 照片和截图文件夹大小: {logs_size / (1024 ** 3):.2f} GB = {logs_size / (1024 ** 2):.2f} MB")
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 磁盘剩余空间: {disk_free_space / (1024 ** 3):.2f} GB = {disk_free_space / (1024 ** 2):.2f} MB")
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 还能存储的最大组数: {max_groups}")
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 按照{self.refresh_interval_seconds}秒一组，还能存储的最大天数: {max_groups * self.refresh_interval_seconds / (60 * 60 * 24):.0f} 天")
