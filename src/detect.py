@@ -12,7 +12,7 @@ import time
 def detect_person_yolo(model, image):
 
     # 将置信度调低，提高一些人影的检测率，默认是0.25，这里调低到0.25*0.01
-    results = model.predict(source=image, verbose=False, conf=0.25 * 0.01)
+    results = model.predict(source=image, verbose=False, conf=0.25 * 0.005)
     person_count = 0
     for result in results:
         for box in result.boxes:
