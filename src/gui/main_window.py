@@ -1,28 +1,16 @@
-from PyQt6.QtWidgets import QApplication, QMainWindow
-from PyQt6.QtGui import QPalette, QColor
-from PyQt6.QtCore import QTimer, QTime
-import subprocess
-import time
-from PyQt6.QtGui import QImage, QPixmap, QAction
-from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QApplication, QWidget, QTextEdit, QLabel, QVBoxLayout, QHBoxLayout, QSizePolicy, QInputDialog, QLineEdit, QMessageBox, QApplication, QMainWindow, QSystemTrayIcon, QMenu, QInputDialog, QMessageBox, QLineEdit
-import os
-from PyQt6.QtGui import QFont, QPixmap, QIcon, QTextCursor
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QTextEdit, QPushButton, QVBoxLayout,
-    QSystemTrayIcon, QMenu, QHBoxLayout, QLabel
+    QApplication, QWidget, QTextEdit, QLabel, QVBoxLayout, QHBoxLayout,
+    QInputDialog, QLineEdit, QMessageBox, QSystemTrayIcon, QMenu, QPushButton
 )
-from PyQt6.QtGui import QAction
-
-from PyQt6.QtCore import QObject, pyqtSignal, QEvent, QTimer
-from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPalette, QColor, QImage, QPixmap, QAction, QFont, QIcon, QTextCursor
+from PyQt6.QtCore import QTimer, QEvent, Qt, QDateTime
+import subprocess
+import os
 import sys
-from manager.manager_main import Monitor
-# from cursor.code_runner import CodeRunner
-from datetime import datetime
-from PyQt6.QtCore import QTimer, QDateTime
 import shutil
 import cv2
+from datetime import datetime
+from manager.manager_main import Monitor
 from .worker import WorkerThread
 from .emitting_stream import EmittingStream
 from cv2_enumerate_cameras import enumerate_cameras
