@@ -85,6 +85,12 @@ class MainWindow(QWidget):
         self.image_thread.output_signal.connect(self.display_images)
         self.image_thread.start()
 
+        # 设置托盘图标提示文本
+        self.update_tray_icon_tooltip()
+        self.tray_icon_tooltip_timer = QTimer(self)
+        self.tray_icon_tooltip_timer.timeout.connect(self.update_tray_icon_tooltip)
+        self.tray_icon_tooltip_timer.start(5000)  # 每 5 秒更新一次
+
     def identify_logs_folder(self):
 
         # 先尝试环境变量
@@ -488,3 +494,9 @@ class MainWindow(QWidget):
             return output.decode().split('\n')[1].strip()
         except:
             return "未知电脑型号"
+
+    def update_tray_icon_tooltip(self):
+        """更新托盘图标的提示文本"""
+        # 获取当前任务状态或任何你想要显示的信息
+        tooltip_text = "任务管理器 - 运行中..."  # 替换为你实际的状态信息
+        self.tray_icon.setToolTip(tooltip_text)
