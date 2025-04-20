@@ -1,213 +1,303 @@
 import pandas as pd
 import numpy as np
 import re
+import jieba
 import os
+import json
+from tqdm import tqdm
+from openai import OpenAI  # 阿里云兼容openai sdk
 
-# --- 配置 ---
-# 确定当前脚本的目录
-script_dir = os.path.dirname(__file__)
-# 构建相对于脚本目录的数据文件的绝对路径
-DATA_PATH = os.path.join(script_dir, 'data/Time.csv')
-
-# --- 数据加载和预处理
+# 判断健康情况文本是否为“拉稀”或“正常”
 
 
-def parse_sleep_time(time_str):
-    """将睡眠时长字符串 'X小时Y分' 转换为总小时数。"""
-    if pd.isna(time_str) or time_str == '':
-        return np.nan
-    hours = 0
-    minutes = 0
-    hour_match = re.search(r'(\\d+)\\s*小时', str(time_str))
-    minute_match = re.search(r'(\\d+)\\s*分', str(time_str))
-    if hour_match:
-        hours = int(hour_match.group(1))
-    if minute_match:
-        minutes = int(minute_match.group(1))
-    return hours + minutes / 60.0
+def is_diarrhea(x, p_good, p_bad):
+    if pd.isna(x):
+        return np.nan  # 如果是空值，返回NaN
+    s = str(x)
+    if p_good.search(s):
+        return 0      # 如果匹配到“拉得好”，返回0（正常）
+    return 1 if p_bad.search(s) else np.nan  # 匹配到“拉了/拉稀/稀”返回1，否则NaN
 
 
-def load_and_preprocess_data(file_path):
-    """从 CSV 加载并预处理健康数据。"""
-    try:
-        df = pd.read_csv(file_path, encoding='utf-8')
-    except UnicodeDecodeError:
-        try:
-            df = pd.read_csv(file_path, encoding='gbk')
-        except Exception as e:
-            print(f"Error reading CSV with multiple encodings: {e}")
-            return None
-    except FileNotFoundError:
-        print(f"Error: Data file not found at {file_path}")
-        return None
-
-    print("原始列名:", df.columns.tolist())
-    df.columns = [col.replace('\\r\\n', '').replace('\\n', '') for col in df.columns]
-    print("清理后的列名:", df.columns.tolist())
-
-    relevant_cols = {
-        '日期': 'Date',
-        '健康情况': 'HealthNotes',
-        '生活（饮食+社交+运动）': 'LifeNotes'
+def llm_classify(text):
+    """
+    用大模型API对text进行分词和分类，返回结构如：
+    {
+        "食物": ["牛肉", "米饭"],
+        "餐厅": ["肯德基"],
+        "活动": ["聚会"]
     }
-    existing_cols = {k: v for k, v in relevant_cols.items() if k in df.columns}
-    # 特别检查分析器所需的列
-    required_analyzer_cols = ['Date', 'HealthNotes', 'LifeNotes']
-    if not all(col in existing_cols.values() for col in required_analyzer_cols):
-        missing = [col for col in required_analyzer_cols if col not in existing_cols.values()]
-        print(f"错误: 重命名后未找到分析所需的列 ({', '.join(missing)})。")
-        # 如果重命名失败，尝试查找原始名称
-        original_missing = []
-        reverse_map = {v: k for k, v in relevant_cols.items()}
-        for col in missing:
-            original_name = reverse_map.get(col)
-            if original_name and original_name not in df.columns:
-                original_missing.append(original_name)
-            elif not original_name:
-                original_missing.append(f"(未知 {col} 的原始名称)")
-
-        if original_missing:
-            print(f"CSV 中缺少原始必需列: {', '.join(original_missing)}")
-        return None
-
-    df = df[[k for k, v in relevant_cols.items() if k in df.columns]]
-    df = df.rename(columns=existing_cols)
-
-    if 'Date' not in df.columns:
-        print("Error: '日期' (Date) column is missing.")
-        return None
-    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-    df = df.dropna(subset=['Date'])
-    df = df.sort_values('Date').reset_index(drop=True)
-
-    # 填充缺失的文本数据 - 对分析器很重要
-    text_cols = ['HealthNotes', 'LifeNotes']
-    for col in text_cols:
-        if col in df.columns:
-            df[col] = df[col].fillna('')
-        else:
-            print(f"警告: 列 {col} 预期存在但未找到，将创建空列。")
-            df[col] = ''
-
-    print("处理后的数据头部 (供分析器使用):")
-    print(df.head())
-    print("数据信息 (供分析器使用):")
-    df.info()
-
-    return df
-
-
-# --- 过敏分析函数 (恢复为关联性分析) ---
-def analyze_allergies(df):
-    """分析健康笔记和生活笔记之间的潜在关联，找出可能与'拉'相关的词语。"""
-    print("--- 分析潜在触发因素 (基于 LifeNotes 与 HealthNotes 关联) ---")
-
-    if 'HealthNotes' not in df.columns or 'LifeNotes' not in df.columns:
-        print("错误: 未找到 'HealthNotes' 或 'LifeNotes' 列。无法执行分析。")
-        return
-
-    # 定义健康问题关键词
-    issue_keywords = ['拉', '肚子', '泻', '喷射']
+    """
+    api_key = os.getenv('ALIYUN_ACCESS_KEY')
+    url = os.getenv('ALIYUN_ACCESS_BASE_URL')
+    golbal_model = 'qwen-max-latest'
+    if not api_key or not url:
+        raise ValueError("请设置环境变量 ALIYUN_ACCESS_KEY 和 ALIYUN_ACCESS_BASE_URL")
+    client = OpenAI(base_url=url, api_key=api_key)
+    prompt = (
+        f"请将下列文本分词并按如下JSON格式分类：'食物'、'餐厅'、'活动'，只返回JSON，不要多余解释。\n"
+        f"文本：{text}\n"
+        "输出示例：{\"食物\":[...],\"餐厅\":[...],\"活动\":[...]}"
+    )
     try:
-        df['HealthNotes'] = df['HealthNotes'].astype(str)  # 确保是字符串类型
-        # 找到包含问题关键词的行 (问题日)
-        issue_days = df[df['HealthNotes'].str.contains('|'.join(issue_keywords), na=False, regex=True)]
+        # 实时显示进度
+        print(f"正在分析: {text[:]}", flush=True)
+        completion = client.chat.completions.create(
+            model=golbal_model,
+            messages=[
+                {'role': 'user', 'content': prompt},
+            ],
+            max_tokens=512,
+            temperature=0.2
+        )
+        reply = completion.choices[0].message.content.strip()
+        # 尝试提取JSON
+        match = re.search(r'\{[\s\S]*\}', reply)
+        if match:
+            reply = match.group(0)
+        result = json.loads(reply)
+        # 确保有三个key
+        for k in ["食物", "餐厅", "活动"]:
+            if k not in result:
+                result[k] = []
+        return result
     except Exception as e:
-        print(f"搜索问题关键词期间出错: {e}")
-        issue_days = pd.DataFrame()
+        print(f"llm_classify调用失败: {e}")
+        return {"食物": [], "餐厅": [], "活动": []}
 
-    if issue_days.empty:
-        print("在 'HealthNotes' 中未找到特定的健康问题关键词。无法执行分析。")
-        return
 
-    num_issue_days = len(issue_days)
-    print(f"在 HealthNotes 中找到 {num_issue_days} 天提及潜在的消化问题。")
+def llm_extract_meals(text):
+    """
+    用大模型API对饮食描述进行餐次结构化，返回如：
+    {
+        "早餐": ["鸡蛋", "牛奶"],
+        "午餐": ["米饭", "红烧肉"],
+        "晚餐": ["面条"],
+        "小吃": ["薯片"]
+    }
+    """
+    api_key = os.getenv('ALIYUN_ACCESS_KEY')
+    url = os.getenv('ALIYUN_ACCESS_BASE_URL')
+    golbal_model = 'qwen-max-latest'
+    if not api_key or not url:
+        raise ValueError("请设置环境变量 ALIYUN_ACCESS_KEY 和 ALIYUN_ACCESS_BASE_URL")
+    client = OpenAI(base_url=url, api_key=api_key)
+    prompt = (
+        f"请将下列饮食描述按餐次结构化，输出JSON，key为餐次（早餐、午餐、晚餐、小吃），value为食物列表，只返回JSON：\n{text}\n"
+        "示例：{\"早餐\":[...],\"午餐\":[...],\"晚餐\":[...],\"小吃\":[...]}")
+    try:
+        completion = client.chat.completions.create(
+            model=golbal_model,
+            messages=[{'role': 'user', 'content': prompt}],
+            max_tokens=512,
+            temperature=0.2
+        )
+        reply = completion.choices[0].message.content.strip()
+        match = re.search(r'\{[\s\S]*\}', reply)
+        if match:
+            reply = match.group(0)
+        result = json.loads(reply)
+        for k in ["早餐", "午餐", "晚餐", "小吃"]:
+            if k not in result:
+                result[k] = []
+        return result
+    except Exception as e:
+        print(f"llm_extract_meals调用失败: {e}")
+        return {"早餐": [], "午餐": [], "晚餐": [], "小吃": []}
 
-    potential_triggers = {}
 
-    # 定义要排除的常见非食物词/名称/地点 (可以根据需要扩展)
-    stop_words = set([
-        ' ', '的', '了', '和', '是', '在', '我', '有', '也', '不', '都', '就',
-        '很', '点', '个', '还', '吃', '喝', '玩', '去', '回', '家', '公司',
-        '上班', '下班', '中午', '晚上', '早上', '下午', '昨天', '今天', '明天',
-        # 可以添加更多地点、人名、常见活动等
-        '外卖', '食堂', '自己做', '一点', '有点'  # 示例
-    ])
+def llm_extract_diarrhea_info(text):
+    """
+    用大模型API对健康描述提取拉稀次数、严重程度、时间，返回如：
+    [
+      {"次数": 1, "程度": "轻微", "时间": "早上"},
+      {"次数": 2, "程度": "严重", "时间": "下午"}
+    ]
+    """
+    api_key = os.getenv('ALIYUN_ACCESS_KEY')
+    url = os.getenv('ALIYUN_ACCESS_BASE_URL')
+    golbal_model = 'qwen-max-latest'
+    if not api_key or not url:
+        raise ValueError("请设置环境变量 ALIYUN_ACCESS_KEY 和 ALIYUN_ACCESS_BASE_URL")
+    client = OpenAI(base_url=url, api_key=api_key)
+    prompt = (
+        f"请从下列健康描述中提取所有拉稀事件，输出JSON数组，每个元素包含次数、严重程度（如轻微/中等/严重）、时间（如早上/下午/晚上/凌晨），只返回JSON：\n{text}\n"
+        "示例：[{'次数':1,'程度':'轻微','时间':'早上'}]"
+    )
+    try:
+        completion = client.chat.completions.create(
+            model=golbal_model,
+            messages=[{'role': 'user', 'content': prompt}],
+            max_tokens=512,
+            temperature=0.2
+        )
+        reply = completion.choices[0].message.content.strip()
+        match = re.search(r'\[.*\]', reply, re.DOTALL)
+        if match:
+            reply = match.group(0)
+        # 修正单引号为双引号，兼容大模型输出
+        reply = reply.replace("'", '"')
+        result = json.loads(reply)
+        if not isinstance(result, list):
+            result = []
+        return result
+    except Exception as e:
+        print(f"llm_extract_diarrhea_info调用失败: {e}")
+        return []
 
-    # 遍历每个问题日
-    for index, row in issue_days.iterrows():
-        current_date = row['Date']
-        relevant_notes_list = []
 
-        # 获取前一天的 LifeNotes
-        # 需要找到排序后 DataFrame 中当前行的位置，然后获取前一行的索引
-        current_loc = df.index.get_loc(index)
-        if current_loc > 0:
-            prev_row_index = df.index[current_loc - 1]
-            # 检查前一天的日期是否确实是连续的前一天 (可选)
-            # if df.loc[prev_row_index, 'Date'] == current_date - pd.Timedelta(days=1):
-            prev_day_notes = df.loc[prev_row_index, 'LifeNotes']
-            if pd.notna(prev_day_notes):
-                relevant_notes_list.append(str(prev_day_notes))
+def main():
+    # 1. 读数据
+    # 从csv文件读取数据，假设有“日期”、“生活（饮食+社交+运动）”、“健康情况”三列
+    df = pd.read_excel(r'C:\Users\97012\OneDrive\Mine\Time.xlsx')
+    eat_col = '生活（饮食+社交+运动）'
+    health_col = '健康情况'
+    date_col = '日期'  # 日期列
 
-        # 获取当天的 LifeNotes
-        current_day_notes = row['LifeNotes']
-        if pd.notna(current_day_notes):
-            relevant_notes_list.append(str(current_day_notes))
+    # 2. 预编译正则
+    # p_good匹配“拉得好”，p_bad匹配“拉了/拉稀/稀”，valid用于分词后筛选有效词
+    p_good = re.compile(r'拉得好')
+    p_bad = re.compile(r'拉了|拉稀|稀')
+    valid = re.compile(r'[\u4e00-\u9fa5A-Za-z0-9]')
 
-        # 合并前一天和当天的笔记文本
-        relevant_notes_text = " | ".join(relevant_notes_list)
+    # 3. 日期处理，按日期排序
+    # 将日期列转为datetime类型，并按日期升序排列
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df.sort_values(date_col).reset_index(drop=True)
 
-        # 使用正则表达式分割词语 (更精细的分隔符)
-        potential_items = re.split(r'[\s、，；。？！｜|(),./:;"\'\\\\[\\]\\{\\}<>+-=\\*&^%$#@!`~\\d]+', relevant_notes_text)
+    # 4. 生成 today_health 和 next_health 列
+    # today_health为当天健康情况，next_health为次日健康情况，next_date为次日日期
+    df['today_health'] = df[health_col]
+    df['next_health'] = df[health_col].shift(-1)
+    df['next_date'] = df[date_col].shift(-1)
 
-        # 统计每个词的出现次数
-        for item in potential_items:
-            item_cleaned = item.strip()
-            # 过滤掉空字符串、单个字符、纯数字和停用词
-            if len(item_cleaned) > 1 and not item_cleaned.isnumeric() and item_cleaned not in stop_words:
-                potential_triggers[item_cleaned] = potential_triggers.get(item_cleaned, 0) + 1
+    # 5. 标记拉稀（仅当日期连续才考虑次日，否则只考虑当天）
+    # 规则：如果当天和次日日期连续，则当天食物与当天和次日健康情况都有关联
+    #      如果不连续，只考虑当天健康情况
+    def diarrhea_flag(row):
+        today = is_diarrhea(row['today_health'], p_good, p_bad)
+        # 判断 next_date 是否为下一天
+        if pd.notna(row['next_date']) and (row['next_date'] - row[date_col]).days == 1:
+            nextd = is_diarrhea(row['next_health'], p_good, p_bad)
+        else:
+            nextd = np.nan
+        # 只要当天或次日有拉稀就算1
+        if today == 1 or nextd == 1:
+            return 1
+        # 当天和次日都正常或无记录，算0
+        elif today == 0 and (np.isnan(nextd) or nextd == 0):
+            return 0
+        # 当天无记录，次日正常或无记录，也算0
+        elif np.isnan(today) and (np.isnan(nextd) or nextd == 0):
+            return 0
+        else:
+            return np.nan  # 其他情况算NaN
 
-    # 计算可能性得分
-    possibility_table = {}
-    if num_issue_days > 0:
-        for item, count in potential_triggers.items():
-            # 得分 = (在问题日及前一日 LifeNotes 中出现的总次数) / (总问题天数)
-            score = count / num_issue_days
-            # 可以设置阈值过滤低频词，例如至少出现2次或得分大于某个值
-            # if count >= 2: # or score > 0.1:
-            possibility_table[item] = score
+    df['diarrhea'] = df.apply(diarrhea_flag, axis=1)
 
-    print("--- 可能性表 (Potential Trigger Possibility Table) ---")
-    print("分析 'HealthNotes' 中出现 '拉' 等关键词的当天及前一天的 'LifeNotes'。")
-    print(f"总问题天数: {num_issue_days}")
-    print("可能性 = (该词语在问题期间 LifeNotes 中出现的总次数) / (总问题天数)")
-    print("-" * 60)
-    print(f"{'Potential Item':<20} | {'Count':<5} | {'Possibility':<10}")
-    print("-" * 60)
+    # 6. 丢弃无用行
+    df = df.dropna(subset=[eat_col, 'diarrhea'])
+    # 清洗：当天和次日健康状况都缺失的行视为无效，剔除
+    df = df[~(df['today_health'].isna() & df['next_health'].isna())]
+    # 只保留关键字段
+    keep_cols = [date_col, eat_col, health_col, 'today_health', 'next_health', 'next_date', 'diarrhea']
+    df_valid = df[keep_cols].copy()
+    # 保存清洗后的有效数据表
+    df_valid.to_csv('src/AI_Prediction/data/有效数据表.csv', index=False, encoding='utf-8-sig')
 
-    if possibility_table:
-        # 按可能性得分排序 (降序)
-        sorted_table = sorted(possibility_table.items(), key=lambda item: item[1], reverse=True)
-        for item, score in sorted_table:
-            count = potential_triggers[item]  # 获取原始计数
-            print(f"{item:<20} | {count:<5} | {score:<10.2f}")
+    # 用大模型分词和分类
+    print("正在分析食物和餐厅...")
+
+    def extract_food_and_restaurant(s):
+        if not isinstance(s, str) or not s.strip():
+            return []
+        result = llm_classify(s)
+        # 实时输出大模型返回结果
+        print(f"模型结果: {result}")
+        # 只保留食物和餐厅
+        return (result.get("食物", []) or []) + (result.get("餐厅", []) or [])
+
+    # 检查今天的大模型分析表是否已存在，若存在则直接读取，无需重复分析
+    from datetime import datetime
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    analysis_path = f'src/AI_Prediction/data/大模型分析表_{today_str}.csv'
+    import os
+    if os.path.exists(analysis_path):
+        print(f"检测到今日分析表 {analysis_path}，直接读取...")
+        df = pd.read_csv(analysis_path, encoding='utf-8-sig')
     else:
-        print("未能提取足够信息生成可能性表。")
+        df['words'] = df[eat_col].map(extract_food_and_restaurant)
+        df = df.explode('words')
+        df = df[df['words'].notna() & (df['words'] != '')]
+        keep_cols_analysis = [date_col, eat_col, health_col, 'today_health', 'next_health', 'next_date', 'diarrhea', 'words']
+        df_analysis = df[keep_cols_analysis].copy()
+        df_analysis.to_csv(analysis_path, index=False, encoding='utf-8-sig')
+        print(f"已生成今日分析表 {analysis_path}")
 
-    print("-" * 60)
-    print("免责声明：此分析基于词语共现频率，并非医学诊断。")
-    print("结果可能包含巧合或非直接原因。请结合实际情况判断。")
+    # 用大模型结构化餐次和健康描述
+    print("正在结构化餐次和健康描述...")
+    meal_cols = ["早餐", "午餐", "晚餐", "小吃"]
+    meal_records = []
+    for idx, row in df_valid.iterrows():
+        date = row[date_col]
+        meal_dict = llm_extract_meals(str(row[eat_col]))
+        diarrhea_events = llm_extract_diarrhea_info(str(row[health_col]))
+        for meal in meal_cols:
+            for food in meal_dict.get(meal, []):
+                meal_records.append({
+                    "日期": date,
+                    "餐次": meal,
+                    "食物": food,
+                    "健康描述": row[health_col],
+                    "拉稀事件": diarrhea_events
+                })
+        print(f"第{idx + 1}行分析完成，日期：{date}")
+    meal_df = pd.DataFrame(meal_records)
+    # 展开拉稀事件为一行一事件
+    meal_df = meal_df.explode('拉稀事件').reset_index(drop=True)
+    if not meal_df.empty:
+        meal_df['拉稀次数'] = meal_df['拉稀事件'].apply(lambda x: x.get('次数') if isinstance(x, dict) else None)
+        meal_df['拉稀程度'] = meal_df['拉稀事件'].apply(lambda x: x.get('程度') if isinstance(x, dict) else None)
+        meal_df['拉稀时间'] = meal_df['拉稀事件'].apply(lambda x: x.get('时间') if isinstance(x, dict) else None)
+    # 保存明细表
+    meal_df.to_csv('src/AI_Prediction/data/餐次食物拉稀明细表.csv', index=False, encoding='utf-8-sig')
+    print('已保存餐次-食物-拉稀明细表')
+    # 统计分析：每个餐次-食物的拉稀概率、次数、严重程度分布
+    stat = meal_df.groupby(['餐次', '食物']).agg(
+        总出现次数=('食物', 'size'),
+        拉稀天数=('拉稀次数', lambda x: x.notna().sum()),
+        拉稀总次数=('拉稀次数', 'sum'),
+        严重天数=('拉稀程度', lambda x: (x == '严重').sum()),
+        轻微天数=('拉稀程度', lambda x: (x == '轻微').sum()),
+    ).reset_index()
+    stat['拉稀率'] = (stat['拉稀天数'] / stat['总出现次数']).map('{:.2%}'.format)
+    stat = stat.sort_values(['总出现次数', '拉稀天数'], ascending=[False, False])
+    stat.to_csv('src/AI_Prediction/data/餐次食物拉稀统计表.csv', index=False, encoding='utf-8-sig')
+    print('已保存餐次-食物-拉稀统计表')
+
+    # 7. 分组聚合
+    # 统计每个食物关键词的总出现次数和拉稀次数
+    stats = df.groupby('words').agg(
+        总出现次数=('words', 'size'),
+        拉稀次数=('diarrhea', 'sum')
+    )
+    # 计算拉稀率（百分比字符串）
+    stats['拉稀率'] = (stats['拉稀次数'] / stats['总出现次数']).map("{:.2%}".format)
+
+    # 8. 排序并输出
+    # 先将拉稀率转为浮点数用于排序，排序后去掉临时列
+    result = (
+        stats.assign(_rate=stats['拉稀率'].str.rstrip('%').astype(float))
+        .sort_values(['总出现次数', '_rate'], ascending=[False, False])  # 先按总出现次数降序，再按拉稀率降序
+        .drop(columns=['_rate'])
+        .reset_index()
+        .rename(columns={'words': '食物关键词'})
+    )
+    # 打印对齐的表格
+    print(result.to_string(index=False, justify="center"))
+    # 输出到csv文件
+    result.to_csv('src/AI_Prediction/data/食物过敏分析表.csv', index=False, encoding='utf-8-sig')
 
 
-# --- 主执行 ---
-if __name__ == "__main__":
-    print("加载数据并分析可能的过敏原...")
-    df_health = load_and_preprocess_data(DATA_PATH)
-
-    if df_health is not None and not df_health.empty:
-        analyze_allergies(df_health)
-    elif df_health is None:
-        print("数据加载失败或文件不存在。请检查文件路径和格式。")
-    else:  # df_health 不为 None 但为空
-        print("数据文件为空或没有有效数据。请检查数据源。")
+if __name__ == '__main__':
+    main()
