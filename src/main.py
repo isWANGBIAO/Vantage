@@ -1,9 +1,54 @@
 # main.py
 import os
 import sys
+import torch
+
 from PyQt6.QtWidgets import QApplication
 from gui.main_window import MainWindow
 import psutil
+
+
+def print_env():
+    print("=== 系统环境变量 ===")
+    for k, v in os.environ.items():
+        if any(key in k for key in ["PATH", "CUDA", "PYTHON"]):
+            print(f"{k}={v}")
+    print("\n=== PATH 列表 ===")
+    path_list = os.environ.get("PATH", "").split(";")
+    for p in path_list:
+        print(p)
+
+
+def check_cuda():
+    print("\n=== PyTorch CUDA 检查 ===")
+    try:
+        print("torch.version.cuda:", torch.version.cuda)
+        print("torch.cuda.is_available():", torch.cuda.is_available())
+        print("torch.cuda.device_count():", torch.cuda.device_count())
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                print(f"Device {i}:", torch.cuda.get_device_name(i))
+    except Exception as e:
+        print("CUDA 检查失败:", e)
+
+
+def check_dll(dll_name="c10.dll"):
+    print(f"\n=== 检查 {dll_name} 是否存在于 PATH ===")
+    path_list = os.environ.get("PATH", "").split(";")
+    found = False
+    for p in path_list:
+        dll_path = os.path.join(p, dll_name)
+        if os.path.isfile(dll_path):
+            print(f"找到: {dll_path}")
+            found = True
+    if not found:
+        print(f"{dll_name} 未找到，可能是 DLL 路径问题")
+
+
+if __name__ == '__main__':
+    print_env()
+    check_cuda()
+    check_dll()
 
 
 def is_already_running():
@@ -45,4 +90,7 @@ def main():
 
 
 if __name__ == '__main__':
+    print_env()
+    check_cuda()
+    check_dll()
     main()
