@@ -362,13 +362,20 @@ class MainWindow(QWidget):
         return super().eventFilter(obj, event)
 
     def request_password(self):
-        # 弹出密码输入对话框
-        password, ok = QInputDialog.getText(self, "密码验证", "请输入密码：", QLineEdit.EchoMode.Password)
-        if ok:
-            if password == "789456":
-                self.show_normal()
-            else:
-                QMessageBox.warning(self, "错误", "密码错误，请重试。")
+        # 检查是否启用密码验证
+        use_password_protection = False  # 默认关闭密码保护
+        
+        if use_password_protection:
+            # 弹出密码输入对话框
+            password, ok = QInputDialog.getText(self, "密码验证", "请输入密码：", QLineEdit.EchoMode.Password)
+            if ok:
+                if password == "789456":
+                    self.show_normal()
+                else:
+                    QMessageBox.warning(self, "错误", "密码错误，请重试。")
+        else:
+            # 直接显示窗口，不进行密码验证
+            self.show_normal()
     # 恢复窗口
 
     def show_normal(self):
@@ -490,9 +497,20 @@ class MainWindow(QWidget):
 
     def get_system_model(self):
         try:
-            output = subprocess.check_output('wmic csproduct get name', shell=True)
-            return output.decode().split('\n')[1].strip()
-        except:
+            # Using timeout to prevent hanging
+            output = subprocess.check_output('wmic csproduct get name', shell=True, timeout=10)
+            lines = output.decode('utf-8', errors='ignore').split('\n')
+            # Filter out empty lines
+            non_empty_lines = [line.strip() for line in lines if line.strip()]
+            if len(non_empty_lines) > 1:
+                return non_empty_lines[1]  # Return the second non-empty line (after headers)
+            else:
+                return "未知电脑型号"
+        except subprocess.TimeoutExpired:
+            print("WMIC command timed out, using default model detection")
+            return "未知电脑型号"
+        except Exception as e:
+            print(f"Error getting system model: {e}")
             return "未知电脑型号"
 
     def update_tray_icon_tooltip(self):
