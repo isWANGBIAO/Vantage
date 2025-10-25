@@ -1,3 +1,4 @@
+import sys
 from PyQt6.QtCore import QObject, pyqtSignal
 
 
@@ -7,6 +8,17 @@ class EmittingStream(QObject):
     def write(self, text):
         if text.strip():  # 过滤空行
             self.output_signal.emit(text)
+        # 同时输出到终端 (stdout 或 stderr)
+        if self is sys.stdout:
+            sys.__stdout__.write(text)
+        elif self is sys.stderr:
+            sys.__stderr__.write(text)
+        else:
+            # 默认写入 stdout
+            sys.__stdout__.write(text)
+        self.flush()
 
     def flush(self):
-        pass  # 保持兼容性
+        # 刷新终端输出
+        sys.__stdout__.flush()
+        sys.__stderr__.flush()  # 保持兼容性
