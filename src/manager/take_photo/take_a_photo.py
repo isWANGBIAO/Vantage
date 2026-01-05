@@ -10,9 +10,19 @@ from ..get_location import save_image_with_gps
 from ultralytics import YOLO
 
 
+_YOLO_MODEL = None
+
+
+def _get_yolo_model():
+    global _YOLO_MODEL
+    if _YOLO_MODEL is None:
+        _YOLO_MODEL = YOLO("yolo12x.pt")
+    return _YOLO_MODEL
+
+
 def detect_person_YOLO(image):
     # 加载预训练的YOLO模型
-    model = YOLO("yolo12x.pt")
+    model = _get_yolo_model()
 
     # 对图像进行预测, verbose=False表示进行推理时禁用控制台输出
     results = model.predict(source=image, verbose=False)

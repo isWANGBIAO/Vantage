@@ -14,7 +14,12 @@ class WorkerThread(QThread):
 
     def run(self):
         while self.running:
-            result = self.task_func()
+            try:
+                result = self.task_func()
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                result = None
             if result is not None:
                 self.output_signal.emit(result)
             self.msleep(int(self.interval))  # 线程休眠，控制任务频率

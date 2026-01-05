@@ -31,7 +31,20 @@ class MainWindow(QWidget):
         sys.stderr = EmittingStream()
         sys.stdout.output_signal.connect(self.append_text)
         sys.stderr.output_signal.connect(self.append_error)
+        self.cam = None
+        self.paths = {
+            'photo': None,
+            'screenshot': None
+        }
+        self.photos_path = None
+        self.screenshots_path = None
+        self.refresh_interval_seconds = 10  # ??????????????????
+        self.refresh_interval = self.refresh_interval_seconds * 1000  # ?????????????????????
+        self.monitor = None
 
+        QTimer.singleShot(0, self.bootstrap_runtime)
+
+    def bootstrap_runtime(self):
         camera_index = 0
         system_model = self.get_system_model()
         if system_model == "MRGF-XX":
@@ -39,58 +52,47 @@ class MainWindow(QWidget):
                 print(f'{camera_info.index}: {camera_info.name}')
                 if "USB Camera" in camera_info.name:
                     camera_index = camera_info.index
-            print(f"MRGF-XX 笔记本电脑默认打开内置摄像头 USB Camera, camera_index = {camera_index}")
+            print(f"MRGF-XX ??????????????????????????????????????????USB Camera, camera_index = {camera_index}")
 
         self.cam = cv2.VideoCapture(camera_index)
-        # 检查摄像头是否成功打开
+        # ?????????????????????????????????
         if not self.cam.isOpened():
             print('Failed to open camera.', file=sys.stderr)
-            return False
+            return
 
-        # 自动调整到摄像头最高的清晰度
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution")
+        # ??????????????????????????????????????????        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution")
         resolution = self.set_max_camera_resolution()
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Setting camera resolution to {resolution}")
 
-        # 用于存储最新的照片和截图路径
-        self.paths = {
-            'photo': None,
-            'screenshot': None
-        }
         # Identify folder location
         self.photos_path, self.screenshots_path = self.identify_logs_folder()
 
-        self.refresh_interval_seconds = 10  # 刷新间隔秒数
-        self.refresh_interval = self.refresh_interval_seconds * 1000  # 刷新间隔毫秒数
-
-        self.monitor = Monitor(self.cam, self.paths, self.photos_path, self.screenshots_path)  # 传入 logs_path
-        self.monitor.run_task()  # 运行一次截图任务
-        self.update_images()  # 显示最新图片
-
-        # 1️⃣ 线程处理 update_frame
+        self.monitor = Monitor(self.cam, self.paths, self.photos_path, self.screenshots_path)  # ?????? logs_path
+        self.monitor.run_task()  # ????????????????????????        
+        self.update_images()  # ??????????????????
+        # 1?????? ???????????? update_frame
         self.frame_thread = WorkerThread(self.update_frame)
         self.frame_thread.set_interval(15)
         self.frame_thread.output_signal.connect(self.display_frame)
         self.frame_thread.start()
 
-        # # 2️⃣ 线程处理 run_task 拍照截图
+        # # 2?????? ???????????? run_task ????????????
         self.task_thread = WorkerThread(self.monitor.run_task)
         self.task_thread.set_interval(self.refresh_interval)
         self.task_thread.output_signal.connect(self.display_task_result)
         self.task_thread.start()
 
-        # 3️⃣ 线程处理 update_images 显示最新图片截图
+        # 3?????? ???????????? update_images ????????????????????????
         self.image_thread = WorkerThread(self.update_images)
         self.image_thread.set_interval(self.refresh_interval * 0.1)
         self.image_thread.output_signal.connect(self.display_images)
         self.image_thread.start()
 
-        # 设置托盘图标提示文本
+        # ??????????????????????????????
         self.update_tray_icon_tooltip()
         self.tray_icon_tooltip_timer = QTimer(self)
         self.tray_icon_tooltip_timer.timeout.connect(self.update_tray_icon_tooltip)
-        self.tray_icon_tooltip_timer.start(5000)  # 每 5 秒更新一次
-
+        self.tray_icon_tooltip_timer.start(5000)  # ???5 ???????????????
     def identify_logs_folder(self):
 
         # 先尝试环境变量
@@ -181,32 +183,39 @@ class MainWindow(QWidget):
 
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
+        self.text_edit.setObjectName("logView")
 
         # ✅ 设置字体和大小
         font = QFont('Consolas', 14)  # 字体：Consolas，大小：14
         self.text_edit.setFont(font)
+        self.text_edit.setMinimumHeight(220)
 
         # 控制按钮
         self.manager_button = QPushButton('🚀 运行 Manager 任务')
         self.cursor_button = QPushButton('🎯 运行 Cursor 任务')
         self.manager_button.setIcon(QIcon('run_icon.png'))  # 添加图标
         self.cursor_button.setIcon(QIcon('cursor_icon.png'))
+        self.manager_button.setObjectName("primaryButton")
+        self.cursor_button.setObjectName("secondaryButton")
 
         # self.manager_button.clicked.connect(self.run_manager_task)
         # self.cursor_button.clicked.connect(self.run_cursor_task)
 
         # 创建主布局
         main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(12)
         main_layout.addWidget(self.text_edit)
 
         # 创建一个水平布局，放置两个子窗口（显示照片和截图）
         photo_and_screenshot_layout = QHBoxLayout()
+        photo_and_screenshot_layout.setSpacing(12)
 
         # Bottom: Real-time camera, latest photo, latest screenshot
         camera_layout = QVBoxLayout()
         # 添加时钟插件
         self.time_label = QLabel()
-        self.time_label.setStyleSheet("font-size: 24px; color: blue; border: 1px solid black;")
+        self.time_label.setObjectName("timeLabel")
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 设置文本居中显示
         self.timer4 = QTimer(self)
         self.timer4.timeout.connect(lambda: self.time_label.setText(QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")))
@@ -219,11 +228,11 @@ class MainWindow(QWidget):
 
         # 创建左侧的窗口，显示实时摄像头
         self.camera_label = QLabel('Real-time Camera')
+        self.camera_label.setObjectName("previewLabel")
         width = int(self.main_window_size[0] * 0.3)
         height = int(self.main_window_size[1] * 0.3)
 
         self.camera_label.setFixedSize(width, height)  # 设置尺寸
-        self.camera_label.setStyleSheet("border: 1px solid black;")
         self.camera_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 图片居中
         # self.camera_label.setScaledContents(True)       # 图片自适应缩放
         camera_layout.addWidget(self.camera_label)
@@ -231,14 +240,14 @@ class MainWindow(QWidget):
         photo_layout = QVBoxLayout()
         # 创建左侧的标签，用于显示照片文件名
         self.photo_filename_label = QLabel(self)
-        self.photo_filename_label.setStyleSheet("border: 1px solid black;")  # 可以设置边框样式
+        self.photo_filename_label.setObjectName("filenameLabel")
         self.photo_filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 设置文本居中显示
         photo_layout.addWidget(self.photo_filename_label)
 
         # 创建左侧的窗口，显示照片
         self.photo_label = QLabel(self)
+        self.photo_label.setObjectName("previewLabel")
         self.photo_label.setFixedSize(width, height)  # 设置尺寸
-        self.photo_label.setStyleSheet("border: 1px solid black;")
         self.photo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 图片居中
         # self.photo_label.setScaledContents(True)       # 图片自适应缩放
         photo_layout.addWidget(self.photo_label)
@@ -246,33 +255,34 @@ class MainWindow(QWidget):
         screenshot_layout = QVBoxLayout()
         # 创建右侧的标签，用于显示截图文件名
         self.screenshot_filename_label = QLabel(self)
-        self.screenshot_filename_label.setStyleSheet("border: 1px solid black;")  # 可以设置边框样式
+        self.screenshot_filename_label.setObjectName("filenameLabel")
         self.screenshot_filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 设置文本居中显示
         screenshot_layout.addWidget(self.screenshot_filename_label)
         # 创建右侧的窗口，显示截图
         self.screenshot_label = QLabel(self)
+        self.screenshot_label.setObjectName("previewLabel")
         self.screenshot_label.setFixedSize(width, height)  # 设置尺寸
-        self.screenshot_label.setStyleSheet("border: 1px solid black;")
         self.screenshot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 图片居中
         # self.screenshot_label.setScaledContents(True)       # 图片自适应缩放
         screenshot_layout.addWidget(self.screenshot_label)
 
-        # 将左侧和右侧的布局添加到水平布局
-        photo_and_screenshot_layout.addLayout(camera_layout)
+        # 将左侧和右侧的布局添加到水平布局（实时摄像头放中间）
         photo_and_screenshot_layout.addLayout(photo_layout)
+        photo_and_screenshot_layout.addLayout(camera_layout)
         photo_and_screenshot_layout.addLayout(screenshot_layout)
 
         # 按钮布局
         button_layout = QVBoxLayout()
         button_layout.addWidget(self.manager_button)
         button_layout.addWidget(self.cursor_button)
-        button_layout.setSpacing(20)
+        button_layout.setSpacing(12)
 
         # 组合布局
         main_layout.addLayout(photo_and_screenshot_layout)
         main_layout.addLayout(button_layout)
 
         self.setLayout(main_layout)
+        self.apply_style()
 
         # 监听最小化和关闭事件
         self.installEventFilter(self)
@@ -512,6 +522,63 @@ class MainWindow(QWidget):
         except Exception as e:
             print(f"Error getting system model: {e}")
             return "未知电脑型号"
+
+    def apply_style(self):
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #f4f6f8;
+                color: #202124;
+                font-family: "Segoe UI", "Microsoft YaHei";
+                font-size: 13px;
+            }
+            QTextEdit#logView {
+                background-color: #ffffff;
+                border: 1px solid #d4d7dd;
+                border-radius: 8px;
+                padding: 8px;
+            }
+            QLabel#timeLabel {
+                background-color: #0f62fe;
+                color: #ffffff;
+                border-radius: 8px;
+                padding: 6px 8px;
+                font-size: 16px;
+                font-weight: 600;
+            }
+            QLabel#previewLabel {
+                background-color: #ffffff;
+                border: 1px solid #d4d7dd;
+                border-radius: 8px;
+            }
+            QLabel#filenameLabel {
+                background-color: #eef2f6;
+                border: 1px solid #d4d7dd;
+                border-radius: 6px;
+                padding: 4px 6px;
+            }
+            QPushButton#primaryButton {
+                background-color: #0f62fe;
+                color: #ffffff;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 12px;
+                font-weight: 600;
+            }
+            QPushButton#primaryButton:hover {
+                background-color: #0043ce;
+            }
+            QPushButton#secondaryButton {
+                background-color: #ffffff;
+                color: #202124;
+                border: 1px solid #d4d7dd;
+                border-radius: 8px;
+                padding: 10px 12px;
+                font-weight: 600;
+            }
+            QPushButton#secondaryButton:hover {
+                background-color: #eef2f6;
+            }
+        """)
 
     def update_tray_icon_tooltip(self):
         """更新托盘图标的提示文本"""

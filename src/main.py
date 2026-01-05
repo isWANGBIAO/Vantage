@@ -2,6 +2,9 @@
 import os
 import sys
 import torch
+import faulthandler
+import threading
+import traceback
 
 from PyQt6.QtWidgets import QApplication
 from gui.main_window import MainWindow
@@ -45,10 +48,20 @@ def check_dll(dll_name="c10.dll"):
         print(f"{dll_name} 未找到，可能是 DLL 路径问题")
 
 
-if __name__ == '__main__':
-    print_env()
-    check_cuda()
-    check_dll()
+
+def setup_exception_logging():
+    faulthandler.enable()
+
+    def _excepthook(exc_type, exc, tb):
+        traceback.print_exception(exc_type, exc, tb, file=sys.__stderr__)
+
+    sys.excepthook = _excepthook
+
+    if hasattr(threading, "excepthook"):
+        def _thread_excepthook(args):
+            traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback, file=sys.__stderr__)
+        threading.excepthook = _thread_excepthook
+
 
 
 def is_already_running():
@@ -90,6 +103,7 @@ def main():
 
 
 if __name__ == '__main__':
+    setup_exception_logging()
     print_env()
     check_cuda()
     check_dll()
