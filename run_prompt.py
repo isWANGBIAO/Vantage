@@ -18,7 +18,10 @@ def load_env_file(path):
         key, value = line.split("=", 1)
         key = key.strip()
         if key and key not in os.environ:
-            os.environ[key] = value.strip()
+            val = value.strip()
+            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                val = val[1:-1]
+            os.environ[key] = val
 
 
 def get_history_dir(base_dir):
@@ -451,7 +454,7 @@ def main():
     historical_stats["total_conversations"] += 1
     
     if action_plan_content:
-        action_plan_filename = f"action_plan_{datetime.now().strftime('%Y%m%d')}.md"
+        action_plan_filename = f"action_plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
         action_plan_path = get_history_dir(base_dir) / action_plan_filename
         action_plan_path.write_text(action_plan_content, encoding="utf-8")
         current_messages.append({"role": "assistant", "content": action_plan_content})

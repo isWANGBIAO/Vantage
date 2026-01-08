@@ -13,6 +13,7 @@ from datetime import datetime
 from manager.manager_main import Monitor
 from .worker import WorkerThread
 from .emitting_stream import EmittingStream
+from .action_plan_dialog import ActionPlanDialog
 from cv2_enumerate_cameras import enumerate_cameras
 
 
@@ -43,6 +44,9 @@ class MainWindow(QWidget):
         self.monitor = None
 
         QTimer.singleShot(0, self.bootstrap_runtime)
+        
+        # 自动弹出今日计划 (Auto-show action plan on startup)
+        QTimer.singleShot(1000, self.show_action_plan)
 
     def bootstrap_runtime(self):
         camera_index = 0
@@ -193,6 +197,12 @@ class MainWindow(QWidget):
         # 控制按钮
         self.manager_button = QPushButton('🚀 运行 Manager 任务')
         self.cursor_button = QPushButton('🎯 运行 Cursor 任务')
+        
+        self.plan_button = QPushButton('📅 查看今日计划')
+        self.plan_button.setIcon(QIcon('plan_icon.png'))
+        self.plan_button.setObjectName("actionButton")
+        self.plan_button.clicked.connect(self.show_action_plan)
+        
         self.manager_button.setIcon(QIcon('run_icon.png'))  # 添加图标
         self.cursor_button.setIcon(QIcon('cursor_icon.png'))
         self.manager_button.setObjectName("primaryButton")
@@ -275,6 +285,7 @@ class MainWindow(QWidget):
         button_layout = QVBoxLayout()
         button_layout.addWidget(self.manager_button)
         button_layout.addWidget(self.cursor_button)
+        button_layout.addWidget(self.plan_button)
         button_layout.setSpacing(12)
 
         # 组合布局
@@ -342,10 +353,18 @@ class MainWindow(QWidget):
 
         # 创建托盘菜单
         tray_menu = QMenu()
-        restore_action = QAction("恢复窗口", self)
+        
+        view_plan_action = QAction("📅 查看今日计划", self)
+        view_plan_action.triggered.connect(self.show_action_plan)
+        
+        restore_action = QAction("🖥️ 恢复窗口", self)
         restore_action.triggered.connect(self.request_password)
-        quit_action = QAction("退出", self)
+        
+        quit_action = QAction("❌ 退出", self)
         quit_action.triggered.connect(QApplication.instance().quit)
+        
+        tray_menu.addAction(view_plan_action)
+        tray_menu.addSeparator()
         tray_menu.addAction(restore_action)
         tray_menu.addAction(quit_action)
 
@@ -524,59 +543,122 @@ class MainWindow(QWidget):
             return "未知电脑型号"
 
     def apply_style(self):
+        # Modern Glassmorphism-inspired Light Theme
         self.setStyleSheet("""
             QWidget {
-                background-color: #f4f6f8;
-                color: #202124;
-                font-family: "Segoe UI", "Microsoft YaHei";
-                font-size: 13px;
+                background-color: #f0f2f5;
+                color: #1d1d1f;
+                font-family: "Segoe UI", "Inter", "Microsoft YaHei";
+                font-size: 14px;
             }
+            
+            /* Logs Area */
             QTextEdit#logView {
                 background-color: #ffffff;
-                border: 1px solid #d4d7dd;
-                border-radius: 8px;
-                padding: 8px;
+                border: 1px solid #e0e0e0;
+                border-radius: 12px;
+                padding: 12px;
+                selection-background-color: #0066cc;
             }
+            
+            /* Time Label */
             QLabel#timeLabel {
-                background-color: #0f62fe;
+                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0066cc, stop:1 #0099ff);
                 color: #ffffff;
-                border-radius: 8px;
-                padding: 6px 8px;
-                font-size: 16px;
-                font-weight: 600;
+                border-radius: 10px;
+                padding: 8px 16px;
+                font-size: 18px;
+                font-weight: bold;
+                border: 1px solid rgba(255, 255, 255, 0.2);
             }
+            
+            /* Image Preview Labels */
             QLabel#previewLabel {
                 background-color: #ffffff;
-                border: 1px solid #d4d7dd;
-                border-radius: 8px;
+                border: 1px solid #e0e0e0;
+                border-radius: 12px;
+                padding: 2px;
             }
+            
+            /* Filename Labels */
             QLabel#filenameLabel {
-                background-color: #eef2f6;
-                border: 1px solid #d4d7dd;
+                background-color: #e8eaed;
+                color: #5f6368;
+                border: none;
                 border-radius: 6px;
-                padding: 4px 6px;
+                padding: 4px 10px;
+                font-size: 12px;
+                font-weight: 500;
             }
+            
+            /* Primary Button (Manager) */
             QPushButton#primaryButton {
-                background-color: #0f62fe;
+                background-color: #0066cc;
                 color: #ffffff;
                 border: none;
-                border-radius: 8px;
-                padding: 10px 12px;
+                border-radius: 10px;
+                padding: 12px 20px;
                 font-weight: 600;
+                font-size: 15px;
             }
             QPushButton#primaryButton:hover {
-                background-color: #0043ce;
+                background-color: #0052a3;
             }
+            QPushButton#primaryButton:pressed {
+                background-color: #003d7a;
+            }
+            
+            /* Secondary Button (Cursor) */
             QPushButton#secondaryButton {
                 background-color: #ffffff;
-                color: #202124;
-                border: 1px solid #d4d7dd;
-                border-radius: 8px;
-                padding: 10px 12px;
+                color: #1d1d1f;
+                border: 1px solid #d1d1d6;
+                border-radius: 10px;
+                padding: 12px 20px;
                 font-weight: 600;
+                font-size: 15px;
             }
             QPushButton#secondaryButton:hover {
-                background-color: #eef2f6;
+                background-color: #f5f5f7;
+                border-color: #0066cc;
+            }
+            
+            /* Action Button (Plan) */
+            QPushButton#actionButton {
+                background-color: #34c759;
+                color: #ffffff;
+                border: none;
+                border-radius: 10px;
+                padding: 12px 20px;
+                font-weight: 600;
+                font-size: 15px;
+            }
+            QPushButton#actionButton:hover {
+                background-color: #248a3d;
+            }
+            
+            /* Tooltip */
+            QToolTip {
+                background-color: #333333;
+                color: white;
+                border: none;
+                padding: 5px;
+            }
+            
+            /* Menu */
+            QMenu {
+                background-color: white;
+                border: 1px solid #d1d1d6;
+                padding: 5px;
+                border-radius: 8px;
+            }
+            QMenu::item {
+                padding: 8px 24px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #0066cc;
+                color: white;
             }
         """)
 
@@ -585,3 +667,13 @@ class MainWindow(QWidget):
         # 获取当前任务状态或任何你想要显示的信息
         tooltip_text = "任务管理器 - 运行中..."  # 替换为你实际的状态信息
         self.tray_icon.setToolTip(tooltip_text)
+
+    def show_action_plan(self):
+        """Show the Action Plan Dialog"""
+        if hasattr(self, 'plan_dialog') and self.plan_dialog.isVisible():
+            self.plan_dialog.raise_()
+            self.plan_dialog.activateWindow()
+            return
+            
+        self.plan_dialog = ActionPlanDialog(self)
+        self.plan_dialog.show()
