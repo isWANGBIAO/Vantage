@@ -2,15 +2,22 @@ import os
 import subprocess
 import sys
 from datetime import datetime
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QLabel, QHBoxLayout
-from PyQt6.QtGui import QFont, QIcon, QTextCursor
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QLabel, QHBoxLayout, QWidget, QSplitter, QApplication
+from PyQt6.QtGui import QFont, QIcon, QTextCursor, QPalette, QColor
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+try:
+    import pythoncom
+except ImportError:
+    pythoncom = None
 
 class GenerationWorker(QThread):
     finished_signal = pyqtSignal(bool, str)
     output_signal = pyqtSignal(str)
+    stats_signal = pyqtSignal(dict)
 
     def run(self):
+        if pythoncom:
+            pythoncom.CoInitialize()
         try:
             # Locate run_prompt.py
             # Assuming we are in src/gui/ or src/ so we need to go up to find run_prompt.py
@@ -67,6 +74,15 @@ class GenerationWorker(QThread):
                         except UnicodeDecodeError:
                             line = line_bytes.decode('utf-8', errors='replace')
                     self.output_signal.emit(line.strip())
+                    
+                    if line.startswith("STATS_JSON:"):
+                        try:
+                            json_str = line.replace("STATS_JSON:", "").strip()
+                            import json
+                            stats = json.loads(json_str)
+                            self.stats_signal.emit(stats)
+                        except Exception:
+                            pass
             
             # Read any remaining stderr
             stderr_bytes = process.stderr.read()
@@ -87,13 +103,28 @@ class GenerationWorker(QThread):
 
         except Exception as e:
             self.finished_signal.emit(False, str(e))
+        finally:
+            if pythoncom:
+                pythoncom.CoUninitialize()
 
 class ActionPlanDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("今日 Action Plan")
-        self.resize(700, 800)
+        self.setWindowTitle("Vantage - 今日 Action Plan")
+        self.resize(1200, 900)
         self.init_ui()
+
+    def is_dark_mode(self):
+        # 简单判断：如果 WindowText 颜色比 Window 颜色亮，则是深色模式
+        # Use QApplication.palette() which is standard for app-wide theme
+        palette = QApplication.palette()
+        
+        window_color = palette.color(QPalette.ColorRole.Window)
+        text_color = palette.color(QPalette.ColorRole.WindowText)
+        return text_color.lightness() > window_color.lightness()
+        
+        
+        self.current_target = "analysis" # analysis or plan
         
         # Start generation immediately
         self.start_generation()
@@ -109,12 +140,50 @@ class ActionPlanDialog(QDialog):
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
 
-        # Content Area
-        self.text_edit = QTextEdit()
-        self.text_edit.setReadOnly(True)
-        self.text_edit.setObjectName("planContent")
-        self.text_edit.setFont(QFont("Consolas", 12))
-        layout.addWidget(self.text_edit)
+        # Main Content Area (Splitter for Left/Right)
+        content_layout = QHBoxLayout()
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # Left Pane: Analysis
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_label = QLabel("📊 总体回复 (General Analysis)")
+        left_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        self.left_text_edit = QTextEdit()
+        self.left_text_edit.setReadOnly(True)
+        self.left_text_edit.setObjectName("analysisContent")
+        self.left_text_edit.setFont(QFont("Consolas", 11))
+        left_layout.addWidget(left_label)
+        left_layout.addWidget(self.left_text_edit)
+        
+        # Right Pane: Action Plan
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_label = QLabel("📝 今日计划 (Today's Action Plan)")
+        right_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        self.right_text_edit = QTextEdit()
+        self.right_text_edit.setReadOnly(True)
+        self.right_text_edit.setObjectName("planContent")
+        self.right_text_edit.setFont(QFont("Consolas", 11))
+        right_layout.addWidget(right_label)
+        right_layout.addWidget(self.right_text_edit)
+        
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        
+        layout.addWidget(splitter, stretch=1)
+
+        # Stats Area (Red Box Area)
+        self.stats_label = QLabel("")
+        self.stats_label.setObjectName("statsLabel")
+        self.stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.stats_label.setWordWrap(True)
+        self.stats_label.hide() # Hidden until we have stats
+        layout.addWidget(self.stats_label, stretch=0)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -131,30 +200,164 @@ class ActionPlanDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         btn_layout.addWidget(close_btn)
         
-        layout.addLayout(btn_layout)
+        layout.addLayout(btn_layout, stretch=0)
 
         self.setLayout(layout)
         self.apply_style()
+        
+        # Start generation automatically
+        self.start_generation()
+
+    def apply_style(self):
+        is_dark = self.is_dark_mode()
+        
+        # Define colors based on mode
+        if is_dark:
+            # Dark Mode Colors
+            bg_color = "#2b2b2b"      # App window background (handled by system usually, but for specific widgets)
+            text_color = "#ffffff"
+            border_color = "#444444"
+            stats_bg = "#333333"      # Dark gray for stats box
+            stats_text = "#dddddd"
+            stats_border = "#555555"
+            primary_btn_bg = "#0d6efd"
+            primary_btn_text = "#ffffff"
+            text_edit_bg = "#1e1e1e"  # Slightly darker for input/text areas
+            text_edit_border = "#444444"
+            title_color = "#ffffff"
+        else:
+            # Light Mode Colors
+            bg_color = "#ffffff"
+            text_color = "#000000"
+            border_color = "#cccccc"
+            stats_bg = "#f8f9fa"      # Light gray for stats box
+            stats_text = "#555555"
+            stats_border = "#dee2e6"
+            primary_btn_bg = "#0d6efd"
+            primary_btn_text = "#ffffff"
+            text_edit_bg = "#ffffff"
+            text_edit_border = "#ccc"
+            title_color = "#000000"
+
+        self.setStyleSheet(f"""
+            QLabel#dialogTitle {{
+                font-size: 20px;
+                font-weight: bold;
+                margin-bottom: 5px;
+                color: {title_color};
+            }}
+            QTextEdit {{
+                font-family: "Consolas";
+                font-size: 11pt;
+                background-color: {text_edit_bg};
+                color: {text_color};
+                border: 1px solid {text_edit_border};
+                border-radius: 8px;
+                padding: 10px;
+            }}
+            QLabel#statsLabel {{
+                font-size: 12px;
+                color: {stats_text};
+                background-color: {stats_bg};
+                border-top: 1px solid {stats_border};
+                border-radius: 4px;
+                padding: 4px 8px;
+                margin-top: 5px;
+            }}
+               
+            QPushButton {{
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 14px;
+            }}
+            QPushButton#actionButton {{
+                background-color: {primary_btn_bg};
+                color: {primary_btn_text};
+                border: none;
+            }}
+            QPushButton#actionButton:hover {{
+                background-color: #0b5ed7; /* Slightly darker blue */
+            }}
+            QPushButton#actionButton:disabled {{
+                background-color: #6c757d;
+            }}
+            QPushButton#closeButton {{
+                border: 1px solid {border_color};
+                color: {text_color};
+                background-color: transparent;
+            }}
+            QPushButton#closeButton:hover {{
+                border-color: #6c757d;
+            }}
+        """)
+
 
     def start_generation(self):
-        self.text_edit.clear()
-        self.text_edit.setMarkdown("### ⏳ 正在生成今日计划 (Generating Action Plan)...\n\nThis process may take a few seconds. Please wait.\n\n```\n")
+        self.left_text_edit.clear()
+        self.right_text_edit.clear()
+        self.current_target = "analysis"
+        
+        self.left_text_edit.setMarkdown("### ⏳ 正在分析数据 (Analyzing Data)...\n\n")
+        self.right_text_edit.setMarkdown("### ⏳ 等待生成计划 (Waiting for Plan)...\n\n")
+        self.accumulated_analysis_text = ""
         
         self.regen_btn.setEnabled(False)
         
         self.worker = GenerationWorker()
         self.worker.output_signal.connect(self.append_log)
         self.worker.finished_signal.connect(self.on_generation_finished)
+        self.worker.stats_signal.connect(self.update_stats)
         self.worker.start()
 
+    def update_stats(self, stats):
+        # Update the stats label
+        text = (
+            f"📊 <b>Session Stats:</b> "
+            f"Speed: {stats.get('speed', 'N/A')} | "
+            f"Time: {stats.get('total_duration', 0):.2f}s | "
+            f"Tokens: {stats.get('total_tokens', 0)} "
+            f"(Prompt: {stats.get('prompt_tokens', 0)}, Completion: {stats.get('completion_tokens', 0)}) | "
+            f"Turns: {stats.get('turns', 0)}"
+        )
+        self.stats_label.setText(text)
+        self.stats_label.show()
+
     def append_log(self, text):
-        self.text_edit.moveCursor(QTextCursor.MoveOperation.End)
-        self.text_edit.insertPlainText(text + "\n")
-        self.text_edit.moveCursor(QTextCursor.MoveOperation.End)
+        # Check for start marker (to clear init logs)
+        if "---ANALYSIS_START---" in text:
+            parts = text.split("---ANALYSIS_START---")
+            # If there's content after the marker, allow it to be processed
+            # But primarily we want to clear the buffer
+            self.accumulated_analysis_text = ""
+            self.left_text_edit.clear()
+            # Take the part after the marker if it exists in this chunk
+            if len(parts) > 1:
+                text = parts[1].strip()
+            else:
+                text = "" # valid marker but no content yet
+            
+            if not text:
+                return # Nothing to add yet
+
+        # Check for switching marker
+        if "初始分析已完成。正在生成今日行动建议..." in text:
+            self.current_target = "plan"
+            self.right_text_edit.clear() # Clear waiting message
+            self.right_text_edit.append("🚀 开始生成计划...\n")
+        
+        if self.current_target == "analysis":
+            self.accumulated_analysis_text += text + "\n"
+            self.left_text_edit.setMarkdown(self.accumulated_analysis_text)
+            self.left_text_edit.moveCursor(QTextCursor.MoveOperation.End)
+        else:
+            self.right_text_edit.moveCursor(QTextCursor.MoveOperation.End)
+            self.right_text_edit.insertPlainText(text + "\n")
+            self.right_text_edit.moveCursor(QTextCursor.MoveOperation.End)
 
     def on_generation_finished(self, success, message):
-        self.text_edit.moveCursor(QTextCursor.MoveOperation.End)
-        self.text_edit.insertPlainText(f"```\n\n**Status**: {message}\n\n")
+        self.right_text_edit.moveCursor(QTextCursor.MoveOperation.End)
+        self.right_text_edit.insertPlainText(f"```\n\n**Status**: {message}\n\n")
         
         if success:
             self.load_action_plan()
@@ -198,57 +401,9 @@ class ActionPlanDialog(QDialog):
             try:
                 with open(target_file, "r", encoding="utf-8") as f:
                     content = f.read()
-                    self.text_edit.setMarkdown(content)
+                    self.right_text_edit.setMarkdown(content)
             except Exception as e:
-                self.text_edit.setText(f"Error reading file {target_file}: {e}")
+                self.right_text_edit.setText(f"Error reading file {target_file}: {e}")
         else:
-             self.text_edit.setMarkdown(f"# No Plan Found for Today :(\n\nLooking for pattern: `{pattern}*.md`")
+             self.right_text_edit.setMarkdown(f"# No Plan Found for Today :(\n\nLooking for pattern: `{pattern}*.md`")
 
-    def apply_style(self):
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #1e1e1e;
-                color: #ffffff;
-            }
-            QLabel#dialogTitle {
-                font-size: 24px;
-                font-weight: bold;
-                color: #ffffff;
-                margin-bottom: 10px;
-            }
-            QTextEdit#planContent {
-                background-color: #2d2d2d;
-                border: 1px solid #3d3d3d;
-                border-radius: 8px;
-                padding: 10px;
-                color: #ffffff;
-            }
-            QPushButton#actionButton {
-                background-color: #0d6efd;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton#actionButton:hover {
-                background-color: #0b5ed7;
-            }
-            QPushButton#actionButton:disabled {
-                background-color: #495057;
-                color: #868e96;
-            }
-            QPushButton#closeButton {
-                background-color: #6c757d;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton#closeButton:hover {
-                background-color: #5c636a;
-            }
-        """)

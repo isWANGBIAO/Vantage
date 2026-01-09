@@ -1,4 +1,11 @@
 from PyQt6.QtCore import QThread, pyqtSignal
+import traceback
+
+try:
+    import pythoncom
+except ImportError:
+    pythoncom = None
+
 
 # 通用的工作线程类
 
@@ -13,16 +20,22 @@ class WorkerThread(QThread):
         self.running = True
 
     def run(self):
-        while self.running:
-            try:
-                result = self.task_func()
-            except Exception:
-                import traceback
-                traceback.print_exc()
-                result = None
-            if result is not None:
-                self.output_signal.emit(result)
-            self.msleep(int(self.interval))  # 线程休眠，控制任务频率
+        if pythoncom:
+            pythoncom.CoInitialize()
+        
+        try:
+            while self.running:
+                try:
+                    result = self.task_func()
+                except Exception:
+                    traceback.print_exc()
+                    result = None
+                if result is not None:
+                    self.output_signal.emit(result)
+                self.msleep(int(self.interval))  # 线程休眠，控制任务频率
+        finally:
+            if pythoncom:
+                pythoncom.CoUninitialize()
 
     def set_interval(self, interval):
         self.interval = interval   # 支持动态调整间隔

@@ -102,6 +102,9 @@ Comsol教程 见开会纪要.docx
 - [ ] 水下射线声学建模教学案例（二位轴对称几何）
   [https://cn.comsol.com/model/underwater-ray-tracing-in-a-2d-axisymmetric-geometry-44711](https://cn.comsol.com/model/underwater-ray-tracing-in-a-2d-axisymmetric-geometry-44711)
 
+  - [ ] GPU加速及其渲染视频这个值得做会议汇报的时候展示，https://www.comsol.com/release/6.4/acoustics-module
+  - [ ] GPU加速及渲染https://www.comsol.com/blogs/using-acoustic-ray-tracing-and-gpu-in-automotive-applications
+
 #### 工具与流程
 
 - [ ] 大规模算例使用Blender进行渲染
@@ -161,6 +164,9 @@ Comsol教程 见开会纪要.docx
 ### 可能可以发论文的创新点
 
 - [ ] 射线发射不均匀 实现均匀射线发射
+- [ ] 多GPU加速
+- [ ] AI AGENTS 集成
+
 
 ### 奖励荣誉
 

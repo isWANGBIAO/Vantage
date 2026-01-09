@@ -9,6 +9,8 @@ import requests
 import shutil
 import tempfile
 import subprocess
+import time
+import json
 
 
 
@@ -353,9 +355,16 @@ def call_model_messages(messages):
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    
+    start_time = time.time()
     response = requests.post(url, json=payload, headers=headers, timeout=120)
     response.raise_for_status()
-    return response.json()
+    
+    result = response.json()
+    duration = time.time() - start_time
+    result["_duration_seconds"] = duration
+    
+    return result
 
 
 def extract_text(response_json):
@@ -371,10 +380,11 @@ def extract_usage(response_json):
         return {
             "prompt_tokens": usage.get("prompt_tokens", 0),
             "completion_tokens": usage.get("completion_tokens", 0),
-            "total_tokens": usage.get("total_tokens", 0)
+            "total_tokens": usage.get("total_tokens", 0),
+            "duration": response_json.get("_duration_seconds", 0)
         }
     except Exception:
-        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "duration": 0}
 
 
 def main():
@@ -387,7 +397,8 @@ def main():
         "prompt_tokens": 0,
         "completion_tokens": 0,
         "total_tokens": 0,
-        "turns": 0
+        "turns": 0,
+        "total_duration": 0
     }
 
     if len(sys.argv) > 1:
@@ -449,6 +460,8 @@ def main():
         os.environ.get("SILICONFLOW_MODEL", "Unknown")
     )
 
+    print("---ANALYSIS_START---")
+    print(content)
     print(f"已生成模型结果: {output_path}")
     print("\n" + "="*50)
     print("初始分析已完成。正在生成今日行动建议...")
@@ -475,6 +488,7 @@ def main():
     current_session_usage["completion_tokens"] += usage["completion_tokens"]
     current_session_usage["total_tokens"] += usage["total_tokens"]
     current_session_usage["turns"] += 1
+    current_session_usage["total_duration"] += usage["duration"]
     
     historical_stats["total_prompt_tokens"] += usage["prompt_tokens"]
     historical_stats["total_completion_tokens"] += usage["completion_tokens"]
@@ -511,6 +525,24 @@ def main():
     print("-" * 30)
     print(f"历史总消耗 Tokens: {historical_stats['total_prompt_tokens'] + historical_stats['total_completion_tokens']}")
     print("="*30 + "\n")
+    
+    # Print JSON for GUI to parse
+    # Calculate average speed
+    total_duration = current_session_usage.get("total_duration", 0) # We need to accumulate this
+    total_tokens = current_session_usage["total_tokens"]
+    # Calculate speed based on completion tokens only (Generation Speed)
+    completion_tokens = current_session_usage["completion_tokens"]
+    speed = completion_tokens / total_duration if total_duration > 0 else 0
+    
+    stats_output = {
+        "turns": current_session_usage['turns'],
+        "prompt_tokens": current_session_usage['prompt_tokens'],
+        "completion_tokens": current_session_usage['completion_tokens'],
+        "total_tokens": total_tokens,
+        "total_duration": total_duration,
+        "speed": f"{speed:.2f} tokens/s"
+    }
+    print(f"STATS_JSON:{json.dumps(stats_output)}")
 
 
 if __name__ == "__main__":

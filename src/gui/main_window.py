@@ -9,6 +9,7 @@ import os
 import sys
 import shutil
 import cv2
+import traceback
 from datetime import datetime
 from manager.manager_main import Monitor
 from .worker import WorkerThread
@@ -22,16 +23,21 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
 
-        # 初始化界面
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 开始初始化")
-        self.init_ui()
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 初始化完成")
+        # 初始化日志记录
+        self.init_file_logging()
 
-        # 重定向 stdout 和 stderr
+        # 重定向 stdout 和 stderr (尽早进行，以捕获初始化日志)
         sys.stdout = EmittingStream()
         sys.stderr = EmittingStream()
         sys.stdout.output_signal.connect(self.append_text)
         sys.stderr.output_signal.connect(self.append_error)
+
+        # 初始化界面
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 开始初始化")
+        
+        self.init_ui()
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 初始化完成")
+
         self.cam = None
         self.paths = {
             'photo': None,
@@ -97,6 +103,50 @@ class MainWindow(QWidget):
         self.tray_icon_tooltip_timer = QTimer(self)
         self.tray_icon_tooltip_timer.timeout.connect(self.update_tray_icon_tooltip)
         self.tray_icon_tooltip_timer.start(5000)  # ???5 ???????????????
+        
+    def init_file_logging(self):
+        # 确保 logs 目录存在
+        self.logs_dir = os.path.join(os.getcwd(), 'logs')
+        if not os.path.exists(self.logs_dir):
+            os.makedirs(self.logs_dir)
+            print(f"Created logs directory: {self.logs_dir}")
+            
+        # 设置今日日志文件路径
+        date_str = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+        self.log_file_path = os.path.join(self.logs_dir, f"log_{date_str}.log")
+        print(f"Logging to file: {self.log_file_path}")
+
+        # 设置全局异常捕获
+        sys.excepthook = self.exception_hook
+
+    def exception_hook(self, exctype, value, tb):
+        """捕获未处理的异常并记录到日志"""
+        # 格式化异常信息
+        error_msg = "".join(traceback.format_exception(exctype, value, tb))
+        
+        # 打印到控制台（会被重定向的 stderr 捕获）
+        sys.__stderr__.write(error_msg)
+        
+        # 强制写入日志文件
+        self.log_to_file(f"[CRITICAL ERROR] Uncaught Exception:\n{error_msg}")
+        
+        # 如果需要，可以保留默认的异常处理行为（可选）
+        # sys.__excepthook__(exctype, value, tb) 
+
+    def log_to_file(self, text):
+        try:
+            with open(self.log_file_path, "a", encoding="utf-8") as f:
+                # Add timestamp if not present (simple check)
+                # print statements usually have their own timestamps based on the app logic,
+                # but raw text might not. For simplicity, we just append exactly what is sent.
+                # Or we can prefer adding a timestamp if line doesn't start with 'Time'
+                # But let's keep it simple: exact mirror of console.
+                f.write(text + "\n")
+        except Exception as e:
+            # Avoid recursion if logging fails
+            sys.__stderr__.write(f"Failed to write to log file: {e}\n")
+
+
     def identify_logs_folder(self):
 
         # 先尝试环境变量
@@ -150,7 +200,7 @@ class MainWindow(QWidget):
 
     # 显示 run_task 处理结果
     def display_task_result(self, result):
-        self.output_area.append(result)  # 显示到文本框中
+        self.text_edit.append(result)  # 显示到文本框中
 
     # 显示最新图片
     def display_images(self, images):
@@ -179,7 +229,7 @@ class MainWindow(QWidget):
     def init_ui(self):
         # print("已切换到浅色主题")
         # self.set_light_theme()
-        self.setWindowTitle('任务管理器')
+        self.setWindowTitle('Vantage - 任务管理器')
         self.main_window_size = (800, 800)
         self.resize_window()  # 调整窗口大小并且居中显示
 
@@ -188,6 +238,13 @@ class MainWindow(QWidget):
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
         self.text_edit.setObjectName("logView")
+        
+        # Log Section Layout
+        log_layout = QVBoxLayout()
+        log_title = QLabel("📝 运行日志 (System Logs)")
+        log_title.setObjectName("sectionTitle")
+        log_layout.addWidget(log_title)
+        log_layout.addWidget(self.text_edit)
 
         # ✅ 设置字体和大小
         font = QFont('Consolas', 14)  # 字体：Consolas，大小：14
@@ -215,7 +272,8 @@ class MainWindow(QWidget):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(12)
-        main_layout.addWidget(self.text_edit)
+        # main_layout.addWidget(self.text_edit)
+        main_layout.addLayout(log_layout)
 
         # 创建一个水平布局，放置两个子窗口（显示照片和截图）
         photo_and_screenshot_layout = QHBoxLayout()
@@ -245,6 +303,12 @@ class MainWindow(QWidget):
         self.camera_label.setFixedSize(width, height)  # 设置尺寸
         self.camera_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 图片居中
         # self.camera_label.setScaledContents(True)       # 图片自适应缩放
+
+        camera_title = QLabel("📷 实时监控 (Camera Feed)")
+        camera_title.setObjectName("sectionTitle")
+        camera_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        camera_layout.insertWidget(0, camera_title) # Add to top
+        
         camera_layout.addWidget(self.camera_label)
 
         photo_layout = QVBoxLayout()
@@ -252,6 +316,12 @@ class MainWindow(QWidget):
         self.photo_filename_label = QLabel(self)
         self.photo_filename_label.setObjectName("filenameLabel")
         self.photo_filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 设置文本居中显示
+        
+        photo_title = QLabel("🖼️ 最新照片 (Latest Photo)")
+        photo_title.setObjectName("sectionTitle")
+        photo_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        photo_layout.addWidget(photo_title)
         photo_layout.addWidget(self.photo_filename_label)
 
         # 创建左侧的窗口，显示照片
@@ -267,6 +337,12 @@ class MainWindow(QWidget):
         self.screenshot_filename_label = QLabel(self)
         self.screenshot_filename_label.setObjectName("filenameLabel")
         self.screenshot_filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)  # 设置文本居中显示
+        
+        screenshot_title = QLabel("🖥️ 最新截图 (Latest Screenshot)")
+        screenshot_title.setObjectName("sectionTitle")
+        screenshot_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        screenshot_layout.addWidget(screenshot_title)
         screenshot_layout.addWidget(self.screenshot_filename_label)
         # 创建右侧的窗口，显示截图
         self.screenshot_label = QLabel(self)
@@ -335,15 +411,20 @@ class MainWindow(QWidget):
 
     # 正常输出
     def append_text(self, text):
+        if not hasattr(self, 'text_edit'):
+            return
         color = "white" if self.is_dark_mode() else "black"
         self.text_edit.append(f"<span style='color:{color};'>{text}</span>")
         self.text_edit.moveCursor(QTextCursor.MoveOperation.End)
+        self.log_to_file(text)
 
     # 错误输出
     def append_error(self, text):
+        if not hasattr(self, 'text_edit'):
+            return
         error_color = "#FF6666" if self.is_dark_mode() else "red"
         self.text_edit.append(f"<span style='color:{error_color};'>{text}</span>")
-        self.text_edit.moveCursor(QTextCursor.MoveOperation.End)
+        self.log_to_file(f"[ERROR] {text}")
 
     # 托盘菜单
     def init_tray_icon(self):
@@ -543,124 +624,141 @@ class MainWindow(QWidget):
             return "未知电脑型号"
 
     def apply_style(self):
-        # Modern Glassmorphism-inspired Light Theme
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #f0f2f5;
-                color: #1d1d1f;
+        # Simplified Style using System Palette
+        # We rely on QPalette for base colors (Window, Text, Base)
+        # We only style specific components to add structure without forcing colors
+        
+        is_dark = self.is_dark_mode()
+        
+        if is_dark:
+            # Dark Mode
+            text_color = "#ffffff"
+            border_color = "#444444" 
+            text_edit_bg = "#1e1e1e"
+            label_border = "#555555"
+            btn_text = "#ffffff"
+            secondary_btn_border = "#666666"
+            secondary_btn_hover = "#0d6efd"
+            menu_bg = "#2b2b2b"
+            menu_border = "#444444"
+            menu_item_hover = "#0d6efd"
+        else:
+            # Light Mode
+            text_color = "#000000"
+            border_color = "#cccccc"
+            text_edit_bg = "#ffffff"
+            label_border = "#cccccc"
+            btn_text = "#000000"
+            secondary_btn_border = "#cccccc"
+            secondary_btn_hover = "#0066cc"
+            menu_bg = "#ffffff"
+            menu_border = "#cccccc"
+            menu_item_hover = "#0066cc"
+
+        self.setStyleSheet(f"""
+            QWidget {{
                 font-family: "Segoe UI", "Inter", "Microsoft YaHei";
                 font-size: 14px;
-            }
+            }}
+            
+            /* Section Titles */
+            QLabel#sectionTitle {{
+                font-size: 14px;
+                font-weight: bold;
+                /* color: {text_color}; */
+                padding-bottom: 4px;
+            }}
             
             /* Logs Area */
-            QTextEdit#logView {
-                background-color: #ffffff;
-                border: 1px solid #e0e0e0;
-                border-radius: 12px;
-                padding: 12px;
-                selection-background-color: #0066cc;
-            }
+            QTextEdit#logView {{
+                border: 1px solid {border_color};
+                background-color: {text_edit_bg};
+                color: {text_color};
+                border-radius: 8px;
+                padding: 8px;
+            }}
             
-            /* Time Label */
-            QLabel#timeLabel {
-                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0066cc, stop:1 #0099ff);
+            /* Time Label - Keep distinctive but possibly adapt border */
+            QLabel#timeLabel {{
+                background-color: #0066cc; /* Keep accent color for time */
                 color: #ffffff;
-                border-radius: 10px;
-                padding: 8px 16px;
+                border-radius: 8px;
+                padding: 6px 12px;
                 font-size: 18px;
                 font-weight: bold;
-                border: 1px solid rgba(255, 255, 255, 0.2);
-            }
+            }}
             
             /* Image Preview Labels */
-            QLabel#previewLabel {
-                background-color: #ffffff;
-                border: 1px solid #e0e0e0;
-                border-radius: 12px;
+            QLabel#previewLabel {{
+                border: 1px solid {label_border};
+                border-radius: 8px;
                 padding: 2px;
-            }
+            }}
             
             /* Filename Labels */
-            QLabel#filenameLabel {
-                background-color: #e8eaed;
-                color: #5f6368;
-                border: none;
+            QLabel#filenameLabel {{
+                /* Use a translucent background or border instead of fixed color */
+                border: 1px solid {label_border};
                 border-radius: 6px;
                 padding: 4px 10px;
                 font-size: 12px;
                 font-weight: 500;
-            }
+            }}
             
-            /* Primary Button (Manager) */
-            QPushButton#primaryButton {
+            /* Buttons - Standardize with slight modernization */
+            QPushButton {{
+                padding: 10px 18px;
+                border-radius: 8px;
+                font-weight: 600;
+                font-size: 14px;
+            }}
+            
+            QPushButton#primaryButton {{
                 background-color: #0066cc;
-                color: #ffffff;
-                border: none;
-                border-radius: 10px;
-                padding: 12px 20px;
-                font-weight: 600;
-                font-size: 15px;
-            }
-            QPushButton#primaryButton:hover {
-                background-color: #0052a3;
-            }
-            QPushButton#primaryButton:pressed {
-                background-color: #003d7a;
-            }
-            
-            /* Secondary Button (Cursor) */
-            QPushButton#secondaryButton {
-                background-color: #ffffff;
-                color: #1d1d1f;
-                border: 1px solid #d1d1d6;
-                border-radius: 10px;
-                padding: 12px 20px;
-                font-weight: 600;
-                font-size: 15px;
-            }
-            QPushButton#secondaryButton:hover {
-                background-color: #f5f5f7;
-                border-color: #0066cc;
-            }
-            
-            /* Action Button (Plan) */
-            QPushButton#actionButton {
-                background-color: #34c759;
-                color: #ffffff;
-                border: none;
-                border-radius: 10px;
-                padding: 12px 20px;
-                font-weight: 600;
-                font-size: 15px;
-            }
-            QPushButton#actionButton:hover {
-                background-color: #248a3d;
-            }
-            
-            /* Tooltip */
-            QToolTip {
-                background-color: #333333;
                 color: white;
                 border: none;
-                padding: 5px;
-            }
+            }}
+            QPushButton#primaryButton:hover {{
+                background-color: #0052a3;
+            }}
+            
+            QPushButton#secondaryButton {{
+                border: 1px solid {secondary_btn_border};
+                color: {text_color};
+                background-color: transparent;
+            }}
+            QPushButton#secondaryButton:hover {{
+                border-color: {secondary_btn_hover};
+            }}
+            
+            QPushButton#actionButton {{
+                background-color: #34c759;
+                color: white;
+                border: none;
+            }}
+            QPushButton#actionButton:hover {{
+                background-color: #248a3d;
+            }}
             
             /* Menu */
-            QMenu {
-                background-color: white;
-                border: 1px solid #d1d1d6;
+            QMenu {{
+                background-color: {menu_bg};
+                border: 1px solid {menu_border};
                 padding: 5px;
-                border-radius: 8px;
-            }
-            QMenu::item {
-                padding: 8px 24px;
+                border-radius: 6px;
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
                 border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #0066cc;
+                color: {text_color};
+            }}
+            QMenu::item:selected {{
+                background-color: {menu_item_hover};
                 color: white;
-            }
+            }}
         """)
+            
+
 
     def update_tray_icon_tooltip(self):
         """更新托盘图标的提示文本"""

@@ -5,6 +5,7 @@ import torch
 import faulthandler
 import threading
 import traceback
+import datetime
 
 from PyQt6.QtWidgets import QApplication
 from gui.main_window import MainWindow
@@ -51,15 +52,33 @@ def check_dll(dll_name="c10.dll"):
 
 def setup_exception_logging():
     faulthandler.enable()
+    
+    # Ensure logs dir exists
+    # If running from src, logs is ../logs
+    # script path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    logs_dir = os.path.join(project_root, "logs")
+    if not os.path.exists(logs_dir):
+        os.makedirs(logs_dir, exist_ok=True)
+        
+    log_file = os.path.join(logs_dir, "startup_error.log")
+
+    def log_to_file(exc_type, exc_value, exc_traceback):
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"\n[{datetime.datetime.now()}] Uncaught Exception:\n")
+            traceback.print_exception(exc_type, exc_value, exc_traceback, file=f)
 
     def _excepthook(exc_type, exc, tb):
         traceback.print_exception(exc_type, exc, tb, file=sys.__stderr__)
+        log_to_file(exc_type, exc, tb)
 
     sys.excepthook = _excepthook
 
     if hasattr(threading, "excepthook"):
         def _thread_excepthook(args):
             traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback, file=sys.__stderr__)
+            log_to_file(args.exc_type, args.exc_value, args.exc_traceback)
         threading.excepthook = _thread_excepthook
 
 
@@ -104,7 +123,20 @@ def main():
 
 if __name__ == '__main__':
     setup_exception_logging()
-    print_env()
-    check_cuda()
-    check_dll()
-    main()
+    try:
+        print_env()
+        check_cuda()
+        check_dll()
+        main()
+    except Exception as e:
+        print(f"CRITICAL STARTUP ERROR: {e}")
+        # Manually log since sys.excepthook might not catch everything in this scope if handled
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        logs_dir = os.path.join(project_root, "logs")
+        log_file = os.path.join(logs_dir, "startup_error.log")
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"\n[{datetime.datetime.now()}] CRITICAL MAIN ERROR:\n")
+            f.write(str(e) + "\n")
+            traceback.print_exc(file=f)
+        input("Press Enter to exit...") # Keep window open on crash
