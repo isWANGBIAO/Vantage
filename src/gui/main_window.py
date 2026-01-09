@@ -410,6 +410,11 @@ class MainWindow(QWidget):
         return text_color.lightness() > background_color.lightness()
 
     # 正常输出
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.PaletteChange:
+            self.apply_style()
+        super().changeEvent(event)
+
     def append_text(self, text):
         if not hasattr(self, 'text_edit'):
             return

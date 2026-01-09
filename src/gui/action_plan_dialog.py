@@ -4,7 +4,7 @@ import sys
 from datetime import datetime
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QLabel, QHBoxLayout, QWidget, QSplitter, QApplication
 from PyQt6.QtGui import QFont, QIcon, QTextCursor, QPalette, QColor
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEvent
 try:
     import pythoncom
 except ImportError:
@@ -127,7 +127,13 @@ class ActionPlanDialog(QDialog):
         self.current_target = "analysis" # analysis or plan
         
         # Start generation immediately
+        # Start generation automatically
         self.start_generation()
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.PaletteChange:
+            self.apply_style()
+        super().changeEvent(event)
 
     def init_ui(self):
         layout = QVBoxLayout()
