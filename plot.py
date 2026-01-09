@@ -276,11 +276,11 @@ def get_collage_size():
     width = os.environ.get("PLOT_COLLAGE_WIDTH") or os.environ.get("PLOT_SCREEN_WIDTH")
     height = os.environ.get("PLOT_COLLAGE_HEIGHT") or os.environ.get("PLOT_SCREEN_HEIGHT")
     if width is None or height is None:
-        return 3840, 2160
+        return 5120, 2880  # 5K resolution for high DPI clarity
     try:
         return int(width), int(height)
     except ValueError:
-        return 3840, 2160
+        return 5120, 2880
 
 
 def save_figure(fig, output_dir, filename):
@@ -289,7 +289,7 @@ def save_figure(fig, output_dir, filename):
     if not filename.lower().endswith(".png"):
         filename = f"{filename}.png"
     path = Path(output_dir) / filename
-    fig.savefig(path, dpi=300, bbox_inches='tight', pad_inches=0.1, facecolor=fig.get_facecolor(), edgecolor='none')
+    fig.savefig(path, dpi=800, bbox_inches='tight', pad_inches=0.1, facecolor=fig.get_facecolor(), edgecolor='none')
     plt.close(fig)
     return path
 
@@ -376,7 +376,7 @@ def merge_plot_images(output_dir, filename="plot_collage.png", is_dark_mode=Fals
 
     files = sorted(files, key=sort_key)
     files = sorted(files, key=sort_key)
-    cols = 3
+    cols = 5
     rows = math.ceil(len(files) / cols) if len(files) > 0 else 1
     padding = max(16, int(min(collage_width, collage_height) * 0.01))
     cell_width = max(1, (collage_width - padding * (cols + 1)) // cols)
@@ -392,8 +392,8 @@ def merge_plot_images(output_dir, filename="plot_collage.png", is_dark_mode=Fals
         background.paste(image, (x, y))
 
     output_path = output_dir / filename
-    background.save(output_path)
-    print(f"已生成合并图: {output_path}")
+    background.save(output_path, "PNG", optimize=True)
+    print(f"已生成合并图: {output_path} (分辨率: {collage_width}x{collage_height})")
     return output_path
 
 

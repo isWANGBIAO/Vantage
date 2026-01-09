@@ -15,7 +15,6 @@ from datetime import datetime
 from manager.manager_main import Monitor
 from .worker import WorkerThread
 from .emitting_stream import EmittingStream
-from .action_plan_dialog import ActionPlanDialog
 from cv2_enumerate_cameras import enumerate_cameras
 
 
@@ -48,6 +47,97 @@ class PlotWorker(QThread):
         except Exception as e:
             self.finished_signal.emit(False, f"Error: {e}")
 
+
+class ActionPlanWorker(QThread):
+    """Worker thread for generating Action Plan via run_prompt.py"""
+    finished_signal = pyqtSignal(bool, str)
+    output_signal = pyqtSignal(str)
+    stats_signal = pyqtSignal(dict)
+
+    def run(self):
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except ImportError:
+            pass
+
+        try:
+            # Locate run_prompt.py
+            script_path = "run_prompt.py"
+            if not os.path.isabs(script_path):
+                if not os.path.exists(script_path):
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    candidate = os.path.normpath(os.path.join(current_dir, "..", "..", "run_prompt.py"))
+                    if os.path.exists(candidate):
+                        script_path = candidate
+                    else:
+                        script_path = os.path.abspath(script_path)
+                else:
+                    script_path = os.path.abspath(script_path)
+
+            if not os.path.exists(script_path):
+                self.finished_signal.emit(False, f"Could not find run_prompt.py at {script_path}")
+                return
+
+            self.output_signal.emit(f"🚀 Starting generation task...\nScript: {script_path}\n")
+
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+
+            process = subprocess.Popen(
+                [sys.executable, script_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=False,
+                cwd=os.path.dirname(script_path),
+                env=env
+            )
+
+            while True:
+                line_bytes = process.stdout.readline()
+                if line_bytes == b'' and process.poll() is not None:
+                    break
+                if line_bytes:
+                    try:
+                        line = line_bytes.decode('utf-8')
+                    except UnicodeDecodeError:
+                        try:
+                            line = line_bytes.decode('gbk')
+                        except UnicodeDecodeError:
+                            line = line_bytes.decode('utf-8', errors='replace')
+                    self.output_signal.emit(line.strip())
+                    
+                    if line.startswith("STATS_JSON:"):
+                        try:
+                            import json
+                            json_str = line.replace("STATS_JSON:", "").strip()
+                            stats = json.loads(json_str)
+                            self.stats_signal.emit(stats)
+                        except Exception:
+                            pass
+
+            stderr_bytes = process.stderr.read()
+            if stderr_bytes:
+                try:
+                    stderr = stderr_bytes.decode('utf-8')
+                except UnicodeDecodeError:
+                    stderr = stderr_bytes.decode('utf-8', errors='replace')
+                self.output_signal.emit(f"STDERR: {stderr}")
+
+            if process.returncode == 0:
+                self.finished_signal.emit(True, "Generation completed successfully.")
+            else:
+                self.finished_signal.emit(False, f"Generation failed with return code {process.returncode}")
+
+        except Exception as e:
+            self.finished_signal.emit(False, str(e))
+        finally:
+            try:
+                import pythoncom
+                pythoncom.CoUninitialize()
+            except:
+                pass
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -65,7 +155,8 @@ class MainWindow(QWidget):
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 开始初始化")
         
         self.init_ui()
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 初始化完成")
+        # Window will be shown after Action Plan generation completes
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} MainWindow 初始化完成，等待 Action Plan 生成...")
 
         self.cam = None
         self.paths = {
@@ -78,10 +169,20 @@ class MainWindow(QWidget):
         self.refresh_interval = self.refresh_interval_seconds * 1000  # ?????????????????????
         self.monitor = None
 
-        QTimer.singleShot(0, self.bootstrap_runtime)
-        
-        # 自动弹出今日计划 (Auto-show action plan on startup)
-        QTimer.singleShot(1000, self.show_action_plan)
+        QTimer.singleShot(0, self._start_bootstrap_thread)
+
+    def _start_bootstrap_thread(self):
+        """Start bootstrap in a thread to prevent UI freeze."""
+        from threading import Thread
+        self._bootstrap_thread = Thread(target=self._bootstrap_runtime_safe, daemon=True)
+        self._bootstrap_thread.start()
+
+    def _bootstrap_runtime_safe(self):
+        """Wrapper to safely run bootstrap_runtime and handle exceptions."""
+        try:
+            self.bootstrap_runtime()
+        except Exception as e:
+            print(f"[ERROR] Bootstrap failed: {e}", file=sys.stderr)
 
     def bootstrap_runtime(self):
         camera_index = 0
@@ -254,6 +355,180 @@ class MainWindow(QWidget):
 
             self.camera_label.setPixmap(scaled_image)
 
+    # ========== ACTION PLAN TAB ==========
+    def init_action_plan_tab(self):
+        from PyQt6.QtWidgets import QSplitter
+        from datetime import datetime
+        
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        # Title
+        title_label = QLabel(f"📅 今日 Action Plan - {datetime.now().strftime('%Y-%m-%d')}")
+        title_label.setObjectName("dialogTitle")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_label.setStyleSheet("font-size: 20px; font-weight: bold;")
+        layout.addWidget(title_label)
+
+        # Splitter for Left/Right panes
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # Left: Analysis
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_label = QLabel("📊 总体回复 (General Analysis)")
+        left_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        self.action_plan_left_text = QTextEdit()
+        self.action_plan_left_text.setReadOnly(True)
+        self.action_plan_left_text.setObjectName("logView")
+        left_layout.addWidget(left_label)
+        left_layout.addWidget(self.action_plan_left_text)
+        
+        # Right: Plan
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_label = QLabel("📝 今日计划 (Today's Action Plan)")
+        right_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        self.action_plan_right_text = QTextEdit()
+        self.action_plan_right_text.setReadOnly(True)
+        self.action_plan_right_text.setObjectName("logView")
+        right_layout.addWidget(right_label)
+        right_layout.addWidget(self.action_plan_right_text)
+        
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        layout.addWidget(splitter, stretch=1)
+
+        # Stats Label
+        self.action_plan_stats_label = QLabel("")
+        self.action_plan_stats_label.setObjectName("statsLabel")
+        self.action_plan_stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.action_plan_stats_label.setWordWrap(True)
+        self.action_plan_stats_label.hide()
+        layout.addWidget(self.action_plan_stats_label)
+
+        # Regenerate Button
+        self.action_plan_regen_btn = QPushButton("🔄 重新生成 (Regenerate)")
+        self.action_plan_regen_btn.setObjectName("actionButton")
+        self.action_plan_regen_btn.setFixedHeight(48)
+        self.action_plan_regen_btn.clicked.connect(self.start_action_plan_generation)
+        layout.addWidget(self.action_plan_regen_btn)
+
+        return tab
+
+    def start_action_plan_generation(self):
+        from PyQt6.QtGui import QTextCursor
+        self.action_plan_left_text.clear()
+        self.action_plan_right_text.clear()
+        self.action_plan_current_target = "analysis"
+        self.action_plan_accumulated_text = ""
+        
+        self.action_plan_left_text.setMarkdown("### ⏳ 正在分析数据 (Analyzing Data)...\n\n")
+        self.action_plan_right_text.setMarkdown("### ⏳ 等待生成计划 (Waiting for Plan)...\n\n")
+        
+        self.action_plan_regen_btn.setEnabled(False)
+        
+        self.action_plan_worker = ActionPlanWorker()
+        self.action_plan_worker.output_signal.connect(self.append_action_plan_log)
+        self.action_plan_worker.finished_signal.connect(self.on_action_plan_finished)
+        self.action_plan_worker.stats_signal.connect(self.update_action_plan_stats)
+        self.action_plan_worker.start()
+
+    def append_action_plan_log(self, text):
+        from PyQt6.QtGui import QTextCursor
+        
+        if "---ANALYSIS_START---" in text:
+            parts = text.split("---ANALYSIS_START---")
+            self.action_plan_accumulated_text = ""
+            self.action_plan_left_text.clear()
+            text = parts[1].strip() if len(parts) > 1 else ""
+            if not text:
+                return
+
+        if "初始分析已完成。正在生成今日行动建议..." in text:
+            self.action_plan_current_target = "plan"
+            self.action_plan_right_text.clear()
+            self.action_plan_right_text.append("🚀 开始生成计划...\n")
+        
+        if self.action_plan_current_target == "analysis":
+            self.action_plan_accumulated_text += text + "\n"
+            self.action_plan_left_text.setMarkdown(self.action_plan_accumulated_text)
+            self.action_plan_left_text.moveCursor(QTextCursor.MoveOperation.End)
+        else:
+            self.action_plan_right_text.moveCursor(QTextCursor.MoveOperation.End)
+            self.action_plan_right_text.insertPlainText(text + "\n")
+            self.action_plan_right_text.moveCursor(QTextCursor.MoveOperation.End)
+
+    def update_action_plan_stats(self, stats):
+        text = (
+            f"📊 <b>Session Stats:</b> "
+            f"Speed: {stats.get('speed', 'N/A')} | "
+            f"Time: {stats.get('total_duration', 0):.2f}s | "
+            f"Tokens: {stats.get('total_tokens', 0)} "
+            f"(Prompt: {stats.get('prompt_tokens', 0)}, Completion: {stats.get('completion_tokens', 0)}) | "
+            f"Turns: {stats.get('turns', 0)}"
+        )
+        self.action_plan_stats_label.setText(text)
+        self.action_plan_stats_label.show()
+
+    def on_action_plan_finished(self, success, message):
+        from PyQt6.QtGui import QTextCursor
+        self.action_plan_right_text.moveCursor(QTextCursor.MoveOperation.End)
+        self.action_plan_right_text.insertPlainText(f"\n\n**Status**: {message}\n\n")
+        
+        if success:
+            self.load_action_plan_file()
+        
+        self.action_plan_regen_btn.setEnabled(True)
+        
+        # Show window after Action Plan generation completes
+        if not self.isVisible():
+            self.show()
+            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Action Plan 已生成，显示主窗口")
+
+    def load_action_plan_file(self):
+        from datetime import datetime
+        date_str = datetime.now().strftime('%Y%m%d')
+        pattern = f"action_plan_{date_str}_"
+        
+        possible_history_dirs = [
+            os.path.join("history"),
+            os.path.join("..", "history"),
+            os.path.join(os.path.expanduser("~"), "gitee", "ai", "history")
+        ]
+        
+        target_file = None
+        
+        for history_dir in possible_history_dirs:
+            if not os.path.exists(history_dir):
+                continue
+            try:
+                files = os.listdir(history_dir)
+                plan_files = [f for f in files if f.startswith(pattern) and f.endswith(".md")]
+                if plan_files:
+                    plan_files.sort(reverse=True)
+                    target_file = os.path.join(history_dir, plan_files[0])
+                    break
+            except Exception:
+                continue
+        
+        if target_file and os.path.exists(target_file):
+            try:
+                with open(target_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    self.action_plan_right_text.setMarkdown(content)
+            except Exception as e:
+                self.action_plan_right_text.setText(f"Error reading file {target_file}: {e}")
+        else:
+            self.action_plan_right_text.setMarkdown(f"# No Plan Found for Today :(\n\nLooking for pattern: `{pattern}*.md`")
+
+    # ========== PLOTS TAB ==========
     def init_plots_tab(self):
         tab = QWidget()
         tab_layout = QVBoxLayout(tab)
@@ -323,72 +598,50 @@ class MainWindow(QWidget):
             self.plot_grid_layout.addWidget(error_label, 0, 0)
             return
         
-        # Load individual plot images
+        # Load the merged collage image
         plot_dir = os.path.join(os.getcwd(), "plot_outputs")
-        if not os.path.exists(plot_dir):
-            error_label = QLabel("❌ 图表输出目录不存在")
+        collage_path = os.path.join(plot_dir, "plot_collage.png")
+        
+        if not os.path.exists(collage_path):
+            error_label = QLabel("❌ 未找到合并图表文件")
             error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.plot_grid_layout.addWidget(error_label, 0, 0)
             return
         
-        # Get all PNG files (excluding collage and screen variants)
-        plot_files = sorted([
-            f for f in os.listdir(plot_dir)
-            if f.endswith('.png') 
-            and not f.startswith('plot_collage')
-            and not f.endswith('_screen.png')
-        ])
+        # Create image label for collage
+        img_label = QLabel()
+        img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        img_label.setObjectName("plotImage")
         
-        if not plot_files:
-            error_label = QLabel("❌ 未找到任何图表文件")
-            error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.plot_grid_layout.addWidget(error_label, 0, 0)
-            return
-        
-        # Calculate grid dimensions (3 columns for professional look)
-        cols = 3
-        
-        for idx, filename in enumerate(plot_files):
-            row = idx // cols
-            col = idx % cols
+        try:
+            from PyQt6.QtGui import QImageReader
+            reader = QImageReader(collage_path)
+            reader.setAutoTransform(True)
+            image = reader.read()
             
-            file_path = os.path.join(plot_dir, filename)
-            
-            # Create card widget for each plot
-            card = QWidget()
-            card.setObjectName("plotCard")
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(8, 8, 8, 8)
-            card_layout.setSpacing(4)
-            
-            # Image label
-            img_label = QLabel()
-            img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            img_label.setObjectName("plotImage")
-            
-            pixmap = QPixmap(file_path)
-            if not pixmap.isNull():
-                # Scale to reasonable size while maintaining aspect ratio
+            if not image.isNull():
+                pixmap = QPixmap.fromImage(image)
+                # Get available size from parent scroll area (use window size as reference)
+                available_width = int(self.width() * 0.95)
+                available_height = int(self.height() * 0.85)
+                
+                # Scale to fit window while keeping aspect ratio
                 scaled_pixmap = pixmap.scaled(
-                    450, 350,
+                    available_width, available_height,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation
                 )
                 img_label.setPixmap(scaled_pixmap)
+                print(f"Loaded collage: {pixmap.width()}x{pixmap.height()} -> scaled to {scaled_pixmap.width()}x{scaled_pixmap.height()}")
             else:
-                img_label.setText("⚠️ 无法加载")
-            
-            card_layout.addWidget(img_label)
-            
-            # Filename label (formatted nicely)
-            display_name = filename.replace('.png', '').replace('_', ' ').title()
-            name_label = QLabel(display_name)
-            name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            name_label.setObjectName("plotTitle")
-            name_label.setStyleSheet("font-size: 11px; color: #aaa; padding-top: 4px;")
-            card_layout.addWidget(name_label)
-            
-            self.plot_grid_layout.addWidget(card, row, col)
+                error_msg = reader.errorString()
+                print(f"Failed to load collage: {error_msg}")
+                img_label.setText(f"⚠️ 无法加载合并图表")
+        except Exception as e:
+            print(f"Exception loading collage: {e}")
+            img_label.setText("⚠️ 加载错误")
+        
+        self.plot_grid_layout.addWidget(img_label, 0, 0)
 
     def init_dashboard_tab(self):
         tab = QWidget()
@@ -409,22 +662,7 @@ class MainWindow(QWidget):
         self.text_edit.setFont(font)
         self.text_edit.setMinimumHeight(220)
 
-        # 控制按钮
-        self.manager_button = QPushButton('🚀 运行 Manager 任务')
-        self.cursor_button = QPushButton('🎯 运行 Cursor 任务')
-        
-        self.plan_button = QPushButton('📅 查看今日计划')
-        self.plan_button.setIcon(QIcon('plan_icon.png'))
-        self.plan_button.setObjectName("actionButton")
-        self.plan_button.clicked.connect(self.show_action_plan)
-        
-        self.manager_button.setIcon(QIcon('run_icon.png'))  # 添加图标
-        self.cursor_button.setIcon(QIcon('cursor_icon.png'))
-        self.manager_button.setObjectName("primaryButton")
-        self.cursor_button.setObjectName("secondaryButton")
 
-        # self.manager_button.clicked.connect(self.run_manager_task)
-        # self.cursor_button.clicked.connect(self.run_cursor_task)
 
         # 创建主布局
         main_layout = QVBoxLayout()
@@ -515,16 +753,8 @@ class MainWindow(QWidget):
         photo_and_screenshot_layout.addLayout(camera_layout)
         photo_and_screenshot_layout.addLayout(screenshot_layout)
 
-        # 按钮布局
-        button_layout = QVBoxLayout()
-        button_layout.addWidget(self.manager_button)
-        button_layout.addWidget(self.cursor_button)
-        button_layout.addWidget(self.plan_button)
-        button_layout.setSpacing(12)
-
         # 组合布局
         main_layout.addLayout(photo_and_screenshot_layout)
-        main_layout.addLayout(button_layout)
 
         tab.setLayout(main_layout)
         return tab
@@ -547,7 +777,8 @@ class MainWindow(QWidget):
         self.tabs = QTabWidget()
         self.tabs.setObjectName("mainTabs")
         
-        # Add Tabs
+        # Add Tabs - Action Plan FIRST
+        self.tabs.addTab(self.init_action_plan_tab(), "📅 今日计划 (Action Plan)")
         self.tabs.addTab(self.init_dashboard_tab(), "📊 仪表盘 (Dashboard)")
         self.tabs.addTab(self.init_plots_tab(), "📈 数据图表 (Plots)")
         
@@ -566,7 +797,10 @@ class MainWindow(QWidget):
         self.setFocus()
         self.tray_icon.activated.connect(self.on_tray_icon_activated)
         
-        # Initial Plot Generation
+        # Auto-start Action Plan generation on startup
+        QTimer.singleShot(1000, self.start_action_plan_generation)
+        
+        # Auto-refresh plots on startup (slightly delayed to let UI initialize)
         QTimer.singleShot(2000, self.refresh_plots)
 
     def resize_window(self):
@@ -630,16 +864,13 @@ class MainWindow(QWidget):
         # 创建托盘菜单
         tray_menu = QMenu()
         
-        view_plan_action = QAction("📅 查看今日计划", self)
-        view_plan_action.triggered.connect(self.show_action_plan)
-        
         restore_action = QAction("🖥️ 恢复窗口", self)
         restore_action.triggered.connect(self.request_password)
         
         quit_action = QAction("❌ 退出", self)
         quit_action.triggered.connect(QApplication.instance().quit)
         
-        tray_menu.addAction(view_plan_action)
+        tray_menu.addAction(restore_action)
         tray_menu.addSeparator()
         tray_menu.addAction(restore_action)
         tray_menu.addAction(quit_action)
@@ -1018,12 +1249,3 @@ class MainWindow(QWidget):
         tooltip_text = "任务管理器 - 运行中..."  # 替换为你实际的状态信息
         self.tray_icon.setToolTip(tooltip_text)
 
-    def show_action_plan(self):
-        """Show the Action Plan Dialog"""
-        if hasattr(self, 'plan_dialog') and self.plan_dialog.isVisible():
-            self.plan_dialog.raise_()
-            self.plan_dialog.activateWindow()
-            return
-            
-        self.plan_dialog = ActionPlanDialog(self)
-        self.plan_dialog.show()
