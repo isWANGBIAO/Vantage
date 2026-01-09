@@ -6,6 +6,10 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+import shutil
+import tempfile
+import subprocess
+
 
 
 def load_env_file(path):
@@ -120,7 +124,30 @@ def extract_recent_data_and_combine(prompt_file_path, excel_file_path, days=30):
 
     prompt_content = prompt_file_path.read_text(encoding="utf-8")
 
-    df = pd.read_excel(excel_file_path, engine="openpyxl")
+    # Create a temporary copy of the Excel file to avoid PermissionError if it's open
+    temp_dir = Path(tempfile.gettempdir())
+    temp_excel_path = temp_dir / f"temp_read_{datetime.now().strftime('%f')}.xlsx"
+    
+    try:
+        # Use PowerShell Copy-Item which might be more robust
+        ps_cmd = [
+            "powershell", 
+            "-NoProfile", 
+            "-Command", 
+            f"Copy-Item -Path '{str(excel_file_path)}' -Destination '{str(temp_excel_path)}' -Force"
+        ]
+        # properly handle path encoding and quoting in the f-string if needed, but Path objects str() is usually safe on Windows unless complex chars
+        # Actually, using subprocess with a string command is often easier for PS due to quoting hell.
+        # But let's try the list form first.
+        subprocess.run(ps_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        df = pd.read_excel(temp_excel_path, engine="openpyxl")
+    finally:
+        if temp_excel_path.exists():
+            try:
+                os.remove(temp_excel_path)
+            except Exception:
+                pass
     if "日期" not in df.columns:
         raise KeyError(f"Excel中缺少'日期'列: {excel_file_path}")
     df["日期"] = pd.to_datetime(df["日期"])
