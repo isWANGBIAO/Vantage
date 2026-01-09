@@ -1,9 +1,10 @@
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QTextEdit, QLabel, QVBoxLayout, QHBoxLayout,
-    QInputDialog, QLineEdit, QMessageBox, QSystemTrayIcon, QMenu, QPushButton
+    QInputDialog, QLineEdit, QMessageBox, QSystemTrayIcon, QMenu, QPushButton,
+    QTabWidget, QScrollArea, QGridLayout
 )
 from PyQt6.QtGui import QPalette, QColor, QImage, QPixmap, QAction, QFont, QIcon, QTextCursor
-from PyQt6.QtCore import QTimer, QEvent, Qt, QDateTime
+from PyQt6.QtCore import QTimer, QEvent, Qt, QDateTime, QThread, pyqtSignal
 import subprocess
 import os
 import sys
@@ -19,6 +20,34 @@ from cv2_enumerate_cameras import enumerate_cameras
 
 
 # main_window.py
+class PlotWorker(QThread):
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, is_dark_mode=False):
+        super().__init__()
+        self.is_dark_mode = is_dark_mode
+
+    def run(self):
+        try:
+            # Run plot.py as a subprocess to ensure isolation and proper matplotlib state
+            # We assume plot.py is in the same directory as main.py (root)
+            script_path = os.path.join(os.getcwd(), "plot.py")
+            if not os.path.exists(script_path):
+                # Fallback search
+                script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "plot.py")
+            
+            cmd = [sys.executable, script_path]
+            if self.is_dark_mode:
+                cmd.append("--dark")
+                
+            # Run blocking call
+            subprocess.run(cmd, check=True, capture_output=True)
+            self.finished_signal.emit(True, "Plots generated.")
+        except subprocess.CalledProcessError as e:
+            self.finished_signal.emit(False, f"Plot generation failed: {e}")
+        except Exception as e:
+            self.finished_signal.emit(False, f"Error: {e}")
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -223,17 +252,146 @@ class MainWindow(QWidget):
                 Qt.TransformationMode.FastTransformation  # 快速变换
             )
 
-    # 设置到标签
             self.camera_label.setPixmap(scaled_image)
 
-    def init_ui(self):
-        # print("已切换到浅色主题")
-        # self.set_light_theme()
-        self.setWindowTitle('Vantage - 任务管理器')
-        self.main_window_size = (800, 800)
-        self.resize_window()  # 调整窗口大小并且居中显示
+    def init_plots_tab(self):
+        tab = QWidget()
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.setSpacing(0)
+        
+        # Scroll Area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setObjectName("plotScrollArea")
+        
+        # Container widget with grid layout
+        self.plot_grid_container = QWidget()
+        self.plot_grid_layout = QGridLayout(self.plot_grid_container)
+        self.plot_grid_layout.setSpacing(12)
+        self.plot_grid_layout.setContentsMargins(16, 16, 16, 16)
+        
+        # Placeholder label
+        self.plot_loading_label = QLabel("⏳ 点击下方按钮生成图表...")
+        self.plot_loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.plot_loading_label.setObjectName("plotPlaceholder")
+        self.plot_loading_label.setStyleSheet("font-size: 16px; color: #888;")
+        self.plot_grid_layout.addWidget(self.plot_loading_label, 0, 0)
+        
+        scroll.setWidget(self.plot_grid_container)
+        tab_layout.addWidget(scroll, stretch=1)
+        
+        # Refresh Button - Fixed at bottom
+        refresh_btn = QPushButton("🔄 刷新图表 (Refresh Plots)")
+        refresh_btn.setObjectName("actionButton")
+        refresh_btn.setFixedHeight(48)
+        refresh_btn.clicked.connect(self.refresh_plots)
+        tab_layout.addWidget(refresh_btn)
+        
+        return tab
 
-        self.init_tray_icon()
+    def refresh_plots(self):
+        # Show loading state
+        self._clear_plot_grid()
+        self.plot_loading_label = QLabel("⏳ 正在生成图表，请稍候...")
+        self.plot_loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.plot_loading_label.setStyleSheet("font-size: 18px; color: #888; padding: 40px;")
+        self.plot_grid_layout.addWidget(self.plot_loading_label, 0, 0)
+        
+        is_dark = self.is_dark_mode()
+        self.plot_worker = PlotWorker(is_dark_mode=is_dark)
+        self.plot_worker.finished_signal.connect(self.on_plot_finished)
+        self.plot_worker.start()
+    
+    def _clear_plot_grid(self):
+        """Clear all widgets from the plot grid layout."""
+        while self.plot_grid_layout.count():
+            item = self.plot_grid_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+    def on_plot_finished(self, success, message):
+        self._clear_plot_grid()
+        
+        if not success:
+            error_label = QLabel(f"❌ {message}")
+            error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            error_label.setStyleSheet("font-size: 16px; color: #ff6666; padding: 40px;")
+            self.plot_grid_layout.addWidget(error_label, 0, 0)
+            return
+        
+        # Load individual plot images
+        plot_dir = os.path.join(os.getcwd(), "plot_outputs")
+        if not os.path.exists(plot_dir):
+            error_label = QLabel("❌ 图表输出目录不存在")
+            error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.plot_grid_layout.addWidget(error_label, 0, 0)
+            return
+        
+        # Get all PNG files (excluding collage and screen variants)
+        plot_files = sorted([
+            f for f in os.listdir(plot_dir)
+            if f.endswith('.png') 
+            and not f.startswith('plot_collage')
+            and not f.endswith('_screen.png')
+        ])
+        
+        if not plot_files:
+            error_label = QLabel("❌ 未找到任何图表文件")
+            error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.plot_grid_layout.addWidget(error_label, 0, 0)
+            return
+        
+        # Calculate grid dimensions (3 columns for professional look)
+        cols = 3
+        
+        for idx, filename in enumerate(plot_files):
+            row = idx // cols
+            col = idx % cols
+            
+            file_path = os.path.join(plot_dir, filename)
+            
+            # Create card widget for each plot
+            card = QWidget()
+            card.setObjectName("plotCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(8, 8, 8, 8)
+            card_layout.setSpacing(4)
+            
+            # Image label
+            img_label = QLabel()
+            img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            img_label.setObjectName("plotImage")
+            
+            pixmap = QPixmap(file_path)
+            if not pixmap.isNull():
+                # Scale to reasonable size while maintaining aspect ratio
+                scaled_pixmap = pixmap.scaled(
+                    450, 350,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                img_label.setPixmap(scaled_pixmap)
+            else:
+                img_label.setText("⚠️ 无法加载")
+            
+            card_layout.addWidget(img_label)
+            
+            # Filename label (formatted nicely)
+            display_name = filename.replace('.png', '').replace('_', ' ').title()
+            name_label = QLabel(display_name)
+            name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            name_label.setObjectName("plotTitle")
+            name_label.setStyleSheet("font-size: 11px; color: #aaa; padding-top: 4px;")
+            card_layout.addWidget(name_label)
+            
+            self.plot_grid_layout.addWidget(card, row, col)
+
+    def init_dashboard_tab(self):
+        tab = QWidget()
 
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
@@ -368,17 +526,48 @@ class MainWindow(QWidget):
         main_layout.addLayout(photo_and_screenshot_layout)
         main_layout.addLayout(button_layout)
 
-        self.setLayout(main_layout)
+        tab.setLayout(main_layout)
+        return tab
+
+    def init_ui(self):
+        # Window setup
+        self.setWindowTitle('Vantage - 任务管理器')
+        self.main_window_size = (800, 800)
+        
+        # NOTE: resize_window logic calls default implementation or customized in class
+        # But we need to call it before creating widgets if it sets self.main_window_size used by widgets
+        # The original code set self.main_window_size then called resize_window which calculates centering
+        # then widgets used self.main_window_size.
+        # So we must call it early.
+        self.resize_window() # Sets size and position
+
+        self.init_tray_icon()
+        
+        # --- TAB SETUP ---
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("mainTabs")
+        
+        # Add Tabs
+        self.tabs.addTab(self.init_dashboard_tab(), "📊 仪表盘 (Dashboard)")
+        self.tabs.addTab(self.init_plots_tab(), "📈 数据图表 (Plots)")
+        
+        # Main Layout
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.tabs)
+        self.setLayout(layout)
+        
+        # Final Setup
         self.apply_style()
-
-        # 监听最小化和关闭事件
+        
+        # Listeners
         self.installEventFilter(self)
-        # 只有当你的程序窗口处于活动状态（即窗口在最前面、已被点击或激活）时，按键事件才会被接收。
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # 强制窗口接收键盘事件
-        self.setFocus()                      # 主动获取焦点
-
-        # 双击托盘图标恢复窗口
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFocus()
         self.tray_icon.activated.connect(self.on_tray_icon_activated)
+        
+        # Initial Plot Generation
+        QTimer.singleShot(2000, self.refresh_plots)
 
     def resize_window(self):
         screen = QApplication.primaryScreen()
@@ -413,6 +602,7 @@ class MainWindow(QWidget):
     def changeEvent(self, event):
         if event.type() == QEvent.Type.PaletteChange:
             self.apply_style()
+            self.refresh_plots()
         super().changeEvent(event)
 
     def append_text(self, text):
@@ -760,6 +950,63 @@ class MainWindow(QWidget):
             QMenu::item:selected {{
                 background-color: {menu_item_hover};
                 color: white;
+            }}
+
+            /* Tabs */
+            QTabWidget::pane {{
+                border: 1px solid {border_color};
+                border-radius: 6px;
+                top: -1px; 
+            }}
+            QTabBar::tab {{
+                background: {menu_bg};
+                border: 1px solid {border_color};
+                padding: 8px 12px;
+                margin-right: 4px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                color: {text_color};
+            }}
+            QTabBar::tab:selected {{
+                background: {secondary_btn_hover};
+                color: white;
+                border-color: {secondary_btn_hover};
+            }}
+            
+            /* Scroll Area */
+            QScrollArea {{
+                border: none;
+                background-color: transparent;
+            }}
+            QScrollArea#plotScrollArea {{
+                background-color: {text_edit_bg};
+            }}
+            
+            /* Plot Cards */
+            QWidget#plotCard {{
+                background-color: {menu_bg};
+                border: 1px solid {border_color};
+                border-radius: 12px;
+                padding: 0px;
+            }}
+            QWidget#plotCard:hover {{
+                border-color: {secondary_btn_hover};
+            }}
+            
+            QLabel#plotImage {{
+                padding: 8px;
+            }}
+            
+            QLabel#plotTitle {{
+                color: {text_color};
+                font-size: 11px;
+                padding: 4px 8px 8px 8px;
+            }}
+            
+            QLabel#plotPlaceholder {{
+                color: {text_color};
+                font-size: 16px;
+                padding: 60px;
             }}
         """)
             

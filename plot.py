@@ -1,6 +1,10 @@
 import os
 import platform
 import re
+import shutil
+import tempfile
+import subprocess
+import math
 from pathlib import Path
 
 import matplotlib
@@ -29,7 +33,7 @@ COLORS = {
 }
 
 
-def configure_matplotlib():
+def configure_matplotlib(is_dark_mode=False):
     plt.style.use(["nature", "no-latex"])
 
     font_family = pick_font_family()
@@ -59,6 +63,86 @@ def configure_matplotlib():
     rcParams["lines.markersize"] = 4
     rcParams["legend.frameon"] = False
     plt.rcParams["figure.figsize"] = [12, 12]
+
+    if is_dark_mode:
+        # Dark Mode Overrides
+        rcParams["figure.facecolor"] = "#2b2b2b"
+        rcParams["axes.facecolor"] = "#2b2b2b"
+        rcParams["savefig.facecolor"] = "#2b2b2b"
+        
+        rcParams["text.color"] = "white"
+        rcParams["axes.labelcolor"] = "white"
+        rcParams["xtick.color"] = "white"
+        rcParams["ytick.color"] = "white"
+        rcParams["axes.edgecolor"] = "#555555"
+        rcParams["grid.color"] = "#555555"
+        rcParams["figure.edgecolor"] = "#2b2b2b"
+        
+        # Adjust colors for visibility on dark background
+        COLORS["blue"] = "#5e96ff"
+        COLORS["orange"] = "#ffb066"
+        COLORS["green"] = "#8cd98c"
+        COLORS["red"] = "#ff8c8e"
+        COLORS["purple"] = "#d1a3ff"
+        COLORS["gray"] = "#a0a0a0"
+        COLORS["lightblue"] = "#b3e0ff"
+    else:
+        # Restore Light Mode Defaults (or just don't override)
+        # We need to reset these if switching back and forth in same process
+        rcParams["figure.facecolor"] = "white"
+        rcParams["axes.facecolor"] = "white"
+        rcParams["savefig.facecolor"] = "white"
+        
+        rcParams["text.color"] = "black"
+        rcParams["axes.labelcolor"] = "black"
+        rcParams["xtick.color"] = "black"
+        rcParams["ytick.color"] = "black"
+        rcParams["axes.edgecolor"] = "black"
+        rcParams["grid.color"] = "#b0b0b0"
+        
+        # Restore standard colors
+        COLORS["blue"] = "#2F6FED"
+        COLORS["orange"] = "#F28E2B"
+        COLORS["green"] = "#59A14F"
+        COLORS["red"] = "#E15759"
+        COLORS["purple"] = "#B07AA1"
+        COLORS["gray"] = "#6B7280"
+        COLORS["lightblue"] = "#9AD0F5"
+
+
+def load_excel_safely(path):
+    """Safely load Excel file even if it is open/locked by copying to temp first."""
+    path = str(path)
+    try:
+        return pd.read_excel(path, engine="openpyxl")
+    except PermissionError:
+        print(f"Warning: File {path} is locked. Attempting to copy to temp...")
+        try:
+            # Create temp file path
+            fd, temp_path = tempfile.mkstemp(suffix=".xlsx")
+            os.close(fd)
+            
+            # Try shutil copy
+            try:
+                shutil.copy2(path, temp_path)
+            except PermissionError:
+                # Fallback to PowerShell Copy-Item (Win32 API based copy often works on locked files)
+                cmd = ["powershell", "-NoProfile", "-Command", f"Copy-Item -LiteralPath '{path}' -Destination '{temp_path}' -Force"]
+                subprocess.run(cmd, check=True, capture_output=True)
+            
+            # Read from temp
+            df = pd.read_excel(temp_path, engine="openpyxl")
+            
+            # Cleanup
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+            
+            return df
+        except Exception as e:
+            print(f"Failed to copy and read locked file: {e}")
+            raise
 
 
 def resolve_data_root():
@@ -205,7 +289,7 @@ def save_figure(fig, output_dir, filename):
     if not filename.lower().endswith(".png"):
         filename = f"{filename}.png"
     path = Path(output_dir) / filename
-    fig.savefig(path, dpi=300)
+    fig.savefig(path, dpi=300, bbox_inches='tight', pad_inches=0.1, facecolor=fig.get_facecolor(), edgecolor='none')
     plt.close(fig)
     return path
 
@@ -260,7 +344,7 @@ def _collect_plot_images(output_dir):
     ]
 
 
-def merge_plot_images(output_dir, filename="plot_collage.png"):
+def merge_plot_images(output_dir, filename="plot_collage.png", is_dark_mode=False):
     output_dir = Path(output_dir)
     files = _collect_plot_images(output_dir)
     if not files:
@@ -291,13 +375,15 @@ def merge_plot_images(output_dir, filename="plot_collage.png"):
         return (len(order), name)
 
     files = sorted(files, key=sort_key)
-    cols = 5
-    rows = 3
+    files = sorted(files, key=sort_key)
+    cols = 3
+    rows = math.ceil(len(files) / cols) if len(files) > 0 else 1
     padding = max(16, int(min(collage_width, collage_height) * 0.01))
     cell_width = max(1, (collage_width - padding * (cols + 1)) // cols)
     cell_height = max(1, (collage_height - padding * (rows + 1)) // rows)
 
-    background = Image.new("RGB", (collage_width, collage_height), (250, 250, 250))
+    bg_color = (43, 43, 43) if is_dark_mode else (250, 250, 250)
+    background = Image.new("RGB", (collage_width, collage_height), bg_color)
     for index, path in enumerate(files):
         image = Image.open(path).convert("RGB")
         image.thumbnail((cell_width, cell_height), Image.LANCZOS)
@@ -347,7 +433,7 @@ def time_to_hour(time_value, row_index=None, column_name=None):
 def load_time_data(path=None):
     if path is None:
         path = resolve_data_path("Time.xlsx")
-    return pd.read_excel(path, engine="openpyxl")
+    return load_excel_safely(path)
 
 
 def plot_weight_and_body_fat_rate(data_frame, recent_days=30, output_dir=None):
@@ -862,7 +948,7 @@ def plot_hhh_stats(data_frame, output_dir=None):
 def load_balance_sheet(path=None):
     if path is None:
         path = resolve_data_path("Balance Sheet.xlsx")
-    return pd.read_excel(path, engine="openpyxl")
+    return load_excel_safely(path)
 
 
 def plot_balance_sheet(data_frame_balance, output_dir=None):
@@ -1079,8 +1165,8 @@ def plot_running_pace(data_frame, output_dir=None):
     save_figure(fig, output_dir, "running_pace")
 
 
-def main():
-    configure_matplotlib()
+def generate_all_plots(output_dir=None, is_dark_mode=False):
+    configure_matplotlib(is_dark_mode)
 
     output_dir = resolve_output_dir()
     data_frame = load_time_data()
@@ -1127,8 +1213,10 @@ def main():
 
     compute_running_metrics(data_frame, output_dir=output_dir)
     plot_running_pace(data_frame, output_dir=output_dir)
-    merge_plot_images(output_dir)
+    merge_plot_images(output_dir, is_dark_mode=is_dark_mode)
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    is_dark = "--dark" in sys.argv
+    generate_all_plots(is_dark_mode=is_dark)
