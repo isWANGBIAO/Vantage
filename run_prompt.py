@@ -114,17 +114,10 @@ def resolve_data_path(filename):
     return path
 
 
-def extract_recent_data_and_combine(prompt_file_path, excel_file_path, days=30):
-    prompt_file_path = Path(prompt_file_path)
+def load_excel_data(excel_file_path):
     excel_file_path = Path(excel_file_path)
-    project_mgmt_path = resolve_data_path("ProjectManagement.md")
-
-    if not prompt_file_path.exists():
-        raise FileNotFoundError(f"未找到 Prompt 文件: {prompt_file_path}")
     if not excel_file_path.exists():
         raise FileNotFoundError(f"未找到 Excel 文件: {excel_file_path}")
-
-    prompt_content = prompt_file_path.read_text(encoding="utf-8")
 
     # Create a temporary copy of the Excel file to avoid PermissionError if it's open
     temp_dir = Path(tempfile.gettempdir())
@@ -138,9 +131,6 @@ def extract_recent_data_and_combine(prompt_file_path, excel_file_path, days=30):
             "-Command", 
             f"Copy-Item -Path '{str(excel_file_path)}' -Destination '{str(temp_excel_path)}' -Force"
         ]
-        # properly handle path encoding and quoting in the f-string if needed, but Path objects str() is usually safe on Windows unless complex chars
-        # Actually, using subprocess with a string command is often easier for PS due to quoting hell.
-        # But let's try the list form first.
         subprocess.run(ps_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         df = pd.read_excel(temp_excel_path, engine="openpyxl")
@@ -150,9 +140,25 @@ def extract_recent_data_and_combine(prompt_file_path, excel_file_path, days=30):
                 os.remove(temp_excel_path)
             except Exception:
                 pass
+    
     if "日期" not in df.columns:
         raise KeyError(f"Excel中缺少'日期'列: {excel_file_path}")
+    
     df["日期"] = pd.to_datetime(df["日期"])
+    return df
+
+
+def extract_recent_data_and_combine(prompt_file_path, excel_file_path, days=30):
+    prompt_file_path = Path(prompt_file_path)
+    excel_file_path = Path(excel_file_path)
+    project_mgmt_path = resolve_data_path("Prompt_Project_Management.md")
+
+    if not prompt_file_path.exists():
+        raise FileNotFoundError(f"未找到 Prompt 文件: {prompt_file_path}")
+    
+    df = load_excel_data(excel_file_path)
+
+    prompt_content = prompt_file_path.read_text(encoding="utf-8")
 
     all_columns = [col for col in df.columns if col != "日期"]
 
@@ -387,10 +393,89 @@ def extract_usage(response_json):
         return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "duration": 0}
 
 
+def save_context(base_dir, messages):
+    history_dir = get_history_dir(base_dir)
+    context_file = history_dir / "latest_context.json"
+    try:
+        with open(context_file, 'w', encoding='utf-8') as f:
+            json.dump(messages, f, ensure_ascii=False, indent=2)
+        print(f"Context saved to: {context_file}")
+    except Exception as e:
+        print(f"Warning: Failed to save context: {e}")
+    return context_file
+
+def load_context(context_file_path):
+    path = Path(context_file_path)
+    if path.exists():
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def transcribe_audio(file_path):
+    base_url = os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
+    api_key = os.environ.get("SILICONFLOW_API_KEY")
+    
+    if not api_key:
+        raise ValueError("缺少环境变量 SILICONFLOW_API_KEY")
+        
+    url = base_url.rstrip("/") + "/audio/transcriptions"
+    
+    # Model: fun-audio-llm/sensevoice-small is a common choice on SiliconFlow
+    # Fallback/Default might vary, checking env or default
+    model = "FunAudioLLM/SenseVoiceSmall" 
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    try:
+        with open(file_path, "rb") as f:
+            files = {
+                "file": (os.path.basename(file_path), f, "audio/wav"),
+                "model": (None, model)
+            }
+        # Note: requests sends multipart/form-data when files is present
+            # We don't verify SSL cert if sometimes issues on win
+            response = requests.post(url, headers=headers, files=files, timeout=60)
+            
+        if not response.ok:
+            print(f"API Error details: {response.text}")
+            
+        response.raise_for_status()
+        result = response.json()
+        return result.get("text", "")
+        
+    except Exception as e:
+        print(f"Transcription error: {e}")
+        return None
+
 def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Run AI Prompts")
+    parser.add_argument("prompt_file", nargs="?", help="Path to the prompt file")
+    parser.add_argument("output_file", nargs="?", help="Path to the output file")
+    parser.add_argument("--transcribe", help="Path to audio file to transcribe")
+    parser.add_argument("--chat_message", help="User message for chat mode")
+    parser.add_argument("--context_file", help="Path to load context from")
+    
+    args = parser.parse_args()
+
     base_dir = Path.cwd()
     load_env_file(base_dir / ".env")
     
+    # === TRANSCRIPT MODE ===
+    if args.transcribe:
+        text = transcribe_audio(args.transcribe)
+        if text:
+            print(f"TRANSCRIPTION_RESULT:{text}")
+        else:
+            print("TRANSCRIPTION_RESULT:")
+        return
+
     # Load historical stats
     historical_stats = load_stats(base_dir)
     current_session_usage = {
@@ -401,107 +486,242 @@ def main():
         "total_duration": 0
     }
 
-    if len(sys.argv) > 1:
-        prompt_path = Path(sys.argv[1])
+    # === CHAT MODE ===
+    if args.chat_message:
+        print("Mode: Chat")
+        
+        # Load context
+        current_messages = []
+        if args.context_file:
+            current_messages = load_context(args.context_file)
+        
+        # If no context loaded, checks for fallback or error? 
+        # For now, if no context, we just start fresh with system prompt (though we might miss it if not passed)
+        if not current_messages:
+            # Try to load default system prompt logic if context is empty
+             system_prompt_path = base_dir / "Prompt_System.md"
+             if system_prompt_path.exists():
+                sys_content = system_prompt_path.read_text(encoding="utf-8").strip()
+                current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+                if "{current_time}" in sys_content:
+                     sys_content = sys_content.replace("{current_time}", current_time_str)
+                if "{当前时间}" in sys_content:
+                     sys_content = sys_content.replace("{当前时间}", current_time_str)
+                current_messages.append({"role": "system", "content": sys_content})
+
+        # Append new user message
+        current_messages.append({"role": "user", "content": args.chat_message})
+        
+        print("Thinking...")
+        response_json = call_model_messages(current_messages)
+        content = extract_text(response_json)
+        
+        # Stats update
+        usage = extract_usage(response_json)
+        current_session_usage["prompt_tokens"] += usage["prompt_tokens"]
+        current_session_usage["completion_tokens"] += usage["completion_tokens"]
+        current_session_usage["total_tokens"] += usage["total_tokens"]
+        current_session_usage["turns"] += 1
+        current_session_usage["total_duration"] += usage.get("duration", 0)
+        
+        historical_stats["total_prompt_tokens"] += usage["prompt_tokens"]
+        historical_stats["total_completion_tokens"] += usage["completion_tokens"]
+        historical_stats["total_conversations"] += 1
+        
+        if content:
+            print(content) # Print to stdout for GUI to capture
+            current_messages.append({"role": "assistant", "content": content})
+            
+            # Save updated context
+            if args.context_file:
+                 # Overwrite the context file
+                 try:
+                    with open(args.context_file, 'w', encoding='utf-8') as f:
+                        json.dump(current_messages, f, ensure_ascii=False, indent=2)
+                 except Exception as e:
+                    print(f"Error saving context: {e}")
+            else:
+                # Save to default latest
+                save_context(base_dir, current_messages)
+        else:
+            print("Error: No content returned.")
+
+    # === NORMAL MODE ===
     else:
-        prompt_path = extract_recent_data_and_combine(
-            resolve_data_path("Prompt_Personal_Info.md"),
-            resolve_data_path("Time.xlsx"),
-            days=30,
+        # Compatibility with old positional args logic
+        if args.prompt_file:
+            prompt_path = Path(args.prompt_file)
+        else:
+            prompt_path = extract_recent_data_and_combine(
+                resolve_data_path("Prompt_Personal_Info.md"),
+                resolve_data_path("Time.xlsx"),
+                days=30,
+            )
+            
+        if args.output_file:
+            output_path = Path(args.output_file)
+        else:
+            output_path = get_history_dir(base_dir) / f"model_response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        
+        # Prepare messages
+        current_messages = []
+        
+        # Check for System Prompt
+        system_prompt_path = base_dir / "Prompt_System.md"
+        system_prompt_content = ""
+        
+        if system_prompt_path.exists():
+            system_prompt_content = system_prompt_path.read_text(encoding="utf-8").strip()
+        
+        # Inject current time context into system prompt
+        current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+        
+        if system_prompt_content:
+            # Support placeholder replacement
+            if "{current_time}" in system_prompt_content:
+                 system_prompt_content = system_prompt_content.replace("{current_time}", current_time_str)
+            # Also support {当前时间} just in case
+            if "{当前时间}" in system_prompt_content:
+                 system_prompt_content = system_prompt_content.replace("{当前时间}", current_time_str)
+        else:
+            # Fallback system prompt if file not found
+            system_prompt_content = f"Context: Current Date and Time is {current_time_str}."
+
+        if system_prompt_content:
+            current_messages.append({"role": "system", "content": system_prompt_content})
+            print(f"已加载系统提示词 (System Prompt)")
+
+        # Add User Prompt (without time context duplicate)
+        current_messages.append({"role": "user", "content": prompt_text})
+        
+        print("正在生成初始分析报告，请稍候...")
+        response_json = call_model_messages(current_messages)
+        content = extract_text(response_json)
+        
+        # Update stats
+        usage = extract_usage(response_json)
+        current_session_usage["prompt_tokens"] += usage["prompt_tokens"]
+        current_session_usage["completion_tokens"] += usage["completion_tokens"]
+        current_session_usage["total_tokens"] += usage["total_tokens"]
+        current_session_usage["turns"] += 1
+        current_session_usage["total_duration"] += usage.get("duration", 0)
+        
+        historical_stats["total_prompt_tokens"] += usage["prompt_tokens"]
+        historical_stats["total_completion_tokens"] += usage["completion_tokens"]
+        historical_stats["total_conversations"] += 1
+        current_session_usage["total_duration"] += usage.get("duration", 0)
+
+        if content is None:
+            output_path.write_text(str(response_json), encoding="utf-8")
+            print("Error: Failed to get response content.")
+            return
+        else:
+            output_path.write_text(content, encoding="utf-8")
+            # Add assistant response to history
+            current_messages.append({"role": "assistant", "content": content})
+
+        # Save stats and generate report
+        save_stats(base_dir, historical_stats)
+        generate_usage_report(
+            base_dir, 
+            current_session_usage, 
+            historical_stats, 
+            os.environ.get("SILICONFLOW_MODEL", "Unknown")
         )
-    output_path = (
-        Path(sys.argv[2])
-        if len(sys.argv) > 2
-        else get_history_dir(base_dir)
-        / f"model_response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-    )
 
-    prompt_text = prompt_path.read_text(encoding="utf-8")
-    
-    # Inject current time context
-    current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
-    time_context = f"Context: Current Date and Time is {current_time_str}\n\n"
-    full_prompt_text = time_context + prompt_text
-    
-    # Initial interaction
-    current_messages = [{"role": "user", "content": full_prompt_text}]
-    
-    print("正在生成初始分析报告，请稍候...")
-    response_json = call_model_messages(current_messages)
-    content = extract_text(response_json)
-    
-    # Update stats
-    usage = extract_usage(response_json)
-    current_session_usage["prompt_tokens"] += usage["prompt_tokens"]
-    current_session_usage["completion_tokens"] += usage["completion_tokens"]
-    current_session_usage["total_tokens"] += usage["total_tokens"]
-    current_session_usage["turns"] += 1
-    
-    historical_stats["total_prompt_tokens"] += usage["prompt_tokens"]
-    historical_stats["total_completion_tokens"] += usage["completion_tokens"]
-    historical_stats["total_conversations"] += 1
+        print("---ANALYSIS_START---")
+        print(content)
+        print("初始分析已完成。正在生成今日行动建议...")
+        
+        # Second pass: Generate Today's Action Plan
+        current_time_dt = datetime.now()
+        current_time = current_time_dt.strftime('%Y-%m-%d %H:%M')
+        
+        # Try to load today's data from Excel
+        today_data_str = "Today's Excel Data: None found."
+        try:
+            excel_path = resolve_data_path("Time.xlsx")
+            if excel_path.exists():
+                df_full = load_excel_data(excel_path)
+                # Normalize dates for comparison
+                df_full['DateOnly'] = df_full['日期'].dt.date
+                today_date_obj = current_time_dt.date()
+                
+                today_row = df_full[df_full['DateOnly'] == today_date_obj]
+                
+                if not today_row.empty:
+                    # Convert the single row to a readable string
+                    row_dict = today_row.iloc[0].to_dict()
+                    parts = []
+                    for k, v in row_dict.items():
+                        if k in ['日期', 'DateOnly']: continue
+                        if pd.isna(v): continue
+                        parts.append(f"{k}: {v}")
+                    
+                    if parts:
+                        today_data_str = "Today's Excel Data:\n" + "\n".join([f"- {p}" for p in parts])
+        except Exception as e:
+            print(f"Warning: Failed to load today's Excel data: {e}")
 
-    if content is None:
-        output_path.write_text(str(response_json), encoding="utf-8")
-        print("Error: Failed to get response content.")
-        # Save persistence even on fail? Maybe not.
-        return
-    else:
-        output_path.write_text(content, encoding="utf-8")
-        # Add assistant response to history
-        current_messages.append({"role": "assistant", "content": content})
+        # Load action plan prompt from file
+        action_plan_prompt_path = base_dir / "Prompt_Action_Plan.md"
+        if action_plan_prompt_path.exists():
+            action_plan_prompt = action_plan_prompt_path.read_text(encoding="utf-8")
+            
+            # Inject today's data row
+            if "{today_data_row}" in action_plan_prompt:
+                 action_plan_prompt = action_plan_prompt.replace("{today_data_row}", today_data_str)
+            else:
+                 # Auto-append if placeholder missing
+                 action_plan_prompt += f"\n\n{today_data_str}"
 
-    # Save stats and generate report
-    save_stats(base_dir, historical_stats)
-    report_path = generate_usage_report(
-        base_dir, 
-        current_session_usage, 
-        historical_stats, 
-        os.environ.get("SILICONFLOW_MODEL", "Unknown")
-    )
-
-    print("---ANALYSIS_START---")
-    print(content)
-    print(f"已生成模型结果: {output_path}")
-    print("\n" + "="*50)
-    print("初始分析已完成。正在生成今日行动建议...")
-    
-    # Second pass: Generate Today's Action Plan
-    today_date = datetime.now().strftime('%Y-%m-%d')
-    action_plan_prompt = f"""
+            # Replace {current_time} placeholder
+            action_plan_prompt = action_plan_prompt.replace("{current_time}", current_time)
+            action_plan_prompt = action_plan_prompt.replace("{当前时间}", current_time)
+            # Backward compatibility in case usage varies
+            action_plan_prompt = action_plan_prompt.replace("{today_date}", current_time.split()[0])
+        else:
+            # Fallback to default if file doesn't exist
+            action_plan_prompt = f"""
 基于上述分析，请为我生成今天的行动建议（Today's Action Plan）。
-今天是 {today_date}。
+现在是 {current_time}。
+{today_data_str}
 请输出一个独立的 Markdown 文档，只包含今天需要做的事情。
 格式要求：
 1. 核心任务（P0/P1）
 2. 具体行动（时间点+事项）
 3. 注意事项
 """
-    current_messages.append({"role": "user", "content": action_plan_prompt})
-    
-    response_json = call_model_messages(current_messages)
-    action_plan_content = extract_text(response_json)
-    
-    # Update stats for second pass
-    usage = extract_usage(response_json)
-    current_session_usage["prompt_tokens"] += usage["prompt_tokens"]
-    current_session_usage["completion_tokens"] += usage["completion_tokens"]
-    current_session_usage["total_tokens"] += usage["total_tokens"]
-    current_session_usage["turns"] += 1
-    current_session_usage["total_duration"] += usage["duration"]
-    
-    historical_stats["total_prompt_tokens"] += usage["prompt_tokens"]
-    historical_stats["total_completion_tokens"] += usage["completion_tokens"]
-    historical_stats["total_conversations"] += 1
-    
-    if action_plan_content:
-        action_plan_filename = f"action_plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-        action_plan_path = get_history_dir(base_dir) / action_plan_filename
-        action_plan_path.write_text(action_plan_content, encoding="utf-8")
-        current_messages.append({"role": "assistant", "content": action_plan_content})
-        print(f"已生成今日行动建议: {action_plan_path}")
-    else:
-        print("Error: Failed to generate action plan.")
+        current_messages.append({"role": "user", "content": action_plan_prompt})
+        
+        response_json = call_model_messages(current_messages)
+        action_plan_content = extract_text(response_json)
+        
+        # Update stats for second pass
+        usage = extract_usage(response_json)
+        current_session_usage["prompt_tokens"] += usage["prompt_tokens"]
+        current_session_usage["completion_tokens"] += usage["completion_tokens"]
+        current_session_usage["total_tokens"] += usage["total_tokens"]
+        current_session_usage["turns"] += 1
+        current_session_usage["total_duration"] += usage.get("duration", 0)
+        
+        historical_stats["total_prompt_tokens"] += usage["prompt_tokens"]
+        historical_stats["total_completion_tokens"] += usage["completion_tokens"]
+        historical_stats["total_conversations"] += 1
+        
+        if action_plan_content:
+            action_plan_filename = f"action_plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+            action_plan_path = get_history_dir(base_dir) / action_plan_filename
+            action_plan_path.write_text(action_plan_content, encoding="utf-8")
+            current_messages.append({"role": "assistant", "content": action_plan_content})
+            print(f"已生成今日行动建议: {action_plan_path}")
+        else:
+            print("Error: Failed to generate action plan.")
+            
+        # SAVE CONTEXT FOR CHAT
+        save_context(base_dir, current_messages)
 
     # Save stats and generate report (Final update)
     save_stats(base_dir, historical_stats)
@@ -546,4 +766,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import traceback
+        traceback.print_exc()

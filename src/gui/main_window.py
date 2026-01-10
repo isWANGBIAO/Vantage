@@ -138,9 +138,168 @@ class ActionPlanWorker(QThread):
             except:
                 pass
 
+
+class ChatWorker(QThread):
+    """Worker thread for sending chat messages via run_prompt.py"""
+    finished_signal = pyqtSignal(bool, str)
+    output_signal = pyqtSignal(str)
+    
+    def __init__(self, message, context_file=None):
+        super().__init__()
+        self.message = message
+        self.context_file = context_file
+
+    def run(self):
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except ImportError:
+            pass
+
+        try:
+            # Locate run_prompt.py (same logic as ActionPlanWorker)
+            script_path = "run_prompt.py"
+            if not os.path.isabs(script_path):
+                if not os.path.exists(script_path):
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    candidate = os.path.normpath(os.path.join(current_dir, "..", "..", "run_prompt.py"))
+                    if os.path.exists(candidate):
+                        script_path = candidate
+                    else:
+                        script_path = os.path.abspath(script_path)
+                else:
+                    script_path = os.path.abspath(script_path)
+
+            if not os.path.exists(script_path):
+                self.finished_signal.emit(False, f"Could not find run_prompt.py at {script_path}")
+                return
+            
+            # Determine context file path
+            if not self.context_file:
+                 # Default to history/latest_context.json relative to script execution or logic
+                 # We'll let run_prompt handle default if not passed, but run_prompt writes to history/latest_context.json
+                 # We should pass it explicitly if we can to be safe, or just rely on run_prompt's default.
+                 # Actually run_prompt saves to `history/latest_context.json`.
+                 # Let's verify where that is.
+                 # For now, we will pass the path explicitly if we can calculate it, otherwise let python handle it.
+                 # Let's try to construct the path.
+                 base_dir = os.path.dirname(script_path)
+                 self.context_file = os.path.join(base_dir, "history", "latest_context.json")
+
+            cmd = [
+                sys.executable, 
+                script_path, 
+                "--chat_message", self.message,
+                "--context_file", self.context_file
+            ]
+            
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=False,
+                cwd=os.path.dirname(script_path),
+                env=env
+            )
+
+            while True:
+                line_bytes = process.stdout.readline()
+                if line_bytes == b'' and process.poll() is not None:
+                    break
+                if line_bytes:
+                    try:
+                        line = line_bytes.decode('utf-8')
+                    except UnicodeDecodeError:
+                        try:
+                            line = line_bytes.decode('gbk')
+                        except UnicodeDecodeError:
+                            line = line_bytes.decode('utf-8', errors='replace')
+                    self.output_signal.emit(line.strip())
+
+            stderr_bytes = process.stderr.read()
+            if stderr_bytes:
+                try:
+                    stderr = stderr_bytes.decode('utf-8')
+                except UnicodeDecodeError:
+                    stderr = stderr_bytes.decode('utf-8', errors='replace')
+                # We won't emit stderr as regular output to avoid cluttering chat unless debugging
+                # self.output_signal.emit(f"STDERR: {stderr}")
+                print(f"[ChatWorker] STDERR: {stderr}")
+
+            if process.returncode == 0:
+                self.finished_signal.emit(True, "Message sent.")
+            else:
+                self.finished_signal.emit(False, f"Failed with return code {process.returncode}")
+
+        except Exception as e:
+            self.finished_signal.emit(False, str(e))
+        finally:
+            try:
+                import pythoncom
+                pythoncom.CoUninitialize()
+            except:
+                pass
+
+
+from .audio_utils import AudioRecorder
+
+class AudioWorker(QThread):
+    finished_signal = pyqtSignal(str)
+    
+    def __init__(self, audio_file):
+        super().__init__()
+        self.audio_file = audio_file
+        
+    def run(self):
+        try:
+            # Run run_prompt.py with --transcribe
+            script_path = "run_prompt.py"
+            if not os.path.isabs(script_path):
+                if not os.path.exists(script_path):
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    candidate = os.path.normpath(os.path.join(current_dir, "..", "..", "run_prompt.py"))
+                    if os.path.exists(candidate):
+                        script_path = candidate
+                    else:
+                        script_path = os.path.abspath(script_path)
+                else:
+                    script_path = os.path.abspath(script_path)
+                 
+            cmd = [sys.executable, script_path, "--transcribe", self.audio_file]
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            
+            result = subprocess.run(cmd, capture_output=True, text=False, cwd=os.path.dirname(script_path), env=env)
+            
+            output = ""
+            try:
+                output = result.stdout.decode('utf-8')
+            except:
+                output = result.stdout.decode('gbk', errors='replace')
+                
+            transcription = ""
+            for line in output.splitlines():
+                if line.startswith("TRANSCRIPTION_RESULT:"):
+                    transcription = line.replace("TRANSCRIPTION_RESULT:", "").strip()
+                    break
+            
+            self.finished_signal.emit(transcription)
+            
+        except Exception as e:
+            print(f"AudioWorker Error: {e}")
+            self.finished_signal.emit("")
+
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
+        
+        # Initialize Audio Recorder
+        self.recorder = AudioRecorder()
+        self.is_recording = False
 
         # 初始化日志记录
         self.init_file_logging()
@@ -260,20 +419,11 @@ class MainWindow(QWidget):
         # 强制写入日志文件
         self.log_to_file(f"[CRITICAL ERROR] Uncaught Exception:\n{error_msg}")
         
-        # 如果需要，可以保留默认的异常处理行为（可选）
-        # sys.__excepthook__(exctype, value, tb) 
-
     def log_to_file(self, text):
         try:
             with open(self.log_file_path, "a", encoding="utf-8") as f:
-                # Add timestamp if not present (simple check)
-                # print statements usually have their own timestamps based on the app logic,
-                # but raw text might not. For simplicity, we just append exactly what is sent.
-                # Or we can prefer adding a timestamp if line doesn't start with 'Time'
-                # But let's keep it simple: exact mirror of console.
                 f.write(text + "\n")
         except Exception as e:
-            # Avoid recursion if logging fails
             sys.__stderr__.write(f"Failed to write to log file: {e}\n")
 
 
@@ -358,21 +508,18 @@ class MainWindow(QWidget):
     # ========== ACTION PLAN TAB ==========
     def init_action_plan_tab(self):
         from PyQt6.QtWidgets import QSplitter
-        from datetime import datetime
         
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
-
-        # Title
-        title_label = QLabel(f"📅 今日 Action Plan - {datetime.now().strftime('%Y-%m-%d')}")
-        title_label.setObjectName("dialogTitle")
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet("font-size: 20px; font-weight: bold;")
-        layout.addWidget(title_label)
-
-        # Splitter for Left/Right panes
+        
+        # Create Tab Widget for "Plan" and "Chat"
+        self.sub_tab_widget = QTabWidget()
+        
+        # --- TAB 1: Analysis & Plan (Original View) ---
+        plan_widget = QWidget()
+        plan_layout = QVBoxLayout(plan_widget)
+        
         splitter = QSplitter(Qt.Orientation.Horizontal)
         
         # Left: Analysis
@@ -384,6 +531,7 @@ class MainWindow(QWidget):
         self.action_plan_left_text = QTextEdit()
         self.action_plan_left_text.setReadOnly(True)
         self.action_plan_left_text.setObjectName("logView")
+        self.action_plan_left_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         left_layout.addWidget(left_label)
         left_layout.addWidget(self.action_plan_left_text)
         
@@ -396,6 +544,7 @@ class MainWindow(QWidget):
         self.action_plan_right_text = QTextEdit()
         self.action_plan_right_text.setReadOnly(True)
         self.action_plan_right_text.setObjectName("logView")
+        self.action_plan_right_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         right_layout.addWidget(right_label)
         right_layout.addWidget(self.action_plan_right_text)
         
@@ -403,26 +552,205 @@ class MainWindow(QWidget):
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
-        layout.addWidget(splitter, stretch=1)
+        
+        plan_layout.addWidget(splitter)
+        self.sub_tab_widget.addTab(plan_widget, "📋 计划详情 (Plan)")
+        
+        # --- TAB 2: Chat (New Voice Interaction) ---
+        chat_widget = QWidget()
+        chat_layout = QVBoxLayout(chat_widget)
+        chat_layout.setSpacing(10)
+        
+        # Chat History with Bubble Style
+        self.chat_history_text = QTextEdit()
+        self.chat_history_text.setReadOnly(True)
+        self.chat_history_text.setStyleSheet("border: none; background-color: #ffffff;") 
+        chat_layout.addWidget(self.chat_history_text, stretch=1)
+        
+        # Controls Area
+        controls_layout = QHBoxLayout()
+        controls_layout.setContentsMargins(0, 0, 0, 0) # Zero margins for inner layout
+        controls_layout.setSpacing(10)
+        
+        # Chat Input (Left, stretches)
+        self.chat_input = QTextEdit()
+        self.chat_input.setPlaceholderText("Type a message...")
+        self.chat_input.setFixedHeight(50) 
+        self.chat_input.setStyleSheet("font-size: 14px; padding: 5px;")
+        self.chat_input.installEventFilter(self)
+        
+        # Voice Button (Right, Auto Width)
+        self.voice_btn = QPushButton("🎤 Record")
+        self.voice_btn.setToolTip("Click to Toggle Recording")
+        self.voice_btn.setFixedHeight(50) # Fixed height only
+        self.voice_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.voice_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding-left: 15px; padding-right: 15px;")
+        self.voice_btn.clicked.connect(self.toggle_recording)
 
-        # Stats Label
+        # Send Button (Right, Auto Width)
+        self.chat_send_btn = QPushButton("Send")
+        self.chat_send_btn.setToolTip("Send Message (Ctrl+Enter)")
+        self.chat_send_btn.setFixedHeight(50) # Fixed height only
+        self.chat_send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.chat_send_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding-left: 20px; padding-right: 20px;")
+        self.chat_send_btn.clicked.connect(self.send_chat_message)
+        
+        # Layout: Input (Stretch) -> Voice (Fixed) -> Send (Fixed)
+        controls_layout.addWidget(self.chat_input, 1) 
+        controls_layout.addWidget(self.voice_btn, 0)  
+        controls_layout.addWidget(self.chat_send_btn, 0) 
+        
+        chat_layout.addLayout(controls_layout)
+        
+        self.sub_tab_widget.addTab(chat_widget, "💬 对话 (Chat)")
+        
+        layout.addWidget(self.sub_tab_widget)
+
+        # Bottom Bar: Stats & Regenerate
+        bottom_layout = QHBoxLayout()
         self.action_plan_stats_label = QLabel("")
-        self.action_plan_stats_label.setObjectName("statsLabel")
-        self.action_plan_stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.action_plan_stats_label.setWordWrap(True)
-        self.action_plan_stats_label.hide()
-        layout.addWidget(self.action_plan_stats_label)
-
-        # Regenerate Button
+        bottom_layout.addWidget(self.action_plan_stats_label)
+        
         self.action_plan_regen_btn = QPushButton("🔄 重新生成 (Regenerate)")
-        self.action_plan_regen_btn.setObjectName("actionButton")
-        self.action_plan_regen_btn.setFixedHeight(48)
+        self.action_plan_regen_btn.setFixedHeight(40)
         self.action_plan_regen_btn.clicked.connect(self.start_action_plan_generation)
-        layout.addWidget(self.action_plan_regen_btn)
+        bottom_layout.addWidget(self.action_plan_regen_btn)
+        
+        layout.addLayout(bottom_layout)
 
         return tab
 
+    def eventFilter(self, obj, event):
+        if obj == self.chat_input and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Return and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                self.send_chat_message()
+                return True
+        return super().eventFilter(obj, event)
+
+    # --- CHAT & VOICE LOGIC ---
+    def toggle_recording(self):
+        if self.is_recording:
+            self.stop_recording()
+        else:
+            self.start_recording()
+
+    def start_recording(self):
+        self.is_recording = True
+        self.voice_btn.setText("🔴 Stop")
+        self.voice_btn.setToolTip("Click to Stop Recording")
+        self.voice_btn.setStyleSheet("background-color: #ffcccc; color: #cc0000; border: 1px solid #cc0000; font-size: 14px; font-weight: bold; padding-left: 15px; padding-right: 15px;")
+        self.recorder.start_recording()
+        self.chat_input.setPlaceholderText("Listening...")
+        self.chat_input.setEnabled(False)
+
+    def stop_recording(self):
+        if not self.is_recording:
+            return
+        self.is_recording = False
+        self.voice_btn.setText("🎤 Record")
+        self.voice_btn.setToolTip("Click to Start Recording")
+        self.voice_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding-left: 15px; padding-right: 15px;") # Restore default style
+        
+        file_path = self.recorder.stop_recording()
+        if file_path:
+            self.chat_input.setPlaceholderText("Transcribing...")
+            # Run transcription in worker
+            self.audio_worker = AudioWorker(file_path)
+            self.audio_worker.finished_signal.connect(self.on_transcription_finished)
+            self.audio_worker.start()
+        else:
+            self.chat_input.setEnabled(True)
+            self.chat_input.setPlaceholderText("Type a message...")
+
+    def on_transcription_finished(self, text):
+        self.chat_input.setEnabled(True)
+        if text:
+            self.chat_input.setPlainText(text)
+            self.chat_input.setFocus()
+        else:
+            self.chat_input.setPlaceholderText("Transcription failed or empty.")
+
+    def append_chat_bubble(self, role, text):
+        # Allow HTML styling
+        if role == "user":
+            style = "background-color: #dcf8c6; padding: 10px; border-radius: 10px; margin: 5px; float: right; clear: both;"
+            align = "right"
+            prefix = "User"
+        else:
+            style = "background-color: #f0f0f0; padding: 10px; border-radius: 10px; margin: 5px; float: left; clear: both;"
+            align = "left"
+            prefix = "Assistant"
+            
+        # Convert markdown to html
+        try:
+            import markdown
+            formatted_text = markdown.markdown(text)
+        except ImportError:
+            formatted_text = text.replace("\n", "<br>")
+
+        html = f"""
+        <div style='width: 100%; overflow: hidden;'>
+            <div style='{style} max-width: 80%;'>
+                <b>{prefix}:</b><br>{formatted_text}
+            </div>
+        </div>
+        """
+        self.chat_history_text.append(html)
+        # Scroll to bottom
+        cursor = self.chat_history_text.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.chat_history_text.setTextCursor(cursor)
+
+    def send_chat_message(self):
+        message = self.chat_input.toPlainText().strip()
+        if not message:
+            return
+
+        self.chat_input.clear()
+        self.append_chat_bubble("user", message)
+        
+        self.chat_input.setEnabled(False)
+        self.chat_send_btn.setEnabled(False)
+        self.chat_send_btn.setText("...")
+
+        self.chat_worker = ChatWorker(message)
+        self.chat_worker.output_signal.connect(self.on_chat_output_stream)
+        self.chat_worker.finished_signal.connect(self.on_chat_finished)
+        self.chat_worker.start()
+        
+        # We will accumulate streamed response to update the bubble?
+        # Creating a dynamic bubble is tricky with HTML append.
+        # Strategy: Create a temporary placeholder or specific buffer.
+        # For simplicity: wait for full finishing OR (better):
+        # Just use a buffer and update the last block? textEdit.toHtml -> replace?
+        # Actually simplest is: Stream into a separate variable, and only append when done?
+        # OR: Just stream raw text for now like before?
+        # The user requested "Cherry Studio" style which implies distinct bubbles.
+        # Streaming inside a bubble is hard with simple append.
+        # I will buffer the response and assume "Thinking..." state, then show full bubble.
+        self.chat_response_buffer = ""
+
+    def on_chat_output_stream(self, text):
+        self.chat_response_buffer += text + "\n"
+        # Optional: Show typing indicator or stream to a temporary UI element if needed.
+        # For now, we will just wait until finished to show the bubble to keep it clean,
+        # or we could update a status label.
+
+    def on_chat_finished(self, success, message):
+        if self.chat_response_buffer:
+            self.append_chat_bubble("assistant", self.chat_response_buffer.strip())
+        else:
+             if not success:
+                 self.append_chat_bubble("assistant", f"[Error: {message}]")
+
+        self.chat_response_buffer = ""
+        self.chat_input.setEnabled(True)
+        self.chat_send_btn.setEnabled(True)
+        self.chat_send_btn.setText("发送 (Send)")
+        self.chat_input.setFocus()
+
     def start_action_plan_generation(self):
+
         from PyQt6.QtGui import QTextCursor
         self.action_plan_left_text.clear()
         self.action_plan_right_text.clear()
@@ -484,6 +812,11 @@ class MainWindow(QWidget):
         
         if success:
             self.load_action_plan_file()
+            # Populate Chat Tab with initial analysis and plan
+            analysis_text = self.action_plan_left_text.toPlainText()
+            plan_text = self.action_plan_right_text.toPlainText()
+            combined_text = f"**General Analysis**:\n{analysis_text}\n\n**Today's Action Plan**:\n{plan_text}"
+            self.append_chat_bubble("assistant", combined_text)
         
         self.action_plan_regen_btn.setEnabled(True)
         
