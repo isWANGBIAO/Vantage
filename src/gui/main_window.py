@@ -297,6 +297,9 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         
+        # 主题模式标志
+        self.is_dark_mode = False
+        
         # Initialize Audio Recorder
         self.recorder = AudioRecorder()
         self.is_recording = False
@@ -458,18 +461,71 @@ class MainWindow(QWidget):
         return photos_path, screenshots_path
 
     def set_light_theme(self):
+        self.is_dark_mode = False
         palette = QPalette()
-        palette.setColor(QPalette.ColorRole.Window, QColor(255, 255, 255))  # 白色背景
-        palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))    # 黑色文本
+        # 背景颜色
+        palette.setColor(QPalette.ColorRole.Window, QColor(255, 255, 255))
+        palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(245, 245, 245))
+        # 文本颜色
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))
+        palette.setColor(QPalette.ColorRole.Text, QColor(0, 0, 0))
+        palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(128, 128, 128))
+        # 按钮颜色
+        palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
+        # 高亮颜色
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 215))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+        
         QApplication.instance().setPalette(palette)
+        self._apply_theme_styles()
         print("已切换到浅色主题")
 
     def set_dark_theme(self):
+        self.is_dark_mode = True
         palette = QPalette()
-        palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))     # 深灰色背景
-        palette.setColor(QPalette.ColorRole.WindowText, QColor(255, 255, 255))  # 白色文本
+        # 背景颜色
+        palette.setColor(QPalette.ColorRole.Window, QColor(45, 45, 45))
+        palette.setColor(QPalette.ColorRole.Base, QColor(35, 35, 35))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
+        # 文本颜色
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(230, 230, 230))
+        palette.setColor(QPalette.ColorRole.Text, QColor(230, 230, 230))
+        palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(150, 150, 150))
+        # 按钮颜色
+        palette.setColor(QPalette.ColorRole.Button, QColor(60, 60, 60))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor(230, 230, 230))
+        # 高亮颜色
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+        
         QApplication.instance().setPalette(palette)
+        self._apply_theme_styles()
         print("已切换到深色主题")
+    
+    def _apply_theme_styles(self):
+        """根据当前主题应用样式到各个组件"""
+        if self.is_dark_mode:
+            # 深色主题样式
+            chat_bg = "#2d2d2d"
+            input_style = "font-size: 14px; padding: 5px; background-color: #3d3d3d; color: #e6e6e6; border: 1px solid #555;"
+            btn_style = "font-size: 14px; font-weight: bold; padding-left: 15px; padding-right: 15px; background-color: #404040; color: #e6e6e6;"
+        else:
+            # 浅色主题样式
+            chat_bg = "#ffffff"
+            input_style = "font-size: 14px; padding: 5px; background-color: #ffffff; color: #000000; border: 1px solid #ccc;"
+            btn_style = "font-size: 14px; font-weight: bold; padding-left: 15px; padding-right: 15px;"
+        
+        # 应用到Chat组件
+        if hasattr(self, 'chat_history_text'):
+            self.chat_history_text.setStyleSheet(f"border: none; background-color: {chat_bg};")
+        if hasattr(self, 'chat_input'):
+            self.chat_input.setStyleSheet(input_style)
+        if hasattr(self, 'voice_btn'):
+            self.voice_btn.setStyleSheet(btn_style)
+        if hasattr(self, 'chat_send_btn'):
+            self.chat_send_btn.setStyleSheet(btn_style.replace("15px", "20px"))
     # 显示摄像头画面
 
     def display_frame(self, frame):
@@ -671,26 +727,51 @@ class MainWindow(QWidget):
             self.chat_input.setPlaceholderText("Transcription failed or empty.")
 
     def append_chat_bubble(self, role, text):
+        # 根据主题选择颜色
+        if self.is_dark_mode:
+            user_bg = "#2d5a3d"  # 深绿色
+            assistant_bg = "#3d3d3d"  # 深灰色
+            text_color = "#e6e6e6"
+            table_border = "#555"
+            th_bg = "#404040"
+        else:
+            user_bg = "#dcf8c6"  # 浅绿色
+            assistant_bg = "#f0f0f0"  # 浅灰色
+            text_color = "#000000"
+            table_border = "#ccc"
+            th_bg = "#e0e0e0"
+        
         # Allow HTML styling
         if role == "user":
-            style = "background-color: #dcf8c6; padding: 10px; border-radius: 10px; margin: 5px; float: right; clear: both;"
+            style = f"background-color: {user_bg}; color: {text_color}; padding: 10px; border-radius: 10px; margin: 5px; float: right; clear: both;"
             align = "right"
             prefix = "User"
         else:
-            style = "background-color: #f0f0f0; padding: 10px; border-radius: 10px; margin: 5px; float: left; clear: both;"
+            style = f"background-color: {assistant_bg}; color: {text_color}; padding: 10px; border-radius: 10px; margin: 5px; float: left; clear: both;"
             align = "left"
             prefix = "Assistant"
             
+        # Table CSS to make them look good
+        table_css = f"""
+        <style>
+        table {{ border-collapse: collapse; width: 100%; margin-top: 10px; margin-bottom: 10px; }}
+        th, td {{ border: 1px solid {table_border}; padding: 6px; text-align: left; color: {text_color}; }}
+        th {{ background-color: {th_bg}; font-weight: bold; }}
+        </style>
+        """
+
         # Convert markdown to html
         try:
             import markdown
-            formatted_text = markdown.markdown(text)
+            # Enable nl2br to preserve newlines, tables for grids
+            formatted_text = markdown.markdown(text, extensions=['nl2br', 'tables'])
         except ImportError:
             formatted_text = text.replace("\n", "<br>")
 
         html = f"""
         <div style='width: 100%; overflow: hidden;'>
             <div style='{style} max-width: 80%;'>
+                {table_css}
                 <b>{prefix}:</b><br>{formatted_text}
             </div>
         </div>
@@ -718,32 +799,81 @@ class MainWindow(QWidget):
         self.chat_worker.finished_signal.connect(self.on_chat_finished)
         self.chat_worker.start()
         
-        # We will accumulate streamed response to update the bubble?
-        # Creating a dynamic bubble is tricky with HTML append.
-        # Strategy: Create a temporary placeholder or specific buffer.
-        # For simplicity: wait for full finishing OR (better):
-        # Just use a buffer and update the last block? textEdit.toHtml -> replace?
-        # Actually simplest is: Stream into a separate variable, and only append when done?
-        # OR: Just stream raw text for now like before?
-        # The user requested "Cherry Studio" style which implies distinct bubbles.
-        # Streaming inside a bubble is hard with simple append.
-        # I will buffer the response and assume "Thinking..." state, then show full bubble.
+        # 初始化流式响应缓存
         self.chat_response_buffer = ""
+        self.chat_thinking_buffer = ""
+        self.chat_streaming_started = False
 
     def on_chat_output_stream(self, text):
+        from PyQt6.QtGui import QTextCursor
+        
+        # 跳过非内容行
+        if text.startswith("Mode:") or text.startswith("Thinking") or text.startswith("---CHAT_START---"):
+            return
+        if text.startswith("STREAM_DONE:") or text.startswith("Context saved"):
+            return
+        
+        # 跳过统计信息和系统输出
+        skip_prefixes = [
+            "STATS_JSON:", "======", "------", "本次会话统计", "对话轮数:", 
+            "本次消耗", "历史总消耗", "Prompt:", "Completion:", "已更新统计报告",
+            "历史总", "- Prompt", "- Completion", "="
+        ]
+        for prefix in skip_prefixes:
+            if text.startswith(prefix) or text.strip().startswith(prefix):
+                return
+        
+        # 跳过空行和纯符号行
+        if not text.strip() or text.strip() in ["=", "-", "==", "--"]:
+            return
+        
+        # 解析流式标记
+        if text.startswith("STREAM_THINKING:"):
+            thinking_chunk = text[len("STREAM_THINKING:"):]
+            self.chat_thinking_buffer += thinking_chunk
+            self._update_chat_status_indicator()
+            return
+        
+        if text.startswith("STREAM_CONTENT:"):
+            content_chunk = text[len("STREAM_CONTENT:"):]
+            self.chat_response_buffer += content_chunk
+            self._update_chat_status_indicator()
+            return
+        
+        if text.startswith("STREAM_ERROR:"):
+            error_msg = text[len("STREAM_ERROR:"):]
+            self.chat_response_buffer += f"\n[Error: {error_msg}]"
+            return
+        
+        # 兼容旧格式（非流式输出）- 但仍需过滤统计内容
+        if "tokens" in text.lower() and ("prompt" in text.lower() or "completion" in text.lower()):
+            return
         self.chat_response_buffer += text + "\n"
-        # Optional: Show typing indicator or stream to a temporary UI element if needed.
-        # For now, we will just wait until finished to show the bubble to keep it clean,
-        # or we could update a status label.
+        self._update_chat_status_indicator()
+    
+    def _update_chat_status_indicator(self):
+        """更新发送按钮显示进度"""
+        # 显示已接收的字符数作为进度指示
+        total_chars = len(self.chat_thinking_buffer) + len(self.chat_response_buffer)
+        self.chat_send_btn.setText(f"... {total_chars}")
 
     def on_chat_finished(self, success, message):
-        if self.chat_response_buffer:
-            self.append_chat_bubble("assistant", self.chat_response_buffer.strip())
-        else:
-             if not success:
-                 self.append_chat_bubble("assistant", f"[Error: {message}]")
+        from PyQt6.QtGui import QTextCursor
+        
+        # 使用正确的气泡格式显示完整响应
+        if self.chat_response_buffer or self.chat_thinking_buffer:
+            full_response = ""
+            if self.chat_thinking_buffer:
+                full_response += f"💭 *思考:* {self.chat_thinking_buffer}\n\n"
+            full_response += self.chat_response_buffer
+            self.append_chat_bubble("assistant", full_response.strip())
+        elif not success:
+            self.append_chat_bubble("assistant", f"[Error: {message}]")
 
+        # 重置状态
         self.chat_response_buffer = ""
+        self.chat_thinking_buffer = ""
+        self.chat_streaming_started = False
         self.chat_input.setEnabled(True)
         self.chat_send_btn.setEnabled(True)
         self.chat_send_btn.setText("发送 (Send)")
@@ -756,6 +886,9 @@ class MainWindow(QWidget):
         self.action_plan_right_text.clear()
         self.action_plan_current_target = "analysis"
         self.action_plan_accumulated_text = ""
+        self.action_plan_accumulated_thinking = ""
+        self.action_plan_plan_text = ""
+        self.action_plan_plan_thinking = ""
         
         self.action_plan_left_text.setMarkdown("### ⏳ 正在分析数据 (Analyzing Data)...\n\n")
         self.action_plan_right_text.setMarkdown("### ⏳ 等待生成计划 (Waiting for Plan)...\n\n")
@@ -768,39 +901,194 @@ class MainWindow(QWidget):
         self.action_plan_worker.stats_signal.connect(self.update_action_plan_stats)
         self.action_plan_worker.start()
 
+    def render_markdown_to_html(self, text):
+        # 根据主题选择颜色
+        if self.is_dark_mode:
+            heading_color = "#e6e6e6"
+            code_bg = "#3d3d3d"
+            blockquote_border = "#666"
+            blockquote_text = "#aaa"
+            table_border = "#555"
+            th_bg = "#404040"
+            tr_even_bg = "#353535"
+            thinking_color = "#aaa"
+            thinking_bg = "#3a3a3a"
+        else:
+            heading_color = "#333"
+            code_bg = "#f0f0f0"
+            blockquote_border = "#ccc"
+            blockquote_text = "#666"
+            table_border = "#ddd"
+            th_bg = "#f5f5f5"
+            tr_even_bg = "#fafafa"
+            thinking_color = "#888"
+            thinking_bg = "#f9f9f9"
+        
+        style = f"""
+        <style>
+        h1, h2, h3 {{ color: {heading_color}; margin-top: 20px; margin-bottom: 10px; }}
+        p {{ line-height: 1.6; margin-bottom: 10px; }}
+        ul, ol {{ margin-bottom: 10px; margin-left: 20px; }}
+        li {{ margin-bottom: 5px; }}
+        code {{ background-color: {code_bg}; padding: 2px 4px; border-radius: 4px; font-family: monospace; }}
+        pre {{ background-color: {code_bg}; padding: 10px; border-radius: 5px; margin-bottom: 15px; }}
+        blockquote {{ border-left: 4px solid {blockquote_border}; padding-left: 10px; color: {blockquote_text}; margin-bottom: 15px; }}
+        table {{ border-collapse: collapse; width: 100%; margin-top: 15px; margin-bottom: 15px; }}
+        th, td {{ border: 1px solid {table_border}; padding: 8px; text-align: left; }}
+        th {{ background-color: {th_bg}; font-weight: bold; }}
+        tr:nth-child(even) {{ background-color: {tr_even_bg}; }}
+        .thinking {{ color: {thinking_color}; font-style: italic; background-color: {thinking_bg}; padding: 10px; border-radius: 5px; margin-bottom: 15px; border-left: 3px solid {blockquote_border}; }}
+        </style>
+        """
+        try:
+            import markdown
+            html_content = markdown.markdown(text, extensions=['nl2br', 'tables', 'fenced_code'])
+            return style + html_content
+        except ImportError:
+            return f"<pre>{text}</pre>"
+
+    def render_with_thinking(self, thinking_text, content_text):
+        """渲染包含思考内容的HTML"""
+        # 根据主题选择颜色
+        if self.is_dark_mode:
+            heading_color = "#e6e6e6"
+            code_bg = "#3d3d3d"
+            blockquote_border = "#666"
+            blockquote_text = "#aaa"
+            table_border = "#555"
+            th_bg = "#404040"
+            thinking_color = "#aaa"
+            thinking_bg = "#3a3a3a"
+        else:
+            heading_color = "#333"
+            code_bg = "#f0f0f0"
+            blockquote_border = "#ccc"
+            blockquote_text = "#666"
+            table_border = "#ddd"
+            th_bg = "#f5f5f5"
+            thinking_color = "#888"
+            thinking_bg = "#f9f9f9"
+        
+        style = f"""
+        <style>
+        h1, h2, h3 {{ color: {heading_color}; margin-top: 20px; margin-bottom: 10px; }}
+        p {{ line-height: 1.6; margin-bottom: 10px; }}
+        ul, ol {{ margin-bottom: 10px; margin-left: 20px; }}
+        li {{ margin-bottom: 5px; }}
+        code {{ background-color: {code_bg}; padding: 2px 4px; border-radius: 4px; font-family: monospace; }}
+        pre {{ background-color: {code_bg}; padding: 10px; border-radius: 5px; margin-bottom: 15px; }}
+        blockquote {{ border-left: 4px solid {blockquote_border}; padding-left: 10px; color: {blockquote_text}; margin-bottom: 15px; }}
+        table {{ border-collapse: collapse; width: 100%; margin-top: 15px; margin-bottom: 15px; }}
+        th, td {{ border: 1px solid {table_border}; padding: 8px; text-align: left; }}
+        th {{ background-color: {th_bg}; font-weight: bold; }}
+        </style>
+        """
+        
+        html = style
+        
+        # 添加思考区域
+        if thinking_text:
+            html += f'<div style="color: {thinking_color}; font-style: italic; background-color: {thinking_bg}; padding: 10px; border-radius: 5px; margin-bottom: 15px; border-left: 3px solid {blockquote_border};"><b>💭 思考过程:</b><br>{thinking_text}</div>'
+        
+        # 添加正文内容
+        if content_text:
+            try:
+                import markdown
+                html += markdown.markdown(content_text, extensions=['nl2br', 'tables', 'fenced_code'])
+            except ImportError:
+                html += f"<pre>{content_text}</pre>"
+        
+        return html
+
     def append_action_plan_log(self, text):
         from PyQt6.QtGui import QTextCursor
         
+        # 检测阶段切换标记
         if "---ANALYSIS_START---" in text:
-            parts = text.split("---ANALYSIS_START---")
+            self.action_plan_current_target = "analysis"
             self.action_plan_accumulated_text = ""
+            self.action_plan_accumulated_thinking = ""
             self.action_plan_left_text.clear()
-            text = parts[1].strip() if len(parts) > 1 else ""
-            if not text:
-                return
-
-        if "初始分析已完成。正在生成今日行动建议..." in text:
+            return
+        
+        if "---PLAN_START---" in text:
             self.action_plan_current_target = "plan"
+            self.action_plan_plan_text = ""
+            self.action_plan_plan_thinking = ""
             self.action_plan_right_text.clear()
             self.action_plan_right_text.append("🚀 开始生成计划...\n")
+            return
+
+        if "初始分析已完成。正在生成今日行动建议..." in text:
+            # 阶段切换提示
+            return
         
+        # 解析流式标记
+        if text.startswith("STREAM_THINKING:"):
+            thinking_chunk = text[len("STREAM_THINKING:"):]
+            if self.action_plan_current_target == "analysis":
+                self.action_plan_accumulated_thinking += thinking_chunk
+                # 实时更新思考内容显示
+                self._update_analysis_display()
+            else:
+                self.action_plan_plan_thinking += thinking_chunk
+                self._update_plan_display()
+            return
+        
+        if text.startswith("STREAM_CONTENT:"):
+            content_chunk = text[len("STREAM_CONTENT:"):]
+            if self.action_plan_current_target == "analysis":
+                self.action_plan_accumulated_text += content_chunk
+                self._update_analysis_display()
+            else:
+                self.action_plan_plan_text += content_chunk
+                self._update_plan_display()
+            return
+        
+        if text.startswith("STREAM_DONE:") or text.startswith("STREAM_ERROR:"):
+            return
+        
+        # 兼容旧格式的非流式输出
         if self.action_plan_current_target == "analysis":
             self.action_plan_accumulated_text += text + "\n"
-            self.action_plan_left_text.setMarkdown(self.action_plan_accumulated_text)
-            self.action_plan_left_text.moveCursor(QTextCursor.MoveOperation.End)
+            self._update_analysis_display()
         else:
-            self.action_plan_right_text.moveCursor(QTextCursor.MoveOperation.End)
-            self.action_plan_right_text.insertPlainText(text + "\n")
-            self.action_plan_right_text.moveCursor(QTextCursor.MoveOperation.End)
+            self.action_plan_plan_text += text + "\n"
+            self._update_plan_display()
+    
+    def _update_analysis_display(self):
+        """更新分析区域的显示"""
+        from PyQt6.QtGui import QTextCursor
+        
+        html = self.render_with_thinking(
+            self.action_plan_accumulated_thinking, 
+            self.action_plan_accumulated_text
+        )
+        self.action_plan_left_text.setHtml(html)
+        self.action_plan_left_text.moveCursor(QTextCursor.MoveOperation.End)
+    
+    def _update_plan_display(self):
+        """更新计划区域的显示"""
+        from PyQt6.QtGui import QTextCursor
+        
+        html = self.render_with_thinking(
+            self.action_plan_plan_thinking, 
+            self.action_plan_plan_text
+        )
+        self.action_plan_right_text.setHtml(html)
+        self.action_plan_right_text.moveCursor(QTextCursor.MoveOperation.End)
 
     def update_action_plan_stats(self, stats):
+        # 历史总tokens以百万计算
+        historical_tokens = stats.get('historical_total_tokens', 0)
+        historical_m = historical_tokens / 1_000_000
+        
         text = (
-            f"📊 <b>Session Stats:</b> "
+            f"📊 <b>Session:</b> "
             f"Speed: {stats.get('speed', 'N/A')} | "
-            f"Time: {stats.get('total_duration', 0):.2f}s | "
-            f"Tokens: {stats.get('total_tokens', 0)} "
-            f"(Prompt: {stats.get('prompt_tokens', 0)}, Completion: {stats.get('completion_tokens', 0)}) | "
-            f"Turns: {stats.get('turns', 0)}"
+            f"Time: {stats.get('total_duration', 0):.1f}s | "
+            f"Tokens: {stats.get('total_tokens', 0):,} | "
+            f"<b>History:</b> {historical_m:.2f}M tokens"
         )
         self.action_plan_stats_label.setText(text)
         self.action_plan_stats_label.show()
@@ -855,11 +1143,12 @@ class MainWindow(QWidget):
             try:
                 with open(target_file, "r", encoding="utf-8") as f:
                     content = f.read()
-                    self.action_plan_right_text.setMarkdown(content)
+                    self.action_plan_right_text.setHtml(self.render_markdown_to_html(content))
             except Exception as e:
                 self.action_plan_right_text.setText(f"Error reading file {target_file}: {e}")
         else:
-            self.action_plan_right_text.setMarkdown(f"# No Plan Found for Today :(\n\nLooking for pattern: `{pattern}*.md`")
+            msg = f"# No Plan Found for Today :(\n\nLooking for pattern: `{pattern}*.md`"
+            self.action_plan_right_text.setHtml(self.render_markdown_to_html(msg))
 
     # ========== PLOTS TAB ==========
     def init_plots_tab(self):
@@ -908,7 +1197,7 @@ class MainWindow(QWidget):
         self.plot_loading_label.setStyleSheet("font-size: 18px; color: #888; padding: 40px;")
         self.plot_grid_layout.addWidget(self.plot_loading_label, 0, 0)
         
-        is_dark = self.is_dark_mode()
+        is_dark = self.is_dark_mode
         self.plot_worker = PlotWorker(is_dark_mode=is_dark)
         self.plot_worker.finished_signal.connect(self.on_plot_finished)
         self.plot_worker.start()
@@ -1175,7 +1464,7 @@ class MainWindow(QWidget):
     def append_text(self, text):
         if not hasattr(self, 'text_edit'):
             return
-        color = "white" if self.is_dark_mode() else "black"
+        color = "white" if self.is_dark_mode else "black"
         self.text_edit.append(f"<span style='color:{color};'>{text}</span>")
         self.text_edit.moveCursor(QTextCursor.MoveOperation.End)
         self.log_to_file(text)
@@ -1184,7 +1473,7 @@ class MainWindow(QWidget):
     def append_error(self, text):
         if not hasattr(self, 'text_edit'):
             return
-        error_color = "#FF6666" if self.is_dark_mode() else "red"
+        error_color = "#FF6666" if self.is_dark_mode else "red"
         self.text_edit.append(f"<span style='color:{error_color};'>{text}</span>")
         self.log_to_file(f"[ERROR] {text}")
 
@@ -1387,7 +1676,7 @@ class MainWindow(QWidget):
         # We rely on QPalette for base colors (Window, Text, Base)
         # We only style specific components to add structure without forcing colors
         
-        is_dark = self.is_dark_mode()
+        is_dark = self.is_dark_mode
         
         if is_dark:
             # Dark Mode

@@ -148,7 +148,7 @@ def load_excel_data(excel_file_path):
     return df
 
 
-def extract_recent_data_and_combine(prompt_file_path, excel_file_path, days=30):
+def extract_recent_data_and_combine(prompt_file_path, excel_file_path, days=90):
     prompt_file_path = Path(prompt_file_path)
     excel_file_path = Path(excel_file_path)
     project_mgmt_path = resolve_data_path("Prompt_Project_Management.md")
@@ -277,6 +277,30 @@ def extract_recent_data_and_combine(prompt_file_path, excel_file_path, days=30):
     if project_mgmt_path.exists():
         pm_content = project_mgmt_path.read_text(encoding="utf-8")
         combined_content += f"\n\n# Project Management Context\n\n{pm_content}"
+    
+    # 加载导师要求文件
+    advisor_req_path = resolve_data_path("Prompt_Advisor_Requirements.md")
+    if advisor_req_path.exists():
+        advisor_content = advisor_req_path.read_text(encoding="utf-8")
+        combined_content += f"\n\n# Advisor Requirements\n\n{advisor_content}"
+    
+    # 加载目标与期望文件
+    goals_path = resolve_data_path("Prompt_Goals.md")
+    if goals_path.exists():
+        goals_content = goals_path.read_text(encoding="utf-8")
+        combined_content += f"\n\n# Goals\n\n{goals_content}"
+    
+    # 加载资源清单文件
+    inventory_path = resolve_data_path("Prompt_Inventory.md")
+    if inventory_path.exists():
+        inventory_content = inventory_path.read_text(encoding="utf-8")
+        combined_content += f"\n\n# Personal Resources & Inventory\n\n{inventory_content}"
+    
+    # 加载AI响应要求文件
+    ai_instructions_path = resolve_data_path("Prompt_AI_Instructions.md")
+    if ai_instructions_path.exists():
+        ai_content = ai_instructions_path.read_text(encoding="utf-8")
+        combined_content += f"\n\n# AI Instructions\n\n{ai_content}"
 
     output_filename = f"combined_output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
     output_path = get_history_dir(Path.cwd()) / output_filename
@@ -371,6 +395,135 @@ def call_model_messages(messages):
     result["_duration_seconds"] = duration
     
     return result
+
+
+def call_model_messages_stream(messages, print_callback=None):
+    """
+    流式调用模型API，逐块输出内容。
+    
+    Args:
+        messages: 消息列表
+        print_callback: 可选的回调函数，用于自定义输出处理
+                       回调格式: callback(tag, content) 
+                       tag可以是 'thinking', 'content', 'done', 'error'
+    
+    Returns:
+        dict: 包含完整响应内容和使用统计的字典
+    """
+    base_url = os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
+    model = os.environ.get("SILICONFLOW_MODEL")
+    api_key = os.environ.get("SILICONFLOW_API_KEY")
+
+    if not model:
+        raise ValueError("缺少环境变量 SILICONFLOW_MODEL")
+    if not api_key:
+        raise ValueError("缺少环境变量 SILICONFLOW_API_KEY")
+
+    url = base_url.rstrip("/") + "/chat/completions"
+    
+    # 检查是否是支持思考的模型
+    enable_thinking = "qwq" in model.lower() or "deepseek" in model.lower()
+    
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "max_tokens": 4096,
+        "enable_thinking": enable_thinking,
+        "thinking_budget": 4096 if enable_thinking else 0,
+        "min_p": 0.05,
+        "stop": None,
+        "temperature": 0.7,
+        "top_p": 0.7,
+        "top_k": 50,
+        "frequency_penalty": 0.5,
+        "n": 1,
+        "response_format": {"type": "text"},
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    
+    start_time = time.time()
+    
+    full_content = ""
+    full_thinking = ""
+    usage_data = {}
+    
+    def output(tag, content):
+        if print_callback:
+            print_callback(tag, content)
+        else:
+            # 默认输出到stdout，使用特殊标记
+            if tag == "thinking":
+                print(f"STREAM_THINKING:{content}", flush=True)
+            elif tag == "content":
+                print(f"STREAM_CONTENT:{content}", flush=True)
+            elif tag == "done":
+                print("STREAM_DONE:", flush=True)
+            elif tag == "error":
+                print(f"STREAM_ERROR:{content}", flush=True)
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=300, stream=True)
+        response.raise_for_status()
+        
+        for line in response.iter_lines():
+            if not line:
+                continue
+            
+            line_str = line.decode('utf-8')
+            
+            if line_str.startswith("data: "):
+                data_str = line_str[6:]
+                
+                if data_str.strip() == "[DONE]":
+                    output("done", "")
+                    break
+                
+                try:
+                    data = json.loads(data_str)
+                    
+                    # 获取usage信息（通常在最后一条消息）
+                    if "usage" in data:
+                        usage_data = data["usage"]
+                    
+                    if "choices" in data and len(data["choices"]) > 0:
+                        delta = data["choices"][0].get("delta", {})
+                        
+                        # 处理思考内容
+                        reasoning = delta.get("reasoning_content", "")
+                        if reasoning:
+                            full_thinking += reasoning
+                            output("thinking", reasoning)
+                        
+                        # 处理正文内容
+                        content = delta.get("content", "")
+                        if content:
+                            full_content += content
+                            output("content", content)
+                            
+                except json.JSONDecodeError:
+                    continue
+                    
+    except Exception as e:
+        output("error", str(e))
+        raise
+    
+    duration = time.time() - start_time
+    
+    return {
+        "content": full_content,
+        "thinking": full_thinking,
+        "usage": {
+            "prompt_tokens": usage_data.get("prompt_tokens", 0),
+            "completion_tokens": usage_data.get("completion_tokens", 0),
+            "total_tokens": usage_data.get("total_tokens", 0),
+        },
+        "duration": duration
+    }
 
 
 def extract_text(response_json):
@@ -513,23 +666,26 @@ def main():
         current_messages.append({"role": "user", "content": args.chat_message})
         
         print("Thinking...")
-        response_json = call_model_messages(current_messages)
-        content = extract_text(response_json)
+        print("---CHAT_START---")
+        
+        # 使用流式调用
+        stream_result = call_model_messages_stream(current_messages)
+        content = stream_result["content"]
+        thinking = stream_result.get("thinking", "")
         
         # Stats update
-        usage = extract_usage(response_json)
+        usage = stream_result["usage"]
         current_session_usage["prompt_tokens"] += usage["prompt_tokens"]
         current_session_usage["completion_tokens"] += usage["completion_tokens"]
         current_session_usage["total_tokens"] += usage["total_tokens"]
         current_session_usage["turns"] += 1
-        current_session_usage["total_duration"] += usage.get("duration", 0)
+        current_session_usage["total_duration"] += stream_result.get("duration", 0)
         
         historical_stats["total_prompt_tokens"] += usage["prompt_tokens"]
         historical_stats["total_completion_tokens"] += usage["completion_tokens"]
         historical_stats["total_conversations"] += 1
         
         if content:
-            print(content) # Print to stdout for GUI to capture
             current_messages.append({"role": "assistant", "content": content})
             
             # Save updated context
@@ -555,7 +711,7 @@ def main():
             prompt_path = extract_recent_data_and_combine(
                 resolve_data_path("Prompt_Personal_Info.md"),
                 resolve_data_path("Time.xlsx"),
-                days=30,
+                days=90,
             )
             
         if args.output_file:
@@ -597,24 +753,26 @@ def main():
         current_messages.append({"role": "user", "content": prompt_text})
         
         print("正在生成初始分析报告，请稍候...")
-        response_json = call_model_messages(current_messages)
-        content = extract_text(response_json)
+        print("---ANALYSIS_START---")
+        
+        # 使用流式调用
+        stream_result = call_model_messages_stream(current_messages)
+        content = stream_result["content"]
+        thinking = stream_result.get("thinking", "")
         
         # Update stats
-        usage = extract_usage(response_json)
+        usage = stream_result["usage"]
         current_session_usage["prompt_tokens"] += usage["prompt_tokens"]
         current_session_usage["completion_tokens"] += usage["completion_tokens"]
         current_session_usage["total_tokens"] += usage["total_tokens"]
         current_session_usage["turns"] += 1
-        current_session_usage["total_duration"] += usage.get("duration", 0)
+        current_session_usage["total_duration"] += stream_result.get("duration", 0)
         
         historical_stats["total_prompt_tokens"] += usage["prompt_tokens"]
         historical_stats["total_completion_tokens"] += usage["completion_tokens"]
         historical_stats["total_conversations"] += 1
-        current_session_usage["total_duration"] += usage.get("duration", 0)
 
-        if content is None:
-            output_path.write_text(str(response_json), encoding="utf-8")
+        if not content:
             print("Error: Failed to get response content.")
             return
         else:
@@ -631,8 +789,6 @@ def main():
             os.environ.get("SILICONFLOW_MODEL", "Unknown")
         )
 
-        print("---ANALYSIS_START---")
-        print(content)
         print("初始分析已完成。正在生成今日行动建议...")
         
         # Second pass: Generate Today's Action Plan
@@ -696,16 +852,18 @@ def main():
 """
         current_messages.append({"role": "user", "content": action_plan_prompt})
         
-        response_json = call_model_messages(current_messages)
-        action_plan_content = extract_text(response_json)
+        print("---PLAN_START---")
+        # 使用流式调用生成计划
+        plan_stream_result = call_model_messages_stream(current_messages)
+        action_plan_content = plan_stream_result["content"]
         
         # Update stats for second pass
-        usage = extract_usage(response_json)
+        usage = plan_stream_result["usage"]
         current_session_usage["prompt_tokens"] += usage["prompt_tokens"]
         current_session_usage["completion_tokens"] += usage["completion_tokens"]
         current_session_usage["total_tokens"] += usage["total_tokens"]
         current_session_usage["turns"] += 1
-        current_session_usage["total_duration"] += usage.get("duration", 0)
+        current_session_usage["total_duration"] += plan_stream_result.get("duration", 0)
         
         historical_stats["total_prompt_tokens"] += usage["prompt_tokens"]
         historical_stats["total_completion_tokens"] += usage["completion_tokens"]
@@ -760,7 +918,8 @@ def main():
         "completion_tokens": current_session_usage['completion_tokens'],
         "total_tokens": total_tokens,
         "total_duration": total_duration,
-        "speed": f"{speed:.2f} tokens/s"
+        "speed": f"{speed:.2f} tokens/s",
+        "historical_total_tokens": historical_stats['total_prompt_tokens'] + historical_stats['total_completion_tokens']
     }
     print(f"STATS_JSON:{json.dumps(stats_output)}")
 
