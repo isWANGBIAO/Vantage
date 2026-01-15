@@ -106,8 +106,6 @@ class ActionPlanWorker(QThread):
                             line = line_bytes.decode('gbk')
                         except UnicodeDecodeError:
                             line = line_bytes.decode('utf-8', errors='replace')
-                    self.output_signal.emit(line.strip())
-                    
                     if line.startswith("STATS_JSON:"):
                         try:
                             import json
@@ -116,6 +114,14 @@ class ActionPlanWorker(QThread):
                             self.stats_signal.emit(stats)
                         except Exception:
                             pass
+                        continue  # Skip emitting STATS_JSON to UI
+
+                    if line.startswith("Response saved to:") or line.startswith("已生成今日行动建议:"):
+                         # Optional: Log to console but skip UI
+                         print(f"[ActionPlanWorker] {line.strip()}")
+                         continue
+
+                    self.output_signal.emit(line.strip())
 
             stderr_bytes = process.stderr.read()
             if stderr_bytes:
@@ -123,7 +129,11 @@ class ActionPlanWorker(QThread):
                     stderr = stderr_bytes.decode('utf-8')
                 except UnicodeDecodeError:
                     stderr = stderr_bytes.decode('utf-8', errors='replace')
-                self.output_signal.emit(f"STDERR: {stderr}")
+                # Filter out INFO logs from STDERR that clutter the UI
+                if "INFO" in stderr or "Mode:" in stderr:
+                     print(f"[ActionPlanWorker] STDERR (Hidden): {stderr}")
+                else:
+                     self.output_signal.emit(f"STDERR: {stderr}")
 
             if process.returncode == 0:
                 self.finished_signal.emit(True, "Generation completed successfully.")
@@ -214,6 +224,13 @@ class ChatWorker(QThread):
                             line = line_bytes.decode('gbk')
                         except UnicodeDecodeError:
                             line = line_bytes.decode('utf-8', errors='replace')
+                    
+                    if line.startswith("STATS_JSON:"):
+                        continue
+                    if line.startswith("Response saved to:") or line.startswith("已生成今日行动建议:"):
+                         print(f"[ChatWorker] {line.strip()}")
+                         continue
+
                     self.output_signal.emit(line.strip())
 
             stderr_bytes = process.stderr.read()
@@ -449,7 +466,10 @@ class MainWindow(QWidget):
         print("OneDrive 截图目录:", screenshots_path)
 
         # C:\Users\97012\OneDrive\图片\本机照片
-        photos_path = pictures_path + "\\本机照片"
+        photos_path = os.path.join(pictures_path, "本机照片")
+        if not os.path.exists(photos_path):
+             # Fallback if "本机照片" doesn't exist
+             photos_path = pictures_path
 
         return photos_path, screenshots_path
 

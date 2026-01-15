@@ -7,7 +7,11 @@ class EmittingStream(QObject):
 
     def write(self, text):
         if text.strip():  # 过滤空行
-            self.output_signal.emit(text)
+            try:
+                self.output_signal.emit(text)
+            except RuntimeError:
+                # C++ object might be deleted on exit
+                pass
         # 同时输出到终端 (stdout 或 stderr)
         if self is sys.stdout:
             sys.__stdout__.write(text)
