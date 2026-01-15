@@ -3,8 +3,19 @@
 '''
 import os
 
+from pathlib import Path
+
+def get_project_root():
+    current = Path(__file__).resolve().parent
+    for _ in range(5):
+        if (current / "requirements.txt").exists():
+            return current
+        current = current.parent
+    return Path.cwd()
+
 # 打开requirements.txt文件，使用with语句确保文件在使用后正确关闭
-with open('requirements.txt', 'r') as file:
+req_path = get_project_root() / 'requirements.txt'
+with open(req_path, 'r') as file:
     # 遍历文件的每一行
     for line in file:
         # 去除行两端的空白字符

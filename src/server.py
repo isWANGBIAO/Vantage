@@ -243,7 +243,14 @@ def get_latest_images():
 
 @app.post("/api/plots/refresh")
 async def refresh_plots(background_tasks: BackgroundTasks):
-    script_path = os.path.join(os.getcwd(), "plot.py")
+    # Locate plot.py in src/scripts
+    current_dir = os.path.dirname(os.path.abspath(__file__)) # src/server.py -> src
+    script_path = os.path.join(current_dir, "scripts", "plot.py")
+    
+    if not os.path.exists(script_path):
+        # Fallback to absolute path check
+        script_path = os.path.abspath("src/scripts/plot.py")
+
     if not os.path.exists(script_path):
         return JSONResponse(status_code=404, content={"error": "plot.py not found"})
 
@@ -265,7 +272,11 @@ class ChatRequest(BaseModel):
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    script_path = os.path.join(os.getcwd(), "run_prompt.py")
+    # Locate run_prompt.py in src/scripts
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
+    if not os.path.exists(script_path):
+         script_path = os.path.abspath("src/scripts/run_prompt.py")
     
     # Determine context file (similar logic to ChatWorker)
     context_file = request.context_file
@@ -311,7 +322,11 @@ async def chat_endpoint(request: ChatRequest):
 
 @app.post("/api/action_plan")
 async def generate_action_plan():
-    script_path = os.path.join(os.getcwd(), "run_prompt.py")
+    # Locate run_prompt.py in src/scripts
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
+    if not os.path.exists(script_path):
+         script_path = os.path.abspath("src/scripts/run_prompt.py")
     
     cmd = [sys.executable, script_path] # Default runs action plan generation
     
@@ -355,7 +370,11 @@ async def transcribe_audio(file: UploadFile = File(...)):
         content = await file.read()
         buffer.write(content)
         
-    script_path = os.path.join(os.getcwd(), "run_prompt.py")
+    # Locate run_prompt.py in src/scripts
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
+    if not os.path.exists(script_path):
+         script_path = os.path.abspath("src/scripts/run_prompt.py")
     cmd = [sys.executable, script_path, "--transcribe", temp_filename]
     
     env = os.environ.copy()

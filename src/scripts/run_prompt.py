@@ -14,6 +14,17 @@ import json
 
 
 
+def get_project_root():
+    """Dynamically find project root by looking for .env or requirements.txt"""
+    # Start from current file path and go up
+    current = Path(__file__).resolve().parent
+    for _ in range(5): # Check up to 5 levels up
+        if (current / ".env").exists() or (current / "requirements.txt").exists():
+             return current
+        current = current.parent
+    return Path.cwd() # Fallback
+
+
 def load_env_file(path):
     if not path.exists():
         return
@@ -100,7 +111,9 @@ def resolve_data_root():
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    return Path.cwd()
+    
+    # Fallback to project root if env var not set and onedrive not found
+    return get_project_root()
 
 
 def resolve_data_path(filename):
@@ -108,6 +121,14 @@ def resolve_data_path(filename):
     path = root / filename
     if path.exists():
         return path
+        
+    # Check Project Root
+    project_root = get_project_root()
+    path_project = project_root / filename
+    if path_project.exists():
+        return path_project
+
+    # Check CWD
     fallback = Path.cwd() / filename
     if fallback.exists():
         return fallback
@@ -321,7 +342,7 @@ def build_payload(prompt_text, model):
         "thinking_budget": 4096,
         "min_p": 0.05,
         "stop": None,
-        "temperature": 0.7,
+        "temperature": float(os.environ.get("AI_TEMPERATURE", 0.6)),
         "top_p": 0.7,
         "top_k": 50,
         "frequency_penalty": 0.5,
@@ -373,7 +394,7 @@ def call_model_messages(messages):
         "thinking_budget": 4096,
         "min_p": 0.05,
         "stop": None,
-        "temperature": 0.7,
+        "temperature": float(os.environ.get("AI_TEMPERATURE", 0.6)),
         "top_p": 0.7,
         "top_k": 50,
         "frequency_penalty": 0.5,
@@ -433,7 +454,7 @@ def call_model_messages_stream(messages, print_callback=None):
         "thinking_budget": 4096 if enable_thinking else 0,
         "min_p": 0.05,
         "stop": None,
-        "temperature": 0.7,
+        "temperature": float(os.environ.get("AI_TEMPERATURE", 0.6)),
         "top_p": 0.7,
         "top_k": 50,
         "frequency_penalty": 0.5,
@@ -617,7 +638,7 @@ def main():
     
     args = parser.parse_args()
 
-    base_dir = Path.cwd()
+    base_dir = get_project_root()
     load_env_file(base_dir / ".env")
     
     # === TRANSCRIPT MODE ===

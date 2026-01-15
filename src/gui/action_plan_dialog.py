@@ -20,25 +20,14 @@ class GenerationWorker(QThread):
             pythoncom.CoInitialize()
         try:
             # Locate run_prompt.py
-            # Assuming we are in src/gui/ or src/ so we need to go up to find run_prompt.py
-            # Best way is to find the project root.
-            # Using relative path from CWD which is usually project root main.py launch
+            # Assuming we are in src/gui/
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            src_dir = os.path.dirname(current_dir) # src/
+            script_path = os.path.join(src_dir, "scripts", "run_prompt.py")
             
-            script_path = "run_prompt.py"
-            # Ensure absolute path resolution
-            if not os.path.isabs(script_path):
-                # Try to find run_prompt.py in likely locations if not in CWD
-                if not os.path.exists(script_path):
-                     current_dir = os.path.dirname(os.path.abspath(__file__))
-                     # Try ../../run_prompt.py (assuming src/gui/ -> root)
-                     candidate = os.path.normpath(os.path.join(current_dir, "..", "..", "run_prompt.py"))
-                     if os.path.exists(candidate):
-                         script_path = candidate
-                     else:
-                         # Fallback to checking CWD again, but make it absolute
-                         script_path = os.path.abspath(script_path)
-                else:
-                    script_path = os.path.abspath(script_path)
+            if not os.path.exists(script_path):
+                 # Fallback: check relative to CWD if running from root
+                 script_path = os.path.abspath("src/scripts/run_prompt.py")
 
             if not os.path.exists(script_path):
                 self.finished_signal.emit(False, f"Could not find run_prompt.py at {script_path}")

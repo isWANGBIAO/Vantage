@@ -30,11 +30,16 @@ class PlotWorker(QThread):
         try:
             # Run plot.py as a subprocess to ensure isolation and proper matplotlib state
             # We assume plot.py is in the same directory as main.py (root)
-            script_path = os.path.join(os.getcwd(), "plot.py")
-            if not os.path.exists(script_path):
-                # Fallback search
-                script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "plot.py")
+            # We assume plot.py is in src/scripts
+            # __file__ is src/gui/main_window.py -> src/gui -> src -> src/scripts/plot.py
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            src_dir = os.path.dirname(current_dir)
+            script_path = os.path.join(src_dir, "scripts", "plot.py")
             
+            if not os.path.exists(script_path):
+                # Fallback: check relative to CWD if running from root
+                script_path = os.path.abspath("src/scripts/plot.py")
+
             cmd = [sys.executable, script_path]
             if self.is_dark_mode:
                 cmd.append("--dark")
@@ -63,17 +68,13 @@ class ActionPlanWorker(QThread):
 
         try:
             # Locate run_prompt.py
-            script_path = "run_prompt.py"
-            if not os.path.isabs(script_path):
-                if not os.path.exists(script_path):
-                    current_dir = os.path.dirname(os.path.abspath(__file__))
-                    candidate = os.path.normpath(os.path.join(current_dir, "..", "..", "run_prompt.py"))
-                    if os.path.exists(candidate):
-                        script_path = candidate
-                    else:
-                        script_path = os.path.abspath(script_path)
-                else:
-                    script_path = os.path.abspath(script_path)
+            # Locate run_prompt.py in src/scripts
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            src_dir = os.path.dirname(current_dir)
+            script_path = os.path.join(src_dir, "scripts", "run_prompt.py")
+
+            if not os.path.exists(script_path):
+                 script_path = os.path.abspath("src/scripts/run_prompt.py")
 
             if not os.path.exists(script_path):
                 self.finished_signal.emit(False, f"Could not find run_prompt.py at {script_path}")
@@ -158,17 +159,13 @@ class ChatWorker(QThread):
 
         try:
             # Locate run_prompt.py (same logic as ActionPlanWorker)
-            script_path = "run_prompt.py"
-            if not os.path.isabs(script_path):
-                if not os.path.exists(script_path):
-                    current_dir = os.path.dirname(os.path.abspath(__file__))
-                    candidate = os.path.normpath(os.path.join(current_dir, "..", "..", "run_prompt.py"))
-                    if os.path.exists(candidate):
-                        script_path = candidate
-                    else:
-                        script_path = os.path.abspath(script_path)
-                else:
-                    script_path = os.path.abspath(script_path)
+            # Locate run_prompt.py in src/scripts
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            src_dir = os.path.dirname(current_dir)
+            script_path = os.path.join(src_dir, "scripts", "run_prompt.py")
+
+            if not os.path.exists(script_path):
+                 script_path = os.path.abspath("src/scripts/run_prompt.py")
 
             if not os.path.exists(script_path):
                 self.finished_signal.emit(False, f"Could not find run_prompt.py at {script_path}")
@@ -256,17 +253,13 @@ class AudioWorker(QThread):
     def run(self):
         try:
             # Run run_prompt.py with --transcribe
-            script_path = "run_prompt.py"
-            if not os.path.isabs(script_path):
-                if not os.path.exists(script_path):
-                    current_dir = os.path.dirname(os.path.abspath(__file__))
-                    candidate = os.path.normpath(os.path.join(current_dir, "..", "..", "run_prompt.py"))
-                    if os.path.exists(candidate):
-                        script_path = candidate
-                    else:
-                        script_path = os.path.abspath(script_path)
-                else:
-                    script_path = os.path.abspath(script_path)
+            # Run run_prompt.py with --transcribe
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            src_dir = os.path.dirname(current_dir)
+            script_path = os.path.join(src_dir, "scripts", "run_prompt.py")
+
+            if not os.path.exists(script_path):
+                 script_path = os.path.abspath("src/scripts/run_prompt.py")
                  
             cmd = [sys.executable, script_path, "--transcribe", self.audio_file]
             env = os.environ.copy()

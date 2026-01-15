@@ -6,7 +6,7 @@ reg add "HKCU\Console" /v CodePage /t REG_DWORD /d 65001 /f >nul
 reg add "HKCU\Console" /v FaceName /t REG_SZ /d "Lucida Console" /f >nul
 
 echo 正在转换图标...
-python convert_icon.py
+python src/scripts/convert_icon.py
 echo 正在打包任务管理器程序...
 
 :: 记录开始时间

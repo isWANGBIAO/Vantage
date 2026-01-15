@@ -145,6 +145,17 @@ def load_excel_safely(path):
             raise
 
 
+
+def get_project_root():
+    """Dynamically find project root by looking for .env or requirements.txt"""
+    # Start from current file path and go up
+    current = Path(__file__).resolve().parent
+    for _ in range(5): # Check up to 5 levels up
+        if (current / ".env").exists() or (current / "requirements.txt").exists():
+             return current
+        current = current.parent
+    return Path.cwd() # Fallback
+
 def resolve_data_root():
     env_root = os.environ.get("AI_DATA_ROOT") or os.environ.get("DATA_ROOT")
     if env_root:
@@ -158,7 +169,7 @@ def resolve_data_root():
         if candidate.exists():
             return candidate
 
-    return Path.cwd()
+    return get_project_root()
 
 
 def resolve_data_path(filename):
@@ -166,6 +177,14 @@ def resolve_data_path(filename):
     path = root / filename
     if path.exists():
         return path
+        
+    # Check Project Root
+    project_root = get_project_root()
+    path_project = project_root / filename
+    if path_project.exists():
+        return path_project
+        
+    # Check CWD
     fallback = Path.cwd() / filename
     if fallback.exists():
         return fallback
@@ -267,7 +286,7 @@ def resolve_output_dir():
     if env_root:
         root = Path(env_root)
     else:
-        root = Path.cwd() / "plot_outputs"
+        root = get_project_root() / "plot_outputs"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
