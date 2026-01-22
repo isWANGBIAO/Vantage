@@ -84,6 +84,38 @@ class DataLoader:
         return df
 
     @staticmethod
+    def get_today_data_row(excel_file_path):
+        """
+        Retrieves the data row for today (or the latest date) as a formatted string.
+        """
+        try:
+            df = DataLoader.load_excel_data(excel_file_path)
+            
+            # Find today's row or latest
+            today = datetime.now().date()
+            # Convert timestamp to date for comparison
+            df['date_only'] = df['日期'].dt.date
+            
+            today_row = df[df['date_only'] == today]
+            
+            row_str = ""
+            if not today_row.empty:
+                # Format the row data
+                row = today_row.iloc[0]
+                row_str = f"本日({today})数据记录：\n"
+                for col in df.columns:
+                    if col not in ['日期', 'date_only'] and pd.notna(row[col]):
+                         row_str += f"- {col}: {row[col]}\n"
+            else:
+                 # If no data for today, maybe mention latest? Or just empty
+                 row_str = f"本日({today})暂无特定数据记录。\n"
+                 
+            return row_str
+        except Exception as e:
+            logging.error(f"Error getting today's data row: {e}")
+            return "无法获取今日数据记录。"
+
+    @staticmethod
     def construct_prompt(prompt_file_path, excel_file_path, days=90):
         prompt_file_path = Path(prompt_file_path)
         excel_file_path = Path(excel_file_path)

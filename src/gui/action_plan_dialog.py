@@ -367,7 +367,13 @@ class ActionPlanDialog(QDialog):
         # Determine history dir
         # Logic matches what run_prompt.py does broadly
         # But here we just need to search likely locations
+        # Robustly find root dir based on this file's location
+        current_file_dir = os.path.dirname(os.path.abspath(__file__)) # src/gui
+        root_dir = os.path.abspath(os.path.join(current_file_dir, "..", "..")) # src/gui/../../ -> root
+        history_path_abs = os.path.join(root_dir, "history")
+
         possible_history_dirs = [
+             history_path_abs,
              os.path.join("history"),
              os.path.join("..", "history"),
              os.path.join(os.path.expanduser("~"), "gitee", "ai", "history")

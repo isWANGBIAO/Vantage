@@ -190,8 +190,10 @@ class ChatWorker(QThread):
                  # Let's verify where that is.
                  # For now, we will pass the path explicitly if we can calculate it, otherwise let python handle it.
                  # Let's try to construct the path.
-                 base_dir = os.path.dirname(script_path)
-                 self.context_file = os.path.join(base_dir, "history", "latest_context.json")
+                 # Use root/history/latest_context.json
+                 # current_dir is defined above as src/gui
+                 root_dir = os.path.abspath(os.path.join(current_dir, "..", ".."))
+                 self.context_file = os.path.join(root_dir, "history", "latest_context.json")
 
             cmd = [
                 sys.executable, 
@@ -1034,6 +1036,12 @@ class MainWindow(QWidget):
 
         if "初始分析已完成。正在生成今日行动建议..." in text:
             # 阶段切换提示
+            self.action_plan_current_target = "plan"
+            self.action_plan_plan_text = ""
+            self.action_plan_plan_thinking = ""
+            # Don't clear right text here, allow valid accumulation if any started
+            self.action_plan_right_text.clear() 
+            self.action_plan_right_text.append("🚀 开始生成计划...\n")
             return
         
         # 解析流式标记
@@ -1112,7 +1120,8 @@ class MainWindow(QWidget):
         self.action_plan_right_text.insertPlainText(f"\n\n**Status**: {message}\n\n")
         
         if success:
-            self.load_action_plan_file()
+            # Pass preserve_left=True so we don't wipe out the stream-generated analysis on the left
+            self.load_action_plan_file(preserve_left=True)
             # Populate Chat Tab with initial analysis and plan
             analysis_text = self.action_plan_left_text.toPlainText()
             plan_text = self.action_plan_right_text.toPlainText()
@@ -1126,12 +1135,18 @@ class MainWindow(QWidget):
             self.show()
             print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Action Plan 已生成，显示主窗口")
 
-    def load_action_plan_file(self):
+    def load_action_plan_file(self, preserve_left=False):
         from datetime import datetime
         date_str = datetime.now().strftime('%Y%m%d')
         pattern = f"action_plan_{date_str}_"
         
+        # Robustly find root dir based on this file's location
+        current_file_dir = os.path.dirname(os.path.abspath(__file__)) # src/gui
+        root_dir = os.path.abspath(os.path.join(current_file_dir, "..", "..")) # src/gui/../../ -> root
+        history_path_abs = os.path.join(root_dir, "history")
+
         possible_history_dirs = [
+            history_path_abs,
             os.path.join("history"),
             os.path.join("..", "history"),
             os.path.join(os.path.expanduser("~"), "gitee", "ai", "history")
@@ -1156,127 +1171,198 @@ class MainWindow(QWidget):
             try:
                 with open(target_file, "r", encoding="utf-8") as f:
                     content = f.read()
-                    self.action_plan_right_text.setHtml(self.render_markdown_to_html(content))
+                    
+                # Split content if separator exists
+                # Direct load: The file contains the Action Plan.
+                # No separation logic needed.
+                if not preserve_left:
+                    self.action_plan_left_text.setHtml(self.render_markdown_to_html("### 📊 Analysis (See Logs)\n\nThe analysis for this plan was generated in a previous step."))
+                    
+                self.action_plan_right_text.setHtml(self.render_markdown_to_html(content))
             except Exception as e:
                 self.action_plan_right_text.setText(f"Error reading file {target_file}: {e}")
         else:
             msg = f"# No Plan Found for Today :(\n\nLooking for pattern: `{pattern}*.md`"
             self.action_plan_right_text.setHtml(self.render_markdown_to_html(msg))
+            self.action_plan_left_text.clear()
 
-    # ========== PLOTS TAB ==========
+    # ========== PLOTS TAB (CAROUSEL) ==========
     def init_plots_tab(self):
         tab = QWidget()
         tab_layout = QVBoxLayout(tab)
         tab_layout.setContentsMargins(0, 0, 0, 0)
-        tab_layout.setSpacing(0)
+        tab_layout.setSpacing(10)
         
-        # Scroll Area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setObjectName("plotScrollArea")
+        # Main Display Area (Image + Info)
+        self.plot_display_container = QWidget()
+        display_layout = QVBoxLayout(self.plot_display_container)
+        display_layout.setContentsMargins(20, 20, 20, 20)
         
-        # Container widget with grid layout
-        self.plot_grid_container = QWidget()
-        self.plot_grid_layout = QGridLayout(self.plot_grid_container)
-        self.plot_grid_layout.setSpacing(12)
-        self.plot_grid_layout.setContentsMargins(16, 16, 16, 16)
+        # Image Label
+        self.plot_image_label = QLabel("⏳ 点击下方按钮生成图表...")
+        self.plot_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.plot_image_label.setObjectName("plotCarouselImage")
+        self.plot_image_label.setStyleSheet("background-color: transparent;")
+        # Fix size policy to allow expansion
+        from PyQt6.QtWidgets import QSizePolicy
+        self.plot_image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
-        # Placeholder label
-        self.plot_loading_label = QLabel("⏳ 点击下方按钮生成图表...")
-        self.plot_loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.plot_loading_label.setObjectName("plotPlaceholder")
-        self.plot_loading_label.setStyleSheet("font-size: 16px; color: #888;")
-        self.plot_grid_layout.addWidget(self.plot_loading_label, 0, 0)
+        display_layout.addWidget(self.plot_image_label, stretch=1)
         
-        scroll.setWidget(self.plot_grid_container)
-        tab_layout.addWidget(scroll, stretch=1)
+        # Info Label (filename, index)
+        self.plot_info_label = QLabel("")
+        self.plot_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.plot_info_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #555; margin-top: 10px;")
+        display_layout.addWidget(self.plot_info_label, stretch=0)
         
-        # Refresh Button - Fixed at bottom
-        refresh_btn = QPushButton("🔄 刷新图表 (Refresh Plots)")
+        tab_layout.addWidget(self.plot_display_container, stretch=1)
+        
+        # Bottom Controls
+        controls_layout = QHBoxLayout()
+        controls_layout.setContentsMargins(20, 10, 20, 20)
+        
+        prev_btn = QPushButton("◀ 上一张 (Prev)")
+        prev_btn.clicked.connect(self.prev_plot)
+        prev_btn.setFixedHeight(40)
+        
+        next_btn = QPushButton("下一张 (Next) ▶")
+        next_btn.clicked.connect(self.next_plot)
+        next_btn.setFixedHeight(40)
+        
+        refresh_btn = QPushButton("🔄 刷新图表 (Refresh)")
         refresh_btn.setObjectName("actionButton")
-        refresh_btn.setFixedHeight(48)
+        refresh_btn.setFixedHeight(40)
         refresh_btn.clicked.connect(self.refresh_plots)
-        tab_layout.addWidget(refresh_btn)
+        
+        controls_layout.addWidget(prev_btn)
+        controls_layout.addWidget(refresh_btn)
+        controls_layout.addWidget(next_btn)
+        
+        tab_layout.addLayout(controls_layout)
         
         return tab
 
+    def wheelEvent(self, event):
+        # Handle scroll for plot navigation if in Plots tab
+        if self.tabs.currentIndex() == 2:
+            angle = event.angleDelta().y()
+            if angle > 0:
+                self.prev_plot()
+            else:
+                self.next_plot()
+        super().wheelEvent(event)
+
     def refresh_plots(self):
         # Show loading state
-        self._clear_plot_grid()
-        self.plot_loading_label = QLabel("⏳ 正在生成图表，请稍候...")
-        self.plot_loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.plot_loading_label.setStyleSheet("font-size: 18px; color: #888; padding: 40px;")
-        self.plot_grid_layout.addWidget(self.plot_loading_label, 0, 0)
+        self.plot_image_label.setText("⏳ 正在生成图表，请稍候...")
         
         is_dark = self.is_dark_mode
         self.plot_worker = PlotWorker(is_dark_mode=is_dark)
         self.plot_worker.finished_signal.connect(self.on_plot_finished)
         self.plot_worker.start()
     
-    def _clear_plot_grid(self):
-        """Clear all widgets from the plot grid layout."""
-        while self.plot_grid_layout.count():
-            item = self.plot_grid_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-
     def on_plot_finished(self, success, message):
-        self._clear_plot_grid()
-        
         if not success:
-            error_label = QLabel(f"❌ {message}")
-            error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            error_label.setStyleSheet("font-size: 16px; color: #ff6666; padding: 40px;")
-            self.plot_grid_layout.addWidget(error_label, 0, 0)
+            self.plot_image_label.setText(f"❌ {message}")
             return
         
-        # Load the merged collage image
+        self.load_plot_images()
+        
+    def load_plot_images(self):
+        import math
         plot_dir = os.path.join(os.getcwd(), "plot_outputs")
-        collage_path = os.path.join(plot_dir, "plot_collage.png")
-        
-        if not os.path.exists(collage_path):
-            error_label = QLabel("❌ 未找到合并图表文件")
-            error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.plot_grid_layout.addWidget(error_label, 0, 0)
+        if not os.path.exists(plot_dir):
+            self.plot_image_label.setText("❌ 未找到 plot_outputs 目录")
             return
-        
-        # Create image label for collage
-        img_label = QLabel()
-        img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        img_label.setObjectName("plotImage")
-        
+
+        # Listing logic similar to plot.py
+        files = []
         try:
-            from PyQt6.QtGui import QImageReader
-            reader = QImageReader(collage_path)
-            reader.setAutoTransform(True)
-            image = reader.read()
+             files = [f for f in os.listdir(plot_dir) if f.endswith(".png") and not f.startswith("plot_collage") and not f.endswith("_screen.png")]
+        except Exception as e:
+            self.plot_image_label.setText(f"❌ 读取目录失败: {e}")
+            return
+
+        if not files:
+            self.plot_image_label.setText("⚠️ 未找到任何图表")
+            return
+
+        # Sort Logic
+        order = [
+            "weight_bodyfat",
+            "time_allocation_bar",
+            "time_trend_screen_remaining",
+            "time_trend_averages",
+            "time_trend_delta",
+            "running_pace",
+            "radar_goal",
+            "hhh_frequency",
+            "hhh_interval_trend",
+            "balance_sheet",
+        ]
+        
+        def sort_key(name):
+            for index, prefix in enumerate(order):
+                if name.startswith(prefix):
+                    # Sort by prefix index, then by length (shorter first usually means generic), then alphabetical
+                    return (index, name)
+            return (len(order), name)
+
+        self.plot_files = sorted(files, key=sort_key)
+        self.current_plot_index = 0
+        self.update_plot_display()
+
+    def prev_plot(self):
+        if not self.plot_files:
+            return
+        self.current_plot_index = (self.current_plot_index - 1) % len(self.plot_files)
+        self.update_plot_display()
+
+    def next_plot(self):
+        if not self.plot_files:
+            return
+        self.current_plot_index = (self.current_plot_index + 1) % len(self.plot_files)
+        self.update_plot_display()
+
+    def update_plot_display(self):
+        if not self.plot_files:
+            self.plot_image_label.setText("No plots available")
+            self.plot_info_label.setText("")
+            return
             
-            if not image.isNull():
-                pixmap = QPixmap.fromImage(image)
-                # Get available size from parent scroll area (use window size as reference)
-                available_width = int(self.width() * 0.95)
-                available_height = int(self.height() * 0.85)
+        filename = self.plot_files[self.current_plot_index]
+        path = os.path.join(os.getcwd(), "plot_outputs", filename)
+        
+        # Update Info
+        self.plot_info_label.setText(f"[{self.current_plot_index + 1}/{len(self.plot_files)}] {filename}")
+        
+        # Load and Scale Image
+        if os.path.exists(path):
+            pixmap = QPixmap(path)
+            if not pixmap.isNull():
+                # Target Size: 16:9 Aspect Ratio based on Window Width?
+                # Or just fit to available container size.
+                # User requested "16:9" view. We can try to restrict the container.
                 
-                # Scale to fit window while keeping aspect ratio
+                container_size = self.plot_image_label.size()
+                w = container_size.width()
+                h = container_size.height()
+                
+                # If we want to enforce visual 16:9, we might handle it here, 
+                # but "fit center" is usually best for variable content.
+                # Let's just fit inside safely.
+                
                 scaled_pixmap = pixmap.scaled(
-                    available_width, available_height,
+                    w, h,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation
                 )
-                img_label.setPixmap(scaled_pixmap)
-                print(f"Loaded collage: {pixmap.width()}x{pixmap.height()} -> scaled to {scaled_pixmap.width()}x{scaled_pixmap.height()}")
+                self.plot_image_label.setPixmap(scaled_pixmap)
             else:
-                error_msg = reader.errorString()
-                print(f"Failed to load collage: {error_msg}")
-                img_label.setText(f"⚠️ 无法加载合并图表")
-        except Exception as e:
-            print(f"Exception loading collage: {e}")
-            img_label.setText("⚠️ 加载错误")
-        
-        self.plot_grid_layout.addWidget(img_label, 0, 0)
+                self.plot_image_label.setText("Failed to load image")
+        else:
+            self.plot_image_label.setText("File not found")
+
 
     def init_dashboard_tab(self):
         tab = QWidget()
@@ -1417,6 +1503,11 @@ class MainWindow(QWidget):
         self.tabs.addTab(self.init_dashboard_tab(), "📊 仪表盘 (Dashboard)")
         self.tabs.addTab(self.init_plots_tab(), "📈 数据图表 (Plots)")
         
+        # Plot Navigation State
+        self.plot_files = []
+        self.current_plot_index = 0
+
+        
         # Main Layout
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1529,6 +1620,14 @@ class MainWindow(QWidget):
             elif event.key() == Qt.Key.Key_W and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 self.hide()
                 # self.tray_icon.showMessage("任务管理器", "程序已最小化到托盘。", QSystemTrayIcon.Information, 2000)
+            
+            # Plot Navigation Keys (Only when Plots tab is active)
+            elif self.tabs.currentIndex() == 2: # Plots Tab
+                if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Up):
+                    self.prev_plot()
+                elif event.key() in (Qt.Key.Key_Right, Qt.Key.Key_Down):
+                    self.next_plot()
+            
             return True  # 表示事件已处理
         return super().eventFilter(obj, event)
 

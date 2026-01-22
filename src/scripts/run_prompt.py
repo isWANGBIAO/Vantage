@@ -62,7 +62,9 @@ def main():
             # Update System Prompt time if it exists (Optional improvement)
             # For now, let's just stick to adding user message
             
-            context_mgr.add_message("user", args.chat_message)
+            # [User Request] Repeat the chat message twice to emphasize it
+            chat_msg = f"{args.chat_message}\n\n{args.chat_message}"
+            context_mgr.add_message("user", chat_msg)
             
             print("Thinking...")
             print("---CHAT_START---")
@@ -114,6 +116,9 @@ def main():
                     days=90
                 )
             
+            # [User Request] Repeat the prompt content twice to emphasize it
+            prompt_text = f"{prompt_text}\n\n{prompt_text}"
+            
             # Clear previous context for fresh analysis? 
             # Original script seemed to start fresh in "Normal Mode" but didn't explicitly clear if context file wasn't passed.
             # But here we are using a persistent ContextManager by default.
@@ -131,45 +136,95 @@ def main():
             print("正在生成初始分析报告，请稍候...")
             print("---ANALYSIS_START---")
             
+            # === ROUND 1: General Analysis ===
+            print("正在生成初始分析报告，请稍候...")
+            print("---ANALYSIS_START---")
+            
+            # Send initial huge context
             result = client.chat(analysis_messages, stream=True)
             
-            # Save Output to File (Old behavior)
-            base_dir = Config.get_project_root()
-            if args.output_file:
-                output_path = Path(args.output_file)
-            else:
-                history_dir = Config.get_history_dir()
-                output_path = history_dir / f"model_response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+            first_round_content = result["content"]
+            if first_round_content:
+                # We do NOT save the full history context yet, or maybe we do?
+                # For this specific dual-turn flow, let's keep it simple.
+                analysis_messages.append({"role": "assistant", "content": first_round_content})
             
-            content = result["content"]
-            if content:
-                output_path.write_text(content, encoding="utf-8")
-                print(f"\nResponse saved to: {output_path}")
+            # Print Stats for round 1 (Optional, but GUI might expect it at end)
+            
+            # === SEPARATOR FOR GUI ===
+            print("\n初始分析已完成。正在生成今日行动建议...\n")
+            
+            # === ROUND 2: Specific Action Plan ===
+            
+            # 1. Load Action Plan Template
+            action_plan_prompt_path = DataLoader.resolve_data_path("Prompt_Action_Plan.md")
+            if action_plan_prompt_path.exists():
+                action_plan_template = action_plan_prompt_path.read_text(encoding="utf-8")
                 
-                print(f"\nResponse saved to: {output_path}")
+                # 2. Get Today's Data Row
+                today_data = DataLoader.get_today_data_row(DataLoader.resolve_data_path("Time.xlsx"))
+                current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+                
+                # 3. Fill Template
+                # Replace {current_time}
+                action_plan_msg = action_plan_template.replace("{current_time}", current_time_str)
+                # Replace {today_data_row}
+                action_plan_msg = action_plan_msg.replace("{today_data_row}", today_data)
+                
+                # [User Request] Repeat the prompt content twice for Round 2 as well
+                action_plan_msg = f"{action_plan_msg}\n\n{action_plan_msg}"
+                
+                # 4. Append to history
+                analysis_messages.append({"role": "user", "content": action_plan_msg})
+                
+                # 5. Call API Again
+                # Stream usage is tricky effectively. run_prompt.py streams to stdout, 
+                # and the GUI reads it.
+                # The GUI splits by "初始分析已完成..." so the second stream will go to the right panel.
+                
+                result_round_2 = client.chat(analysis_messages, stream=True)
+                second_round_content = result_round_2["content"]
+                
+                if second_round_content:
+                    # Save Output to File
+                    if args.output_file:
+                        output_path = Path(args.output_file)
+                    else:
+                        history_dir = Config.get_history_dir()
+                        prefix = "action_plan"
+                        output_path = history_dir / f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+                    
+                    # We save the SECOND round content (The Action Plan) to the file, 
+                    # as that corresponds to "Action Plan" file. 
+                    # Or should we save both? 
+                    # Usually the daily review file is the PLAN. 
+                    # Let's save the Plan.
+                    output_path.write_text(second_round_content, encoding="utf-8")
+                    print(f"\nResponse saved to: {output_path}")
 
-            # Print Stats for GUI
-            usage = result.get("usage", {})
-            prompt_tokens = usage.get("prompt_tokens", 0)
-            completion_tokens = usage.get("completion_tokens", 0)
-            total_tokens = usage.get("total_tokens", 0)
-            duration = result.get("duration", 0)
-            
-            stats_output = {
-                "turns": 1,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-                "total_duration": duration,
-                "speed": f"{completion_tokens / duration:.2f} tokens/s" if duration > 0 else "0.00 tokens/s",
-                "historical_total_tokens": total_tokens # simplified
-            }
-            print(f"STATS_JSON:{json.dumps(stats_output)}")
-            # or it did?
-            # Original: 
-            # if args.chat_message: save_context...
-            # if normal mode: just plain print and save to output file.
-            # So we do NOT save to context file in this mode to avoid polluting chat history with huge reports.
+                    # Print Stats (Aggregate or just last round? Let's use last round for simplicity to avoid huge token calc issues or sum them)
+                    # Ideally sum them.
+                    usage1 = result.get("usage", {})
+                    usage2 = result_round_2.get("usage", {})
+                    
+                    total_prompt_tokens = usage1.get("prompt_tokens", 0) + usage2.get("prompt_tokens", 0)
+                    total_completion_tokens = usage1.get("completion_tokens", 0) + usage2.get("completion_tokens", 0)
+                    total_total_tokens = usage1.get("total_tokens", 0) + usage2.get("total_tokens", 0)
+                    total_duration = result.get("duration", 0) + result_round_2.get("duration", 0)
+
+                    stats_output = {
+                        "turns": 2,
+                        "prompt_tokens": total_prompt_tokens,
+                        "completion_tokens": total_completion_tokens,
+                        "total_tokens": total_total_tokens,
+                        "total_duration": total_duration,
+                        "speed": f"{total_completion_tokens / total_duration:.2f} tokens/s" if total_duration > 0 else "0.00 tokens/s",
+                        "historical_total_tokens": total_total_tokens
+                    }
+                    print(f"STATS_JSON:{json.dumps(stats_output)}")
+
+            else:
+                print("Error: Prompt_Action_Plan.md not found. Skipping second round.")
             
     except Exception as e:
         logging.error(f"An error occurred: {e}", exc_info=True)
