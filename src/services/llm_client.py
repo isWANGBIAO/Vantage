@@ -31,6 +31,19 @@ class SiliconFlowClient:
             stream: Whether to stream the response.
             print_callback: Function(tag, content) to handle stream output.
         """
+        # [Auto-Repeat Prompt]
+        # Identify the last message with role "user" and duplicate its content
+        if messages and len(messages) > 0:
+            last_msg = messages[-1]
+            if last_msg.get("role") == "user":
+                content = last_msg.get("content", "")
+                # Avoid repeat on repeat (simple check if already repeated? - No, user wants it every time strictly, 
+                # but we should be careful if it's already done by caller. 
+                # The plan said we remove it from caller, so we can blindly do it here.)
+                # However, to be safe against double application if script isn't updated perfectly or multiple calls:
+                # But request is "Repeat twice prompt", usually means "Prompt \n\n Prompt".
+                messages[-1]["content"] = f"{content}\n\n{content}"
+
         url = self.base_url.rstrip("/") + "/chat/completions"
         
         # Detect model capability (Thinking)

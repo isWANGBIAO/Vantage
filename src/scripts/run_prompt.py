@@ -63,7 +63,7 @@ def main():
             # For now, let's just stick to adding user message
             
             # [User Request] Repeat the chat message twice to emphasize it
-            chat_msg = f"{args.chat_message}\n\n{args.chat_message}"
+            chat_msg = args.chat_message
             context_mgr.add_message("user", chat_msg)
             
             print("Thinking...")
@@ -117,7 +117,7 @@ def main():
                 )
             
             # [User Request] Repeat the prompt content twice to emphasize it
-            prompt_text = f"{prompt_text}\n\n{prompt_text}"
+            # Handled in llm_client now
             
             # Clear previous context for fresh analysis? 
             # Original script seemed to start fresh in "Normal Mode" but didn't explicitly clear if context file wasn't passed.
@@ -172,7 +172,7 @@ def main():
                 action_plan_msg = action_plan_msg.replace("{today_data_row}", today_data)
                 
                 # [User Request] Repeat the prompt content twice for Round 2 as well
-                action_plan_msg = f"{action_plan_msg}\n\n{action_plan_msg}"
+                # Handled in llm_client now
                 
                 # 4. Append to history
                 analysis_messages.append({"role": "user", "content": action_plan_msg})
