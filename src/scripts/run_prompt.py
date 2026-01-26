@@ -205,8 +205,17 @@ def main():
                     output_path.write_text(second_round_content, encoding="utf-8")
                     print(f"\nResponse saved to: {output_path}")
 
-                    # Print Stats (Aggregate or just last round? Let's use last round for simplicity to avoid huge token calc issues or sum them)
-                    # Ideally sum them.
+                    # --- CRITICAL FIX: Save back to ContextManager so Chat knows what happened ---
+                    # Round 1: Analysis
+                    context_mgr.add_message("user", prompt_text)
+                    context_mgr.add_message("assistant", first_round_content)
+                    # Round 2: Plan
+                    plan_prompt_text = action_plan_msg # Use the variable name from surrounding scope
+                    context_mgr.add_message("user", plan_prompt_text)
+                    context_mgr.add_message("assistant", second_round_content)
+                    context_mgr.save()
+
+                    # Print Stats
                     usage1 = result.get("usage", {})
                     usage2 = result_round_2.get("usage", {})
                     
@@ -216,13 +225,13 @@ def main():
                     total_duration = result.get("duration", 0) + result_round_2.get("duration", 0)
 
                     stats_output = {
-                        "turns": 2,
+                        "turns": len(context_mgr.messages),
                         "prompt_tokens": total_prompt_tokens,
                         "completion_tokens": total_completion_tokens,
                         "total_tokens": total_total_tokens,
                         "total_duration": total_duration,
                         "speed": f"{total_completion_tokens / total_duration:.2f} tokens/s" if total_duration > 0 else "0.00 tokens/s",
-                        "historical_total_tokens": total_total_tokens
+                        "historical_total_tokens": context_mgr.token_count
                     }
                     print(f"STATS_JSON:{json.dumps(stats_output)}")
 

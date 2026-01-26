@@ -1,0 +1,216 @@
+/* Base Reset & Variables */
+:root {
+  --bg-color: #ffffff;
+  --text-color: #333333;
+  --bubble-user-bg: #dcf8c6;
+  --bubble-user-text: #000000;
+  --bubble-ai-bg: #f0f0f0;
+  --bubble-ai-text: #333333;
+  --input-bg: #ffffff;
+  --input-border: #cccccc;
+  --input-text: #333333;
+  --code-bg: #f5f5f5;
+  --code-border: #e0e0e0;
+  --scrollbar-track: #f1f1f1;
+  --scrollbar-thumb: #c1c1c1;
+}
+
+[data-theme="dark"] {
+  --bg-color: #2d2d2d;
+  --text-color: #e6e6e6;
+  --bubble-user-bg: #2d5a3d;
+  --bubble-user-text: #e6e6e6;
+  --bubble-ai-bg: #3d3d3d;
+  --bubble-ai-text: #e6e6e6;
+  --input-bg: #3d3d3d;
+  --input-border: #555555;
+  --input-text: #e6e6e6;
+  --code-bg: #323232;
+  --code-border: #444444;
+  --scrollbar-track: #2d2d2d;
+  --scrollbar-thumb: #4d4d4d;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  transition: background-color 0.3s, color 0.3s;
+}
+
+/* Chat History Area */
+#chat-history {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  scroll-behavior: smooth;
+}
+
+/* Custom Scrollbar */
+#chat-history::-webkit-scrollbar {
+  width: 8px;
+}
+#chat-history::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+#chat-history::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+/* Message Bubbles */
+.message {
+  max-width: 80%;
+  padding: 12px 16px;
+  border-radius: 12px;
+  line-height: 1.5;
+  position: relative;
+  word-wrap: break-word;
+  animation: fadeIn 0.3s ease-out;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.message.user {
+  align-self: flex-end;
+  background-color: var(--bubble-user-bg);
+  color: var(--bubble-user-text);
+  border-bottom-right-radius: 2px;
+}
+
+.message.assistant {
+  align-self: flex-start;
+  background-color: var(--bubble-ai-bg);
+  color: var(--bubble-ai-text);
+  border-bottom-left-radius: 2px;
+}
+
+/* Markdown Styles */
+.message strong { font-weight: bold; }
+.message em { font-style: italic; }
+.message code {
+  background-color: rgba(27,31,35,0.05);
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 85%;
+}
+[data-theme="dark"] .message code {
+    background-color: rgba(255,255,255,0.1);
+}
+
+.message pre {
+  background-color: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+  padding: 10px;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+.message pre code {
+  background-color: transparent;
+  padding: 0;
+  border: none;
+  font-size: 13px;
+  color: inherit;
+  display: block;
+}
+
+.message table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+}
+.message th, .message td {
+  border: 1px solid var(--code-border);
+  padding: 8px;
+  text-align: left;
+}
+.message th {
+  background-color: rgba(0,0,0,0.05);
+}
+[data-theme="dark"] .message th {
+  background-color: rgba(255,255,255,0.05);
+}
+
+.message a {
+  color: #0366d6;
+  text-decoration: none;
+}
+[data-theme="dark"] .message a {
+  color: #58a6ff;
+}
+.message a:hover {
+  text-decoration: underline;
+}
+
+/* Input Area */
+#input-area {
+  padding: 20px;
+  background-color: var(--bg-color);
+  border-top: 1px solid var(--code-border);
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+textarea {
+  flex: 1;
+  background-color: var(--input-bg);
+  color: var(--input-text);
+  border: 1px solid var(--input-border);
+  border-radius: 20px;
+  padding: 12px 15px;
+  resize: none;
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  min-height: 24px;
+  max-height: 150px;
+  transition: border-color 0.2s;
+}
+
+textarea:focus {
+  border-color: #0078d4;
+}
+
+button {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background-color: #0078d4;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: background-color 0.2s, transform 0.1s;
+}
+
+button:hover {
+  background-color: #0063b1;
+}
+button:active {
+  transform: scale(0.95);
+}
+
+#send-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}

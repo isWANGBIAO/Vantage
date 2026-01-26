@@ -37,6 +37,14 @@ class ContextManager:
         """Add a message to the context."""
         self.messages.append({"role": role, "content": content})
 
+    @property
+    def token_count(self):
+        """Estimate token count."""
+        # Simple estimation: 1 token ~= 4 chars (English) or 2-3 chars (Chinese)
+        # We'll use a safer estimation of 3 chars per token
+        total_chars = sum(len(m.get("content", "")) for m in self.messages)
+        return total_chars // 3
+
     def get_messages(self, prune=True):
         """
         Get messages, optionally pruning to fit within token limit.

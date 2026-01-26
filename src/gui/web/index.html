@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Marked.js for Markdown Rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- QWebChannel -->
+    <script src="qwebchannel.js"></script>
+    <!-- Logic -->
+    <script src="script.js"></script>
+</head>
+<body>
+    <div id="chat-history">
+        <!-- Messages will appear here -->
+        <div class="message assistant">
+            <strong>Assistant:</strong><br>
+            Hello! How can I help you today?
+        </div>
+    </div>
+
+    <div id="input-area">
+        <textarea id="chat-input" placeholder="Type a message..." rows="1"></textarea>
+        <button id="send-btn" title="Send">
+            <svg viewBox="0 0 24 24">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
+            </svg>
+        </button>
+    </div>
+</body>
+</html>

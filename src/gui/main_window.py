@@ -4,18 +4,30 @@ from PyQt6.QtWidgets import (
     QTabWidget, QScrollArea, QGridLayout
 )
 from PyQt6.QtGui import QPalette, QColor, QImage, QPixmap, QAction, QFont, QIcon, QTextCursor
-from PyQt6.QtCore import QTimer, QEvent, Qt, QDateTime, QThread, pyqtSignal
+from PyQt6.QtCore import QTimer, QEvent, Qt, QDateTime, QThread, pyqtSignal, QUrl, QObject, pyqtSlot
+from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebChannel import QWebChannel
 import subprocess
 import os
 import sys
 import shutil
 import cv2
 import traceback
+import json
 from datetime import datetime
 from manager.manager_main import Monitor
 from .worker import WorkerThread
 from .emitting_stream import EmittingStream
 from cv2_enumerate_cameras import enumerate_cameras
+
+class ChatBridge(QObject):
+    """Bridge for communication between Python and Web JS"""
+    messageSent = pyqtSignal(str)
+
+    @pyqtSlot(str)
+    def sendMessageToPython(self, text):
+        # Triggered from JS
+        self.messageSent.emit(text)
 
 
 # main_window.py
@@ -59,6 +71,10 @@ class ActionPlanWorker(QThread):
     output_signal = pyqtSignal(str)
     stats_signal = pyqtSignal(dict)
 
+    def __init__(self, context_file=None):
+        super().__init__()
+        self.context_file = context_file
+
     def run(self):
         try:
             import pythoncom
@@ -84,9 +100,13 @@ class ActionPlanWorker(QThread):
 
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
+            
+            cmd = [sys.executable, script_path]
+            if self.context_file:
+                cmd.extend(["--context_file", self.context_file])
 
             process = subprocess.Popen(
-                [sys.executable, script_path],
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=False,
@@ -180,27 +200,21 @@ class ChatWorker(QThread):
             if not os.path.exists(script_path):
                 self.finished_signal.emit(False, f"Could not find run_prompt.py at {script_path}")
                 return
-            
+
             # Determine context file path
             if not self.context_file:
-                 # Default to history/latest_context.json relative to script execution or logic
-                 # We'll let run_prompt handle default if not passed, but run_prompt writes to history/latest_context.json
-                 # We should pass it explicitly if we can to be safe, or just rely on run_prompt's default.
-                 # Actually run_prompt saves to `history/latest_context.json`.
-                 # Let's verify where that is.
-                 # For now, we will pass the path explicitly if we can calculate it, otherwise let python handle it.
-                 # Let's try to construct the path.
-                 # Use root/history/latest_context.json
-                 # current_dir is defined above as src/gui
-                 root_dir = os.path.abspath(os.path.join(current_dir, "..", ".."))
-                 self.context_file = os.path.join(root_dir, "history", "latest_context.json")
+                 # Should have been passed, but fallback to relative path if not
+                 # logic usually handled by caller
+                 pass
 
             cmd = [
                 sys.executable, 
                 script_path, 
-                "--chat_message", self.message,
-                "--context_file", self.context_file
+                "--chat_message", self.message
             ]
+            
+            if self.context_file:
+                 cmd.extend(["--context_file", self.context_file])
             
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
@@ -523,24 +537,33 @@ class MainWindow(QWidget):
         """根据当前主题应用样式到各个组件"""
         if self.is_dark_mode:
             # 深色主题样式
-            chat_bg = "#2d2d2d"
-            input_style = "font-size: 14px; padding: 5px; background-color: #3d3d3d; color: #e6e6e6; border: 1px solid #555;"
             btn_style = "font-size: 14px; font-weight: bold; padding-left: 15px; padding-right: 15px; background-color: #404040; color: #e6e6e6;"
+            theme_mode = "dark"
         else:
             # 浅色主题样式
-            chat_bg = "#ffffff"
-            input_style = "font-size: 14px; padding: 5px; background-color: #ffffff; color: #000000; border: 1px solid #ccc;"
             btn_style = "font-size: 14px; font-weight: bold; padding-left: 15px; padding-right: 15px;"
+            theme_mode = "light"
         
         # 应用到Chat组件
-        if hasattr(self, 'chat_history_text'):
-            self.chat_history_text.setStyleSheet(f"border: none; background-color: {chat_bg};")
-        if hasattr(self, 'chat_input'):
-            self.chat_input.setStyleSheet(input_style)
+        if hasattr(self, 'web_view'):
+            # Call JS to set theme
+             self.web_view.page().runJavaScript(f"setTheme('{theme_mode}')")
+
         if hasattr(self, 'voice_btn'):
             self.voice_btn.setStyleSheet(btn_style)
-        if hasattr(self, 'chat_send_btn'):
-            self.chat_send_btn.setStyleSheet(btn_style.replace("15px", "20px"))
+
+    # Shared Context File Path
+    @property
+    def SHARED_CONTEXT_FILE(self):
+        # Use a fixed path for both Action Plan and Chat
+        # This ensures they share the same history
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        root_dir = os.path.abspath(os.path.join(current_dir, "..", ".."))
+        history_dir = os.path.join(root_dir, "history")
+        if not os.path.exists(history_dir):
+            os.makedirs(history_dir)
+        return os.path.join(history_dir, "latest_context.json")
+
     # 显示摄像头画面
 
     def display_frame(self, frame):
@@ -558,23 +581,37 @@ class MainWindow(QWidget):
         self.image_label.setPixmap(QPixmap.fromImage(images))
 
     def update_frame(self):
-        ret, frame = self.cam.read()
-        if ret:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = frame.shape
-            bytes_per_line = ch * w
-            qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-            # 获取标签的大小
-            label_size = self.camera_label.size()
+        try:
+            if not self.cam.isOpened():
+                return
+                
+            ret, frame = self.cam.read()
+            if ret and hasattr(self, 'camera_label') and self.camera_label.isVisible():
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w, ch = frame.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                
+                # Double check before accessing C++ object
+                if self.camera_label is None: 
+                    return
+                    
+                # 获取标签的大小
+                try:
+                    label_size = self.camera_label.size()
+                except RuntimeError:
+                    return # Widget deleted
 
-            # 使用scaled方法，调整顺序
-            scaled_image = QPixmap.fromImage(qt_image).scaled(
-                label_size,
-                Qt.AspectRatioMode.KeepAspectRatio,  # 保持宽高比
-                Qt.TransformationMode.FastTransformation  # 快速变换
-            )
+                # 使用scaled方法，调整顺序
+                scaled_image = QPixmap.fromImage(qt_image).scaled(
+                    label_size,
+                    Qt.AspectRatioMode.KeepAspectRatio,  # 保持宽高比
+                    Qt.TransformationMode.FastTransformation  # 快速变换
+                )
 
-            self.camera_label.setPixmap(scaled_image)
+                self.camera_label.setPixmap(scaled_image)
+        except Exception as e:
+            pass # Suppress closing errors
 
     # ========== ACTION PLAN TAB ==========
     def init_action_plan_tab(self):
@@ -627,49 +664,49 @@ class MainWindow(QWidget):
         plan_layout.addWidget(splitter)
         self.sub_tab_widget.addTab(plan_widget, "📋 计划详情 (Plan)")
         
-        # --- TAB 2: Chat (New Voice Interaction) ---
+        # --- TAB 2: Chat (New Web Interaction) ---
         chat_widget = QWidget()
         chat_layout = QVBoxLayout(chat_widget)
-        chat_layout.setSpacing(10)
+        chat_layout.setContentsMargins(0, 0, 0, 0)
+        chat_layout.setSpacing(0)
         
-        # Chat History with Bubble Style
-        self.chat_history_text = QTextEdit()
-        self.chat_history_text.setReadOnly(True)
-        self.chat_history_text.setStyleSheet("border: none; background-color: #ffffff;") 
-        chat_layout.addWidget(self.chat_history_text, stretch=1)
+        # Web View for Chat
+        self.web_view = QWebEngineView()
+        self.web_view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu) # Optional
         
-        # Controls Area
+        # Setup WebChannel
+        self.channel = QWebChannel()
+        self.bridge = ChatBridge()
+        self.bridge.messageSent.connect(self.handle_web_message)
+        self.channel.registerObject("chatBridge", self.bridge)
+        self.web_view.page().setWebChannel(self.channel)
+        
+        # Load index.html
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        url = QUrl.fromLocalFile(os.path.join(current_dir, "web", "index.html"))
+        self.web_view.setUrl(url)
+        
+        chat_layout.addWidget(self.web_view, stretch=1)
+        
+        # Voice Controls Area (Keep Voice Button)
         controls_layout = QHBoxLayout()
-        controls_layout.setContentsMargins(0, 0, 0, 0) # Zero margins for inner layout
+        controls_layout.setContentsMargins(10, 10, 10, 10)
         controls_layout.setSpacing(10)
         
-        # Chat Input (Left, stretches)
-        self.chat_input = QTextEdit()
-        self.chat_input.setPlaceholderText("Type a message...")
-        self.chat_input.setFixedHeight(50) 
-        self.chat_input.setStyleSheet("font-size: 14px; padding: 5px;")
-        self.chat_input.installEventFilter(self)
+        # Voice Button (Center or Right?) -> Let's put it on the right to match potential sending flow, or float.
+        # Let's simple toolbar at bottom.
         
-        # Voice Button (Right, Auto Width)
         self.voice_btn = QPushButton("🎤 Record")
         self.voice_btn.setToolTip("Click to Toggle Recording")
-        self.voice_btn.setFixedHeight(50) # Fixed height only
+        self.voice_btn.setFixedHeight(40) 
         self.voice_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.voice_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding-left: 15px; padding-right: 15px;")
         self.voice_btn.clicked.connect(self.toggle_recording)
-
-        # Send Button (Right, Auto Width)
-        self.chat_send_btn = QPushButton("Send")
-        self.chat_send_btn.setToolTip("Send Message (Ctrl+Enter)")
-        self.chat_send_btn.setFixedHeight(50) # Fixed height only
-        self.chat_send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.chat_send_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding-left: 20px; padding-right: 20px;")
-        self.chat_send_btn.clicked.connect(self.send_chat_message)
         
-        # Layout: Input (Stretch) -> Voice (Fixed) -> Send (Fixed)
-        controls_layout.addWidget(self.chat_input, 1) 
-        controls_layout.addWidget(self.voice_btn, 0)  
-        controls_layout.addWidget(self.chat_send_btn, 0) 
+        # Add to layout
+        controls_layout.addStretch()
+        controls_layout.addWidget(self.voice_btn)
+        controls_layout.addStretch()
         
         chat_layout.addLayout(controls_layout)
         
@@ -691,13 +728,6 @@ class MainWindow(QWidget):
 
         return tab
 
-    def eventFilter(self, obj, event):
-        if obj == self.chat_input and event.type() == QEvent.Type.KeyPress:
-            if event.key() == Qt.Key.Key_Return and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
-                self.send_chat_message()
-                return True
-        return super().eventFilter(obj, event)
-
     # --- CHAT & VOICE LOGIC ---
     def toggle_recording(self):
         if self.is_recording:
@@ -711,8 +741,8 @@ class MainWindow(QWidget):
         self.voice_btn.setToolTip("Click to Stop Recording")
         self.voice_btn.setStyleSheet("background-color: #ffcccc; color: #cc0000; border: 1px solid #cc0000; font-size: 14px; font-weight: bold; padding-left: 15px; padding-right: 15px;")
         self.recorder.start_recording()
-        self.chat_input.setPlaceholderText("Listening...")
-        self.chat_input.setEnabled(False)
+        if hasattr(self, 'web_view'):
+            self.web_view.page().runJavaScript("document.getElementById('chat-input').placeholder = 'Listening...'; document.getElementById('chat-input').disabled = true;")
 
     def stop_recording(self):
         if not self.is_recording:
@@ -724,92 +754,40 @@ class MainWindow(QWidget):
         
         file_path = self.recorder.stop_recording()
         if file_path:
-            self.chat_input.setPlaceholderText("Transcribing...")
+            if hasattr(self, 'web_view'):
+                self.web_view.page().runJavaScript("document.getElementById('chat-input').placeholder = 'Transcribing...';")
+            
             # Run transcription in worker
             self.audio_worker = AudioWorker(file_path)
             self.audio_worker.finished_signal.connect(self.on_transcription_finished)
             self.audio_worker.start()
         else:
-            self.chat_input.setEnabled(True)
-            self.chat_input.setPlaceholderText("Type a message...")
+            if hasattr(self, 'web_view'):
+                self.web_view.page().runJavaScript("document.getElementById('chat-input').disabled = false; document.getElementById('chat-input').placeholder = 'Type a message...';")
 
     def on_transcription_finished(self, text):
-        self.chat_input.setEnabled(True)
-        if text:
-            self.chat_input.setPlainText(text)
-            self.chat_input.setFocus()
-        else:
-            self.chat_input.setPlaceholderText("Transcription failed or empty.")
+        if hasattr(self, 'web_view'):
+            if text:
+                import json
+                escaped_text = json.dumps(text)
+                self.web_view.page().runJavaScript(f"document.getElementById('chat-input').value = {escaped_text}; document.getElementById('chat-input').disabled = false; document.getElementById('chat-input').focus();")
+            else:
+                 self.web_view.page().runJavaScript("document.getElementById('chat-input').disabled = false; document.getElementById('chat-input').placeholder = 'Transcription failed.';")
 
     def append_chat_bubble(self, role, text):
-        # 根据主题选择颜色
-        if self.is_dark_mode:
-            user_bg = "#2d5a3d"  # 深绿色
-            assistant_bg = "#3d3d3d"  # 深灰色
-            text_color = "#e6e6e6"
-            table_border = "#555"
-            th_bg = "#404040"
-        else:
-            user_bg = "#dcf8c6"  # 浅绿色
-            assistant_bg = "#f0f0f0"  # 浅灰色
-            text_color = "#000000"
-            table_border = "#ccc"
-            th_bg = "#e0e0e0"
-        
-        # Allow HTML styling
-        if role == "user":
-            style = f"background-color: {user_bg}; color: {text_color}; padding: 10px; border-radius: 10px; margin: 5px; float: right; clear: both;"
-            align = "right"
-            prefix = "User"
-        else:
-            style = f"background-color: {assistant_bg}; color: {text_color}; padding: 10px; border-radius: 10px; margin: 5px; float: left; clear: both;"
-            align = "left"
-            prefix = "Assistant"
-            
-        # Table CSS to make them look good
-        table_css = f"""
-        <style>
-        table {{ border-collapse: collapse; width: 100%; margin-top: 10px; margin-bottom: 10px; }}
-        th, td {{ border: 1px solid {table_border}; padding: 6px; text-align: left; color: {text_color}; }}
-        th {{ background-color: {th_bg}; font-weight: bold; }}
-        </style>
-        """
+        if hasattr(self, 'web_view'):
+            import json
+            json_text = json.dumps(text)
+            self.web_view.page().runJavaScript(f"addMessage('{role}', {json_text})")
 
-        # Convert markdown to html
-        try:
-            import markdown
-            # Enable nl2br to preserve newlines, tables for grids
-            formatted_text = markdown.markdown(text, extensions=['nl2br', 'tables'])
-        except ImportError:
-            formatted_text = text.replace("\n", "<br>")
-
-        html = f"""
-        <div style='width: 100%; overflow: hidden;'>
-            <div style='{style} max-width: 80%;'>
-                {table_css}
-                <b>{prefix}:</b><br>{formatted_text}
-            </div>
-        </div>
-        """
-        self.chat_history_text.append(html)
-        # Scroll to bottom
-        cursor = self.chat_history_text.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        self.chat_history_text.setTextCursor(cursor)
-
-    def send_chat_message(self):
-        message = self.chat_input.toPlainText().strip()
+    def handle_web_message(self, message):
+        """Handle message sent from Web JS"""
+        message = message.strip()
         if not message:
             return
 
-        self.chat_input.clear()
-        self.append_chat_bubble("user", message)
-        
-        self.chat_input.setEnabled(False)
-        self.chat_send_btn.setEnabled(False)
-        self.chat_send_btn.setText("...")
-
-        self.chat_worker = ChatWorker(message)
+        # Start Worker
+        self.chat_worker = ChatWorker(message, context_file=self.SHARED_CONTEXT_FILE)
         self.chat_worker.output_signal.connect(self.on_chat_output_stream)
         self.chat_worker.finished_signal.connect(self.on_chat_finished)
         self.chat_worker.start()
@@ -820,8 +798,6 @@ class MainWindow(QWidget):
         self.chat_streaming_started = False
 
     def on_chat_output_stream(self, text):
-        from PyQt6.QtGui import QTextCursor
-        
         # 跳过非内容行
         if text.startswith("Mode:") or text.startswith("Thinking") or text.startswith("---CHAT_START---"):
             return
@@ -836,63 +812,64 @@ class MainWindow(QWidget):
         ]
         for prefix in skip_prefixes:
             if text.startswith(prefix) or text.strip().startswith(prefix):
-                return
+                 return
         
         # 跳过空行和纯符号行
         if not text.strip() or text.strip() in ["=", "-", "==", "--"]:
             return
         
         # 解析流式标记
+        content_to_stream = ""
+        
         if text.startswith("STREAM_THINKING:"):
             thinking_chunk = text[len("STREAM_THINKING:"):]
             self.chat_thinking_buffer += thinking_chunk
-            self._update_chat_status_indicator()
+            # For now, maybe not stream thinking to Web UI to keep it simple, or add a thinking bubble?
+            # Script.js "startStreamResponse" adds a "Thinking..." generic text. 
+            # We can leave it as is or update it. Let's just focus on content first.
             return
         
-        if text.startswith("STREAM_CONTENT:"):
+        elif text.startswith("STREAM_CONTENT:"):
             content_chunk = text[len("STREAM_CONTENT:"):]
             self.chat_response_buffer += content_chunk
-            self._update_chat_status_indicator()
-            return
+            content_to_stream = self.chat_response_buffer # Send FULL buffer to JS to re-render markdown
         
-        if text.startswith("STREAM_ERROR:"):
+        elif text.startswith("STREAM_ERROR:"):
             error_msg = text[len("STREAM_ERROR:"):]
             self.chat_response_buffer += f"\n[Error: {error_msg}]"
+            content_to_stream = self.chat_response_buffer
+            
+        # 兼容旧格式
+        elif "tokens" in text.lower() and ("prompt" in text.lower() or "completion" in text.lower()):
             return
-        
-        # 兼容旧格式（非流式输出）- 但仍需过滤统计内容
-        if "tokens" in text.lower() and ("prompt" in text.lower() or "completion" in text.lower()):
-            return
-        self.chat_response_buffer += text + "\n"
-        self._update_chat_status_indicator()
-    
-    def _update_chat_status_indicator(self):
-        """更新发送按钮显示进度"""
-        # 显示已接收的字符数作为进度指示
-        total_chars = len(self.chat_thinking_buffer) + len(self.chat_response_buffer)
-        self.chat_send_btn.setText(f"... {total_chars}")
+        else:
+            self.chat_response_buffer += text + "\n"
+            content_to_stream = self.chat_response_buffer
+
+        # Call JS to update stream
+        if hasattr(self, 'web_view') and content_to_stream:
+            import json
+            json_text = json.dumps(content_to_stream)
+            # We send the ACCUMULATED buffer every time because markdown rendering often needs context (e.g. unclosed bold tag)
+            self.web_view.page().runJavaScript(f"updateStreamResponse({json_text})")
+
 
     def on_chat_finished(self, success, message):
-        from PyQt6.QtGui import QTextCursor
-        
-        # 使用正确的气泡格式显示完整响应
-        if self.chat_response_buffer or self.chat_thinking_buffer:
-            full_response = ""
-            if self.chat_thinking_buffer:
-                full_response += f"💭 *思考:* {self.chat_thinking_buffer}\n\n"
-            full_response += self.chat_response_buffer
-            self.append_chat_bubble("assistant", full_response.strip())
-        elif not success:
-            self.append_chat_bubble("assistant", f"[Error: {message}]")
+        # Finalize Stream
+        if hasattr(self, 'web_view'):
+             self.web_view.page().runJavaScript("endStreamResponse();")
 
-        # 重置状态
+        # 重置状态 / 重新启用输入
+        if hasattr(self, 'web_view'):
+             self.web_view.page().runJavaScript("document.getElementById('chat-input').disabled = false; document.getElementById('chat-input').focus();")
+        
+        # If failure, append error bubbles (success handled by stream)
+        if not success:
+             self.append_chat_bubble("assistant", f"**Error:** {message}")
+
         self.chat_response_buffer = ""
         self.chat_thinking_buffer = ""
         self.chat_streaming_started = False
-        self.chat_input.setEnabled(True)
-        self.chat_send_btn.setEnabled(True)
-        self.chat_send_btn.setText("发送 (Send)")
-        self.chat_input.setFocus()
 
     def start_action_plan_generation(self):
 
@@ -910,7 +887,7 @@ class MainWindow(QWidget):
         
         self.action_plan_regen_btn.setEnabled(False)
         
-        self.action_plan_worker = ActionPlanWorker()
+        self.action_plan_worker = ActionPlanWorker(context_file=self.SHARED_CONTEXT_FILE)
         self.action_plan_worker.output_signal.connect(self.append_action_plan_log)
         self.action_plan_worker.finished_signal.connect(self.on_action_plan_finished)
         self.action_plan_worker.stats_signal.connect(self.update_action_plan_stats)
@@ -1017,30 +994,33 @@ class MainWindow(QWidget):
 
     def append_action_plan_log(self, text):
         from PyQt6.QtGui import QTextCursor
-        
+        import json
+
         # 检测阶段切换标记
         if "---ANALYSIS_START---" in text:
             self.action_plan_current_target = "analysis"
             self.action_plan_accumulated_text = ""
             self.action_plan_accumulated_thinking = ""
             self.action_plan_left_text.clear()
+            
+            # 同步到聊天界面：添加用户模拟消息和开始 AI 响应
+            if hasattr(self, 'web_view'):
+                self.web_view.page().runJavaScript("addMessage('user', '请进行数据分析并生成今日行动建议。');")
+                self.web_view.page().runJavaScript("startStreamResponse();")
             return
         
-        if "---PLAN_START---" in text:
+        if "---PLAN_START---" in text or "初始分析已完成。正在生成今日行动建议..." in text:
+            # 阶段切换逻辑
+            if self.action_plan_current_target == "analysis" and hasattr(self, 'web_view'):
+                # 结束第一轮（分析）的显示
+                self.web_view.page().runJavaScript("endStreamResponse();")
+                # 开始第二轮（计划）的显示
+                self.web_view.page().runJavaScript("startStreamResponse();")
+
             self.action_plan_current_target = "plan"
             self.action_plan_plan_text = ""
             self.action_plan_plan_thinking = ""
             self.action_plan_right_text.clear()
-            self.action_plan_right_text.append("🚀 开始生成计划...\n")
-            return
-
-        if "初始分析已完成。正在生成今日行动建议..." in text:
-            # 阶段切换提示
-            self.action_plan_current_target = "plan"
-            self.action_plan_plan_text = ""
-            self.action_plan_plan_thinking = ""
-            # Don't clear right text here, allow valid accumulation if any started
-            self.action_plan_right_text.clear() 
             self.action_plan_right_text.append("🚀 开始生成计划...\n")
             return
         
@@ -1049,11 +1029,11 @@ class MainWindow(QWidget):
             thinking_chunk = text[len("STREAM_THINKING:"):]
             if self.action_plan_current_target == "analysis":
                 self.action_plan_accumulated_thinking += thinking_chunk
-                # 实时更新思考内容显示
                 self._update_analysis_display()
             else:
                 self.action_plan_plan_thinking += thinking_chunk
                 self._update_plan_display()
+            # 思考过程暂不实时同步到 Chat 气泡，保持简洁，或者只更新状态
             return
         
         if text.startswith("STREAM_CONTENT:"):
@@ -1061,9 +1041,17 @@ class MainWindow(QWidget):
             if self.action_plan_current_target == "analysis":
                 self.action_plan_accumulated_text += content_chunk
                 self._update_analysis_display()
+                # 同步更新 Chat 里的分析气泡
+                if hasattr(self, 'web_view'):
+                    json_data = json.dumps(self.action_plan_accumulated_text)
+                    self.web_view.page().runJavaScript(f"updateStreamResponse({json_data});")
             else:
                 self.action_plan_plan_text += content_chunk
                 self._update_plan_display()
+                # 同步更新 Chat 里的计划气泡
+                if hasattr(self, 'web_view'):
+                    json_data = json.dumps(self.action_plan_plan_text)
+                    self.web_view.page().runJavaScript(f"updateStreamResponse({json_data});")
             return
         
         if text.startswith("STREAM_DONE:") or text.startswith("STREAM_ERROR:"):
@@ -1122,11 +1110,11 @@ class MainWindow(QWidget):
         if success:
             # Pass preserve_left=True so we don't wipe out the stream-generated analysis on the left
             self.load_action_plan_file(preserve_left=True)
-            # Populate Chat Tab with initial analysis and plan
-            analysis_text = self.action_plan_left_text.toPlainText()
-            plan_text = self.action_plan_right_text.toPlainText()
-            combined_text = f"**General Analysis**:\n{analysis_text}\n\n**Today's Action Plan**:\n{plan_text}"
-            self.append_chat_bubble("assistant", combined_text)
+            # We skip appending combined_text here because it's already synced via append_action_plan_log real-time
+        
+        # End Stream
+        if hasattr(self, 'web_view'):
+            self.web_view.page().runJavaScript("endStreamResponse();")
         
         self.action_plan_regen_btn.setEnabled(True)
         
