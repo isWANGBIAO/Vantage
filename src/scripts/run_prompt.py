@@ -161,8 +161,9 @@ def main():
             if action_plan_prompt_path.exists():
                 action_plan_template = action_plan_prompt_path.read_text(encoding="utf-8")
                 
-                # 2. Get Today's Data Row
+                # 2. Get Today's and Yesterday's Data Row
                 today_data = DataLoader.get_today_data_row(DataLoader.resolve_data_path("Time.xlsx"))
+                yesterday_data = DataLoader.get_yesterday_data_row(DataLoader.resolve_data_path("Time.xlsx"))
                 current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
                 
                 # 3. Fill Template
@@ -170,6 +171,8 @@ def main():
                 action_plan_msg = action_plan_template.replace("{current_time}", current_time_str)
                 # Replace {today_data_row}
                 action_plan_msg = action_plan_msg.replace("{today_data_row}", today_data)
+                # Replace {yesterday_data_row}
+                action_plan_msg = action_plan_msg.replace("{yesterday_data_row}", yesterday_data)
                 
                 # [User Request] Repeat the prompt content twice for Round 2 as well
                 # Handled in llm_client now

@@ -116,6 +116,36 @@ class DataLoader:
             return "无法获取今日数据记录。"
 
     @staticmethod
+    def get_yesterday_data_row(excel_file_path):
+        """
+        Retrieves the data row for yesterday as a formatted string.
+        """
+        try:
+            df = DataLoader.load_excel_data(excel_file_path)
+            
+            yesterday = datetime.now().date() - timedelta(days=1)
+            # Convert timestamp to date for comparison
+            df['date_only'] = df['日期'].dt.date
+            
+            yesterday_row = df[df['date_only'] == yesterday]
+            
+            row_str = ""
+            if not yesterday_row.empty:
+                # Format the row data
+                row = yesterday_row.iloc[0]
+                row_str = f"昨日({yesterday})数据记录：\n"
+                for col in df.columns:
+                    if col not in ['日期', 'date_only'] and pd.notna(row[col]):
+                         row_str += f"- {col}: {row[col]}\n"
+            else:
+                 row_str = f"昨日({yesterday})暂无特定数据记录。\n"
+                 
+            return row_str
+        except Exception as e:
+            logging.error(f"Error getting yesterday's data row: {e}")
+            return "无法获取昨日数据记录。"
+
+    @staticmethod
     def construct_prompt(prompt_file_path, excel_file_path, days=90):
         prompt_file_path = Path(prompt_file_path)
         excel_file_path = Path(excel_file_path)
