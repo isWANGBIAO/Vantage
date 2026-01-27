@@ -5,6 +5,7 @@ import json
 import time
 import subprocess
 import threading
+import glob
 import asyncio
 from fastapi import FastAPI, WebSocket, Request, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
@@ -92,32 +93,66 @@ def identify_logs_folder():
 @app.on_event("startup")
 async def startup_event():
     print("Starting up server...")
+    print("Starting up server...")
     try:
-        idx = get_camera_index()
-        state.camera = cv2.VideoCapture(idx)
-        if not state.camera.isOpened():
-             print("Warning: Camera not opened")
+        # DEPRECATED IN FAVOR OF camera_loop: 
+        # idx = get_camera_index()
+        # state.camera = cv2.VideoCapture(idx)
+        # if not state.camera.isOpened():
+        #      print("Warning: Camera not opened")
+        pass # Camera init moved to camera_loop to centralize resolution settings
+    except Exception as e:
+        print(f"Startup camera init error: {e}")
         
+    # RESUME initialization (Unindented to run regardless of camera init success/failure)
+    try:
         state.photos_path, state.screenshots_path = identify_logs_folder()
         state.monitor = Monitor(state.camera, state.paths, state.photos_path, state.screenshots_path)
         
         # Start background frame reading thread
         threading.Thread(target=camera_loop, daemon=True).start()
+        
+        # Start background monitor task thread (every 10s)
+        threading.Thread(target=monitor_loop, daemon=True).start()
 
         # Mount static directories for photos and plots
         if state.photos_path and os.path.exists(state.photos_path):
             app.mount("/static/photos", StaticFiles(directory=state.photos_path), name="photos")
         
         plot_dir = os.path.join(os.getcwd(), "plot_outputs")
-        if os.path.exists(plot_dir):
-            app.mount("/static/plots", StaticFiles(directory=plot_dir), name="plots")
+        if not os.path.exists(plot_dir):
+            os.makedirs(plot_dir)
+        app.mount("/static/plots", StaticFiles(directory=plot_dir), name="plots")
         
-        # Also mount screenshots if different from photos
-        if state.screenshots_path and os.path.exists(state.screenshots_path) and state.screenshots_path != state.photos_path:
-             app.mount("/static/screenshots", StaticFiles(directory=state.screenshots_path), name="screenshots")
+        if state.screenshots_path and os.path.exists(state.screenshots_path):
+            if state.screenshots_path != state.photos_path:
+                app.mount("/static/screenshots", StaticFiles(directory=state.screenshots_path), name="screenshots")
+            else:
+                app.mount("/static/screenshots", StaticFiles(directory=state.screenshots_path), name="screenshots")
 
     except Exception as e:
-        print(f"Startup error: {e}")
+        print(f"Startup logic error: {e}")
+
+def monitor_loop():
+    print("Starting monitor loop (10s interval)...")
+    while state.is_running:
+        try:
+            if state.monitor:
+                # CRITICAL: Ensure Monitor uses the current active camera instance (initialized in camera_loop)
+                # If camera is not ready yet, skip this cycle to avoid errors or default-init
+                if state.camera is None or not state.camera.isOpened():
+                    # print("Monitor skipping: Camera not ready")
+                    time.sleep(2)
+                    continue
+                
+                # Update the camera reference in monitor to match the global state (which is 4K)
+                state.monitor.camera = state.camera
+                
+                # Run the periodic task (take photo, screenshot, etc.)
+                state.monitor.run_task()
+        except Exception as e:
+            print(f"Monitor loop error: {e}")
+        time.sleep(10)
 
 def camera_loop():
     print(f"Starting camera loop... Camera Index: {get_camera_index()}")
@@ -125,7 +160,26 @@ def camera_loop():
         if state.camera is None:
              idx = get_camera_index()
              try:
-                 state.camera = cv2.VideoCapture(idx)
+                 # Use DirectShow (CAP_DSHOW) on Windows for better resolution control
+                 state.camera = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                 
+                 # Request 4K resolution (16:9)
+                 target_w, target_h = 3840, 2160
+                 state.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_w)
+                 state.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
+                 
+                 # Verify actual resolution
+                 actual_w = state.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
+                 actual_h = state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                 print(f"Camera Initialized: Requested {target_w}x{target_h}, Got {int(actual_w)}x{int(actual_h)}")
+                 
+                 # If 4K failed (e.g. got low res), try strict 1080p fallback
+                 if actual_w < 1280: 
+                     print("4K failed or ignored, trying strict 1080p force...")
+                     state.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+                     state.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+                     print(f"Fallback resolution: {int(state.camera.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+                     
              except Exception as e:
                  print(f"Camera init failed: {e}")
                  time.sleep(2)
@@ -159,10 +213,10 @@ def generate_frames():
             if state.latest_frame is not None:
                 frame = state.latest_frame.copy()
             else:
-                # Create a black placeholder image
+                # Create a black placeholder image (16:9 aspect ratio)
                 import numpy as np
-                frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(frame, "Camera Offline", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+                cv2.putText(frame, "Camera Offline", (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 2)
         
         ret, buffer = cv2.imencode('.jpg', frame)
         frame_bytes = buffer.tobytes()
@@ -218,16 +272,23 @@ def get_latest_images():
         screenshot_path = state.paths.get('screenshot')
         
         photo_url = None
-        if photo_path:
-            photo_url = f"/static/photos/{os.path.basename(photo_path)}"
+        if photo_path and state.photos_path:
+            try:
+                rel_path = os.path.relpath(photo_path, state.photos_path)
+                rel_path = rel_path.replace("\\", "/") # Ensure web-friendly slashes
+                photo_url = f"/static/photos/{rel_path}"
+            except ValueError:
+                photo_url = f"/static/photos/{os.path.basename(photo_path)}"
             
         screenshot_url = None
-        if screenshot_path:
-             # Check if screenshots are in a separate mount
-            if state.screenshots_path != state.photos_path:
+        if screenshot_path and state.screenshots_path:
+            try:
+                # Always relative to screenshots_path mount
+                rel_path = os.path.relpath(screenshot_path, state.screenshots_path)
+                rel_path = rel_path.replace("\\", "/")
+                screenshot_url = f"/static/screenshots/{rel_path}"
+            except ValueError:
                 screenshot_url = f"/static/screenshots/{os.path.basename(screenshot_path)}"
-            else:
-                screenshot_url = f"/static/photos/{os.path.basename(screenshot_path)}"
 
         return {
             "photo": photo_url,
@@ -266,6 +327,77 @@ async def refresh_plots(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_plot_script)
     return {"message": "Plot refresh started in background"}
 
+@app.get("/api/plots/list")
+async def list_plots():
+    """Return list of all plot images for carousel display"""
+    plot_dir = os.path.join(os.getcwd(), "plot_outputs")
+    if not os.path.exists(plot_dir):
+        return {"plots": [], "error": "plot_outputs directory not found"}
+    
+    try:
+        # Get all PNG files except collages and screen files
+        files = [f for f in os.listdir(plot_dir) 
+                 if f.endswith(".png") 
+                 and not f.startswith("plot_collage") 
+                 and not f.endswith("_screen.png")]
+        
+        # Sort by predefined order (same as PyQt version)
+        order = [
+            "weight_bodyfat", "time_allocation_bar", "time_trend_screen_remaining",
+            "time_trend_averages", "time_trend_delta", "running_pace",
+            "radar_goal", "hhh_frequency", "hhh_interval_trend", "balance_sheet"
+        ]
+        
+        def sort_key(name):
+            for index, prefix in enumerate(order):
+                if name.startswith(prefix):
+                    return (index, name)
+            return (len(order), name)
+        
+        sorted_files = sorted(files, key=sort_key)
+        
+        return {
+            "plots": [{"name": f, "url": f"/static/plots/{f}"} for f in sorted_files],
+            "count": len(sorted_files)
+        }
+    except Exception as e:
+        return {"plots": [], "error": str(e)}
+
+@app.get("/api/action_plan/today")
+async def get_today_action_plan():
+    """Return today's latest action plan if it exists"""
+    from datetime import datetime
+    
+    today = datetime.now().strftime("%Y%m%d")  # Format: YYYYMMDD
+    history_dir = os.path.join(os.getcwd(), "history")
+    
+    if not os.path.exists(history_dir):
+        return {"exists": False, "content": None, "date": today}
+    
+    try:
+        # Find all action_plan files for today, sorted by modification time (newest first)
+        pattern = f"action_plan_{today}_*.md"
+        import glob
+        files = glob.glob(os.path.join(history_dir, pattern))
+        
+        if not files:
+            return {"exists": False, "content": None, "date": today}
+        
+        # Get the most recent file
+        latest_file = max(files, key=os.path.getmtime)
+        
+        with open(latest_file, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        return {
+            "exists": True, 
+            "content": content, 
+            "date": today,
+            "filename": os.path.basename(latest_file)
+        }
+    except Exception as e:
+        return {"exists": False, "content": None, "error": str(e), "date": today}
+
 class ChatRequest(BaseModel):
     message: str
     context_file: Optional[str] = None
@@ -294,28 +426,40 @@ async def chat_endpoint(request: ChatRequest):
     env["PYTHONIOENCODING"] = "utf-8"
 
     try:
-        # Using execute asynchronously to avoid blocking the main thread
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=os.path.dirname(script_path),
-            env=env
-        )
-        
-        stdout, stderr = await proc.communicate()
-        
-        response_text = ""
-        if stdout:
-            try:
-                response_text = stdout.decode('utf-8')
-            except:
-                response_text = stdout.decode('gbk', errors='replace')
-        
-        if stderr:
-             print(f"STDERR: {stderr.decode()}")
+        # Use StreamingResponse for real-time chat output
+        async def process_chat_stream():
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=os.path.dirname(script_path),
+                env=env
+            )
+            
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                try:
+                    decoded = line.decode('utf-8').rstrip()
+                except:
+                    decoded = line.decode('gbk', errors='replace').rstrip()
+                
+                # Yield as NDJSON line
+                # We strip to avoid double newlines, but keep empty lines if meaningful?
+                # Usually log lines are fine.
+                msg = decoded.strip()
+                if msg:
+                     yield json.dumps({"log": msg}) + "\n"
+            
+            await proc.wait()
+            
+            if proc.returncode != 0:
+                 stderr_data = await proc.stderr.read()
+                 err_msg = stderr_data.decode('utf-8', errors='replace')
+                 yield json.dumps({"error": err_msg}) + "\n"
 
-        return {"response": response_text.strip(), "success": proc.returncode == 0}
+        return StreamingResponse(process_chat_stream(), media_type="application/x-ndjson")
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -343,22 +487,32 @@ async def generate_action_plan():
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT, # Redirect stderr to stdout so errors appear in stream
             cwd=os.path.dirname(script_path),
             env=env
         )
         
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break
-            try:
-                decoded = line.decode('utf-8')
-            except:
-                decoded = line.decode('gbk', errors='replace')
-            yield json.dumps({"log": decoded}) + "\n"
-        
-        await proc.wait()
+        try:
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                try:
+                    decoded = line.decode('utf-8').rstrip()
+                except:
+                    decoded = line.decode('gbk', errors='replace').rstrip()
+                yield json.dumps({"log": decoded}) + "\n"
+                
+            await proc.wait()
+            
+        except asyncio.CancelledError:
+            print("Stream cancelled by client")
+            proc.terminate()
+            raise
+        finally:
+            if proc.returncode is None:
+                print("Killing orphan process")
+                proc.kill()
     
     return StreamingResponse(process_stream(), media_type="application/x-ndjson")
 
@@ -407,6 +561,50 @@ async def transcribe_audio(file: UploadFile = File(...)):
             break
             
     return {"transcription": transcription}
+
+@app.get("/api/action_plan_content")
+async def get_action_plan_content():
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        history_dir = os.path.join(project_root, "history")
+        
+        if not os.path.exists(history_dir):
+            return {"content": ""}
+            
+        # Find latest action_plan file
+        files = glob.glob(os.path.join(history_dir, "action_plan_*.md"))
+        if not files:
+            return {"content": ""}
+            
+        latest_file = max(files, key=os.path.getctime)
+        
+        with open(latest_file, "r", encoding="utf-8") as f:
+            content = f.read()
+            
+        return {"content": content, "timestamp": os.path.getctime(latest_file)}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/system_logs")
+async def get_system_logs():
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        log_file = os.path.join(project_root, "logs", "server.log")
+        
+        if not os.path.exists(log_file):
+            return {"logs": ["Log file not found."]}
+            
+        # Read last 200 lines to avoid huge payload
+        with open(log_file, "r", encoding="utf-8", errors='ignore') as f:
+            # Simple approach: read all then slice (optimized for small logs)
+            # For huge logs, seek would be better.
+            lines = f.readlines()
+            
+        return {"logs": lines[-200:]}
+    except Exception as e:
+        return {"logs": [f"Error reading logs: {str(e)}"]}
 
 if __name__ == "__main__":
     import uvicorn

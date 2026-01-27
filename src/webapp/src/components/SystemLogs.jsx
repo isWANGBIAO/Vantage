@@ -8,24 +8,24 @@ export default function SystemLogs() {
     // For now, let's simulate or provide a placeholder.
     useEffect(() => {
         const fetchLogs = async () => {
-            // Placeholder: currently there's no dedicated system log API,
-            // we could either read run_stdout.log or similar.
-            // Let's just show a simulated connection.
-            setLogs(prev => [...prev.slice(-100), `[${new Date().toLocaleTimeString()}] Connected to log stream...`]);
+            try {
+                const res = await fetch('/api/system_logs');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.logs && Array.isArray(data.logs)) {
+                        setLogs(data.logs);
+                    }
+                }
+            } catch (e) {
+                console.error("Log fetch error:", e);
+            }
         };
+
+        // Initial fetch
         fetchLogs();
-        const interval = setInterval(() => {
-            // Simulate random system events for aesthetics
-            const events = [
-                "Camera frame captured",
-                "System stats pushed",
-                "Monitor task cycle completed",
-                "Heartbeat healthy",
-                "Memory optimization triggered"
-            ];
-            const randomEvent = events[Math.floor(Math.random() * events.length)];
-            setLogs(prev => [...prev.slice(-100), `[${new Date().toLocaleTimeString()}] ${randomEvent}`]);
-        }, 5000);
+
+        // Poll every 2 seconds
+        const interval = setInterval(fetchLogs, 2000);
 
         return () => clearInterval(interval);
     }, []);

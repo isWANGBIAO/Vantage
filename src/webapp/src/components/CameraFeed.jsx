@@ -21,44 +21,48 @@ export default function CameraFeed() {
     }, []);
 
     return (
-        <div className="glass-panel" style={{ padding: '1rem', height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                <h3 style={{ margin: 0 }}>Camera Feed</h3>
-                <span style={{
-                    color: status.online ? 'var(--accent-color)' : 'var(--text-muted)',
-                    display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem'
+        <div style={{
+            width: '100%',
+            height: '100%',
+            background: '#000',
+            position: 'relative',
+            overflow: 'hidden',
+            borderRadius: '8px'
+        }}>
+            {status.online ? (
+                <img
+                    src="/api/stream"
+                    alt="Live Stream"
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+            ) : (
+                <div style={{
+                    width: '100%', height: '100%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--text-muted)'
                 }}>
-                    <span style={{
-                        width: '8px', height: '8px', borderRadius: '50%',
-                        background: status.online ? 'var(--accent-color)' : 'var(--text-muted)'
-                    }}></span>
-                    {status.online ? 'LIVE' : 'OFFLINE'}
-                </span>
-            </div>
+                    Camera Disconnected
+                </div>
+            )}
 
+            {/* Status Indicator Overlay */}
             <div style={{
-                flex: 1,
-                background: '#000',
-                borderRadius: '8px',
-                overflow: 'hidden',
-                position: 'relative',
-                minHeight: '240px'
+                position: 'absolute',
+                top: '10px',
+                right: '10px',
+                background: 'rgba(0,0,0,0.6)',
+                padding: '4px 8px',
+                borderRadius: '4px',
+                display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem',
+                color: status.online ? 'var(--accent-color)' : '#999',
+                zIndex: 20
             }}>
-                {status.online ? (
-                    <img
-                        src="/api/stream"
-                        alt="Live Stream"
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                    />
-                ) : (
-                    <div style={{
-                        position: 'absolute', inset: 0,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        color: 'var(--text-muted)'
-                    }}>
-                        Camera Disconnected
-                    </div>
-                )}
+                <span style={{
+                    width: '6px', height: '6px', borderRadius: '50%',
+                    background: status.online ? 'var(--accent-color)' : '#999',
+                    boxShadow: status.online ? '0 0 8px var(--accent-color)' : 'none'
+                }}></span>
+                {status.online ? 'LIVE' : 'OFFLINE'}
             </div>
         </div>
     );

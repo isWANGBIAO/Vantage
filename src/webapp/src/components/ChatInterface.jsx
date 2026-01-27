@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Mic, Send, StopCircle, Bot, User } from 'lucide-react';
+import { Mic, Send, StopCircle, Bot, User, Trash2 } from 'lucide-react';
 
 export default function ChatInterface() {
     const [messages, setMessages] = useState([]);
@@ -19,9 +19,30 @@ export default function ChatInterface() {
         endRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
 
+    // Load chat history from localStorage on mount
     useEffect(() => {
+        try {
+            const saved = localStorage.getItem('chat_history');
+            if (saved) {
+                setMessages(JSON.parse(saved));
+            }
+        } catch (e) {
+            console.error('Failed to load chat history:', e);
+        }
+    }, []);
+
+    // Save chat history to localStorage on change
+    useEffect(() => {
+        if (messages.length > 0) {
+            localStorage.setItem('chat_history', JSON.stringify(messages));
+        }
         scrollToBottom();
     }, [messages]);
+
+    const clearChat = () => {
+        setMessages([]);
+        localStorage.removeItem('chat_history');
+    };
 
     const sendMessage = async () => {
         if (!input.trim() || isLoading) return;
@@ -38,13 +59,90 @@ export default function ChatInterface() {
                 body: JSON.stringify({ message: userMsg }),
             });
 
-            const data = await res.json();
+            // Stream Handling
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
 
-            if (data.success) {
-                setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
-            } else {
-                setMessages(prev => [...prev, { role: 'assistant', content: 'Error: Failed to process request.' }]);
+            // Initial empty assistant message
+            setMessages(prev => [...prev, { role: 'assistant', content: '', thinking: '' }]);
+
+            let assistantContent = "";
+            let assistantThinking = "";
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split('\n');
+
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+
+                    try {
+                        const data = JSON.parse(line);
+
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+
+                        if (data.log) {
+                            const text = data.log;
+
+                            // Parse Special Tags
+                            if (text.startsWith("STREAM_THINKING:")) {
+                                const raw = text.replace("STREAM_THINKING:", "");
+                                try {
+                                    assistantThinking += JSON.parse(raw);
+                                } catch (e) { assistantThinking += raw; }
+                            } else if (text.startsWith("STREAM_CONTENT:")) {
+                                const raw = text.replace("STREAM_CONTENT:", "");
+                                try {
+                                    assistantContent += JSON.parse(raw);
+                                } catch (e) { assistantContent += raw; }
+                            } else if (
+                                text.startsWith("STREAM_DONE:") ||
+                                text.startsWith("STREAM_ERROR:") ||
+                                text.startsWith("STATS_JSON:") ||
+                                text.includes("---CHAT_START---") ||
+                                text.includes("---ANALYSIS_END---") ||
+                                text.includes("---PLAN_START---") ||
+                                text.startsWith("Response saved to:") ||
+                                text.trim() === ""
+                            ) {
+                                // Ignore control signals and markers
+                            } else {
+                                // Fallback for raw text - only add if it looks like actual content
+                                // Filter out obvious system messages
+                                const cleanText = text
+                                    .replace(/---CHAT_START---/g, '')
+                                    .replace(/---ANALYSIS_END---/g, '')
+                                    .replace(/STATS_JSON:\{.*\}/g, '')
+                                    .trim();
+                                if (cleanText) {
+                                    assistantContent += cleanText;
+                                }
+                            }
+
+                            // Update UI State
+                            setMessages(prev => {
+                                const newMessages = [...prev];
+                                const lastMsg = newMessages[newMessages.length - 1];
+                                if (lastMsg.role === 'assistant') {
+                                    lastMsg.content = assistantContent;
+                                    lastMsg.thinking = assistantThinking;
+                                }
+                                return newMessages;
+                            });
+                        }
+                    } catch (e) {
+                        console.debug("JSON parse error for chunk", line, e);
+                        // treat as raw text if JSON fails? 
+                        // For now, ignore non-JSON lines to be safe against noise
+                    }
+                }
             }
+
         } catch (err) {
             setMessages(prev => [...prev, { role: 'assistant', content: `Network Error: ${err.message}` }]);
         } finally {
@@ -140,7 +238,31 @@ export default function ChatInterface() {
                     <Bot size={20} color="var(--primary-color)" />
                     AI Assistant
                 </h3>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Powered by Gemini</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Powered by Gemini</span>
+                    {messages.length > 0 && (
+                        <button
+                            onClick={clearChat}
+                            title="Clear chat history"
+                            style={{
+                                background: 'transparent',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '6px',
+                                padding: '0.4rem 0.6rem',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.3rem',
+                                color: 'var(--text-secondary)',
+                                fontSize: '0.75rem',
+                                transition: 'all 0.2s'
+                            }}
+                        >
+                            <Trash2 size={14} />
+                            Clear
+                        </button>
+                    )}
+                </div>
             </div>
 
             <div style={{
@@ -185,8 +307,29 @@ export default function ChatInterface() {
                             borderTopLeftRadius: msg.role === 'user' ? '16px' : '4px',
                             lineHeight: '1.6',
                             boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                            border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)'
+                            border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)',
+                            minWidth: '200px'
                         }}>
+                            {/* Thinking Process Display */}
+                            {msg.thinking && (
+                                <div style={{
+                                    fontSize: '0.85rem',
+                                    color: 'var(--text-muted)',
+                                    background: 'rgba(0,0,0,0.1)',
+                                    padding: '0.8rem',
+                                    borderRadius: '8px',
+                                    marginBottom: '1rem',
+                                    borderLeft: '3px solid var(--border-color)',
+                                    whiteSpace: 'pre-wrap'
+                                }}>
+                                    <div style={{ fontWeight: 600, marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <div className="thinking-dot" style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--text-muted)' }}></div>
+                                        Reasoning Process
+                                    </div>
+                                    {msg.thinking}
+                                </div>
+                            )}
+
                             <div className="markdown-body" style={{ fontSize: '0.95rem' }}>
                                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                     {msg.content}

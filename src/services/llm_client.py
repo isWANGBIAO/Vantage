@@ -100,11 +100,11 @@ class SiliconFlowClient:
             else:
                  # Default output
                 if tag == "thinking":
-                    print(f"STREAM_THINKING:{content}", flush=True)
+                    print(f"STREAM_THINKING:{json.dumps(content)}", flush=True)
                 elif tag == "content":
-                    print(f"STREAM_CONTENT:{content}", flush=True)
+                    print(f"STREAM_CONTENT:{json.dumps(content)}", flush=True)
                 elif tag == "error":
-                    print(f"STREAM_ERROR:{content}", flush=True)
+                    print(f"STREAM_ERROR:{json.dumps(content)}", flush=True)
 
         try:
             response = requests.post(url, json=payload, headers=self.headers, timeout=300, stream=True)

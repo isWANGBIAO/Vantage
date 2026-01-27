@@ -74,71 +74,74 @@ export default function Dashboard() {
         : 0;
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: '100%', paddingBottom: '1rem' }}>
             {/* Top Row: Time and Basic Info */}
-            <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="glass-panel" style={{ padding: '1rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                    <h2 style={{ margin: 0, fontSize: '1.8rem', display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
-                        <Activity color="var(--primary-color)" />
+                    <h2 style={{ margin: 0, fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+                        <Activity color="var(--primary-color)" size={24} />
                         System Dashboard
                     </h2>
-                    <p style={{ margin: '0.5rem 0 0 0', color: 'var(--text-secondary)' }}>Real-time monitoring and statistics</p>
                 </div>
-                <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    <div style={{ fontSize: '2rem', fontWeight: 'bold', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
-                        <Clock size={28} color="var(--text-muted)" />
+                <div style={{ textAlign: 'right', display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+                    <div style={{ fontSize: '1.6rem', fontWeight: 'bold', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+                        <Clock size={24} color="var(--text-muted)" />
                         {time.toLocaleTimeString()}
                     </div>
-                    <div style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>
-                        <Calendar size={16} />
+                    <div style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Calendar size={18} />
                         {time.toLocaleDateString()}
                     </div>
                 </div>
             </div>
 
-            {/* Middle Row: Camera and Latest Images */}
+            {/* Middle Row: Photo | Camera | Screenshot (1 Row, 3 Columns) */}
             <div style={{
                 display: 'grid',
-                gridTemplateColumns: '1.5fr 1fr',
+                gridTemplateColumns: 'repeat(3, 1fr)', // Equal columns for consistent height
                 gap: '1.5rem',
-                minHeight: '400px'
+                flex: 1,
+                minHeight: '0',
+                alignContent: 'center'
             }}>
-                <div className="glass-panel" style={{ overflow: 'hidden', padding: '0' }}>
-                    <CameraFeed />
+                {/* 1. Latest Photo */}
+                <div className="glass-panel" style={{ padding: '0', display: 'flex', flexDirection: 'column', aspectRatio: '16/9', overflow: 'hidden', width: '100%', position: 'relative' }}>
+                    <div style={{ padding: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)', position: 'absolute', top: 0, left: 0, zIndex: 10, background: 'linear-gradient(to bottom, rgba(0,0,0,0.8), transparent)', width: '100%' }}>
+                        <ImageIcon size={16} /> Latest Photo
+                    </div>
+                    <div style={{ flex: 1, background: '#000', position: 'relative' }}>
+                        {latestImages.photo ? (
+                            <img src={latestImages.photo} alt="Latest" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        ) : (
+                            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666' }}>No Data</div>
+                        )}
+                    </div>
+                    {latestImages.photo_name && <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.7)', position: 'absolute', bottom: '4px', right: '8px', zIndex: 10, fontFamily: 'monospace', background: 'rgba(0,0,0,0.5)', padding: '2px 4px', borderRadius: '4px' }}>{latestImages.photo_name}</div>}
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateRows: '1fr 1fr', gap: '1.5rem' }}>
-                    {/* Latest Photo */}
-                    <div className="glass-panel" style={{ padding: '1rem', display: 'flex', flexDirection: 'column' }}>
-                        <div style={{ marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)' }}>
-                            <ImageIcon size={18} />
-                            <h4 style={{ margin: 0 }}>Latest Photo</h4>
-                        </div>
-                        <div style={{ flex: 1, background: '#000', borderRadius: '8px', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-                            {latestImages.photo ? (
-                                <img src={latestImages.photo} alt="Latest" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                            ) : (
-                                <span style={{ color: 'var(--text-muted)' }}>No photo available</span>
-                            )}
-                        </div>
-                        {latestImages.photo_name && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '8px', textAlign: 'center', fontFamily: 'monospace' }}>{latestImages.photo_name}</div>}
+                {/* 2. Camera Feed (Center) */}
+                <div className="glass-panel" style={{ padding: '0', display: 'flex', flexDirection: 'column', aspectRatio: '16/9', overflow: 'hidden', width: '100%', position: 'relative', border: '1px solid var(--primary-color)', boxShadow: '0 0 15px rgba(0, 120, 215, 0.2)' }}>
+                    <div style={{ padding: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', fontWeight: 600, color: 'var(--primary-color)', position: 'absolute', top: 0, left: 0, zIndex: 10, background: 'linear-gradient(to bottom, rgba(0,0,0,0.8), transparent)', width: '100%' }}>
+                        <Activity size={16} /> Camera Feed
                     </div>
+                    <div style={{ flex: 1, position: 'relative' }}>
+                        <CameraFeed />
+                    </div>
+                </div>
 
-                    {/* Latest Screenshot */}
-                    <div className="glass-panel" style={{ padding: '1rem', display: 'flex', flexDirection: 'column' }}>
-                        <div style={{ marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)' }}>
-                            <Monitor size={18} />
-                            <h4 style={{ margin: 0 }}>Latest Screenshot</h4>
-                        </div>
-                        <div style={{ flex: 1, background: '#000', borderRadius: '8px', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            {latestImages.screenshot ? (
-                                <img src={latestImages.screenshot} alt="Latest Screenshot" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                            ) : (
-                                <span style={{ color: 'var(--text-muted)' }}>No screenshot available</span>
-                            )}
-                        </div>
-                        {latestImages.screenshot_name && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '8px', textAlign: 'center', fontFamily: 'monospace' }}>{latestImages.screenshot_name}</div>}
+                {/* 3. Latest Screenshot */}
+                <div className="glass-panel" style={{ padding: '0', display: 'flex', flexDirection: 'column', aspectRatio: '16/9', overflow: 'hidden', width: '100%', position: 'relative' }}>
+                    <div style={{ padding: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)', position: 'absolute', top: 0, left: 0, zIndex: 10, background: 'linear-gradient(to bottom, rgba(0,0,0,0.8), transparent)', width: '100%' }}>
+                        <Monitor size={16} /> Latest Screenshot
                     </div>
+                    <div style={{ flex: 1, background: '#000', position: 'relative' }}>
+                        {latestImages.screenshot ? (
+                            <img src={latestImages.screenshot} alt="Screenshot" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        ) : (
+                            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666' }}>No Data</div>
+                        )}
+                    </div>
+                    {latestImages.screenshot_name && <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.7)', position: 'absolute', bottom: '4px', right: '8px', zIndex: 10, fontFamily: 'monospace', background: 'rgba(0,0,0,0.5)', padding: '2px 4px', borderRadius: '4px' }}>{latestImages.screenshot_name}</div>}
                 </div>
             </div>
 
@@ -146,7 +149,8 @@ export default function Dashboard() {
             <div style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(4, 1fr)',
-                gap: '1.5rem'
+                gap: '1.5rem',
+                height: '120px'
             }}>
                 <StatCard
                     icon={<Cpu size={24} color="#a29bfe" />}
@@ -182,7 +186,7 @@ export default function Dashboard() {
 
 function StatCard({ icon, title, value, subValue, color }) {
     return (
-        <div className="glass-panel" style={{ padding: '1.5rem', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        <div className="glass-panel" style={{ padding: '1rem 1.5rem', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '0.3rem' }}>
             <div style={{
                 position: 'absolute',
                 top: 0, left: 0, width: '4px', height: '100%',
@@ -192,8 +196,8 @@ function StatCard({ icon, title, value, subValue, color }) {
                 {icon}
                 <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>{title}</span>
             </div>
-            <div style={{ fontSize: '1.8rem', fontWeight: 'bold', marginTop: '0.5rem' }}>{value}</div>
-            {subValue && <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{subValue}</div>}
+            <div style={{ fontSize: '1.6rem', fontWeight: 'bold' }}>{value}</div>
+            {subValue && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{subValue}</div>}
         </div>
     );
 }

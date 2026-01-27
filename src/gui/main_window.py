@@ -822,20 +822,29 @@ class MainWindow(QWidget):
         content_to_stream = ""
         
         if text.startswith("STREAM_THINKING:"):
-            thinking_chunk = text[len("STREAM_THINKING:"):]
+            raw = text[len("STREAM_THINKING:"):]
+            try:
+                thinking_chunk = json.loads(raw)
+            except json.JSONDecodeError:
+                thinking_chunk = raw
             self.chat_thinking_buffer += thinking_chunk
-            # For now, maybe not stream thinking to Web UI to keep it simple, or add a thinking bubble?
-            # Script.js "startStreamResponse" adds a "Thinking..." generic text. 
-            # We can leave it as is or update it. Let's just focus on content first.
             return
         
         elif text.startswith("STREAM_CONTENT:"):
-            content_chunk = text[len("STREAM_CONTENT:"):]
+            raw = text[len("STREAM_CONTENT:"):]
+            try:
+                content_chunk = json.loads(raw)
+            except json.JSONDecodeError:
+                content_chunk = raw
             self.chat_response_buffer += content_chunk
             content_to_stream = self.chat_response_buffer # Send FULL buffer to JS to re-render markdown
         
         elif text.startswith("STREAM_ERROR:"):
-            error_msg = text[len("STREAM_ERROR:"):]
+            raw = text[len("STREAM_ERROR:"):]
+            try:
+                error_msg = json.loads(raw)
+            except json.JSONDecodeError:
+                error_msg = raw
             self.chat_response_buffer += f"\n[Error: {error_msg}]"
             content_to_stream = self.chat_response_buffer
             
@@ -1026,18 +1035,27 @@ class MainWindow(QWidget):
         
         # 解析流式标记
         if text.startswith("STREAM_THINKING:"):
-            thinking_chunk = text[len("STREAM_THINKING:"):]
+            raw_chunk = text[len("STREAM_THINKING:"):]
+            try:
+                thinking_chunk = json.loads(raw_chunk)
+            except json.JSONDecodeError:
+                thinking_chunk = raw_chunk
+                
             if self.action_plan_current_target == "analysis":
                 self.action_plan_accumulated_thinking += thinking_chunk
                 self._update_analysis_display()
             else:
                 self.action_plan_plan_thinking += thinking_chunk
                 self._update_plan_display()
-            # 思考过程暂不实时同步到 Chat 气泡，保持简洁，或者只更新状态
             return
         
         if text.startswith("STREAM_CONTENT:"):
-            content_chunk = text[len("STREAM_CONTENT:"):]
+            raw_chunk = text[len("STREAM_CONTENT:"):]
+            try:
+                content_chunk = json.loads(raw_chunk)
+            except json.JSONDecodeError:
+                content_chunk = raw_chunk
+                
             if self.action_plan_current_target == "analysis":
                 self.action_plan_accumulated_text += content_chunk
                 self._update_analysis_display()

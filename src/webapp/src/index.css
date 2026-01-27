@@ -1,4 +1,5 @@
-:root {
+:root,
+[data-theme="dark"] {
   /* Premium Dark Theme Palette */
   --bg-app: #050508;
   --bg-surface: #0f0f16;
@@ -8,6 +9,7 @@
   --primary-color: #6c5ce7;
   --primary-hover: #5b4cc4;
   --accent-color: #00d2d3;
+  --secondary-color: #00d2d3;
   --gradient-primary: linear-gradient(135deg, #6c5ce7 0%, #a29bfe 100%);
 
   --text-primary: #ffffff;
@@ -25,6 +27,31 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 20px;
+}
+
+[data-theme="light"] {
+  /* Clean Light Theme Palette */
+  --bg-app: #f5f6fa;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f0f1f5;
+  --bg-glass: rgba(255, 255, 255, 0.85);
+
+  --primary-color: #6c5ce7;
+  --primary-hover: #5b4cc4;
+  --accent-color: #00b894;
+  --secondary-color: #00b894;
+  --gradient-primary: linear-gradient(135deg, #6c5ce7 0%, #a29bfe 100%);
+
+  --text-primary: #1a1a2e;
+  --text-secondary: #636e82;
+  --text-muted: #9aa5b8;
+
+  --border-color: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.15);
+
+  --shadow-sm: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.15);
+  --shadow-glow: 0 0 20px rgba(108, 92, 231, 0.2);
 }
 
 body {
@@ -208,6 +235,35 @@ button:disabled {
   background: rgba(255, 255, 255, 0.02);
 }
 
+/* Compact Markdown for Action Plan */
+.compact-markdown {
+  font-size: 0.9rem;
+  /* 14.4px */
+  line-height: 1.5;
+}
+
+.compact-markdown h1,
+.compact-markdown h2,
+.compact-markdown h3 {
+  margin-top: 1rem;
+  margin-bottom: 0.4rem;
+  font-size: 1.1em;
+}
+
+.compact-markdown p {
+  margin-bottom: 0.8rem;
+}
+
+.compact-markdown ul,
+.compact-markdown ol {
+  margin-bottom: 0.8rem;
+  padding-left: 1.2rem;
+}
+
+.compact-markdown li {
+  margin-bottom: 0.2rem;
+}
+
 /* Animations */
 @keyframes spin {
   from {
@@ -275,4 +331,50 @@ button:disabled {
     transform: scale(1);
     opacity: 1;
   }
+}
+
+@keyframes pulse-opacity {
+  0% {
+    opacity: 0.5;
+    transform: scale(0.9);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+
+  100% {
+    opacity: 0.5;
+    transform: scale(0.9);
+  }
+}
+
+/* Thinking Block Styling */
+.thinking-block {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.1);
+  padding: 0.8rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  border-left: 3px solid var(--border-color);
+  white-space: pre-wrap;
+  /* Preserve newlines */
+  overflow-wrap: break-word;
+  word-break: break-all;
+  /* Better for CJK mixed with code */
+  max-width: 100%;
+  /* Ensure it doesn't overflow or get crushed */
+  width: 100%;
+  /* Take available space */
+  box-sizing: border-box;
+}
+
+.thinking-header {
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }

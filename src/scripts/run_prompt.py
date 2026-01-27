@@ -66,6 +66,18 @@ def main():
             chat_msg = args.chat_message
             context_mgr.add_message("user", chat_msg)
             
+            # Emit initial stats (Historical only)
+            initial_stats = {
+                "turns": len(context_mgr.messages),
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "total_duration": 0,
+                "speed": "0.00 tokens/s",
+                "historical_total_tokens": context_mgr.token_count
+            }
+            print(f"STATS_JSON:{json.dumps(initial_stats)}")
+
             print("Thinking...")
             print("---CHAT_START---")
             
@@ -137,6 +149,26 @@ def main():
             print("---ANALYSIS_START---")
             
             # === ROUND 1: General Analysis ===
+            # Emit initial stats
+            initial_stats = {
+                "turns": len(analysis_messages), # Estimate
+                "prompt_tokens": len(prompt_text) // 4, # Rough estimate
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "total_duration": 0,
+                "speed": "0.00 tokens/s",
+                "historical_total_tokens": 0 # New session logic in script, but maybe we can read global context? 
+                # Actually, if we are in Analysis mode, we might not have loaded the global ContextManager if we initialized a new list.
+                # But let's check if we can reuse context_mgr from lines 50 involved?
+                # Line 50: context_mgr = ContextManager(context_file=args.context_file)
+                # So we have it.
+            }
+            # Update historical from context_mgr if available
+            if 'context_mgr' in locals():
+                 initial_stats['historical_total_tokens'] = context_mgr.token_count
+
+            print(f"STATS_JSON:{json.dumps(initial_stats)}")
+
             print("正在生成初始分析报告，请稍候...")
             print("---ANALYSIS_START---")
             
@@ -197,22 +229,29 @@ def main():
                         prefix = "action_plan"
                         output_path = history_dir / f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
                     
-                    # We save the SECOND round content (The Action Plan) to the file, 
-                    # as that corresponds to "Action Plan" file. 
-                    # Or should we save both? 
-                    # Usually the daily review file is the PLAN. 
-                    # Let's save the Plan.
-                    output_path.write_text(second_round_content, encoding="utf-8")
+                    # Save BOTH rounds with a separator so Web UI can display both panels
+                    # Format: [Analysis Content]---ANALYSIS_END---[Plan Content]
+                    combined_content = (
+                        first_round_content + 
+                        "\n\n---ANALYSIS_END---\n\n" + 
+                        second_round_content
+                    )
+                    output_path.write_text(combined_content, encoding="utf-8")
                     print(f"\nResponse saved to: {output_path}")
 
-                    # --- CRITICAL FIX: Save back to ContextManager so Chat knows what happened ---
-                    # Round 1: Analysis
-                    context_mgr.add_message("user", prompt_text)
-                    context_mgr.add_message("assistant", first_round_content)
-                    # Round 2: Plan
-                    plan_prompt_text = action_plan_msg # Use the variable name from surrounding scope
-                    context_mgr.add_message("user", plan_prompt_text)
+                    # --- CRITICAL FIX: Reset Context for Chat ---
+                    # The user wants the Chat to start with ONLY the context of this Action Plan session.
+                    # So we clear the old context and save the messages from this session.
+                    
+                    context_mgr.messages = [] # Clear existing history
+                    
+                    # Add all messages from the analysis session (System, User1, Assistant1, User2)
+                    for msg in analysis_messages:
+                        context_mgr.add_message(msg['role'], msg['content'])
+                    
+                    # Add the final response (Assistant2)
                     context_mgr.add_message("assistant", second_round_content)
+                    
                     context_mgr.save()
 
                     # Print Stats

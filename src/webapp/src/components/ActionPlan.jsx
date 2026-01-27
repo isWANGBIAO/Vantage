@@ -5,22 +5,20 @@ import { RotateCcw, FileText, CheckSquare, Activity } from 'lucide-react';
 
 export default function ActionPlan() {
     const [analysisContent, setAnalysisContent] = useState('');
+    const [analysisThinking, setAnalysisThinking] = useState('');
     const [planContent, setPlanContent] = useState('');
+    const [planThinking, setPlanThinking] = useState('');
 
     // Stats
     const [stats, setStats] = useState(null);
     const [isGenerating, setIsGenerating] = useState(false);
 
-    // Auto-scroll refs
+    const abortControllerRef = useRef(null);
     const analysisEndRef = useRef(null);
     const planEndRef = useRef(null);
 
-    // Initial load
+    // Initial load - Check history first, then generate if needed
     useEffect(() => {
-        // Auto-start or load history? 
-        // For webapp, maybe we wait for user, or check if we have data.
-        // Let's just default to empty valid state.
-        // Check for existing plan via chat API fallback?
         loadTodaysPlan();
     }, []);
 
@@ -38,28 +36,83 @@ export default function ActionPlan() {
     }, [planContent, isGenerating]);
 
     const loadTodaysPlan = async () => {
-        // Try to fetch today's plan if available
-        // We can reuse the chat endpoint to "read" the file if we trust the backend to find it
-        // Or just leave it empty until user generates.
-        // Let's try the fetch hack from previous version but cleaner
         try {
-            // We won't implement this yet as we don't have a dedicated endpoint for "get_todays_plan"
-            // and sending a chat message to "read file" is flaky for a UI component.
-            // We can rely on user clicking start.
-        } catch (e) { }
+            const res = await fetch('/api/action_plan/today');
+            const data = await res.json();
+
+            if (data.exists && data.content) {
+                // Parse the content - it contains both analysis and plan sections
+                const content = data.content;
+
+                // Check for our new separator format: ---ANALYSIS_END---
+                if (content.includes('---ANALYSIS_END---')) {
+                    const parts = content.split('---ANALYSIS_END---');
+                    setAnalysisContent(parts[0].trim());
+                    setPlanContent(parts[1].trim());
+                }
+                // Legacy format with ---PLAN_START---
+                else if (content.includes('---PLAN_START---')) {
+                    const parts = content.split('---PLAN_START---');
+                    setAnalysisContent(parts[0].replace('---ANALYSIS_START---', '').trim());
+                    setPlanContent(parts[1].trim());
+                }
+                // Single section - assume it's the plan (old files before dual-save)
+                else {
+                    setPlanContent(content);
+                    setAnalysisContent('### 📁 历史计划已加载\n\n此文件为旧版格式，仅包含今日计划。\n\n点击 **Regenerate** 可重新生成完整的分析与计划。');
+                }
+
+                setStats({
+                    speed: "loaded",
+                    total_duration: 0,
+                    total_tokens: 0,
+                    historical_total_tokens: undefined
+                });
+            } else {
+                // No history - show welcome message
+                setAnalysisContent('### 👋 欢迎使用 Action Plan\n\n点击右上角的 **Regenerate** 按钮生成今日计划。');
+                setPlanContent('### ⏳ 等待生成...\n\n生成后，今日的行动计划将显示在这里。');
+            }
+        } catch (err) {
+            console.error('Failed to load today plan:', err);
+            setAnalysisContent('### ⚠️ 加载失败\n\n无法连接到后端服务，请刷新页面重试。');
+        }
+    };
+
+    const stopGeneration = () => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+        setIsGenerating(false);
+        setPlanContent(prev => prev + '\n\n> [!CAUTION]\n> Generation stopped by user.');
     };
 
     const startGeneration = async () => {
+        // Stop any previous run
+        if (isGenerating) {
+            stopGeneration();
+        }
+
         setIsGenerating(true);
         setAnalysisContent('### ⏳ Analyzing Data...\n\n');
         setPlanContent('### ⏳ Waiting for Analysis...\n\n');
-        setStats(null);
+        setStats({ speed: "0 t/s", total_duration: 0, total_tokens: 0, startTime: Date.now() });
 
-        let currentSection = 'analysis'; // 'analysis' or 'plan'
-        let buffer = ''; // To handle split lines if necessary, though line-by-line usually works
+        // Create new controller
+        abortControllerRef.current = new AbortController();
+        const signal = abortControllerRef.current.signal;
+
+        let currentSection = 'analysis';
 
         try {
-            const response = await fetch('/api/action_plan', { method: 'POST' });
+            const response = await fetch('/api/action_plan', {
+                method: 'POST',
+                signal: signal
+            });
+
+            if (!response.body) throw new Error('No response body');
+
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
 
@@ -82,33 +135,85 @@ export default function ActionPlan() {
                             if (log.startsWith("STATS_JSON:")) {
                                 try {
                                     const jsonStr = log.replace("STATS_JSON:", "").trim();
-                                    setStats(JSON.parse(jsonStr));
+                                    const newStats = JSON.parse(jsonStr);
+                                    setStats(prev => ({ ...prev, ...newStats }));
                                 } catch (e) { console.error("Stats parse error", e); }
                                 return;
                             }
 
                             // 2. Check for Section Separators
                             if (log.includes("---ANALYSIS_START---")) {
-                                setAnalysisContent(""); // Clear buffer text
+                                setAnalysisContent("");
+                                setAnalysisThinking("");
                                 const parts = log.split("---ANALYSIS_START---");
                                 if (parts[1]) log = parts[1];
-                                else return; // Just a marker
+                                else return;
                             }
 
-                            if (log.includes("初始分析已完成。正在生成今日行动建议...") || log.includes("Today's Action Plan")) {
+                            if (log.includes("初始分析已完成。正在生成今日行动建议...") || log.includes("Today's Action Plan") || log.includes("---PLAN_START---")) {
                                 currentSection = 'plan';
-                                setPlanContent(""); // Clear waiting text
+                                setPlanContent("");
+                                setPlanThinking("");
                                 if (log.includes("rocket") || log.includes("🚀")) {
                                     setPlanContent("🚀 Generating Plan...\n\n");
                                 }
                                 return;
                             }
 
-                            // 3. Append Content
-                            if (currentSection === 'analysis') {
-                                setAnalysisContent(prev => prev + log + "\n");
+                            // 3. Parse Content & Thinking
+                            if (log.startsWith("STREAM_THINKING:")) {
+                                const raw = log.replace("STREAM_THINKING:", "");
+                                try {
+                                    const thought = JSON.parse(raw);
+                                    if (currentSection === 'analysis') {
+                                        setAnalysisThinking(prev => prev + thought);
+                                    } else {
+                                        setPlanThinking(prev => prev + thought);
+                                    }
+                                } catch (e) {
+                                    if (currentSection === 'analysis') setAnalysisThinking(prev => prev + raw);
+                                    else setPlanThinking(prev => prev + raw);
+                                }
+                            } else if (log.startsWith("STREAM_CONTENT:")) {
+                                const raw = log.replace("STREAM_CONTENT:", "");
+                                let content = raw;
+                                try {
+                                    content = JSON.parse(raw);
+                                } catch (e) { }
+
+                                // Update Content
+                                if (currentSection === 'analysis') {
+                                    setAnalysisContent(prev => prev + content);
+                                } else {
+                                    setPlanContent(prev => prev + content);
+                                }
+
+                                // --- REAL-TIME STATS UPDATES ---
+                                const estimatedTokens = Math.max(1, Math.ceil(content.length * 0.7));
+
+                                setStats(prev => {
+                                    const startTime = prev?.startTime || Date.now();
+                                    const duration = (Date.now() - startTime) / 1000;
+                                    const newTotalTokens = (prev?.total_tokens || 0) + estimatedTokens;
+                                    const speed = duration > 0 ? (newTotalTokens / duration).toFixed(2) + " t/s" : "0.00 t/s";
+
+                                    return {
+                                        ...prev,
+                                        startTime: startTime,
+                                        total_tokens: newTotalTokens,
+                                        total_duration: duration,
+                                        speed: speed
+                                    };
+                                });
+                            } else if (log.startsWith("STREAM_DONE:") || log.startsWith("STREAM_ERROR:")) {
+                                // ignore
                             } else {
-                                setPlanContent(prev => prev + log + "\n");
+                                // Fallback (Legacy)
+                                if (currentSection === 'analysis') {
+                                    setAnalysisContent(prev => prev + log + "\n");
+                                } else {
+                                    setPlanContent(prev => prev + log + "\n");
+                                }
                             }
                         }
                     } catch (e) {
@@ -122,9 +227,16 @@ export default function ActionPlan() {
                 });
             }
         } catch (err) {
-            setPlanContent(prev => prev + `\n❌ Error: ${err.message}`);
+            if (err.name === 'AbortError') {
+                console.log('Generation aborted');
+            } else {
+                setPlanContent(prev => prev + `\n❌ Error: ${err.message}`);
+            }
         } finally {
-            setIsGenerating(false);
+            if (abortControllerRef.current?.signal === signal) {
+                setIsGenerating(false);
+                abortControllerRef.current = null;
+            }
         }
     };
 
@@ -148,47 +260,52 @@ export default function ActionPlan() {
                             background: 'rgba(0,0,0,0.2)', padding: '0.5rem 1rem', borderRadius: '8px'
                         }}>
                             <span>⚡ {stats.speed}</span>
-                            <span>⏱️ {stats.total_duration.toFixed(1)}s</span>
-                            <span>🪙 {stats.total_tokens} toks</span>
+                            <span>⏱️ {(stats.total_duration || 0).toFixed(1)}s</span>
+                            <span>🪙 {stats.total_tokens || 0} toks</span>
+                            {stats.historical_total_tokens !== undefined && (
+                                <span style={{ borderLeft: '1px solid rgba(255,255,255,0.2)', paddingLeft: '1rem' }}>
+                                    📜 {(stats.historical_total_tokens / 1000000).toFixed(2)}M History
+                                </span>
+                            )}
                         </div>
                     )}
 
                     <button
-                        onClick={startGeneration}
-                        disabled={isGenerating}
+                        onClick={isGenerating ? stopGeneration : startGeneration}
                         style={{
                             padding: '0.8rem 1.5rem', fontSize: '1rem',
                             display: 'flex', alignItems: 'center', gap: '0.5rem',
-                            background: isGenerating ? 'var(--bg-surface-hover)' : 'var(--primary-color)',
-                            color: isGenerating ? 'var(--text-muted)' : '#fff',
-                            border: 'none', borderRadius: '8px', cursor: isGenerating ? 'default' : 'pointer'
+                            background: isGenerating ? '#ff4d4f' : 'var(--primary-color)', // Red for Stop
+                            color: '#fff',
+                            border: 'none', borderRadius: '8px', cursor: 'pointer',
+                            transition: 'background 0.3s'
                         }}
                     >
-                        {isGenerating ? <Activity className="spin-animation" size={18} /> : <RotateCcw size={18} />}
-                        {isGenerating ? 'Generating...' : 'Regenerate'}
+                        {isGenerating ? <div style={{ width: 18, height: 18, background: 'white', borderRadius: 2 }} /> : <RotateCcw size={18} />}
+                        {isGenerating ? 'Stop' : 'Regenerate'}
                     </button>
                 </div>
             </div>
 
-            {/* Split View Content */}
             <div style={{
                 display: 'grid',
                 gridTemplateColumns: '1fr 1fr',
-                gap: '1.5rem',
+                gap: '1rem', // Reduced gap
                 flex: 1,
-                minHeight: 0 // Crucial for nested scroll
+                minHeight: 0
             }}>
                 {/* Left: Analysis */}
                 <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                     <div style={{
-                        padding: '1rem', borderBottom: '1px solid var(--border-color)',
+                        padding: '0.8rem 1rem', borderBottom: '1px solid var(--border-color)',
                         background: 'rgba(255,255,255,0.02)',
                         display: 'flex', alignItems: 'center', gap: '0.5rem'
                     }}>
-                        <Activity size={18} color="var(--secondary-color)" />
-                        <h4 style={{ margin: 0 }}>General Analysis</h4>
+                        <Activity size={16} color="var(--secondary-color)" />
+                        <h4 style={{ margin: 0, fontSize: '0.95rem' }}>📊 总体回复 (General Analysis)</h4>
                     </div>
-                    <div className="markdown-body custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '1.5rem' }}>
+                    <div className="markdown-body compact-markdown custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
+                        {analysisThinking && <ThinkingBlock text={analysisThinking} />}
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                             {analysisContent}
                         </ReactMarkdown>
@@ -199,14 +316,15 @@ export default function ActionPlan() {
                 {/* Right: Plan */}
                 <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                     <div style={{
-                        padding: '1rem', borderBottom: '1px solid var(--border-color)',
+                        padding: '0.8rem 1rem', borderBottom: '1px solid var(--border-color)',
                         background: 'rgba(255,255,255,0.02)',
                         display: 'flex', alignItems: 'center', gap: '0.5rem'
                     }}>
-                        <FileText size={18} color="var(--primary-color)" />
-                        <h4 style={{ margin: 0 }}>Today's Plan</h4>
+                        <FileText size={16} color="var(--primary-color)" />
+                        <h4 style={{ margin: 0, fontSize: '0.95rem' }}>📝 今日计划 (Today's Action Plan)</h4>
                     </div>
-                    <div className="markdown-body custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '1.5rem' }}>
+                    <div className="markdown-body compact-markdown custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
+                        {planThinking && <ThinkingBlock text={planThinking} />}
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                             {planContent}
                         </ReactMarkdown>
@@ -214,6 +332,18 @@ export default function ActionPlan() {
                     </div>
                 </div>
             </div>
+        </div>
+    );
+}
+
+function ThinkingBlock({ text }) {
+    return (
+        <div className="thinking-block">
+            <div className="thinking-header">
+                <div className="thinking-dot" style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--text-muted)' }}></div>
+                Analysis Process
+            </div>
+            {text}
         </div>
     );
 }
