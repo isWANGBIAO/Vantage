@@ -10,12 +10,13 @@
 
 ## 2. 项目理解
 这是一个自动化个人管家工具，主要包含以下部分：
-*   **GUI**: 基于 QT (`src/gui`)，包含实时监控、照片显示和截图显示。
+*   **GUI**: 基于 Electron (`src/webapp`)，提供现代化 Web 界面，包含 Action Plan、Chat、实时监控等功能。
+*   **后端**: 基于 FastAPI (`src/server.py`)，处理核心逻辑、LLM 调用和文件操作。
 *   **功能模块**:
     *   `src/manager/take_photo`: 摄像头拍照。
     *   `src/manager/screenshot`: 屏幕截图。
     *   `src/cursor`: 代码自动化处理模块 (读写、扫描、错误处理)。
-*   **运行方式**: 主程序入口为 `src/main.py`。
+*   **运行方式**: 双击 `START_ELECTRON.bat` 启动（自动启动后端和前端）。
 
 ## 3. 编码规范
 *   保持现有代码风格。
