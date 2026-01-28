@@ -45,8 +45,72 @@ class SystemState:
         self.paths = {'photo': None, 'screenshot': None}
         self.photos_path = None
         self.screenshots_path = None
+        self.legacy_size = 0 # Cache for legacy storage size
 
 state = SystemState()
+
+def update_legacy_storage_stats():
+    """Background task to calculate legacy storage usage once to avoid blocking main loop"""
+    print("Starting background legacy storage scan...")
+    try:
+        total_size = 0
+        
+        # Candidates for legacy paths (OneDrive)
+        candidates = []
+        onedrive_env = os.environ.get("OneDrive")
+        user_home = os.path.expanduser("~")
+        
+        roots_to_check = []
+        if onedrive_env:
+            roots_to_check.append(onedrive_env)
+        roots_to_check.append(os.path.join(user_home, "OneDrive"))
+        
+        # STRICT SUBDIRECTORIES: Only folders created by THIS program
+        subdirs = [
+             os.path.join("Pictures", "本机照片"),
+             os.path.join("图片", "本机照片"),
+             os.path.join("Pictures", "Screenshots"),
+             os.path.join("图片", "屏幕截图"),
+             "本机照片", 
+             os.path.join("Pictures", "屏幕截图"),
+             os.path.join("图片", "Screenshots")
+        ]
+        
+        for root_dir in set(roots_to_check): # unique roots
+            if root_dir and os.path.exists(root_dir):
+                for sub in subdirs:
+                    candidates.append(os.path.join(root_dir, sub))
+
+        # Filter out invalid or current paths
+        checked_paths = set()
+        for cand in candidates:
+            if not os.path.exists(cand): continue
+            
+            # Skip if current path
+            if state.photos_path and os.path.abspath(cand) == os.path.abspath(state.photos_path): continue
+            if state.screenshots_path and os.path.abspath(cand) == os.path.abspath(state.screenshots_path): continue
+            
+            # Avoid duplicates
+            abs_cand = os.path.abspath(cand)
+            if abs_cand in checked_paths: continue
+            checked_paths.add(abs_cand)
+            
+            print(f"Scanning legacy path: {abs_cand}")
+            for root, dirs, files in os.walk(cand):
+                total_size += sum(os.path.getsize(os.path.join(root, f)) for f in files)
+        
+        state.legacy_size = total_size
+        print(f"Legacy storage scan complete: {state.legacy_size / (1024**2):.2f} MB")
+        
+    except Exception as e:
+        print(f"Legacy storage scan error: {e}")
+
+# ... (existing imports/functions) ...
+
+@app.on_event("startup")
+async def startup_event():
+    print("Starting up server...")
+    # ... (rest of startup) ...
 
 def get_camera_index():
     camera_index = 0
@@ -100,6 +164,11 @@ async def startup_event():
     # RESUME initialization (Unindented to run regardless of camera init success/failure)
     try:
         state.photos_path, state.screenshots_path = identify_logs_folder()
+        print(f"----------------------------------------------------------------")
+        print(f"[Storage] Photos Path: {state.photos_path}")
+        print(f"[Storage] Screenshots Path: {state.screenshots_path}")
+        print(f"----------------------------------------------------------------")
+        
         state.monitor = Monitor(state.camera, state.paths, state.photos_path, state.screenshots_path)
         
         # Start background frame reading thread
@@ -107,6 +176,9 @@ async def startup_event():
         
         # Start background monitor task thread (every 10s)
         threading.Thread(target=monitor_loop, daemon=True).start()
+        
+        # Start background legacy storage calculation (doesn't block startup)
+        threading.Thread(target=update_legacy_storage_stats, daemon=True).start()
 
         # Mount static directories for photos and plots
         if state.photos_path and os.path.exists(state.photos_path):
@@ -122,6 +194,39 @@ async def startup_event():
                 app.mount("/static/screenshots", StaticFiles(directory=state.screenshots_path), name="screenshots")
             else:
                 app.mount("/static/screenshots", StaticFiles(directory=state.screenshots_path), name="screenshots")
+                
+        # Attempt to find latest existing files to populate state
+        try:
+            def find_latest_file_recursive(directory, extensions={'.jpg', '.png'}):
+                latest_file = None
+                latest_time = 0
+                for root, dirs, files in os.walk(directory):
+                    for f in files:
+                        if os.path.splitext(f)[1].lower() in extensions:
+                            full_path = os.path.join(root, f)
+                            try:
+                                mtime = os.path.getmtime(full_path)
+                                if mtime > latest_time:
+                                    latest_time = mtime
+                                    latest_file = full_path
+                            except:
+                                pass
+                return latest_file
+
+            print("Scanning for latest existing images...")
+            if not state.paths.get('photo') and state.photos_path:
+                 latest_photo = find_latest_file_recursive(state.photos_path)
+                 if latest_photo:
+                     state.paths['photo'] = latest_photo
+                     print(f"Found latest photo: {latest_photo}")
+
+            if not state.paths.get('screenshot') and state.screenshots_path:
+                 latest_screen = find_latest_file_recursive(state.screenshots_path)
+                 if latest_screen:
+                     state.paths['screenshot'] = latest_screen
+                     print(f"Found latest screenshot: {latest_screen}")
+        except Exception as e:
+            print(f"Error finding latest files: {e}")
 
     except Exception as e:
         print(f"Startup logic error: {e}")
@@ -239,11 +344,16 @@ async def get_sys_stats():
         
         photos_size = 0
         if state.photos_path and os.path.exists(state.photos_path):
-            photos_size += sum(os.path.getsize(os.path.join(state.photos_path, f)) for f in os.listdir(state.photos_path) if os.path.isfile(os.path.join(state.photos_path, f)))
+            for root, dirs, files in os.walk(state.photos_path):
+                photos_size += sum(os.path.getsize(os.path.join(root, f)) for f in files)
         
         screenshots_size = 0
         if state.screenshots_path and os.path.exists(state.screenshots_path):
-            screenshots_size += sum(os.path.getsize(os.path.join(state.screenshots_path, f)) for f in os.listdir(state.screenshots_path) if os.path.isfile(os.path.join(state.screenshots_path, f)))
+            for root, dirs, files in os.walk(state.screenshots_path):
+                screenshots_size += sum(os.path.getsize(os.path.join(root, f)) for f in files)
+        
+        # Use cached legacy size from background thread
+        legacy_size = state.legacy_size
         
         total, used, free = shutil.disk_usage(state.photos_path or ".")
         
@@ -253,7 +363,7 @@ async def get_sys_stats():
             "memory_total_gb": round(memory.total / (1024**3), 2),
             "memory_percent": memory.percent,
             "disk_free_gb": round(free / (1024**3), 2),
-            "storage_used_mb": round((photos_size + screenshots_size) / (1024**2), 2)
+            "storage_used_mb": round((photos_size + screenshots_size + legacy_size) / (1024**2), 2)
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})

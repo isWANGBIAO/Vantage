@@ -219,7 +219,12 @@ export default function Dashboard() {
                 <StatCard
                     icon={<Database size={24} color="#55efc4" />}
                     title="Storage Used"
-                    value={`${stats?.storage_used_mb || 0} MB`}
+                    value={(() => {
+                        const mb = stats?.storage_used_mb || 0;
+                        return mb > 1024
+                            ? `${(mb / 1024).toFixed(2)} GB`
+                            : `${mb} MB`;
+                    })()}
                     subValue={`~${storageEstimate.groupSizeMB.toFixed(2)} MB/group`}
                     color="#55efc4"
                 />
