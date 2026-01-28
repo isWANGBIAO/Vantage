@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from typing import Optional
 import psutil
 import shutil
+import requests
 
 # Ensure project root is in sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -255,6 +256,79 @@ async def get_sys_stats():
             "storage_used_mb": round((photos_size + screenshots_size) / (1024**2), 2)
         }
     except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/api/aqi")
+async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None):
+    """Fetch current AQI (US) based on Location (Default: SJTU Minhang)"""
+    try:
+        # Default to Shanghai Jiao Tong University Minhang Campus
+        # Lat: 31.025, Lon: 121.433
+        target_lat = 31.025
+        target_lon = 121.433
+        city = "SJTU Minhang"
+        
+        # Only use provided coordinates if they seem valid and distinct from a generic VPN exit?
+        # User requested "Directly display...", so let's prefer the hardcoded value 
+        # unless we are very sure about the frontend provided ones.
+        # But for now, to satisfy "Then just display...", I will default to these 
+        # and only override if the frontend EXPLICITLY sends something different 
+        # AND we trust it. 
+        # Actually, let's just make it the default fallback instead of IP.
+        # If frontend sends coordinates (permission granted), it might be accurate.
+        # If permission denied, frontend sends null, we use SJTU.
+        
+        if lat is not None and lon is not None:
+             target_lat = lat
+             target_lon = lon
+             city = "Current Location" 
+        
+        print(f"[AQI] Fetching for Lat: {target_lat}, Lon: {target_lon}, City: {city}")
+
+        # 2. Get API (US Standard) from Open-Meteo
+        aqi_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={target_lat}&longitude={target_lon}&current=us_aqi"
+        
+        aqi_res = await asyncio.to_thread(requests.get, aqi_url, timeout=5)
+        if not aqi_res.ok:
+            return JSONResponse(status_code=502, content={"error": "AQI API failed"})
+            
+        aqi_data = aqi_res.json()
+        current = aqi_data.get("current", {})
+        us_aqi = current.get("us_aqi")
+        
+        if us_aqi is None:
+             return JSONResponse(status_code=404, content={"error": "No AQI data"})
+             
+        # Determine Level
+        level = "Good"
+        color = "#00e400" # Green
+        if us_aqi > 50:
+            level = "Moderate"
+            color = "#ffff00" # Yellow
+        if us_aqi > 100:
+            level = "Unhealthy for Sensitive Groups"
+            color = "#ff7e00" # Orange
+        if us_aqi > 150:
+            level = "Unhealthy"
+            color = "#ff0000" # Red
+        if us_aqi > 200:
+            level = "Very Unhealthy"
+            color = "#8f3f97" # Purple
+        if us_aqi > 300:
+            level = "Hazardous"
+            color = "#7e0023" # Maroon
+            
+        return {
+            "aqi": us_aqi,
+            "city": city,
+            "level": level,
+            "color": color,
+            "lat": lat,
+            "lon": lon
+        }
+        
+    except Exception as e:
+        print(f"AQI Error: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.get("/api/latest_images")

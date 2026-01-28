@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import CameraFeed from './CameraFeed';
-import { Activity, Cpu, HardDrive, Database, Clock, Calendar, Image as ImageIcon, Monitor } from 'lucide-react';
+import { Activity, Cpu, HardDrive, Database, Clock, Calendar, Image as ImageIcon, Monitor, Wind } from 'lucide-react';
 
 export default function Dashboard() {
     const [stats, setStats] = useState(null);
     const [latestImages, setLatestImages] = useState({ photo: null, screenshot: null });
     const [time, setTime] = useState(new Date());
     const [storageEstimate, setStorageEstimate] = useState({ daysLeft: 0, groupSizeMB: 0 });
+    const [aqi, setAqi] = useState(null);
 
     useEffect(() => {
         const timer = setInterval(() => setTime(new Date()), 1000);
@@ -36,6 +37,45 @@ export default function Dashboard() {
             }
         };
 
+        const fetchAqi = async () => {
+            // Use Browser Geolocation for accurate Windows location (bypassing VPN)
+            if (!navigator.geolocation) {
+                console.error("Geolocation is not supported by this browser.");
+                // Fallback to IP-based (backend handles null params)
+                fetchAqiBackend(null, null);
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const { latitude, longitude } = position.coords;
+                    fetchAqiBackend(latitude, longitude);
+                },
+                (error) => {
+                    console.error("Geolocation error:", error);
+                    // Fallback to IP-based
+                    fetchAqiBackend(null, null);
+                },
+                { timeout: 10000, maximumAge: 600000 } // Cache for 10 mins
+            );
+        };
+
+        const fetchAqiBackend = async (lat, lon) => {
+            try {
+                let url = '/api/aqi';
+                if (lat !== null && lon !== null) {
+                    url += `?lat=${lat}&lon=${lon}`;
+                }
+                const res = await fetch(url);
+                if (res.ok) {
+                    const data = await res.json();
+                    setAqi(data);
+                }
+            } catch (err) {
+                console.error("Failed to fetch AQI", err);
+            }
+        };
+
         const estimateStorage = async (photoUrl, screenUrl) => {
             try {
                 const [pRes, sRes] = await Promise.all([
@@ -58,13 +98,17 @@ export default function Dashboard() {
 
         fetchStats();
         fetchLatestImages();
+        fetchAqi();
+
         const statsInterval = setInterval(fetchStats, 5000);
         const imagesInterval = setInterval(fetchLatestImages, 10000);
+        const aqiInterval = setInterval(fetchAqi, 600000); // Fetch AQI every 10 minutes
 
         return () => {
             clearInterval(timer);
             clearInterval(statsInterval);
             clearInterval(imagesInterval);
+            clearInterval(aqiInterval);
         };
     }, []);
 
@@ -148,7 +192,7 @@ export default function Dashboard() {
             {/* Bottom Row: Stats Cards */}
             <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(4, 1fr)',
+                gridTemplateColumns: 'repeat(5, 1fr)', // Increased to 5 columns
                 gap: '1.5rem',
                 height: '120px'
             }}>
@@ -179,12 +223,20 @@ export default function Dashboard() {
                     subValue={`~${storageEstimate.groupSizeMB.toFixed(2)} MB/group`}
                     color="#55efc4"
                 />
+                <StatCard
+                    icon={<Wind size={24} color={aqi?.color || "#b2bec3"} />}
+                    title="Air Quality (US)"
+                    value={aqi ? aqi.aqi : "--"}
+                    subValue={aqi ? `${aqi.city} - ${aqi.level}` : "Loading..."}
+                    color={aqi?.color || "#b2bec3"}
+                    titleColor={aqi?.color} // Use AQI color for text too
+                />
             </div>
         </div>
     );
 }
 
-function StatCard({ icon, title, value, subValue, color }) {
+function StatCard({ icon, title, value, subValue, color, titleColor }) {
     return (
         <div className="glass-panel" style={{ padding: '1rem 1.5rem', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '0.3rem' }}>
             <div style={{
@@ -194,7 +246,7 @@ function StatCard({ icon, title, value, subValue, color }) {
             }}></div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', color: 'var(--text-secondary)' }}>
                 {icon}
-                <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>{title}</span>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: titleColor || 'inherit' }}>{title}</span>
             </div>
             <div style={{ fontSize: '1.6rem', fontWeight: 'bold' }}>{value}</div>
             {subValue && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{subValue}</div>}
