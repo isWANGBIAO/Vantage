@@ -57,22 +57,14 @@ def get_camera_index():
     return camera_index
 
 def identify_logs_folder():
-    # Simplified version of the logic in main_window.py
-    onedrive_path = os.environ.get("OneDrive", "")
-    if not onedrive_path or not os.path.exists(onedrive_path):
-        possible_paths = [
-            os.path.expanduser("~/OneDrive"),
-            os.path.expanduser("~/OneDrive - Personal"),
-            os.path.expanduser("~/OneDrive - Business")
-        ]
-        for path in possible_paths:
-            if os.path.exists(path):
-                onedrive_path = path
-                break
-    
-    if not onedrive_path:
-        # Fallback to local user dir if OneDrive not found
-        onedrive_path = os.path.expanduser("~")
+    # User requested D:\WANGBIAO as the base path
+    onedrive_path = "D:\\WANGBIAO"
+    if not os.path.exists(onedrive_path):
+        try:
+            os.makedirs(onedrive_path, exist_ok=True)
+        except:
+             # Fallback if D drive doesn't exist or permission error, though user asked for it.
+             onedrive_path = os.environ.get("OneDrive", os.path.expanduser("~"))
 
     pictures_path = os.path.join(onedrive_path, "Pictures")
     if not os.path.exists(pictures_path):
@@ -327,12 +319,30 @@ async def refresh_plots(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_plot_script)
     return {"message": "Plot refresh started in background"}
 
+def ensure_thumbnail(file_path, thumb_path):
+    if not os.path.exists(thumb_path):
+        try:
+            img = cv2.imread(file_path)
+            if img is not None:
+                h, w = img.shape[:2]
+                scale = 60.0 / float(h)
+                new_w = int(w * scale)
+                dim = (new_w, 60)
+                resized = cv2.resize(img, dim, interpolation=cv2.INTER_AREA)
+                cv2.imwrite(thumb_path, resized)
+        except Exception as e:
+            print(f"Error creating thumbnail for {file_path}: {e}")
+
 @app.get("/api/plots/list")
 async def list_plots():
     """Return list of all plot images for carousel display"""
     plot_dir = os.path.join(os.getcwd(), "plot_outputs")
     if not os.path.exists(plot_dir):
         return {"plots": [], "error": "plot_outputs directory not found"}
+    
+    thumb_dir = os.path.join(plot_dir, "thumbnails")
+    if not os.path.exists(thumb_dir):
+        os.makedirs(thumb_dir, exist_ok=True)
     
     try:
         # Get all PNG files except collages and screen files
@@ -356,11 +366,27 @@ async def list_plots():
         
         sorted_files = sorted(files, key=sort_key)
         
+        # Generate thumbnails and build response
+        plot_list = []
+        for f in sorted_files:
+            file_path = os.path.join(plot_dir, f)
+            thumb_path = os.path.join(thumb_dir, f)
+            
+            # Use threading to avoid blocking event loop for image processing
+            await asyncio.to_thread(ensure_thumbnail, file_path, thumb_path)
+            
+            plot_list.append({
+                "name": f,
+                "url": f"/static/plots/{f}",
+                "thumbnail_url": f"/static/plots/thumbnails/{f}"
+            })
+        
         return {
-            "plots": [{"name": f, "url": f"/static/plots/{f}"} for f in sorted_files],
-            "count": len(sorted_files)
+            "plots": plot_list,
+            "count": len(plot_list)
         }
     except Exception as e:
+        print(f"Error listing plots: {e}")
         return {"plots": [], "error": str(e)}
 
 @app.get("/api/action_plan/today")
@@ -518,18 +544,29 @@ async def generate_action_plan():
 
 @app.post("/api/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
-    # Save temp file
-    temp_filename = f"temp_audio_{int(time.time())}.wav"
+    # 获取上传文件的扩展名
+    original_filename = file.filename or "recording.webm"
+    ext = os.path.splitext(original_filename)[1] or ".webm"
+    
+    # 保存临时文件到项目根目录
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    temp_filename = os.path.join(project_root, f"temp_audio_{int(time.time())}{ext}")
+    
+    print(f"[Transcribe] Saving uploaded file to: {temp_filename}")
+    
     with open(temp_filename, "wb") as buffer:
         content = await file.read()
         buffer.write(content)
+        print(f"[Transcribe] File size: {len(content)} bytes")
         
     # Locate run_prompt.py in src/scripts
     current_dir = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
     if not os.path.exists(script_path):
          script_path = os.path.abspath("src/scripts/run_prompt.py")
+    
     cmd = [sys.executable, script_path, "--transcribe", temp_filename]
+    print(f"[Transcribe] Running command: {' '.join(cmd)}")
     
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -538,11 +575,11 @@ async def transcribe_audio(file: UploadFile = File(...)):
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        cwd=os.path.dirname(script_path),
+        cwd=project_root,  # 在项目根目录运行
         env=env
     )
     
-    stdout, _ = await proc.communicate()
+    stdout, stderr = await proc.communicate()
     
     # Cleanup
     if os.path.exists(temp_filename):
@@ -553,12 +590,24 @@ async def transcribe_audio(file: UploadFile = File(...)):
         output = stdout.decode('utf-8')
     except:
         output = stdout.decode('gbk', errors='replace')
+    
+    # 打印调试信息
+    if stderr:
+        try:
+            stderr_text = stderr.decode('utf-8')
+        except:
+            stderr_text = stderr.decode('gbk', errors='replace')
+        print(f"[Transcribe] Stderr: {stderr_text}")
+    
+    print(f"[Transcribe] Stdout: {output}")
         
     transcription = ""
     for line in output.splitlines():
         if line.startswith("TRANSCRIPTION_RESULT:"):
             transcription = line.replace("TRANSCRIPTION_RESULT:", "").strip()
             break
+    
+    print(f"[Transcribe] Result: '{transcription}'")
             
     return {"transcription": transcription}
 

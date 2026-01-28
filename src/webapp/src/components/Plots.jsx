@@ -71,25 +71,40 @@ export default function Plots() {
     const currentPlot = plots[currentIndex];
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: '80vh' }}>
+        <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1rem',
+            height: 'calc(100vh - 220px)',
+            overflow: 'hidden',
+            boxSizing: 'border-box'
+        }}>
             {/* Header */}
-            <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="glass-panel" style={{ padding: '1rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
                 <div>
-                    <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <ImageIcon size={24} color="var(--primary-color)" />
+                    <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1.25rem' }}>
+                        <ImageIcon size={20} color="var(--primary-color)" />
                         Visual Analysis
                     </h2>
-                    <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
-                        Data visualization and performance metrics
+                    <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                        Data visualization
                         {plots.length > 0 && <span style={{ marginLeft: '1rem' }}>📊 {currentIndex + 1} / {plots.length}</span>}
                     </p>
                 </div>
+
+                {/* Center Title */}
+                <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.2rem', color: 'var(--text-primary)', fontWeight: 600, textTransform: 'capitalize' }}>
+                        {currentPlot?.name?.replace('.png', '').replace(/_/g, ' ') || ''}
+                    </h3>
+                </div>
+
                 <button
                     onClick={refreshPlots}
                     disabled={isRefreshing}
                     style={{
-                        padding: '0.8rem 1.5rem',
-                        fontSize: '1rem',
+                        padding: '0.6rem 1.2rem',
+                        fontSize: '0.9rem',
                         display: 'flex',
                         alignItems: 'center',
                         gap: '0.5rem',
@@ -100,7 +115,7 @@ export default function Plots() {
                         cursor: isRefreshing ? 'wait' : 'pointer'
                     }}
                 >
-                    <RefreshCw size={18} className={isRefreshing ? 'spinning' : ''} />
+                    <RefreshCw size={16} className={isRefreshing ? 'spinning' : ''} />
                     {isRefreshing ? 'Refreshing...' : 'Refresh Plots'}
                 </button>
             </div>
@@ -115,7 +130,9 @@ export default function Plots() {
                     justifyContent: 'center',
                     position: 'relative',
                     overflow: 'hidden',
-                    minHeight: 0
+                    minHeight: 0,
+                    padding: '0', // Removed padding to maximize space
+                    background: 'rgba(0,0,0,0.2)' // Darker background for better contrast
                 }}
                 onWheel={handleWheel}
             >
@@ -133,22 +150,23 @@ export default function Plots() {
                             onClick={goToPrev}
                             style={{
                                 position: 'absolute',
-                                left: '1rem',
-                                background: 'rgba(0,0,0,0.5)',
+                                left: '0.5rem', // Closer to edge
+                                background: 'rgba(0,0,0,0.3)',
                                 border: 'none',
                                 borderRadius: '50%',
-                                width: '48px',
-                                height: '48px',
+                                width: '40px',
+                                height: '40px',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 cursor: 'pointer',
                                 color: '#fff',
                                 zIndex: 10,
-                                transition: 'all 0.2s'
+                                transition: 'all 0.2s',
+                                backdropFilter: 'blur(4px)'
                             }}
                         >
-                            <ChevronLeft size={28} />
+                            <ChevronLeft size={24} />
                         </button>
 
                         {/* Image */}
@@ -156,11 +174,12 @@ export default function Plots() {
                             src={`${currentPlot.url}?t=${Date.now()}`}
                             alt={currentPlot.name}
                             style={{
-                                maxWidth: '90%',
+                                maxWidth: '100%',
                                 maxHeight: '100%',
-                                objectFit: 'contain',
-                                borderRadius: '8px',
-                                boxShadow: '0 0 40px rgba(0,0,0,0.5)'
+                                width: '100%', // Force fill width if aspect ratio allows
+                                height: '100%', // Force fill height if aspect ratio allows
+                                objectFit: 'contain', // Ensure 16:9 is preserved without cropping
+                                borderRadius: '0'
                             }}
                         />
 
@@ -190,51 +209,7 @@ export default function Plots() {
                 )}
             </div>
 
-            {/* Thumbnail Strip + Info */}
-            {plots.length > 0 && (
-                <div className="glass-panel" style={{ padding: '1rem' }}>
-                    <div style={{ textAlign: 'center', marginBottom: '0.5rem' }}>
-                        <span style={{
-                            fontSize: '0.9rem',
-                            fontWeight: 600,
-                            color: 'var(--text-primary)'
-                        }}>
-                            {currentPlot?.name?.replace('.png', '').replace(/_/g, ' ')}
-                        </span>
-                    </div>
-                    <div style={{
-                        display: 'flex',
-                        gap: '0.5rem',
-                        overflowX: 'auto',
-                        justifyContent: 'center',
-                        padding: '0.5rem'
-                    }}>
-                        {plots.map((plot, i) => (
-                            <div
-                                key={plot.name}
-                                onClick={() => setCurrentIndex(i)}
-                                style={{
-                                    width: '60px',
-                                    height: '40px',
-                                    borderRadius: '4px',
-                                    overflow: 'hidden',
-                                    cursor: 'pointer',
-                                    border: i === currentIndex ? '2px solid var(--primary-color)' : '2px solid transparent',
-                                    opacity: i === currentIndex ? 1 : 0.5,
-                                    transition: 'all 0.2s',
-                                    flexShrink: 0
-                                }}
-                            >
-                                <img
-                                    src={plot.url}
-                                    alt={plot.name}
-                                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                                />
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
+
         </div>
     );
 }

@@ -14,6 +14,7 @@ export default function ChatInterface() {
     const mediaRecorderRef = useRef(null);
     const audioChunksRef = useRef([]);
     const timerRef = useRef(null);
+    const streamRef = useRef(null); // 存储 audio stream 避免作用域问题
 
     const scrollToBottom = () => {
         endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -159,49 +160,168 @@ export default function ChatInterface() {
 
     // --- Audio Recording Logic ---
     const startRecording = async () => {
+        console.log("[Voice] Starting recording...");
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            streamRef.current = stream; // 存储 stream 引用
+
             mediaRecorderRef.current = new MediaRecorder(stream);
             audioChunksRef.current = [];
 
             mediaRecorderRef.current.ondataavailable = (event) => {
+                console.log("[Voice] Data available:", event.data.size, "bytes");
                 if (event.data.size > 0) {
                     audioChunksRef.current.push(event.data);
                 }
             };
 
             mediaRecorderRef.current.onstop = async () => {
-                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-                const formData = new FormData();
-                formData.append('file', audioBlob, 'recording.wav');
+                console.log("[Voice] Recording stopped, chunks:", audioChunksRef.current.length);
 
-                setIsLoading(true); // Show loading state while transcribing
-                setInput("Transcribing audio...");
+                // 停止媒体轨道
+                if (streamRef.current) {
+                    streamRef.current.getTracks().forEach(track => track.stop());
+                    streamRef.current = null;
+                }
+
+                if (audioChunksRef.current.length === 0) {
+                    console.warn("[Voice] No audio data captured");
+                    setInput("");
+                    setIsLoading(false);
+                    return;
+                }
+
+                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                console.log("[Voice] Audio blob size:", audioBlob.size, "bytes");
+
+                const formData = new FormData();
+                formData.append('file', audioBlob, 'recording.webm');
+
+                setIsLoading(true);
+                setInput("正在转写语音...");
 
                 try {
+                    console.log("[Voice] Sending to /api/transcribe...");
                     const res = await fetch('/api/transcribe', {
                         method: 'POST',
                         body: formData
                     });
+
+                    console.log("[Voice] Transcribe response status:", res.status);
                     const data = await res.json();
-                    if (data.transcription) {
-                        setInput(data.transcription);
+                    console.log("[Voice] Transcribe result:", data);
+
+                    if (data.transcription && data.transcription.trim()) {
+                        // 自动发送转写后的消息
+                        const transcribedText = data.transcription.trim();
+                        console.log("[Voice] Transcribed text:", transcribedText);
+                        setInput(""); // 清空输入框
+
+                        // 直接发送消息
+                        setMessages(prev => [...prev, { role: 'user', content: transcribedText }]);
+
+                        // 调用聊天 API
+                        try {
+                            const chatRes = await fetch('/api/chat', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ message: transcribedText }),
+                            });
+
+                            const reader = chatRes.body.getReader();
+                            const decoder = new TextDecoder();
+
+                            setMessages(prev => [...prev, { role: 'assistant', content: '', thinking: '' }]);
+
+                            let assistantContent = "";
+                            let assistantThinking = "";
+
+                            while (true) {
+                                const { value, done } = await reader.read();
+                                if (done) break;
+
+                                const chunk = decoder.decode(value, { stream: true });
+                                const lines = chunk.split('\n');
+
+                                for (const line of lines) {
+                                    if (!line.trim()) continue;
+
+                                    try {
+                                        const jsonData = JSON.parse(line);
+
+                                        if (jsonData.error) {
+                                            throw new Error(jsonData.error);
+                                        }
+
+                                        if (jsonData.log) {
+                                            const text = jsonData.log;
+
+                                            if (text.startsWith("STREAM_THINKING:")) {
+                                                const raw = text.replace("STREAM_THINKING:", "");
+                                                try {
+                                                    assistantThinking += JSON.parse(raw);
+                                                } catch (e) { assistantThinking += raw; }
+                                            } else if (text.startsWith("STREAM_CONTENT:")) {
+                                                const raw = text.replace("STREAM_CONTENT:", "");
+                                                try {
+                                                    assistantContent += JSON.parse(raw);
+                                                } catch (e) { assistantContent += raw; }
+                                            } else if (
+                                                text.startsWith("STREAM_DONE:") ||
+                                                text.startsWith("STREAM_ERROR:") ||
+                                                text.startsWith("STATS_JSON:") ||
+                                                text.includes("---CHAT_START---") ||
+                                                text.includes("---ANALYSIS_END---") ||
+                                                text.includes("---PLAN_START---") ||
+                                                text.startsWith("Response saved to:") ||
+                                                text.trim() === ""
+                                            ) {
+                                                // Ignore control signals
+                                            } else {
+                                                const cleanText = text
+                                                    .replace(/---CHAT_START---/g, '')
+                                                    .replace(/---ANALYSIS_END---/g, '')
+                                                    .replace(/STATS_JSON:\{.*\}/g, '')
+                                                    .trim();
+                                                if (cleanText) {
+                                                    assistantContent += cleanText;
+                                                }
+                                            }
+
+                                            setMessages(prev => {
+                                                const newMessages = [...prev];
+                                                const lastMsg = newMessages[newMessages.length - 1];
+                                                if (lastMsg.role === 'assistant') {
+                                                    lastMsg.content = assistantContent;
+                                                    lastMsg.thinking = assistantThinking;
+                                                }
+                                                return newMessages;
+                                            });
+                                        }
+                                    } catch (e) {
+                                        console.debug("JSON parse error for chunk", line, e);
+                                    }
+                                }
+                            }
+                        } catch (chatErr) {
+                            console.error("[Voice] Chat error:", chatErr);
+                            setMessages(prev => [...prev, { role: 'assistant', content: `Network Error: ${chatErr.message}` }]);
+                        }
                     } else {
-                        // setInput("Transcription failed.");
-                        // Don't overwrite if failed, just clear placeholder
-                        setInput("");
+                        // 转写失败或返回空结果
+                        console.warn("[Voice] Transcription empty or failed");
+                        setInput("语音转写失败，请重试或手动输入");
                     }
                 } catch (err) {
-                    console.error("Transcription error", err);
-                    setInput("");
+                    console.error("[Voice] Transcription error:", err);
+                    setInput("语音转写出错: " + err.message);
                 } finally {
                     setIsLoading(false);
-                    // Stop tracks
-                    stream.getTracks().forEach(track => track.stop());
                 }
             };
 
             mediaRecorderRef.current.start();
+            console.log("[Voice] MediaRecorder started");
             setIsRecording(true);
             setRecordingTime(0);
             timerRef.current = setInterval(() => {
@@ -209,8 +329,8 @@ export default function ChatInterface() {
             }, 1000);
 
         } catch (err) {
-            console.error("Error accessing microphone:", err);
-            alert("Could not access microphone. Please check permissions.");
+            console.error("[Voice] Error accessing microphone:", err);
+            alert("无法访问麦克风，请检查权限设置。\n错误: " + err.message);
         }
     };
 

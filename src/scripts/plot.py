@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import subprocess
 import math
+import glob
 from pathlib import Path
 
 import matplotlib
@@ -345,11 +346,11 @@ def get_figsize(_kind=None, _days=None):
     width = os.environ.get("PLOT_FIG_WIDTH")
     height = os.environ.get("PLOT_FIG_HEIGHT")
     if width is None or height is None:
-        return (12, 12)
+        return (16, 9)
     try:
         return (float(width), float(height))
     except ValueError:
-        return (12, 12)
+        return (16, 9)
 
 
 def _collect_plot_images(output_dir):
@@ -645,7 +646,28 @@ def plot_time_allocation_bar(
         ax.legend(loc="upper center", ncol=3, fontsize=12)
         apply_axis_style(ax, grid_axis="y")
         ax.set_axisbelow(True)
-        save_figure(fig, output_dir, f"time_allocation_bar_{nearest_days}d")
+        suffix = f"{nearest_days}d"
+        # If nearest_days covers the entire dataset (or more), treat as "all" and cleanup old dynamic files
+        if nearest_days >= len(filtered_df):
+            suffix = "all"
+            if output_dir:
+                try:
+                    pattern = os.path.join(output_dir, "time_allocation_bar_*d.png")
+                    for f in glob.glob(pattern):
+                        # Keep fixed duration plots like 30d
+                        if f.endswith("time_allocation_bar_30d.png"):
+                            continue
+                        # Delete dynamic day counts (e.g. 683d, 684d etc)
+                        if re.search(r"time_allocation_bar_\d+d\.png", os.path.basename(f)):
+                            try:
+                                os.remove(f)
+                                print(f"Cleaned up redundant plot: {os.path.basename(f)}")
+                            except OSError:
+                                pass
+                except Exception as e:
+                    print(f"Cleanup warning: {e}")
+
+        save_figure(fig, output_dir, f"time_allocation_bar_{suffix}")
 
     return average_sleep_time, average_screen_time, average_remaining_time
 

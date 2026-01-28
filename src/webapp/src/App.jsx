@@ -120,16 +120,18 @@ function App() {
         </div>
       </main>
 
-      <footer style={{
-        padding: '2rem',
-        textAlign: 'center',
-        color: 'var(--text-muted)',
-        fontSize: '0.85rem',
-        borderTop: '1px solid var(--border-color)',
-        marginTop: 'auto'
-      }}>
-        © 2026 AI Manager Premium Console • Powered by Gemini
-      </footer>
+      {activeTab !== 'plots' && (
+        <footer style={{
+          padding: '2rem',
+          textAlign: 'center',
+          color: 'var(--text-muted)',
+          fontSize: '0.85rem',
+          borderTop: '1px solid var(--border-color)',
+          marginTop: 'auto'
+        }}>
+          © 2026 AI Manager Premium Console • Powered by Gemini
+        </footer>
+      )}
     </div>
   )
 }
