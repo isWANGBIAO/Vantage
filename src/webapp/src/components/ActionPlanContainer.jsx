@@ -7,7 +7,14 @@ export default function ActionPlanContainer() {
     const [subTab, setSubTab] = useState('plan'); // 'plan' or 'chat'
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '1rem' }}>
+        <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            height: 'calc(100vh - 220px)', // Fixed height matching Plots
+            gap: '1rem',
+            overflow: 'hidden', // Prevent outer scroll
+            boxSizing: 'border-box'
+        }}>
             {/* Sub-Tabs - Similar to PyQt's sub_tab_widget */}
             <div className="glass-panel" style={{
                 padding: '0.5rem',

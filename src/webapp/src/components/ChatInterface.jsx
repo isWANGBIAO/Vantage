@@ -352,7 +352,7 @@ export default function ChatInterface() {
     };
 
     return (
-        <div className="glass-panel" style={{ height: '70vh', display: 'flex', flexDirection: 'column' }}>
+        <div className="glass-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <Bot size={20} color="var(--primary-color)" />

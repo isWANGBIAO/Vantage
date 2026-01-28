@@ -241,15 +241,22 @@ export default function ActionPlan() {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: '85vh' }}>
+        <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1rem',
+            height: '100%', // Fill parent container
+            overflow: 'hidden',
+            boxSizing: 'border-box'
+        }}>
             {/* Header */}
-            <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="glass-panel" style={{ padding: '1rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
                 <div>
-                    <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <CheckSquare size={24} color="var(--primary-color)" />
+                    <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1.25rem' }}>
+                        <CheckSquare size={20} color="var(--primary-color)" />
                         Action Plan
                     </h2>
-                    <p style={{ margin: 0, color: 'var(--text-secondary)' }}>Daily Analysis & Task Generation</p>
+                    <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Daily Analysis & Task Generation</p>
                 </div>
 
                 <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>

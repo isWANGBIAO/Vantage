@@ -120,7 +120,7 @@ function App() {
         </div>
       </main>
 
-      {activeTab !== 'plots' && (
+      {activeTab !== 'plots' && activeTab !== 'action plan' && (
         <footer style={{
           padding: '2rem',
           textAlign: 'center',
