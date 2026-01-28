@@ -53,8 +53,13 @@ export default function ActionPlanContainer() {
             </div>
 
             {/* Content Area */}
-            <div style={{ flex: 1, minHeight: 0 }}>
-                {subTab === 'plan' ? <ActionPlan /> : <ChatInterface />}
+            <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+                <div style={{ height: '100%', display: subTab === 'plan' ? 'block' : 'none' }}>
+                    <ActionPlan />
+                </div>
+                <div style={{ height: '100%', display: subTab === 'chat' ? 'block' : 'none' }}>
+                    <ChatInterface />
+                </div>
             </div>
         </div>
     );
