@@ -54,7 +54,7 @@ export default function ChatInterface() {
         setIsLoading(true);
 
         try {
-            const res = await fetch('/api/chat', {
+            const res = await fetch('http://localhost:8000/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: userMsg }),
@@ -202,7 +202,7 @@ export default function ChatInterface() {
 
                 try {
                     console.log("[Voice] Sending to /api/transcribe...");
-                    const res = await fetch('/api/transcribe', {
+                    const res = await fetch('http://localhost:8000/api/transcribe', {
                         method: 'POST',
                         body: formData
                     });
@@ -222,7 +222,7 @@ export default function ChatInterface() {
 
                         // 调用聊天 API
                         try {
-                            const chatRes = await fetch('/api/chat', {
+                            const chatRes = await fetch('http://localhost:8000/api/chat', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ message: transcribedText }),

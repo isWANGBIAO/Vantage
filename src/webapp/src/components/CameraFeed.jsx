@@ -6,7 +6,7 @@ export default function CameraFeed() {
     useEffect(() => {
         const checkStatus = async () => {
             try {
-                const res = await fetch('/api/status');
+                const res = await fetch('http://localhost:8000/api/status');
                 const data = await res.json();
                 setStatus({ online: data.camera_online });
             } catch (err) {
@@ -31,7 +31,7 @@ export default function CameraFeed() {
         }}>
             {status.online ? (
                 <img
-                    src="/api/stream"
+                    src="http://localhost:8000/api/stream"
                     alt="Live Stream"
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />

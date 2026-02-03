@@ -134,3 +134,5 @@ history/
 **/tempCodeRunnerFile.py
 src/AI_Prediction/data/*.csv
 .vscode/launch.json
+src/scripts/download_model_helper.py
+results.csv

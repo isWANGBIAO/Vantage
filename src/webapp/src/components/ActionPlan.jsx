@@ -37,7 +37,7 @@ export default function ActionPlan() {
 
     const loadTodaysPlan = async () => {
         try {
-            const res = await fetch('/api/action_plan/today');
+            const res = await fetch('http://localhost:8000/api/action_plan/today');
             const data = await res.json();
 
             if (data.exists && data.content) {
@@ -106,7 +106,7 @@ export default function ActionPlan() {
         let currentSection = 'analysis';
 
         try {
-            const response = await fetch('/api/action_plan', {
+            const response = await fetch('http://localhost:8000/api/action_plan', {
                 method: 'POST',
                 signal: signal
             });

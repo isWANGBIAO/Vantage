@@ -15,9 +15,13 @@ export default function Plots() {
     const fetchPlots = async () => {
         setIsLoading(true);
         try {
-            const res = await fetch('/api/plots/list');
+            const res = await fetch('http://localhost:8000/api/plots/list');
             const data = await res.json();
             if (data.plots && data.plots.length > 0) {
+                // Fix URLs for production
+                data.plots.forEach(p => {
+                    if (p.url && p.url.startsWith('/')) p.url = 'http://localhost:8000' + p.url;
+                });
                 setPlots(data.plots);
                 setCurrentIndex(0);
             }
@@ -30,7 +34,7 @@ export default function Plots() {
     const refreshPlots = async () => {
         setIsRefreshing(true);
         try {
-            const res = await fetch('/api/plots/refresh', { method: 'POST' });
+            const res = await fetch('http://localhost:8000/api/plots/refresh', { method: 'POST' });
             if (res.ok) {
                 // Wait for plots to be generated, then reload
                 setTimeout(() => {

@@ -1,0 +1,7 @@
+onnxruntime-gpu>=1.15.0; sys_platform == 'win32'
+onnxruntime>=1.15.0; sys_platform != 'win32'
+opencv-python-headless
+numpy
+pandas
+tqdm
+matplotlib

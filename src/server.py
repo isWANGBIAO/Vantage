@@ -478,6 +478,19 @@ def get_latest_images():
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+@app.get("/api/image_proxy")
+async def image_proxy(path: str):
+    """Proxy endpoint to serve local images not in static directories"""
+    if not os.path.exists(path):
+        return JSONResponse(status_code=404, content={"error": "File not found"})
+    
+    # Simple security check: only allow images
+    valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp'}
+    if os.path.splitext(path)[1].lower() not in valid_exts:
+         return JSONResponse(status_code=400, content={"error": "Invalid file type"})
+         
+    return FileResponse(path)
+
 @app.post("/api/plots/refresh")
 async def refresh_plots(background_tasks: BackgroundTasks):
     # Locate plot.py in src/scripts
@@ -838,6 +851,144 @@ async def get_system_logs():
         return {"logs": lines[-200:]}
     except Exception as e:
         return {"logs": [f"Error reading logs: {str(e)}"]}
+
+@app.post("/api/face/analyze")
+async def analyze_face_history(background_tasks: BackgroundTasks):
+    """Trigger background analysis of face history"""
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(current_dir, "scripts", "analyze_face.py")
+    if not os.path.exists(script_path):
+         script_path = os.path.abspath("src/scripts/analyze_face.py")
+    
+    def run_analysis():
+        print("Starting face analysis...")
+        try:
+            subprocess.run([sys.executable, script_path], check=True, cwd=os.getcwd())
+            print("Face analysis complete.")
+        except Exception as e:
+            print(f"Face analysis failed: {e}")
+
+    background_tasks.add_task(run_analysis)
+    return {"message": "Analysis started in background"}
+
+@app.get("/api/face/report")
+async def get_face_report():
+    """Get the latest analysis report including extremes and plot URL"""
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        script_path = os.path.join(current_dir, "scripts", "analyze_face.py")
+        if not os.path.exists(script_path):
+             script_path = os.path.abspath("src/scripts/analyze_face.py")
+             
+        # Run synchronously to ensure we get the latest report (fast if cached)
+        # Force stdout/stderr capture using PIPES to avoid NoneType issues
+        proc = subprocess.run([sys.executable, script_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=os.getcwd(), encoding='utf-8', errors='replace')
+        
+        stdout = proc.stdout
+        if stdout is None:
+             stdout = ""
+             
+        report_json = None
+        for line in stdout.splitlines():
+            if line.startswith("REPORT_JSON:"):
+                try:
+                    report_json = json.loads(line.replace("REPORT_JSON:", ""))
+                except:
+                    pass
+                break
+                
+        if not report_json:
+            return {"error": "No report generated", "details": stdout, "stderr": proc.stderr if proc.stderr else ""}
+            
+        def path_to_url(path):
+            if not path: return ""
+            
+            # Normalize paths
+            abs_path = os.path.abspath(path)
+            
+            if state.photos_path:
+                abs_photos = os.path.abspath(state.photos_path)
+                # Check if file is within the photos directory
+                if abs_path.startswith(abs_photos):
+                    rel = os.path.relpath(abs_path, abs_photos).replace("\\", "/")
+                    return f"/static/photos/{rel}"
+            
+            # Fallback: Use proxy for external files
+            import urllib.parse
+            encoded_path = urllib.parse.quote(abs_path)
+            return f"/api/image_proxy?path={encoded_path}" 
+
+        return {
+            "heaviest": {
+                "url": path_to_url(report_json["heaviest"]["path"]),
+                "date": report_json["heaviest"]["date"],
+                "score": report_json["heaviest"]["score"]
+            },
+            "lightest": {
+                "url": path_to_url(report_json["lightest"]["path"]),
+                "date": report_json["lightest"]["date"],
+                "score": report_json["lightest"]["score"]
+            },
+            "trend_plot": "/static/plots/dark_circles_trend.png?t=" + str(time.time())
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/api/face/export_excel")
+async def export_face_excel():
+    """Export face analysis data to Excel"""
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        script_path = os.path.join(current_dir, "scripts", "analyze_face.py")
+        if not os.path.exists(script_path):
+             script_path = os.path.abspath("src/scripts/analyze_face.py")
+             
+        # Run script with --export flag
+        proc = subprocess.run([sys.executable, script_path, "--export"], capture_output=True, text=True, cwd=os.getcwd(), encoding='utf-8')
+        
+        if proc.returncode != 0:
+            return JSONResponse(status_code=500, content={"error": proc.stderr})
+            
+        # The script should output the path to the excel file in stdout, e.g. "EXPORT_PATH:..."
+        excel_path = None
+        for line in proc.stdout.splitlines():
+            if line.startswith("EXPORT_PATH:"):
+                excel_path = line.replace("EXPORT_PATH:", "").strip()
+                break
+                
+        if excel_path and os.path.exists(excel_path):
+            return FileResponse(excel_path, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename="Face_Analysis_History.xlsx")
+        else:
+             return JSONResponse(status_code=500, content={"error": "Export failed", "details": proc.stdout})
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/api/face/progress")
+async def get_face_progress():
+    """Get the current progress of face analysis"""
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # Assuming script runs in CWD, progress file is in history/
+        # server.py usually runs with CWD as project root
+        progress_file = os.path.join(os.getcwd(), "history", "analysis_progress.json")
+        
+        if not os.path.exists(progress_file):
+            return {"status": "idle", "percent": 0}
+            
+        with open(progress_file, "r") as f:
+            data = json.load(f)
+            
+        # Check if stale (e.g. older than 1 minute)
+        if time.time() - data.get("timestamp", 0) > 60:
+             return {"status": "idle", "percent": 0}
+             
+        return data
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

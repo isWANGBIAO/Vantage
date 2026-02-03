@@ -57,6 +57,7 @@ cd /d "%PROJECT_ROOT%src\webapp"
 :: 检查是使用开发模式还是生产模式
 if exist "%PROJECT_ROOT%src\webapp\dist\index.html" (
     echo       使用生产模式...
+    set "NODE_ENV=production"
     call npm run electron:start
 ) else (
     echo       使用开发模式...

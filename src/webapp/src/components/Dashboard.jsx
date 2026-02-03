@@ -14,7 +14,7 @@ export default function Dashboard() {
 
         const fetchStats = async () => {
             try {
-                const res = await fetch('/api/sys_stats');
+                const res = await fetch('http://localhost:8000/api/sys_stats');
                 const data = await res.json();
                 setStats(data);
             } catch (err) {
@@ -24,8 +24,10 @@ export default function Dashboard() {
 
         const fetchLatestImages = async () => {
             try {
-                const res = await fetch('/api/latest_images');
+                const res = await fetch('http://localhost:8000/api/latest_images');
                 const data = await res.json();
+                if (data.photo && data.photo.startsWith('/')) data.photo = 'http://localhost:8000' + data.photo;
+                if (data.screenshot && data.screenshot.startsWith('/')) data.screenshot = 'http://localhost:8000' + data.screenshot;
                 setLatestImages(data);
 
                 // Estimate Size if we have images
@@ -62,7 +64,7 @@ export default function Dashboard() {
 
         const fetchAqiBackend = async (lat, lon) => {
             try {
-                let url = '/api/aqi';
+                let url = 'http://localhost:8000/api/aqi';
                 if (lat !== null && lon !== null) {
                     url += `?lat=${lat}&lon=${lon}`;
                 }

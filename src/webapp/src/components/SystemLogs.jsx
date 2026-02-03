@@ -9,7 +9,7 @@ export default function SystemLogs() {
     useEffect(() => {
         const fetchLogs = async () => {
             try {
-                const res = await fetch('/api/system_logs');
+                const res = await fetch('http://localhost:8000/api/system_logs');
                 if (res.ok) {
                     const data = await res.json();
                     if (data.logs && Array.isArray(data.logs)) {

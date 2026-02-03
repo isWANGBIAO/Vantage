@@ -45,7 +45,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // ============ Electron 应用 ============
-const isDev = !app.isPackaged;
+const isDev = !app.isPackaged && process.env.NODE_ENV !== 'production';
 
 let mainWindow = null;
 let tray = null;

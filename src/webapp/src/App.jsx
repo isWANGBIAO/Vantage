@@ -1,3 +1,4 @@
+
 import { useState, useEffect } from 'react'
 import './App.css'
 import Dashboard from './components/Dashboard';
@@ -6,6 +7,7 @@ import ActionPlan from './components/ActionPlan';
 import Plots from './components/Plots';
 import SystemLogs from './components/SystemLogs';
 import ActionPlanContainer from './components/ActionPlanContainer';
+import FaceHistory from './components/FaceHistory';
 import { Sun, Moon } from 'lucide-react';
 
 function App() {
@@ -58,7 +60,7 @@ function App() {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
           <nav style={{ display: 'flex', gap: '2rem' }}>
-            {['Dashboard', 'Action Plan', 'Plots', 'System Logs'].map(item => (
+            {['Dashboard', 'Action Plan', 'Plots', 'System Logs', 'Face History'].map(item => (
               <a
                 key={item}
                 href="#"
@@ -118,9 +120,12 @@ function App() {
         <div style={{ display: activeTab === 'system logs' ? 'block' : 'none' }}>
           <SystemLogs />
         </div>
+        <div style={{ display: activeTab === 'face history' ? 'block' : 'none' }}>
+          <FaceHistory />
+        </div>
       </main>
 
-      {activeTab !== 'plots' && activeTab !== 'action plan' && (
+      {activeTab !== 'plots' && activeTab !== 'action plan' && activeTab !== 'face history' && (
         <footer style={{
           padding: '2rem',
           textAlign: 'center',
