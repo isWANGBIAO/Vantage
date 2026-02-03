@@ -3,10 +3,14 @@ import sys
 import cv2
 import json
 import time
+import re
 import subprocess
 import threading
 import glob
 import asyncio
+import math
+import calendar
+from datetime import datetime, date
 from fastapi import FastAPI, WebSocket, Request, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,12 +20,17 @@ from typing import Optional
 import psutil
 import shutil
 import requests
+import pandas as pd
 
 # Ensure project root is in sys.path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.append(current_dir)
+sys.path.append(project_root)
 
 from manager.manager_main import Monitor
 from cv2_enumerate_cameras import enumerate_cameras
+from utils.data_loader import DataLoader
 
 app = FastAPI()
 
@@ -105,6 +114,370 @@ def update_legacy_storage_stats():
     except Exception as e:
         print(f"Legacy storage scan error: {e}")
 
+# Balance Sheet helpers
+def _normalize_cell_value(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except Exception:
+            pass
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
+    return value
+
+def _looks_like_date(text):
+    if not isinstance(text, str):
+        return False
+    s = text.strip()
+    if re.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$", s):
+        return True
+    if re.match(r"^\d{4}年\d{1,2}月\d{1,2}日$", s):
+        return True
+    return False
+
+def _coerce_number(value):
+    if value is None:
+        return None
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except Exception:
+            pass
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+            return None
+        return float(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s or _looks_like_date(s):
+            return None
+        cleaned = re.sub(r"[^\d\.\-]", "", s)
+        if cleaned in ("", "-", "."):
+            return None
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    return None
+
+def _find_latest_date_in_df(df):
+    if df is None or df.empty:
+        return None
+    preferred = [col for col in df.columns if any(k in str(col) for k in ["日期", "时间", "Date", "date", "Time", "time"])]
+    fallback = [col for col in df.columns if "月份" in str(col)]
+    for col in preferred + fallback:
+        try:
+            series = pd.to_datetime(df[col], errors="coerce")
+        except Exception:
+            continue
+        if series.notna().any():
+            latest = series.max()
+            if pd.notna(latest):
+                return latest.date()
+    return None
+
+def _find_metric_from_columns(df, keywords):
+    if df is None or df.empty:
+        return None
+    for col in df.columns:
+        col_name = str(col)
+        if any(k in col_name for k in keywords):
+            values = []
+            for v in df[col].tolist():
+                num = _coerce_number(v)
+                if num is not None:
+                    values.append(num)
+            if values:
+                return {"value": values[-1], "field": col_name}
+    return None
+
+def _find_metric_from_rows(df, keywords):
+    if df is None or df.empty:
+        return None
+    for _, row in df.iterrows():
+        label_cell = None
+        for cell in row.tolist():
+            if isinstance(cell, str) and any(k in cell for k in keywords):
+                label_cell = cell
+                break
+        if label_cell is None:
+            continue
+        # Prefer numeric values from right to left (often latest column)
+        row_values = row.tolist()
+        for col, cell in zip(reversed(df.columns), reversed(row_values)):
+            num = _coerce_number(cell)
+            if num is not None:
+                return {"value": num, "field": str(col), "label": label_cell}
+    return None
+
+def _find_metric(sheets, keywords):
+    for sheet_name, df in sheets.items():
+        result = _find_metric_from_columns(df, keywords)
+        if result:
+            result["sheet"] = sheet_name
+            return result
+    for sheet_name, df in sheets.items():
+        result = _find_metric_from_rows(df, keywords)
+        if result:
+            result["sheet"] = sheet_name
+            return result
+    return None
+
+def _find_budget_sheet(sheets):
+    if not sheets:
+        return None, None
+    for sheet_name, df in sheets.items():
+        if str(sheet_name).strip().lower() == "budget":
+            return sheet_name, df
+    for sheet_name, df in sheets.items():
+        name = str(sheet_name)
+        if "预算" in name or "Budget" in name:
+            return sheet_name, df
+    for sheet_name, df in sheets.items():
+        cols = [str(c) for c in df.columns]
+        if any("是否必须" in c or "必需" in c for c in cols) and any("月" in c or "年" in c or "日" in c for c in cols):
+            return sheet_name, df
+    return None, None
+
+def _parse_required_flag(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if any(k in text for k in ["必须", "必需", "是", "yes", "YES", "Yes", "Y", "y"]):
+        return True
+    if any(k in text for k in ["非必须", "不必须", "否", "no", "NO", "No", "N", "n"]):
+        return False
+    return None
+
+def _find_first_column(columns_or_df, keywords):
+    columns = None
+    if hasattr(columns_or_df, "columns"):
+        columns = columns_or_df.columns
+    else:
+        columns = columns_or_df
+    for col in columns:
+        name = str(col)
+        if any(k in name for k in keywords):
+            return col
+    return None
+
+def _compute_monthly_from_row(row, days_in_month):
+    month_col = _find_first_column(row.index, ["每月", "月消费", "月支出", "月开销", "月均", "月度"])
+    year_col = _find_first_column(row.index, ["一年合计", "年消费", "年支出", "年开销", "年均", "年费", "年"])
+    day_col = _find_first_column(row.index, ["每日", "日消费", "日支出", "日开销", "日均"])
+
+    value = None
+    if month_col is not None:
+        value = _coerce_number(row.get(month_col))
+    if value is None and year_col is not None:
+        year_value = _coerce_number(row.get(year_col))
+        if year_value is not None:
+            value = year_value / 12.0
+    if value is None and day_col is not None:
+        day_value = _coerce_number(row.get(day_col))
+        if day_value is not None and days_in_month:
+            value = day_value * days_in_month
+    return value, month_col or year_col or day_col
+
+def _build_budget_summary(sheets):
+    sheet_name, df = _find_budget_sheet(sheets)
+    if df is None or df.empty:
+        return None
+
+    today = datetime.now()
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+
+    required_col = _find_first_column(df, ["是否必须", "必需", "是否必需"])
+
+    monthly_required = 0.0
+    monthly_optional = 0.0
+    required_count = 0
+    optional_count = 0
+    source_col = None
+
+    for _, row in df.iterrows():
+        flag = _parse_required_flag(row.get(required_col)) if required_col else None
+        monthly_value, value_col = _compute_monthly_from_row(row, days_in_month)
+        if monthly_value is None:
+            continue
+        if source_col is None and value_col is not None:
+            source_col = str(value_col)
+        if flag is True:
+            monthly_required += monthly_value
+            required_count += 1
+        elif flag is False:
+            monthly_optional += monthly_value
+            optional_count += 1
+
+    return {
+        "sheet": sheet_name,
+        "monthly_required": monthly_required if required_count else None,
+        "monthly_optional": monthly_optional if optional_count else None,
+        "required_count": required_count,
+        "optional_count": optional_count,
+        "source_column": source_col
+    }
+
+def _sheet_to_payload(df, max_rows=200):
+    if df is None:
+        return {"columns": [], "rows": [], "row_count": 0, "truncated": False}
+    columns = [str(c) for c in df.columns]
+    row_count = len(df)
+    truncated = row_count > max_rows
+    sliced = df.head(max_rows)
+    rows = []
+    for row in sliced.itertuples(index=False, name=None):
+        rows.append([_normalize_cell_value(v) for v in row])
+    return {
+        "columns": columns,
+        "rows": rows,
+        "row_count": row_count,
+        "truncated": truncated
+    }
+
+def _build_balance_summary(sheets):
+    daily_avg = _find_metric(sheets, ["日均支出", "日均开销", "日均成本"])
+    monthly_total = _find_metric(sheets, ["月支出", "月度支出", "当月支出", "月总支出"])
+    monthly_avg = _find_metric(sheets, ["月均支出", "月均开销", "月均成本"])
+
+    latest_date = None
+    if daily_avg and "sheet" in daily_avg:
+        latest_date = _find_latest_date_in_df(sheets.get(daily_avg["sheet"]))
+    if latest_date is None and monthly_total and "sheet" in monthly_total:
+        latest_date = _find_latest_date_in_df(sheets.get(monthly_total["sheet"]))
+    if latest_date is None and monthly_avg and "sheet" in monthly_avg:
+        latest_date = _find_latest_date_in_df(sheets.get(monthly_avg["sheet"]))
+    if latest_date is None:
+        for df in sheets.values():
+            latest_date = _find_latest_date_in_df(df)
+            if latest_date:
+                break
+
+    days_in_month = 30
+    if latest_date:
+        days_in_month = calendar.monthrange(latest_date.year, latest_date.month)[1]
+
+    daily_avg_value = daily_avg["value"] if daily_avg else None
+    monthly_total_value = None
+    if monthly_total:
+        monthly_total_value = monthly_total["value"]
+    elif monthly_avg:
+        monthly_total_value = monthly_avg["value"]
+
+    if daily_avg_value is None and monthly_total_value is not None:
+        daily_avg_value = monthly_total_value / days_in_month if days_in_month else None
+
+    per_minute = None
+    if daily_avg_value is not None:
+        per_minute = daily_avg_value / (24 * 60)
+    elif monthly_total_value is not None:
+        per_minute = (monthly_total_value / days_in_month) / (24 * 60) if days_in_month else None
+
+    per_day_month = None
+    if monthly_total_value is not None and days_in_month:
+        per_day_month = monthly_total_value / days_in_month
+    elif daily_avg_value is not None:
+        per_day_month = daily_avg_value
+
+    assets = {
+        "fixed_assets": _find_metric(sheets, ["固定资产"]),
+        "current_assets": _find_metric(sheets, ["流动资产"]),
+        "total_assets": _find_metric(sheets, ["总资产", "资产合计"]),
+        "liabilities": _find_metric(sheets, ["负债合计", "负债"]),
+        "equity": _find_metric(sheets, ["净资产", "所有者权益", "股东权益"]),
+        "cash_and_stock": _find_metric(sheets, ["现金及现金等价物+股票", "现金及现金等价物", "现金", "股票"])
+    }
+
+    budget = _build_budget_summary(sheets)
+
+    return {
+        "time_cost": {
+            "daily_average": daily_avg_value,
+            "monthly_total": monthly_total_value,
+            "per_minute": per_minute,
+            "per_day_month": per_day_month,
+            "latest_date": latest_date.strftime("%Y-%m-%d") if latest_date else None,
+            "source": {
+                "daily_average": daily_avg,
+                "monthly_total": monthly_total,
+                "monthly_average": monthly_avg
+            }
+        },
+        "assets": assets,
+        "budget": budget
+    }
+
+def _build_balance_suggestions(summary):
+    suggestions = []
+    time_cost = summary.get("time_cost", {})
+    assets = summary.get("assets", {})
+    budget = summary.get("budget") or {}
+
+    per_minute = time_cost.get("per_minute")
+    per_day_month = time_cost.get("per_day_month")
+    daily_average = time_cost.get("daily_average")
+
+    if per_minute is not None:
+        suggestions.append(f"时间成本：全天均摊每分钟约 {per_minute:.2f}，建议把高价值任务放在高专注时段，降低低价值碎片时间。")
+    if per_day_month is not None:
+        suggestions.append(f"月度均摊每日约 {per_day_month:.2f}，可结合预算上限设定每日支出阈值。")
+
+    def extract_value(item):
+        if not item:
+            return None
+        return item.get("value")
+
+    total_assets = extract_value(assets.get("total_assets"))
+    fixed_assets = extract_value(assets.get("fixed_assets"))
+    current_assets = extract_value(assets.get("current_assets"))
+    liabilities = extract_value(assets.get("liabilities"))
+    cash_and_stock = extract_value(assets.get("cash_and_stock"))
+
+    if total_assets and fixed_assets:
+        fixed_ratio = fixed_assets / total_assets if total_assets else None
+        if fixed_ratio is not None:
+            if fixed_ratio > 0.6:
+                suggestions.append("固定资产占比偏高，建议评估折旧压力和流动性风险，适度提升现金/可变资产比例。")
+            elif fixed_ratio < 0.2:
+                suggestions.append("固定资产占比较低，可结合长期规划评估必要的设备/能力投资。")
+
+    if total_assets and current_assets:
+        current_ratio = current_assets / total_assets if total_assets else None
+        if current_ratio is not None and current_ratio < 0.25:
+            suggestions.append("流动资产占比偏低，建议提高现金或短期可变资产以增强抗风险能力。")
+
+    if total_assets and liabilities:
+        debt_ratio = liabilities / total_assets if total_assets else None
+        if debt_ratio is not None and debt_ratio > 0.6:
+            suggestions.append("负债率偏高，建议优先偿还高利率负债，降低资金压力。")
+
+    if cash_and_stock is not None and daily_average:
+        cash_days = cash_and_stock / daily_average if daily_average else None
+        if cash_days is not None:
+            suggestions.append(f"现金+股票可覆盖约 {cash_days:.1f} 天日常开销，可据此设定安全垫目标。")
+
+    monthly_required = budget.get("monthly_required")
+    monthly_optional = budget.get("monthly_optional")
+    if monthly_required is not None:
+        suggestions.append(f"每月必须开支约 {monthly_required:.2f}，建议优先保障基础支出并定期复盘。")
+    if monthly_optional is not None:
+        suggestions.append(f"每月非必须开支约 {monthly_optional:.2f}，可设置弹性上限以控制超支。")
+
+    if not suggestions:
+        suggestions.append("当前可用指标较少，建议补充‘日均支出/资产/负债’等字段以获得更精确的优化建议。")
+
+    return suggestions
 # ... (existing imports/functions) ...
 
 @app.on_event("startup")
@@ -851,6 +1224,39 @@ async def get_system_logs():
         return {"logs": lines[-200:]}
     except Exception as e:
         return {"logs": [f"Error reading logs: {str(e)}"]}
+
+@app.get("/api/balance_sheet")
+async def get_balance_sheet():
+    try:
+        path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
+        sheets = DataLoader.load_excel_sheets(path)
+
+        if not sheets:
+            return JSONResponse(status_code=404, content={"error": "No sheets found in Balance Sheet.xlsx"})
+
+        summary = _build_balance_summary(sheets)
+        suggestions = _build_balance_suggestions(summary)
+
+        sheet_payloads = []
+        for sheet_name, df in sheets.items():
+            payload = _sheet_to_payload(df, max_rows=200)
+            payload["name"] = sheet_name
+            sheet_payloads.append(payload)
+
+        return {
+            "source": {
+                "path": str(path),
+                "sheet_count": len(sheets),
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            },
+            "summary": summary,
+            "suggestions": suggestions,
+            "sheets": sheet_payloads
+        }
+    except FileNotFoundError as e:
+        return JSONResponse(status_code=404, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/api/face/analyze")
 async def analyze_face_history(background_tasks: BackgroundTasks):

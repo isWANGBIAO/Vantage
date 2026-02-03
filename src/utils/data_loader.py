@@ -84,6 +84,45 @@ class DataLoader:
         return df
 
     @staticmethod
+    def load_excel_sheets(excel_file_path):
+        """
+        Load all sheets from an Excel file safely (supports locked files).
+        Returns a dict: {sheet_name: DataFrame}
+        """
+        excel_file_path = Path(excel_file_path)
+        if not excel_file_path.exists():
+            raise FileNotFoundError(f"Excel file not found: {excel_file_path}")
+
+        temp_dir = Path(tempfile.gettempdir())
+        temp_excel_path = temp_dir / f"temp_read_{datetime.now().strftime('%f')}.xlsx"
+
+        try:
+            if os.name == 'nt':
+                ps_cmd = [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    f"Copy-Item -Path '{str(excel_file_path)}' -Destination '{str(temp_excel_path)}' -Force"
+                ]
+                subprocess.run(ps_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                import shutil
+                shutil.copy2(excel_file_path, temp_excel_path)
+
+            sheets = pd.read_excel(temp_excel_path, engine="openpyxl", sheet_name=None)
+        except Exception as e:
+            logging.error(f"Error reading excel sheets: {e}")
+            raise
+        finally:
+            if temp_excel_path.exists():
+                try:
+                    os.remove(temp_excel_path)
+                except Exception:
+                    pass
+
+        return sheets
+
+    @staticmethod
     def get_today_data_row(excel_file_path):
         """
         Retrieves the data row for today (or the latest date) as a formatted string.
