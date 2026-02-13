@@ -903,7 +903,32 @@ def plot_hhh_stats(data_frame, output_dir=None):
         dates = pd.to_datetime(date_series).sort_values()
         return dates.diff().dt.days.dropna().tolist()
 
+    def _parse_hhh_value(val):
+        """智能解析 HHH 列的值，处理数字和字符串混合情况。
+        实际数据中发现类似 '19.50 -1' 这种空格分隔多值的情况，取最后一个数字。
+        """
+        if isinstance(val, (int, float)):
+            return val
+        if not isinstance(val, str):
+            return None
+        # 先尝试直接转数字
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            pass
+        # 空格分隔的多个值，取最后一个数字（如 '19.50 -1' → -1）
+        parts = val.strip().split()
+        for part in reversed(parts):
+            try:
+                return float(part)
+            except (ValueError, TypeError):
+                continue
+        return None
+
     hhh_data = data_frame[["日期", "HHH"]].dropna()
+    hhh_data = hhh_data.copy()
+    hhh_data["HHH"] = hhh_data["HHH"].apply(_parse_hhh_value)
+    hhh_data = hhh_data.dropna(subset=["HHH"])
     sexual_intercourse = hhh_data[hhh_data["HHH"] > 0]
     masturbation = hhh_data[hhh_data["HHH"] < 0]
 
