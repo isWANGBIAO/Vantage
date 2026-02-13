@@ -268,7 +268,7 @@ def main():
                         "total_tokens": total_total_tokens,
                         "total_duration": total_duration,
                         "speed": f"{total_completion_tokens / total_duration:.2f} tokens/s" if total_duration > 0 else "0.00 tokens/s",
-                        "historical_total_tokens": context_mgr.token_count
+                        "historical_total_tokens": total_total_tokens
                     }
                     print(f"STATS_JSON:{json.dumps(stats_output)}")
 
