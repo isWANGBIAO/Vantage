@@ -9,23 +9,6 @@ export default function Dashboard() {
     const [storageEstimate, setStorageEstimate] = useState({ daysLeft: 0, groupSizeMB: 0 });
     const [aqi, setAqi] = useState(null);
 
-    const openFolder = async (type) => {
-        try {
-            const res = await fetch('http://localhost:8000/api/open_folder', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type })
-            });
-            const data = await res.json();
-            if (!res.ok) {
-                alert('Failed to open folder: ' + (data.error || 'Unknown error'));
-            }
-        } catch (err) {
-            console.error("Failed to open folder", err);
-            alert('Network error or server unreachable');
-        }
-    };
-
     useEffect(() => {
         const timer = setInterval(() => setTime(new Date()), 1000);
 
@@ -115,7 +98,22 @@ export default function Dashboard() {
             }
         };
 
-
+        const openFolder = async (type) => {
+            try {
+                const res = await fetch('http://localhost:8000/api/open_folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    alert('Failed to open folder: ' + (data.error || 'Unknown error'));
+                }
+            } catch (err) {
+                console.error("Failed to open folder", err);
+                alert('Network error or server unreachable');
+            }
+        };
 
         fetchStats();
         fetchLatestImages();
