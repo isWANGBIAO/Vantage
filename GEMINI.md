@@ -1,5 +1,5 @@
 # Gemini Agent Guidelines
-
+- 注意我都是用RUN.bat来运行的
 此文件包含 Gemini Agent 在处理本项目时的特定指南和规则。
 
 ## 1. 核心原则 (集成自 AGENTS.md)
