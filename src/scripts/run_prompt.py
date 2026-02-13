@@ -169,8 +169,6 @@ def main():
 
             print(f"STATS_JSON:{json.dumps(initial_stats)}")
 
-            print("正在生成初始分析报告，请稍候...")
-            print("---ANALYSIS_START---")
             
             # Send initial huge context
             result = client.chat(analysis_messages, stream=True)

@@ -48,20 +48,19 @@ class ContextManager:
     def get_messages(self, prune=True):
         """
         Get messages, optionally pruning to fit within token limit.
+        Returns deep copies to prevent external mutation of internal state.
         Strategy:
         1. Always keep the System Prompt (if present at index 0).
         2. Keep the most recent messages that fit within the limit.
         """
+        import copy
+
         if not prune:
-            return self.messages
+            return copy.deepcopy(self.messages)
 
         if not self.messages:
             return []
 
-        # Simple tokenizer approximation (1 token ~= 4 chars for English, 
-        # but for mixed/Chinese, it varies. Conservative: 1.5 chars/token? 
-        # OpenAI official is ~0.75 words/token. 
-        # Let's say 1 token = 3 chars as a safe average for mixed content)
         CHAR_PER_TOKEN = 3 
 
         current_tokens = 0
@@ -72,7 +71,7 @@ class ContextManager:
         start_index = 0
         if self.messages and self.messages[0].get("role") == "system":
             system_message = self.messages[0]
-            current_tokens += len(system_message.get("content", "")) / CHAR_PER_TOKEN
+            current_tokens += len(system_message.get("content", "")) // CHAR_PER_TOKEN
             start_index = 1
         
         # Iterate backwards from the end
@@ -80,7 +79,7 @@ class ContextManager:
         for i in range(len(self.messages) - 1, start_index - 1, -1):
             msg = self.messages[i]
             content = msg.get("content", "")
-            est_tokens = len(content) / CHAR_PER_TOKEN + 10 # +10 for metadata overhead
+            est_tokens = len(content) // CHAR_PER_TOKEN + 10 # +10 for metadata overhead
             
             if current_tokens + est_tokens > self.token_limit:
                 break
@@ -94,7 +93,8 @@ class ContextManager:
         
         pruned_messages.extend(reversed(temp_messages))
         
-        return pruned_messages
+        # Return deep copies to prevent external mutation
+        return copy.deepcopy(pruned_messages)
 
     def clear(self):
         """Clear context but keep system prompt if it exists"""

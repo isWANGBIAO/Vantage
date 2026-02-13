@@ -7,11 +7,8 @@ from datetime import datetime
 import cv2
 import time
 from apscheduler.schedulers.background import BackgroundScheduler
-import time
 from .get_location import get_location
 import sys
-# manager/manager_main.py
-import time
 
 
 class Monitor:

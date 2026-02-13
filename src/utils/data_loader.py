@@ -44,28 +44,35 @@ class DataLoader:
         return path
 
     @staticmethod
-    def load_excel_data(excel_file_path):
+    def _safe_copy_excel(excel_file_path):
+        """Copy an Excel file to a temp location for safe reading (handles locked files)."""
         excel_file_path = Path(excel_file_path)
         if not excel_file_path.exists():
-            raise FileNotFoundError(f"未找到 Excel 文件: {excel_file_path}")
+            raise FileNotFoundError(f"Excel file not found: {excel_file_path}")
 
         temp_dir = Path(tempfile.gettempdir())
         temp_excel_path = temp_dir / f"temp_read_{datetime.now().strftime('%f')}.xlsx"
+
+        if os.name == 'nt':
+            ps_cmd = [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"Copy-Item -Path '{str(excel_file_path)}' -Destination '{str(temp_excel_path)}' -Force"
+            ]
+            subprocess.run(ps_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            import shutil
+            shutil.copy2(excel_file_path, temp_excel_path)
+
+        return temp_excel_path
+
+    @staticmethod
+    def load_excel_data(excel_file_path):
+        excel_file_path = Path(excel_file_path)
+        temp_excel_path = DataLoader._safe_copy_excel(excel_file_path)
         
         try:
-            # Use PowerShell Copy-Item for robustness on Windows
-            if os.name == 'nt':
-                 ps_cmd = [
-                    "powershell", 
-                    "-NoProfile", 
-                    "-Command", 
-                    f"Copy-Item -Path '{str(excel_file_path)}' -Destination '{str(temp_excel_path)}' -Force"
-                ]
-                 subprocess.run(ps_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            else:
-                import shutil
-                shutil.copy2(excel_file_path, temp_excel_path)
-            
             df = pd.read_excel(temp_excel_path, engine="openpyxl")
         except Exception as e:
             logging.error(f"Error reading excel: {e}")
@@ -90,25 +97,9 @@ class DataLoader:
         Returns a dict: {sheet_name: DataFrame}
         """
         excel_file_path = Path(excel_file_path)
-        if not excel_file_path.exists():
-            raise FileNotFoundError(f"Excel file not found: {excel_file_path}")
-
-        temp_dir = Path(tempfile.gettempdir())
-        temp_excel_path = temp_dir / f"temp_read_{datetime.now().strftime('%f')}.xlsx"
+        temp_excel_path = DataLoader._safe_copy_excel(excel_file_path)
 
         try:
-            if os.name == 'nt':
-                ps_cmd = [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    f"Copy-Item -Path '{str(excel_file_path)}' -Destination '{str(temp_excel_path)}' -Force"
-                ]
-                subprocess.run(ps_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            else:
-                import shutil
-                shutil.copy2(excel_file_path, temp_excel_path)
-
             sheets = pd.read_excel(temp_excel_path, engine="openpyxl", sheet_name=None)
         except Exception as e:
             logging.error(f"Error reading excel sheets: {e}")

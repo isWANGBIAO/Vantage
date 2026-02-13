@@ -45,6 +45,85 @@ export default function ChatInterface() {
         localStorage.removeItem('chat_history');
     };
 
+    // Shared stream processing function to avoid code duplication
+    const processStreamResponse = async (response) => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        setMessages(prev => [...prev, { role: 'assistant', content: '', thinking: '' }]);
+
+        let assistantContent = "";
+        let assistantThinking = "";
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n');
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+
+                try {
+                    const data = JSON.parse(line);
+
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+
+                    if (data.log) {
+                        const text = data.log;
+
+                        if (text.startsWith("STREAM_THINKING:")) {
+                            const raw = text.replace("STREAM_THINKING:", "");
+                            try {
+                                assistantThinking += JSON.parse(raw);
+                            } catch (e) { assistantThinking += raw; }
+                        } else if (text.startsWith("STREAM_CONTENT:")) {
+                            const raw = text.replace("STREAM_CONTENT:", "");
+                            try {
+                                assistantContent += JSON.parse(raw);
+                            } catch (e) { assistantContent += raw; }
+                        } else if (
+                            text.startsWith("STREAM_DONE:") ||
+                            text.startsWith("STREAM_ERROR:") ||
+                            text.startsWith("STATS_JSON:") ||
+                            text.includes("---CHAT_START---") ||
+                            text.includes("---ANALYSIS_END---") ||
+                            text.includes("---PLAN_START---") ||
+                            text.startsWith("Response saved to:") ||
+                            text.trim() === ""
+                        ) {
+                            // Ignore control signals and markers
+                        } else {
+                            const cleanText = text
+                                .replace(/---CHAT_START---/g, '')
+                                .replace(/---ANALYSIS_END---/g, '')
+                                .replace(/STATS_JSON:\{.*\}/g, '')
+                                .trim();
+                            if (cleanText) {
+                                assistantContent += cleanText;
+                            }
+                        }
+
+                        setMessages(prev => {
+                            const newMessages = [...prev];
+                            const lastMsg = newMessages[newMessages.length - 1];
+                            if (lastMsg.role === 'assistant') {
+                                lastMsg.content = assistantContent;
+                                lastMsg.thinking = assistantThinking;
+                            }
+                            return newMessages;
+                        });
+                    }
+                } catch (e) {
+                    console.debug("JSON parse error for chunk", line, e);
+                }
+            }
+        }
+    };
+
     const sendMessage = async () => {
         if (!input.trim() || isLoading) return;
 
@@ -60,89 +139,7 @@ export default function ChatInterface() {
                 body: JSON.stringify({ message: userMsg }),
             });
 
-            // Stream Handling
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
-
-            // Initial empty assistant message
-            setMessages(prev => [...prev, { role: 'assistant', content: '', thinking: '' }]);
-
-            let assistantContent = "";
-            let assistantThinking = "";
-
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-
-                const chunk = decoder.decode(value, { stream: true });
-                const lines = chunk.split('\n');
-
-                for (const line of lines) {
-                    if (!line.trim()) continue;
-
-                    try {
-                        const data = JSON.parse(line);
-
-                        if (data.error) {
-                            throw new Error(data.error);
-                        }
-
-                        if (data.log) {
-                            const text = data.log;
-
-                            // Parse Special Tags
-                            if (text.startsWith("STREAM_THINKING:")) {
-                                const raw = text.replace("STREAM_THINKING:", "");
-                                try {
-                                    assistantThinking += JSON.parse(raw);
-                                } catch (e) { assistantThinking += raw; }
-                            } else if (text.startsWith("STREAM_CONTENT:")) {
-                                const raw = text.replace("STREAM_CONTENT:", "");
-                                try {
-                                    assistantContent += JSON.parse(raw);
-                                } catch (e) { assistantContent += raw; }
-                            } else if (
-                                text.startsWith("STREAM_DONE:") ||
-                                text.startsWith("STREAM_ERROR:") ||
-                                text.startsWith("STATS_JSON:") ||
-                                text.includes("---CHAT_START---") ||
-                                text.includes("---ANALYSIS_END---") ||
-                                text.includes("---PLAN_START---") ||
-                                text.startsWith("Response saved to:") ||
-                                text.trim() === ""
-                            ) {
-                                // Ignore control signals and markers
-                            } else {
-                                // Fallback for raw text - only add if it looks like actual content
-                                // Filter out obvious system messages
-                                const cleanText = text
-                                    .replace(/---CHAT_START---/g, '')
-                                    .replace(/---ANALYSIS_END---/g, '')
-                                    .replace(/STATS_JSON:\{.*\}/g, '')
-                                    .trim();
-                                if (cleanText) {
-                                    assistantContent += cleanText;
-                                }
-                            }
-
-                            // Update UI State
-                            setMessages(prev => {
-                                const newMessages = [...prev];
-                                const lastMsg = newMessages[newMessages.length - 1];
-                                if (lastMsg.role === 'assistant') {
-                                    lastMsg.content = assistantContent;
-                                    lastMsg.thinking = assistantThinking;
-                                }
-                                return newMessages;
-                            });
-                        }
-                    } catch (e) {
-                        console.debug("JSON parse error for chunk", line, e);
-                        // treat as raw text if JSON fails? 
-                        // For now, ignore non-JSON lines to be safe against noise
-                    }
-                }
-            }
+            await processStreamResponse(res);
 
         } catch (err) {
             setMessages(prev => [...prev, { role: 'assistant', content: `Network Error: ${err.message}` }]);
@@ -220,7 +217,7 @@ export default function ChatInterface() {
                         // 直接发送消息
                         setMessages(prev => [...prev, { role: 'user', content: transcribedText }]);
 
-                        // 调用聊天 API
+                        // 调用聊天 API (reuse shared stream processor)
                         try {
                             const chatRes = await fetch('http://localhost:8000/api/chat', {
                                 method: 'POST',
@@ -228,81 +225,7 @@ export default function ChatInterface() {
                                 body: JSON.stringify({ message: transcribedText }),
                             });
 
-                            const reader = chatRes.body.getReader();
-                            const decoder = new TextDecoder();
-
-                            setMessages(prev => [...prev, { role: 'assistant', content: '', thinking: '' }]);
-
-                            let assistantContent = "";
-                            let assistantThinking = "";
-
-                            while (true) {
-                                const { value, done } = await reader.read();
-                                if (done) break;
-
-                                const chunk = decoder.decode(value, { stream: true });
-                                const lines = chunk.split('\n');
-
-                                for (const line of lines) {
-                                    if (!line.trim()) continue;
-
-                                    try {
-                                        const jsonData = JSON.parse(line);
-
-                                        if (jsonData.error) {
-                                            throw new Error(jsonData.error);
-                                        }
-
-                                        if (jsonData.log) {
-                                            const text = jsonData.log;
-
-                                            if (text.startsWith("STREAM_THINKING:")) {
-                                                const raw = text.replace("STREAM_THINKING:", "");
-                                                try {
-                                                    assistantThinking += JSON.parse(raw);
-                                                } catch (e) { assistantThinking += raw; }
-                                            } else if (text.startsWith("STREAM_CONTENT:")) {
-                                                const raw = text.replace("STREAM_CONTENT:", "");
-                                                try {
-                                                    assistantContent += JSON.parse(raw);
-                                                } catch (e) { assistantContent += raw; }
-                                            } else if (
-                                                text.startsWith("STREAM_DONE:") ||
-                                                text.startsWith("STREAM_ERROR:") ||
-                                                text.startsWith("STATS_JSON:") ||
-                                                text.includes("---CHAT_START---") ||
-                                                text.includes("---ANALYSIS_END---") ||
-                                                text.includes("---PLAN_START---") ||
-                                                text.startsWith("Response saved to:") ||
-                                                text.trim() === ""
-                                            ) {
-                                                // Ignore control signals
-                                            } else {
-                                                const cleanText = text
-                                                    .replace(/---CHAT_START---/g, '')
-                                                    .replace(/---ANALYSIS_END---/g, '')
-                                                    .replace(/STATS_JSON:\{.*\}/g, '')
-                                                    .trim();
-                                                if (cleanText) {
-                                                    assistantContent += cleanText;
-                                                }
-                                            }
-
-                                            setMessages(prev => {
-                                                const newMessages = [...prev];
-                                                const lastMsg = newMessages[newMessages.length - 1];
-                                                if (lastMsg.role === 'assistant') {
-                                                    lastMsg.content = assistantContent;
-                                                    lastMsg.thinking = assistantThinking;
-                                                }
-                                                return newMessages;
-                                            });
-                                        }
-                                    } catch (e) {
-                                        console.debug("JSON parse error for chunk", line, e);
-                                    }
-                                }
-                            }
+                            await processStreamResponse(chatRes);
                         } catch (chatErr) {
                             console.error("[Voice] Chat error:", chatErr);
                             setMessages(prev => [...prev, { role: 'assistant', content: `Network Error: ${chatErr.message}` }]);

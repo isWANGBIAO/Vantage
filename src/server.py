@@ -37,7 +37,7 @@ app = FastAPI()
 # Allow CORS for development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*", "http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,6 +55,8 @@ class SystemState:
         self.photos_path = None
         self.screenshots_path = None
         self.legacy_size = 0 # Cache for legacy storage size
+        self.photos_size = 0  # Cache for photos storage size
+        self.screenshots_size = 0  # Cache for screenshots storage size
 
 state = SystemState()
 
@@ -113,6 +115,25 @@ def update_legacy_storage_stats():
         
     except Exception as e:
         print(f"Legacy storage scan error: {e}")
+
+def update_storage_stats():
+    """Background thread to periodically update photos/screenshots storage size cache."""
+    while state.is_running:
+        try:
+            photos_size = 0
+            if state.photos_path and os.path.exists(state.photos_path):
+                for root, dirs, files in os.walk(state.photos_path):
+                    photos_size += sum(os.path.getsize(os.path.join(root, f)) for f in files)
+            state.photos_size = photos_size
+
+            screenshots_size = 0
+            if state.screenshots_path and os.path.exists(state.screenshots_path):
+                for root, dirs, files in os.walk(state.screenshots_path):
+                    screenshots_size += sum(os.path.getsize(os.path.join(root, f)) for f in files)
+            state.screenshots_size = screenshots_size
+        except Exception as e:
+            print(f"Storage stats update error: {e}")
+        time.sleep(60)  # Update every 60 seconds
 
 # Balance Sheet helpers
 def _normalize_cell_value(value):
@@ -480,11 +501,6 @@ def _build_balance_suggestions(summary):
     return suggestions
 # ... (existing imports/functions) ...
 
-@app.on_event("startup")
-async def startup_event():
-    print("Starting up server...")
-    # ... (rest of startup) ...
-
 def get_camera_index():
     camera_index = 0
     # Simple logic to find USB camera, similar to main_window.py
@@ -523,7 +539,6 @@ def identify_logs_folder():
 @app.on_event("startup")
 async def startup_event():
     print("Starting up server...")
-    print("Starting up server...")
     try:
         # DEPRECATED IN FAVOR OF camera_loop: 
         # idx = get_camera_index()
@@ -552,6 +567,9 @@ async def startup_event():
         
         # Start background legacy storage calculation (doesn't block startup)
         threading.Thread(target=update_legacy_storage_stats, daemon=True).start()
+        
+        # Start background storage size cache update (every 60s)
+        threading.Thread(target=update_storage_stats, daemon=True).start()
 
         # Mount static directories for photos and plots
         if state.photos_path and os.path.exists(state.photos_path):
@@ -715,17 +733,9 @@ async def get_sys_stats():
         cpu_usage = psutil.cpu_percent(interval=None)
         memory = psutil.virtual_memory()
         
-        photos_size = 0
-        if state.photos_path and os.path.exists(state.photos_path):
-            for root, dirs, files in os.walk(state.photos_path):
-                photos_size += sum(os.path.getsize(os.path.join(root, f)) for f in files)
-        
-        screenshots_size = 0
-        if state.screenshots_path and os.path.exists(state.screenshots_path):
-            for root, dirs, files in os.walk(state.screenshots_path):
-                screenshots_size += sum(os.path.getsize(os.path.join(root, f)) for f in files)
-        
-        # Use cached legacy size from background thread
+        # Use cached sizes from background thread (avoid blocking event loop)
+        photos_size = state.photos_size
+        screenshots_size = state.screenshots_size
         legacy_size = state.legacy_size
         
         total, used, free = shutil.disk_usage(state.photos_path or ".")
@@ -806,8 +816,8 @@ async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None
             "city": city,
             "level": level,
             "color": color,
-            "lat": lat,
-            "lon": lon
+            "lat": target_lat,
+            "lon": target_lon
         }
         
     except Exception as e:
@@ -857,12 +867,23 @@ async def image_proxy(path: str):
     if not os.path.exists(path):
         return JSONResponse(status_code=404, content={"error": "File not found"})
     
-    # Simple security check: only allow images
+    # Security: only allow images with valid extensions
     valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp'}
     if os.path.splitext(path)[1].lower() not in valid_exts:
          return JSONResponse(status_code=400, content={"error": "Invalid file type"})
+    
+    # Security: restrict to allowed directories only
+    abs_path = os.path.abspath(path)
+    allowed_dirs = [
+        state.photos_path,
+        state.screenshots_path,
+        os.path.join(os.getcwd(), "plot_outputs"),
+        os.path.join(os.getcwd(), "history"),
+    ]
+    if not any(abs_path.startswith(os.path.abspath(d)) for d in allowed_dirs if d):
+        return JSONResponse(status_code=403, content={"error": "Access denied: path not in allowed directories"})
          
-    return FileResponse(path)
+    return FileResponse(abs_path)
 
 @app.post("/api/plots/refresh")
 async def refresh_plots(background_tasks: BackgroundTasks):
@@ -1286,9 +1307,13 @@ async def get_face_report():
         if not os.path.exists(script_path):
              script_path = os.path.abspath("src/scripts/analyze_face.py")
              
-        # Run synchronously to ensure we get the latest report (fast if cached)
-        # Force stdout/stderr capture using PIPES to avoid NoneType issues
-        proc = subprocess.run([sys.executable, script_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=os.getcwd(), encoding='utf-8', errors='replace')
+        # Run in background thread to avoid blocking the async event loop
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, script_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, cwd=os.getcwd(), encoding='utf-8', errors='replace'
+        )
         
         stdout = proc.stdout
         if stdout is None:
