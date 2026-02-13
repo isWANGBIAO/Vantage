@@ -751,6 +751,55 @@ async def get_sys_stats():
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+@app.post("/api/open_folder")
+async def open_folder(request: Request):
+    data = await request.json()
+    folder_type = data.get("type")
+    
+    base_path = None
+    if folder_type == "photo":
+        base_path = state.photos_path
+    elif folder_type == "screenshot":
+        base_path = state.screenshots_path
+        
+    print(f"[OpenFolder] Request for type: {folder_type}, Base Path: {base_path}")
+
+    if base_path and os.path.exists(base_path):
+        try:
+            # Construct hourly path: base / YYYY / MM / DD / HH
+            now = datetime.now()
+            year = now.strftime('%Y')
+            month = now.strftime('%m')
+            day = now.strftime('%d')
+            hour = now.strftime('%H')
+            
+            # Try most specific path first, then fallback
+            candidates = [
+                os.path.join(base_path, year, month, day, hour),
+                os.path.join(base_path, year, month, day),
+                os.path.join(base_path, year, month),
+                os.path.join(base_path, year),
+                base_path
+            ]
+            
+            target_path = base_path
+            for path in candidates:
+                if os.path.exists(path):
+                    target_path = path
+                    break
+            
+            print(f"[OpenFolder] Opening target path: {target_path}")
+            
+            # Use os.startfile for native Windows behavior
+            os.startfile(target_path)
+            return {"status": "success", "opened": target_path}
+        except Exception as e:
+            print(f"[OpenFolder] Error: {e}")
+            return JSONResponse(status_code=500, content={"error": str(e)})
+    
+    print(f"[OpenFolder] Base path not found or invalid.")
+    return JSONResponse(status_code=404, content={"error": "Folder path not found or not set"})
+
 @app.get("/api/aqi")
 async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None):
     """Fetch current AQI (US) based on Location (Default: SJTU Minhang)"""

@@ -9,6 +9,23 @@ export default function Dashboard() {
     const [storageEstimate, setStorageEstimate] = useState({ daysLeft: 0, groupSizeMB: 0 });
     const [aqi, setAqi] = useState(null);
 
+    const openFolder = async (type) => {
+        try {
+            const res = await fetch('http://localhost:8000/api/open_folder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                alert('Failed to open folder: ' + (data.error || 'Unknown error'));
+            }
+        } catch (err) {
+            console.error("Failed to open folder", err);
+            alert('Network error or server unreachable');
+        }
+    };
+
     useEffect(() => {
         const timer = setInterval(() => setTime(new Date()), 1000);
 
@@ -98,6 +115,8 @@ export default function Dashboard() {
             }
         };
 
+
+
         fetchStats();
         fetchLatestImages();
         fetchAqi();
@@ -128,6 +147,38 @@ export default function Dashboard() {
                         <Activity color="var(--primary-color)" size={24} />
                         System Dashboard
                     </h2>
+                    <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
+                        <button
+                            onClick={() => openFolder('photo')}
+                            style={{
+                                background: 'rgba(255,255,255,0.1)',
+                                border: '1px solid rgba(255,255,255,0.2)',
+                                color: 'var(--text-primary)',
+                                padding: '0.3rem 0.8rem',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '0.8rem',
+                                display: 'flex', alignItems: 'center', gap: '0.4rem'
+                            }}
+                        >
+                            <ImageIcon size={14} /> Open Photos
+                        </button>
+                        <button
+                            onClick={() => openFolder('screenshot')}
+                            style={{
+                                background: 'rgba(255,255,255,0.1)',
+                                border: '1px solid rgba(255,255,255,0.2)',
+                                color: 'var(--text-primary)',
+                                padding: '0.3rem 0.8rem',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '0.8rem',
+                                display: 'flex', alignItems: 'center', gap: '0.4rem'
+                            }}
+                        >
+                            <Monitor size={14} /> Open Screenshots
+                        </button>
+                    </div>
                 </div>
                 <div style={{ textAlign: 'right', display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
                     <div style={{ fontSize: '1.6rem', fontWeight: 'bold', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
