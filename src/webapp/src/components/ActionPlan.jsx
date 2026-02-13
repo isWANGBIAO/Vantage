@@ -268,10 +268,12 @@ export default function ActionPlan() {
                         }}>
                             <span>⚡ {stats.speed}</span>
                             <span>⏱️ {(stats.total_duration || 0).toFixed(1)}s</span>
-                            <span>🪙 {stats.total_tokens || 0} toks</span>
+                            <span>🪙 {(stats.total_tokens / 1000).toFixed(1)}k toks</span>
                             {stats.historical_total_tokens !== undefined && (
                                 <span style={{ borderLeft: '1px solid rgba(255,255,255,0.2)', paddingLeft: '1rem' }}>
-                                    📜 {(stats.historical_total_tokens / 1000000).toFixed(2)}M History
+                                    📜 {stats.historical_total_tokens >= 1000000
+                                        ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
+                                        : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`} History
                                 </span>
                             )}
                         </div>
