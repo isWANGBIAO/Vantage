@@ -29,7 +29,7 @@ class ContextManager:
         try:
             with open(self.context_file, 'w', encoding='utf-8') as f:
                 json.dump(self.messages, f, ensure_ascii=False, indent=2)
-            logging.info(f"Context saved to: {self.context_file}")
+            logging.debug(f"Context saved to: {self.context_file}")
         except Exception as e:
             logging.error(f"Warning: Failed to save context: {e}")
 
