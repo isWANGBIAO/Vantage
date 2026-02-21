@@ -10,7 +10,7 @@ import glob
 import asyncio
 import math
 import calendar
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from fastapi import FastAPI, WebSocket, Request, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -1361,12 +1361,14 @@ async def get_face_report():
             subprocess.run,
             [sys.executable, script_path],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, cwd=os.getcwd(), encoding='utf-8', errors='replace'
+            cwd=os.getcwd()
         )
         
-        stdout = proc.stdout
-        if stdout is None:
-             stdout = ""
+        stdout_bytes = proc.stdout if proc.stdout else b""
+        try:
+            stdout = stdout_bytes.decode('utf-8')
+        except:
+            stdout = stdout_bytes.decode('gbk', errors='replace')
              
         report_json = None
         for line in stdout.splitlines():
@@ -1427,14 +1429,20 @@ async def export_face_excel():
              script_path = os.path.abspath("src/scripts/analyze_face.py")
              
         # Run script with --export flag
-        proc = subprocess.run([sys.executable, script_path, "--export"], capture_output=True, text=True, cwd=os.getcwd(), encoding='utf-8')
+        proc = subprocess.run([sys.executable, script_path, "--export"], capture_output=True, cwd=os.getcwd())
         
         if proc.returncode != 0:
-            return JSONResponse(status_code=500, content={"error": proc.stderr})
+            return JSONResponse(status_code=500, content={"error": proc.stderr.decode('utf-8', errors='replace')})
             
         # The script should output the path to the excel file in stdout, e.g. "EXPORT_PATH:..."
         excel_path = None
-        for line in proc.stdout.splitlines():
+        
+        try:
+             stdout_text = proc.stdout.decode('utf-8')
+        except:
+             stdout_text = proc.stdout.decode('gbk', errors='replace')
+             
+        for line in stdout_text.splitlines():
             if line.startswith("EXPORT_PATH:"):
                 excel_path = line.replace("EXPORT_PATH:", "").strip()
                 break
@@ -1469,6 +1477,88 @@ async def get_face_progress():
         return data
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+@app.get("/api/project_progress")
+async def get_project_progress():
+    """Parse Prompt_Project_Management.md and git logs to return project momentum."""
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        md_file = os.path.join(project_root, "Prompt_Project_Management.md")
+        
+        completed_tasks = []
+        pending_tasks = []
+        current_project = "General"
+        
+        if os.path.exists(md_file):
+            with open(md_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+                for line in lines:
+                    line = line.strip()
+                    # Detect Headers as project groups
+                    if line.startswith("## ") or line.startswith("### ") or line.startswith("#### "):
+                        cleaned_header = re.sub(r'^#+\s*', '', line)
+                        if cleaned_header and "任务" in cleaned_header or "项目" in cleaned_header:
+                             current_project = cleaned_header
+                             
+                    # Detect completed tasks
+                    elif line.startswith("- [X]") or line.startswith("- [x]"):
+                        task_desc = line[5:].strip()
+                        completed_tasks.append({"project": current_project, "task": task_desc, "status": "completed"})
+                        
+                    # Detect pending tasks
+                    elif line.startswith("- [ ]"):
+                         task_desc = line[5:].strip()
+                         pending_tasks.append({"project": current_project, "task": task_desc, "status": "pending"})
+        
+        # Calculate stats
+        total_tasks = len(completed_tasks) + len(pending_tasks)
+        completion_rate = (len(completed_tasks) / total_tasks) if total_tasks > 0 else 0
+        
+        # Git commits (last 14 days)
+        recent_commits = []
+        try:
+            # We use subprocess to get git log: hash|date|subject
+            time_limit = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
+            git_cmd = ["git", "log", f'--since="{time_limit}"', "--pretty=format:%h|%ad|%s", "--date=short"]
+            
+            # Use raw bytes and decode manually to handle Windows GBK vs UTF-8 reliably
+            proc = subprocess.run(git_cmd, capture_output=True, cwd=project_root)
+            
+            if proc.returncode == 0 and proc.stdout:
+                 try:
+                      out_text = proc.stdout.decode('utf-8')
+                 except:
+                      out_text = proc.stdout.decode('gbk', errors='replace')
+                      
+                 for line in out_text.splitlines():
+                      parts = line.split("|", 2)
+                      if len(parts) == 3:
+                           recent_commits.append({
+                               "hash": parts[0],
+                               "date": parts[1],
+                               "message": parts[2]
+                           })
+        except Exception as e:
+            print(f"Git log parsing error: {e}")
+            
+        return {
+            "tasks": {
+                "completed": completed_tasks,
+                "pending": pending_tasks
+            },
+            "commits": recent_commits,
+            "stats": {
+                "total_tasks": total_tasks,
+                "completed_tasks": len(completed_tasks),
+                "completion_rate": completion_rate
+            }
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 if __name__ == "__main__":
     import uvicorn

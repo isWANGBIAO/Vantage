@@ -9,6 +9,7 @@ import SystemLogs from './components/SystemLogs';
 import ActionPlanContainer from './components/ActionPlanContainer';
 import FaceHistory from './components/FaceHistory';
 import ExpenseSheet from './components/ExpenseSheet';
+import ProjectProgress from './components/ProjectProgress';
 import { Sun, Moon } from 'lucide-react';
 
 function App() {
@@ -61,7 +62,7 @@ function App() {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
           <nav style={{ display: 'flex', gap: '2rem' }}>
-            {['Dashboard', 'Action Plan', 'Expense Sheet', 'Plots', 'System Logs', 'Face History'].map(item => (
+            {['Dashboard', 'Action Plan', 'Project Progress', 'Expense Sheet', 'Plots', 'System Logs', 'Face History'].map(item => (
               <a
                 key={item}
                 href="#"
@@ -115,6 +116,9 @@ function App() {
         <div style={{ display: activeTab === 'action plan' ? 'block' : 'none' }}>
           <ActionPlanContainer />
         </div>
+        <div style={{ display: activeTab === 'project progress' ? 'block' : 'none', height: '100%' }}>
+          <ProjectProgress />
+        </div>
         <div style={{ display: activeTab === 'expense sheet' ? 'block' : 'none' }}>
           <ExpenseSheet />
         </div>
@@ -129,7 +133,7 @@ function App() {
         </div>
       </main>
 
-      {activeTab !== 'plots' && activeTab !== 'action plan' && activeTab !== 'face history' && activeTab !== 'expense sheet' && (
+      {activeTab !== 'plots' && activeTab !== 'action plan' && activeTab !== 'face history' && activeTab !== 'expense sheet' && activeTab !== 'project progress' && (
         <footer style={{
           padding: '2rem',
           textAlign: 'center',
