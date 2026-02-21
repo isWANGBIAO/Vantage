@@ -6,6 +6,8 @@ import schedule
 from datetime import datetime
 import cv2
 import time
+import threading
+import subprocess
 from apscheduler.schedulers.background import BackgroundScheduler
 from .get_location import get_location
 import sys
@@ -24,6 +26,14 @@ class Monitor:
         if not os.path.exists(KNOWLEDGE_BASE):
             with open(KNOWLEDGE_BASE, 'w') as f:
                 json.dump({}, f)
+                
+        # 健康管家：久坐提醒状态变量
+        self.continuous_sit_start = None
+        self.last_missing_time = None
+        self.last_notification_time = None
+        self.sedentary_threshold = 40 * 60  # 40 分钟 (秒)
+        self.notification_interval = 5 * 60 # 提醒后如果继续坐着，每 5 分钟再提醒一次
+        self.grace_period = 2 * 60          # 允许离开镜头的宽限期 (2 分钟)，防止中途喝水或低头导致计时重置
 
     def run_task(self):
         """
@@ -53,16 +63,66 @@ class Monitor:
             # 有人在的时候才拍照截屏
             # 返回变量，如果是True，说明有人在，如果是False，说明没人在
             real_person, photo_path = take_photo(self.camera, latitude, longitude, self.photos_path)
+            
+            current_time = time.time()
             if real_person:
+                # 用户在座位上，重置离开倒计时
+                self.last_missing_time = None
+                
+                # 初始化开始坐下的时间
+                if self.continuous_sit_start is None:
+                    self.continuous_sit_start = current_time
+                    
+                sit_duration = current_time - self.continuous_sit_start
+                # 检查是否达到久坐阈值 (累计时间超过 self.sedentary_threshold)
+                if sit_duration >= self.sedentary_threshold:
+                    if self.last_notification_time is None or (current_time - self.last_notification_time) >= self.notification_interval:
+                        threading.Thread(target=self.send_sedentary_notification, args=(int(sit_duration // 60),), daemon=True).start()
+                        self.last_notification_time = current_time
+
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_and_save_screenshots()")
                 screenshot_path = take_and_save_screenshots(latitude, longitude, self.screenshots_path)
 
                 # 直接更新路径字典
                 self.paths['photo'] = photo_path
                 self.paths['screenshot'] = screenshot_path
-                print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Done.")
+                print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Done. (Sedentary: {int(sit_duration/60)} mins)")
             else:
-                print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} No person detected.", file=sys.stderr)
+                # 没人检测到，开始宽限期倒计时
+                if self.last_missing_time is None:
+                    self.last_missing_time = current_time
+                
+                missing_duration = current_time - self.last_missing_time
+                if missing_duration >= self.grace_period:
+                    if self.continuous_sit_start is not None:
+                        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} User left for >2mins. Resetting sedentary timer.")
+                    self.continuous_sit_start = None
+                    self.last_notification_time = None
+                else:
+                    print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} No person detected. (Grace period: {int(self.grace_period - missing_duration)}s left)", file=sys.stderr)
+
         except Exception as e:
             print(f"Task error: {e}", file=sys.stderr)
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---------------------------------------------")
+
+    def send_sedentary_notification(self, minutes):
+        print(f"Sending sedentary notification for {minutes} minutes of continuous sitting.")
+        try:
+            ps_script = f"""
+            Add-Type -AssemblyName System.Windows.Forms
+            $notify = New-Object System.Windows.Forms.NotifyIcon
+            $notify.Icon = [System.Drawing.SystemIcons]::Warning
+            $notify.BalloonTipIcon = 'Warning'
+            $notify.BalloonTipTitle = 'AI 健康管家 (久坐提醒)'
+            $notify.BalloonTipText = '你已经连续工作了 {minutes} 分钟了！请起立活动一下，走动走动喝口水，防止病痛、保护视力。'
+            $notify.Visible = $True
+            $notify.ShowBalloonTip(10000)
+            Start-Sleep -Seconds 10
+            $notify.Dispose()
+            """
+            # 隐藏 PowerShell 的黑窗口
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], startupinfo=startupinfo)
+        except Exception as e:
+            print(f"Notification error: {e}")
