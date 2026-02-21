@@ -209,7 +209,7 @@ export default function Dashboard() {
             {/* Middle Row: Photo | Camera | Screenshot (1 Row, 3 Columns) */}
             <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)', // Equal columns for consistent height
+                gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', // minmax(0, 1fr) allows it to shrink below content width
                 gap: '1.5rem',
                 flex: 1,
                 minHeight: '0',
@@ -259,7 +259,7 @@ export default function Dashboard() {
             {/* Bottom Row: Stats Cards */}
             <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)', // Force exactly 3 columns so 6 cards form a perfect 3x2 grid
+                gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', // Force exactly 3 columns, allow shrinking
                 gap: '1.5rem'
             }}>
                 <StatCard
