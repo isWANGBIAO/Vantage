@@ -1478,6 +1478,33 @@ async def get_face_progress():
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
+@app.get("/api/health/sedentary")
+def get_sedentary_stats():
+    """Returns the current continuous sitting duration from the monitor."""
+    try:
+        if not state.monitor:
+             return {"status": "inactive"}
+             
+        start = state.monitor.continuous_sit_start
+        if start is None:
+             return {
+                 "status": "active",
+                 "is_sitting": False,
+                 "duration_minutes": 0,
+                 "threshold_minutes": state.monitor.sedentary_threshold // 60
+             }
+             
+        duration_sec = time.time() - start
+        return {
+             "status": "active",
+             "is_sitting": True,
+             "duration_minutes": int(duration_sec // 60),
+             "duration_seconds": int(duration_sec),
+             "threshold_minutes": state.monitor.sedentary_threshold // 60
+        }
+    except Exception as e:
+         return {"status": "error", "error": str(e)}
+
 @app.get("/api/project_progress")
 async def get_project_progress():
     """Parse Prompt_Project_Management.md and git logs to return project momentum."""
