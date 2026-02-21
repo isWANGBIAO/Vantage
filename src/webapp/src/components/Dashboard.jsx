@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import CameraFeed from './CameraFeed';
-import { Activity, Cpu, HardDrive, Database, Clock, Calendar, Image as ImageIcon, Monitor, Wind } from 'lucide-react';
+import { Activity, Cpu, HardDrive, Database, Clock, Calendar, Image as ImageIcon, Monitor, Wind, Heart } from 'lucide-react';
 
 export default function Dashboard() {
     const [stats, setStats] = useState(null);
@@ -8,6 +8,7 @@ export default function Dashboard() {
     const [time, setTime] = useState(new Date());
     const [storageEstimate, setStorageEstimate] = useState({ daysLeft: 0, groupSizeMB: 0 });
     const [aqi, setAqi] = useState(null);
+    const [healthStats, setHealthStats] = useState(null);
 
     useEffect(() => {
         const timer = setInterval(() => setTime(new Date()), 1000);
@@ -119,15 +120,30 @@ export default function Dashboard() {
         fetchLatestImages();
         fetchAqi();
 
+        const fetchHealth = async () => {
+            try {
+                const res = await fetch('http://localhost:8000/api/health/sedentary');
+                if (res.ok) {
+                    const data = await res.json();
+                    setHealthStats(data);
+                }
+            } catch (err) {
+                console.error("Failed to fetch health stats", err);
+            }
+        };
+        fetchHealth();
+
         const statsInterval = setInterval(fetchStats, 5000);
         const imagesInterval = setInterval(fetchLatestImages, 10000);
         const aqiInterval = setInterval(fetchAqi, 600000); // Fetch AQI every 10 minutes
+        const healthInterval = setInterval(fetchHealth, 10000);
 
         return () => {
             clearInterval(timer);
             clearInterval(statsInterval);
             clearInterval(imagesInterval);
             clearInterval(aqiInterval);
+            clearInterval(healthInterval);
         };
     }, []);
 
@@ -243,9 +259,8 @@ export default function Dashboard() {
             {/* Bottom Row: Stats Cards */}
             <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(5, 1fr)', // Increased to 5 columns
-                gap: '1.5rem',
-                height: '120px'
+                gridTemplateColumns: 'repeat(3, 1fr)', // Force exactly 3 columns so 6 cards form a perfect 3x2 grid
+                gap: '1.5rem'
             }}>
                 <StatCard
                     icon={<Cpu size={24} color="#a29bfe" />}
@@ -287,6 +302,13 @@ export default function Dashboard() {
                     color={aqi?.color || "#b2bec3"}
                     titleColor={aqi?.color} // Use AQI color for text too
                 />
+                <StatCard
+                    icon={<Heart size={24} color={healthStats?.is_sitting && healthStats.duration_minutes >= (healthStats.threshold_minutes * 0.8) ? "#e74c3c" : "#2ecc71"} />}
+                    title="Focus Time"
+                    value={healthStats && healthStats.is_sitting ? `${healthStats.duration_minutes} min` : "Away"}
+                    subValue={healthStats?.is_sitting ? `Limit: ${healthStats.threshold_minutes} min` : "Timer paused"}
+                    color={healthStats?.is_sitting && healthStats.duration_minutes >= (healthStats.threshold_minutes * 0.8) ? "#e74c3c" : "#2ecc71"}
+                />
             </div>
         </div>
     );
@@ -305,7 +327,7 @@ function StatCard({ icon, title, value, subValue, color, titleColor }) {
                 <span style={{ fontSize: '0.9rem', fontWeight: 600, color: titleColor || 'inherit' }}>{title}</span>
             </div>
             <div style={{ fontSize: '1.6rem', fontWeight: 'bold' }}>{value}</div>
-            {subValue && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{subValue}</div>}
+            {subValue && <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={subValue}>{subValue}</div>}
         </div>
     );
 }
