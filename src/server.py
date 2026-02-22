@@ -763,9 +763,10 @@ def generate_frames():
             if state.show_person_box and frame is not None:
                 for (x1, y1, x2, y2) in state.person_boxes:
                     # Neon Green box
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    # Label
-                    cv2.putText(frame, "Person", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    # Label - increased size
+                    cv2.putText(frame, "Person", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.8, (0, 255, 0), 3)
+
         
         ret, buffer = cv2.imencode('.jpg', frame)
         frame_bytes = buffer.tobytes()
