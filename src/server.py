@@ -31,6 +31,7 @@ sys.path.append(project_root)
 from manager.manager_main import Monitor
 from cv2_enumerate_cameras import enumerate_cameras
 from utils.data_loader import DataLoader
+from ultralytics import YOLO
 
 app = FastAPI()
 
@@ -57,6 +58,8 @@ class SystemState:
         self.legacy_size = 0 # Cache for legacy storage size
         self.photos_size = 0  # Cache for photos storage size
         self.screenshots_size = 0  # Cache for screenshots storage size
+        self.show_person_box = True
+        self.person_boxes = []
 
 state = SystemState()
 
@@ -571,6 +574,9 @@ async def startup_event():
         # Start background storage size cache update (every 60s)
         threading.Thread(target=update_storage_stats, daemon=True).start()
 
+        # Start background YOLO detection thread
+        threading.Thread(target=yolo_loop, daemon=True).start()
+
         # Mount static directories for photos and plots
         if state.photos_path and os.path.exists(state.photos_path):
             app.mount("/static/photos", StaticFiles(directory=state.photos_path), name="photos")
@@ -692,8 +698,54 @@ def camera_loop():
              print("Camera not opened, retrying...")
              state.camera = None
              time.sleep(2)
-             
         time.sleep(0.03)
+
+def yolo_loop():
+    print("Starting YOLO detection background thread...")
+    try:
+        model = YOLO("yolo12x.pt")
+        # Initialize an empty run to warm up the model
+        import numpy as np
+        dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
+        model.predict(source=dummy_img, verbose=False, imgsz=640)
+        print("YOLO model warmed up successfully.")
+    except Exception as e:
+        print(f"Failed to load YOLO model in thread: {e}")
+        return
+
+    while state.is_running:
+        if not state.show_person_box:
+            time.sleep(1)
+            continue
+            
+        frame_copy = None
+        with state.lock:
+            if state.latest_frame is not None:
+                frame_copy = state.latest_frame.copy()
+
+        if frame_copy is not None:
+            try:
+                # Run detection on a resized frame to save CPU/GPU if needed, 
+                # but ultralytics handles padding/resizing automatically based on imgsz.
+                # using a very low conf to catch even slight silhouettes of people
+                results = model.predict(source=frame_copy, verbose=False, conf=0.25 * 0.005, imgsz=640)
+                
+                boxes = []
+                if results and len(results) > 0:
+                    for box in results[0].boxes:
+                        if int(box.cls[0]) == 0:  # 0 is 'person' class in COCO
+                            x1, y1, x2, y2 = box.xyxy[0].tolist()
+                            boxes.append((int(x1), int(y1), int(x2), int(y2)))
+                
+                with state.lock:
+                    state.person_boxes = boxes
+                    
+            except Exception as e:
+                print(f"YOLO detection error: {e}")
+        
+        # Don't hit 100% CPU on this thread, YOLO inference takes time anyway, 
+        # but yield a bit to prevent lock starvation
+        time.sleep(0.1)
 
 def generate_frames():
     while True:
@@ -706,6 +758,14 @@ def generate_frames():
                 import numpy as np
                 frame = np.zeros((720, 1280, 3), dtype=np.uint8)
                 cv2.putText(frame, "Camera Offline", (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 2)
+            
+            # Draw YOLO bounding boxes if enabled
+            if state.show_person_box and frame is not None:
+                for (x1, y1, x2, y2) in state.person_boxes:
+                    # Neon Green box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    # Label
+                    cv2.putText(frame, "Person", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
         
         ret, buffer = cv2.imencode('.jpg', frame)
         frame_bytes = buffer.tobytes()
@@ -721,11 +781,20 @@ async def video_feed():
 async def get_status():
     return {
         "camera_online": state.camera.isOpened() if state.camera else False,
+        "show_person_box": state.show_person_box,
         "paths": state.paths,
         "photos_path": state.photos_path,
         "screenshots_path": state.screenshots_path,
         "cwd": os.getcwd()
     }
+
+@app.post("/api/toggle_detection")
+async def toggle_detection():
+    with state.lock:
+        state.show_person_box = not state.show_person_box
+        if not state.show_person_box:
+            state.person_boxes = []  # Clear boxes immediately when turned off
+    return {"status": "success", "show_person_box": state.show_person_box}
 
 @app.get("/api/sys_stats")
 async def get_sys_stats():
