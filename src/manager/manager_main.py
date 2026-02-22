@@ -31,7 +31,7 @@ class Monitor:
         self.continuous_sit_start = None
         self.last_missing_time = None
         self.last_notification_time = None
-        self.sedentary_threshold = 40 * 60  # 40 分钟 (秒)
+        self.sedentary_threshold = 20 * 60  # 20 分钟 (秒)
         self.notification_interval = 5 * 60 # 提醒后如果继续坐着，每 5 分钟再提醒一次
         self.grace_period = 2 * 60          # 允许离开镜头的宽限期 (2 分钟)，防止中途喝水或低头导致计时重置
 

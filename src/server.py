@@ -727,8 +727,8 @@ def yolo_loop():
             try:
                 # Run detection on a resized frame to save CPU/GPU if needed, 
                 # but ultralytics handles padding/resizing automatically based on imgsz.
-                # using a very low conf to catch even slight silhouettes of people
-                results = model.predict(source=frame_copy, verbose=False, conf=0.25 * 0.005, imgsz=640)
+                # using a standard surveillance confidence threshold to reduce false positives
+                results = model.predict(source=frame_copy, verbose=False, conf=0.4, imgsz=640)
                 
                 boxes = []
                 if results and len(results) > 0:
