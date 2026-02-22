@@ -54,6 +54,16 @@ if not exist "%PROJECT_ROOT%src\webapp\node_modules" (
 echo [3/3] 启动 Electron 应用...
 cd /d "%PROJECT_ROOT%src\webapp"
 
+:: 自动检测前端代码更新并打包
+echo       检查前端代码是否有更新...
+node check_build.js
+if %errorlevel% neq 0 (
+    echo       检测到代码更新或首次运行，正在自动打包...
+    call npm run build
+) else (
+    echo       前端代码无更新，直接启动...
+)
+
 :: 检查是使用开发模式还是生产模式
 if exist "%PROJECT_ROOT%src\webapp\dist\index.html" (
     echo       使用生产模式...
