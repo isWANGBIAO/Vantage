@@ -1,5 +1,5 @@
 @echo off
-echo Starting AI Manager WebApp...
+echo Starting Vantage WebApp...
 
 :: Check if node_modules exists
 if not exist "src\webapp\node_modules" (

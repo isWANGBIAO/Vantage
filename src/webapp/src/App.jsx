@@ -56,7 +56,7 @@ function App() {
             boxShadow: '0 0 15px rgba(108, 92, 231, 0.5)'
           }}></div>
           <h1 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, letterSpacing: '0.5px' }}>
-            AI <span className="text-gradient">Manager</span>
+            Vantage
           </h1>
         </div>
 
@@ -142,7 +142,7 @@ function App() {
           borderTop: '1px solid var(--border-color)',
           marginTop: 'auto'
         }}>
-          © 2026 AI Manager Premium Console • Powered by Gemini
+          © 2026 Vantage • Powered by Gemini
         </footer>
       )}
     </div>

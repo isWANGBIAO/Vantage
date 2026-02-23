@@ -50,7 +50,7 @@ const isDev = !app.isPackaged && process.env.NODE_ENV !== 'production';
 let mainWindow = null;
 let tray = null;
 
-log.info('AI Manager Electron starting...');
+log.info('Vantage Electron starting...');
 log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
 log.info(`Log file: ${logFile}`);
 
@@ -68,7 +68,7 @@ function createWindow() {
             nodeIntegration: false
         },
         icon: path.join(__dirname, '..', '..', 'icon.png'),
-        title: 'AI Manager',
+        title: 'Vantage',
         backgroundColor: '#050508',
         show: false
     });
@@ -148,7 +148,7 @@ function createTray() {
         }
     ]);
 
-    tray.setToolTip('AI Manager');
+    tray.setToolTip('Vantage');
     tray.setContextMenu(contextMenu);
 
     tray.on('double-click', () => {

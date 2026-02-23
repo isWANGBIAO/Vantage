@@ -3,7 +3,7 @@ chcp 65001 >nul
 setlocal enabledelayedexpansion
 
 echo ========================================
-echo    AI Manager - Electron 启动脚本
+echo    Vantage - Electron 启动脚本
 echo ========================================
 echo.
 
@@ -34,7 +34,7 @@ echo [1/3] 启动后端服务...
 
 echo       启动 FastAPI 后端...
 if not exist "%PROJECT_ROOT%logs" mkdir "%PROJECT_ROOT%logs"
-start "AI Manager Backend" /min cmd /c "cd /d %PROJECT_ROOT% && python src/server.py > logs/server.log 2>&1"
+start "Vantage Backend" /min cmd /c "cd /d %PROJECT_ROOT% && python src/server.py > logs/server.log 2>&1"
 
 :: 等待后端启动
 echo       等待后端就绪...

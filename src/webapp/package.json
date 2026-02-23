@@ -1,8 +1,8 @@
 {
-  "name": "ai-manager",
+  "name": "vantage",
   "private": true,
   "version": "1.0.0",
-  "description": "AI Manager Electron Desktop Application",
+  "description": "Vantage Electron Desktop Application",
   "main": "main.cjs",
   "type": "module",
   "scripts": {
@@ -37,8 +37,8 @@
     "wait-on": "^8.0.0"
   },
   "build": {
-    "appId": "com.ai.manager",
-    "productName": "AI Manager",
+    "appId": "com.vantage.app",
+    "productName": "Vantage",
     "directories": {
       "output": "electron-dist"
     },
