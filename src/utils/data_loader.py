@@ -324,6 +324,143 @@ class DataLoader:
         return combined_content
 
     @staticmethod
+    def _build_calendar_info():
+        """生成日历信息字符串：公历、农历、节假日、近期节日提醒。"""
+        now = datetime.now()
+        today = now.date()
+        
+        # --- 公历 ---
+        weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        weekday_str = weekday_names[now.weekday()]
+        solar_str = f"{now.year}年{now.month}月{now.day}日({weekday_str})"
+        
+        # --- 农历 ---
+        lunar_str = ""
+        try:
+            from zhdate import ZhDate
+            lunar = ZhDate.from_datetime(now)
+            lunar_str = lunar.chinese()
+        except Exception as e:
+            logging.warning(f"农历计算失败: {e}")
+            lunar_str = "农历信息不可用"
+        
+        # --- 节假日/工作日 ---
+        holiday_str = ""
+        try:
+            import chinese_calendar
+            is_holiday, holiday_name = chinese_calendar.get_holiday_detail(today)
+            if is_holiday and holiday_name:
+                holiday_str = f"🎉 {holiday_name}"
+            elif is_holiday:
+                holiday_str = "休息日"
+            else:
+                if now.weekday() >= 5:
+                    holiday_str = "⚠️ 调休工作日"
+                else:
+                    holiday_str = "工作日"
+        except Exception as e:
+            logging.warning(f"节假日判断失败: {e}")
+            holiday_str = "节假日信息不可用"
+        
+        # --- 近期节日提醒（未来30天） ---
+        upcoming = DataLoader._get_upcoming_festivals(today, days=30)
+        upcoming_str = ""
+        if upcoming:
+            parts = [f"{name}({date.month}/{date.day}, {delta}天后)" if delta > 0 
+                     else f"{name}(今天🎉)" 
+                     for name, date, delta in upcoming]
+            upcoming_str = " | 近期节日: " + ", ".join(parts)
+        
+        return f"{solar_str} | {lunar_str} | {holiday_str}{upcoming_str}"
+
+    @staticmethod
+    def _get_upcoming_festivals(today, days=30):
+        """获取未来N天内的公历和农历节日列表。返回 [(名称, 日期, 天数差), ...]"""
+        from datetime import timedelta
+        
+        year = today.year
+        
+        # 公历固定节日
+        solar_festivals = {
+            (1, 1): "元旦",
+            (2, 14): "情人节",
+            (3, 8): "妇女节",
+            (3, 12): "植树节",
+            (4, 1): "愚人节",
+            (5, 1): "劳动节",
+            (5, 4): "青年节",
+            (6, 1): "儿童节",
+            (7, 1): "建党节",
+            (8, 1): "建军节",
+            (9, 10): "教师节",
+            (10, 1): "国庆节",
+            (12, 24): "平安夜",
+            (12, 25): "圣诞节",
+        }
+        
+        # 农历传统节日 (农历月, 农历日)
+        lunar_festivals = {
+            (1, 1): "春节",
+            (1, 15): "元宵节",
+            (5, 5): "端午节",
+            (7, 7): "七夕",
+            (7, 15): "中元节",
+            (8, 15): "中秋节",
+            (9, 9): "重阳节",
+            (12, 30): "除夕",
+            (12, 29): "除夕(小月)",  # 腊月小月时除夕为廿九
+        }
+        
+        results = []
+        end_date = today + timedelta(days=days)
+        
+        # 检查公历节日
+        for (m, d), name in solar_festivals.items():
+            try:
+                from datetime import date
+                fest_date = date(year, m, d)
+                # 如果今年的已过去，看明年的
+                if fest_date < today:
+                    fest_date = date(year + 1, m, d)
+                if today <= fest_date <= end_date:
+                    delta = (fest_date - today).days
+                    results.append((name, fest_date, delta))
+            except ValueError:
+                pass
+        
+        # 检查农历节日
+        try:
+            from zhdate import ZhDate
+            for (lm, ld), name in lunar_festivals.items():
+                try:
+                    # 尝试今年的农历日期
+                    lunar_date = ZhDate(year, lm, ld)
+                    solar_date = lunar_date.to_datetime().date()
+                    if solar_date < today:
+                        lunar_date = ZhDate(year + 1, lm, ld)
+                        solar_date = lunar_date.to_datetime().date()
+                    if today <= solar_date <= end_date:
+                        delta = (solar_date - today).days
+                        results.append((name, solar_date, delta))
+                except Exception:
+                    pass
+        except ImportError:
+            pass
+        
+        # 按日期排序，去重（除夕可能重复）
+        results.sort(key=lambda x: x[2])
+        seen_names = set()
+        unique_results = []
+        for name, date, delta in results:
+            # 除夕去重：如果已有"除夕"就跳过"除夕(小月)"
+            base_name = name.replace("(小月)", "")
+            if base_name not in seen_names:
+                seen_names.add(base_name)
+                unique_results.append((base_name, date, delta))
+        
+        return unique_results
+
+    @staticmethod
     def get_system_prompt_content():
         base_dir = Config.get_project_root()
         system_prompt_path = base_dir / "Prompt_System.md"
@@ -335,12 +472,17 @@ class DataLoader:
         # Inject current time context
         current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
         
+        # Inject calendar info (公历/农历/节假日)
+        calendar_info_str = DataLoader._build_calendar_info()
+        
         if system_prompt_content:
             if "{current_time}" in system_prompt_content:
                     system_prompt_content = system_prompt_content.replace("{current_time}", current_time_str)
             if "{当前时间}" in system_prompt_content:
                     system_prompt_content = system_prompt_content.replace("{当前时间}", current_time_str)
+            if "{calendar_info}" in system_prompt_content:
+                    system_prompt_content = system_prompt_content.replace("{calendar_info}", calendar_info_str)
         else:
-            system_prompt_content = f"Context: Current Date and Time is {current_time_str}."
+            system_prompt_content = f"Context: Current Date and Time is {current_time_str}. Calendar: {calendar_info_str}"
 
         return system_prompt_content
