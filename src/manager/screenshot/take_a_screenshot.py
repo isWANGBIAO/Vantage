@@ -34,6 +34,7 @@ def take_and_save_screenshots(latitude, longitude, screenshots_path):
             os.makedirs(daily_folder, exist_ok=True)
 
             # 保存所有截图
+            screenshot_path = None
             for i, img in screenshots:
                 screenshot_name = f'screenshot_{timestamp}_monitor_{i}.jpg'
                 screenshot_path = os.path.join(daily_folder, screenshot_name)
@@ -48,4 +49,8 @@ def take_and_save_screenshots(latitude, longitude, screenshots_path):
 
 
 if __name__ == '__main__':
-    take_and_save_screenshots()
+    # When running directly, use some test parameters or default ones.
+    # We use some dummy location coordinates and a test output directory.
+    test_lat, test_lon = 0.0, 0.0
+    test_dir = os.path.join(os.path.expanduser('~'), 'Desktop', 'screenshots_test')
+    take_and_save_screenshots(test_lat, test_lon, test_dir)

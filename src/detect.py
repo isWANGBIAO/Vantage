@@ -3,6 +3,7 @@ import cv2
 from datetime import datetime
 from ultralytics import YOLO
 import time
+import re
 
 """
 在这个a.py 里面实现一个功能，检查logs文件夹下的照片有没有人没有的话，输出文件路径和以及对对应上下2秒以内的截图，问我要不要删除我想的是这些没有检测到人的照片和对应的截图放到一个temp文件夹内，我自己去看删除啊
@@ -28,10 +29,11 @@ def get_screenshots_within_time_range(photo_time, logs_path, time_range=2):
     for root, _, files in os.walk(screenshot_folder):
         for file in files:
             if file:
-                screenshot_time_str = file.split('_')[1] + '_' + file.split('_')[2].split('.')[0]
-                screenshot_time = datetime.strptime(screenshot_time_str, '%Y%m%d_%H%M%S')
-                if abs((screenshot_time - photo_time).total_seconds()) <= time_range:
-                    screenshots.append(os.path.join(root, file))
+                match = re.search(r"(\d{8}_\d{6})", file)
+                if match:
+                    screenshot_time = datetime.strptime(match.group(1), '%Y%m%d_%H%M%S')
+                    if abs((screenshot_time - photo_time).total_seconds()) <= time_range:
+                        screenshots.append(os.path.join(root, file))
     return screenshots
 
 
@@ -50,8 +52,10 @@ def move_back_to_original_folder(temp_folder, logs_path):
     for root, _, files in os.walk(temp_folder):
         for file in sorted(files, reverse=False):
             temp_file_path = os.path.join(root, file)
-            date_time_str = file.split('_')[1] + file.split('_')[2].split('.')[0]
-            date_time = datetime.strptime(date_time_str, '%Y%m%d%H%M%S')
+            match = re.search(r"(\d{8}_\d{6})", file)
+            if not match:
+                continue
+            date_time = datetime.strptime(match.group(1), '%Y%m%d_%H%M%S')
 
             if 'monitor' in file:
                 original_folder = os.path.join(logs_path, 'screenshots', date_time.strftime('%Y'), date_time.strftime('%m'), date_time.strftime('%d'), date_time.strftime('%H'))
@@ -94,10 +98,13 @@ def detect(photo_folder, temp_folder, logs_path):
         if person_count == 0:
             photos_without_people += 1
             print(f"未在照片中检测到人物：{photo_path}")
-            # 从文件名中获得时间，并且要去除后缀
-            photo_time_str = photo_path.split('_')[1] + '_' + photo_path.split('_')[2].split('.')[0]
-            photo_time = datetime.strptime(photo_time_str, '%Y%m%d_%H%M%S')
-            screenshots = get_screenshots_within_time_range(photo_time, logs_path)
+            
+            match = re.search(r"(\d{8}_\d{6})", os.path.basename(photo_path))
+            screenshots = []
+            if match:
+                photo_time = datetime.strptime(match.group(1), '%Y%m%d_%H%M%S')
+                screenshots = get_screenshots_within_time_range(photo_time, logs_path)
+                
             # 打印对应的截图路径
             for screenshot in screenshots:
                 print(f"对应的截图：{screenshot}")
