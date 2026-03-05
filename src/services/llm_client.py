@@ -11,16 +11,70 @@ class SiliconFlowClient:
         self.base_url = Config.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
         self.model = Config.get("SILICONFLOW_MODEL")
         self.api_key = Config.get("SILICONFLOW_API_KEY")
+        self.fallback_base_url = Config.get("SILICONFLOW_FALLBACK_BASE_URL", "https://api.siliconflow.cn/v1")
+        self.fallback_model = Config.get("SILICONFLOW_FALLBACK_MODEL")
+        self.fallback_api_key = Config.get("SILICONFLOW_FALLBACK_API_KEY")
         
         if not self.model:
             raise ValueError("Missing environment variable: SILICONFLOW_MODEL")
         if not self.api_key:
             raise ValueError("Missing environment variable: SILICONFLOW_API_KEY")
 
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
+        self.headers = self._build_headers(self.api_key)
+        self.fallback_headers = self._build_headers(self.fallback_api_key) if self._has_fallback() else None
+
+    def _build_headers(self, api_key):
+        return {
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+
+    def _has_fallback(self):
+        return bool(self.fallback_base_url and self.fallback_model and self.fallback_api_key)
+
+    def _apply_model_settings(self, payload, model):
+        updated = dict(payload)
+        enable_thinking = "qwq" in model.lower() or "deepseek" in model.lower()
+        updated["model"] = model
+        updated["enable_thinking"] = enable_thinking
+        updated["thinking_budget"] = 4096 if enable_thinking else 0
+        return updated
+
+    def _post_with_failover(self, payload, stream=False, timeout=120):
+        primary_url = self.base_url.rstrip("/") + "/chat/completions"
+        primary_payload = self._apply_model_settings(payload, self.model)
+
+        try:
+            response = requests.post(
+                primary_url,
+                json=primary_payload,
+                headers=self.headers,
+                timeout=timeout,
+                stream=stream,
+            )
+            response.raise_for_status()
+            return response, self.model, "primary"
+        except requests.RequestException as primary_error:
+            if not self._has_fallback():
+                raise
+
+            fallback_url = self.fallback_base_url.rstrip("/") + "/chat/completions"
+            fallback_payload = self._apply_model_settings(payload, self.fallback_model)
+            logging.warning(
+                "Primary LLM failed (%s). Switching to fallback model %s at %s.",
+                str(primary_error),
+                self.fallback_model,
+                self.fallback_base_url,
+            )
+            response = requests.post(
+                fallback_url,
+                json=fallback_payload,
+                headers=self.fallback_headers,
+                timeout=timeout,
+                stream=stream,
+            )
+            response.raise_for_status()
+            return response, self.fallback_model, "fallback"
 
     def chat(self, messages, stream=True, print_callback=None):
         """
@@ -41,18 +95,10 @@ class SiliconFlowClient:
                 content = last_msg.get("content", "")
                 messages[-1]["content"] = f"{content}\n\n{content}"
 
-        url = self.base_url.rstrip("/") + "/chat/completions"
-        
-        # Detect model capability (Thinking)
-        enable_thinking = "qwq" in self.model.lower() or "deepseek" in self.model.lower()
-        
         payload = {
-            "model": self.model,
             "messages": messages,
             "stream": stream,
             "max_tokens": 4096,
-            "enable_thinking": enable_thinking,
-            "thinking_budget": 4096 if enable_thinking else 0,
             "min_p": 0.05,
             "stop": None,
             "temperature": float(Config.get("AI_TEMPERATURE", 0.6)),
@@ -66,13 +112,12 @@ class SiliconFlowClient:
         start_time = time.time()
         
         if stream:
-            return self._handle_stream(url, payload, start_time, print_callback)
+            return self._handle_stream(payload, start_time, print_callback)
         else:
-            return self._handle_sync(url, payload, start_time)
+            return self._handle_sync(payload, start_time)
 
-    def _handle_sync(self, url, payload, start_time):
-        response = requests.post(url, json=payload, headers=self.headers, timeout=120)
-        response.raise_for_status()
+    def _handle_sync(self, payload, start_time):
+        response, used_model, used_route = self._post_with_failover(payload, stream=False, timeout=120)
         data = response.json()
         
         content = data["choices"][0]["message"]["content"]
@@ -83,10 +128,12 @@ class SiliconFlowClient:
             "content": content,
             "thinking": "", 
             "usage": usage,
-            "duration": duration
+            "duration": duration,
+            "model": used_model,
+            "provider_route": used_route,
         }
 
-    def _handle_stream(self, url, payload, start_time, print_callback):
+    def _handle_stream(self, payload, start_time, print_callback):
         full_content = ""
         full_thinking = ""
         usage_data = {}
@@ -104,8 +151,7 @@ class SiliconFlowClient:
                     print(f"STREAM_ERROR:{json.dumps(content)}", flush=True)
 
         try:
-            response = requests.post(url, json=payload, headers=self.headers, timeout=300, stream=True)
-            response.raise_for_status()
+            response, used_model, used_route = self._post_with_failover(payload, stream=True, timeout=300)
             
             for line in response.iter_lines():
                 if not line: continue
@@ -151,5 +197,7 @@ class SiliconFlowClient:
                 "completion_tokens": usage_data.get("completion_tokens", 0),
                 "total_tokens": usage_data.get("total_tokens", 0),
             },
-            "duration": duration
+            "duration": duration,
+            "model": used_model,
+            "provider_route": used_route,
         }
