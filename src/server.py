@@ -539,6 +539,22 @@ def identify_logs_folder():
 
     return photos_path, screenshots_path
 
+def find_latest_file_recursive(directory, extensions={'.jpg', '.png'}):
+    latest_file = None
+    latest_time = 0
+    for root, dirs, files in os.walk(directory):
+        for f in files:
+            if os.path.splitext(f)[1].lower() in extensions:
+                full_path = os.path.join(root, f)
+                try:
+                    mtime = os.path.getmtime(full_path)
+                    if mtime > latest_time:
+                        latest_time = mtime
+                        latest_file = full_path
+                except:
+                    pass
+    return latest_file
+
 @app.on_event("startup")
 async def startup_event():
     print("Starting up server...")
@@ -594,22 +610,6 @@ async def startup_event():
                 
         # Attempt to find latest existing files to populate state
         try:
-            def find_latest_file_recursive(directory, extensions={'.jpg', '.png'}):
-                latest_file = None
-                latest_time = 0
-                for root, dirs, files in os.walk(directory):
-                    for f in files:
-                        if os.path.splitext(f)[1].lower() in extensions:
-                            full_path = os.path.join(root, f)
-                            try:
-                                mtime = os.path.getmtime(full_path)
-                                if mtime > latest_time:
-                                    latest_time = mtime
-                                    latest_file = full_path
-                            except:
-                                pass
-                return latest_file
-
             print("Scanning for latest existing images...")
             if not state.paths.get('photo') and state.photos_path:
                  latest_photo = find_latest_file_recursive(state.photos_path)

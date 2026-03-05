@@ -54,11 +54,13 @@ class DataLoader:
         temp_excel_path = temp_dir / f"temp_read_{datetime.now().strftime('%f')}.xlsx"
 
         if os.name == 'nt':
+            safe_source = str(excel_file_path).replace("'", "''")
+            safe_dest = str(temp_excel_path).replace("'", "''")
             ps_cmd = [
                 "powershell",
                 "-NoProfile",
                 "-Command",
-                f"Copy-Item -Path '{str(excel_file_path)}' -Destination '{str(temp_excel_path)}' -Force"
+                f"Copy-Item -Path '{safe_source}' -Destination '{safe_dest}' -Force"
             ]
             subprocess.run(ps_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
@@ -225,10 +227,7 @@ class DataLoader:
                             )
                         elif col == "HHH":
                             try:
-                                if isinstance(value, str):
-                                    num_val = float(value)
-                                else:
-                                    num_val = float(value)
+                                num_val = float(value)
                                 
                                 count = abs(num_val)
                                 formatted_count = int(count) if count.is_integer() else count
@@ -273,10 +272,7 @@ class DataLoader:
                     )
                 elif col == "HHH":
                     try:
-                        if isinstance(latest_value, str):
-                                num_val = float(latest_value)
-                        else:
-                                num_val = float(latest_value)
+                        num_val = float(latest_value)
                         
                         count = abs(num_val)
                         formatted_count = int(count) if count.is_integer() else count
