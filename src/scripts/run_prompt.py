@@ -12,7 +12,7 @@ sys.path.append(str(project_root))
 
 from src.core.config import Config
 from src.core.context import ContextManager
-from src.services.llm_client import SiliconFlowClient
+from src.services.llm_client import LLMClient
 from src.services.audio_service import AudioService
 from src.utils.data_loader import DataLoader
 from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
@@ -49,7 +49,7 @@ def main():
             return
 
         context_mgr = ContextManager(context_file=args.context_file)
-        client = SiliconFlowClient()
+        client = LLMClient()
         
         # === CHAT MODE ===
         if args.chat_message:

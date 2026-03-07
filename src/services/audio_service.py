@@ -77,8 +77,8 @@ class AudioService:
             
         url = base_url.rstrip("/") + "/audio/transcriptions"
         
-        # Model: FunAudioLLM/SenseVoiceSmall
-        model = "FunAudioLLM/SenseVoiceSmall" 
+        # Audio transcription remains pinned to SiliconFlow configuration.
+        model = Config.get("SILICONFLOW_AUDIO_MODEL", "FunAudioLLM/SenseVoiceSmall")
         
         headers = {
             "Authorization": f"Bearer {api_key}"
@@ -127,4 +127,3 @@ class AudioService:
                     logging.info(f"Cleaned up converted file: {converted_file}")
                 except:
                     pass
-
