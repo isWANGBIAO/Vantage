@@ -13,7 +13,7 @@ logs/photos/
 # 忽略logs/photos/文件夹
 logs/screenshots/
 # 忽略test/文件夹
-tests/
+# tests/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
