@@ -17,6 +17,7 @@ from src.services.audio_service import AudioService
 from src.utils.data_loader import DataLoader
 from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
 from src.utils.action_plan_stream import build_action_plan_stream_printer
+from src.utils.generation_stats import build_generation_metadata
 
 def setup_logging():
     logging.basicConfig(
@@ -113,6 +114,7 @@ def main():
                 "speed": f"{completion_tokens / duration:.2f} tokens/s" if duration > 0 else "0.00 tokens/s",
                 "historical_total_tokens": context_mgr.token_count # Approximate
             }
+            stats_output.update(build_generation_metadata(result))
             print(f"STATS_JSON:{json.dumps(stats_output)}")
 
         # === PROMPT/ANALYSIS MODE ===
@@ -280,6 +282,7 @@ def main():
                         "speed": f"{total_completion_tokens / total_duration:.2f} tokens/s" if total_duration > 0 else "0.00 tokens/s",
                         "historical_total_tokens": total_total_tokens
                     }
+                    stats_output.update(build_generation_metadata(result, result_round_2))
                     print(f"STATS_JSON:{json.dumps(stats_output)}")
 
             else:

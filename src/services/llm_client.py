@@ -223,6 +223,7 @@ class LLMClient:
                 content = last_msg.get("content", "")
                 messages[-1]["content"] = f"{content}\n\n{content}"
 
+        reasoning_effort = Config.get("AI_REASONING_EFFORT") or "medium"
         payload = {
             "messages": messages,
             "stream": stream,
@@ -232,12 +233,14 @@ class LLMClient:
             "frequency_penalty": 0.5,
             "n": 1,
         }
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
 
         start_time = time.time()
 
         if stream:
-            return self._handle_stream(payload, start_time, print_callback)
-        return self._handle_sync(payload, start_time)
+            return self._handle_stream(payload, start_time, print_callback, reasoning_effort)
+        return self._handle_sync(payload, start_time, reasoning_effort)
 
     def _extract_content(self, message):
         content = message.get("content", "")
@@ -251,7 +254,7 @@ class LLMClient:
             return "".join(text_parts)
         return ""
 
-    def _handle_sync(self, payload, start_time):
+    def _handle_sync(self, payload, start_time, reasoning_effort):
         response, used_model, used_route = self._post_with_failover(payload, stream=False, timeout=120)
         data = response.json()
 
@@ -266,9 +269,10 @@ class LLMClient:
             "duration": duration,
             "model": used_model,
             "provider_route": used_route,
+            "reasoning_effort": reasoning_effort,
         }
 
-    def _handle_stream(self, payload, start_time, print_callback):
+    def _handle_stream(self, payload, start_time, print_callback, reasoning_effort):
         full_content = ""
         full_thinking = ""
         usage_data = {}
@@ -336,6 +340,7 @@ class LLMClient:
             "duration": duration,
             "model": used_model,
             "provider_route": used_route,
+            "reasoning_effort": reasoning_effort,
         }
 
 

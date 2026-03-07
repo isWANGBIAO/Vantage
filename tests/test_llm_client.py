@@ -139,6 +139,62 @@ class LLMClientTests(unittest.TestCase):
             ],
         )
 
+    def test_chat_includes_reasoning_effort_when_configured(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(
+                os.environ,
+                {
+                    **self._env(),
+                    "AI_REASONING_EFFORT": "xhigh",
+                },
+                clear=True,
+            ),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            client.chat([{"role": "user", "content": "ping"}], stream=False)
+
+        self.assertEqual(mock_post.call_args.kwargs["json"]["reasoning_effort"], "xhigh")
+
+    def test_chat_defaults_reasoning_effort_to_medium(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+
+        env = self._env()
+        env.pop("AI_REASONING_EFFORT", None)
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(os.environ, env, clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            client.chat([{"role": "user", "content": "ping"}], stream=False)
+
+        self.assertEqual(mock_post.call_args.kwargs["json"]["reasoning_effort"], "medium")
+
 
 if __name__ == "__main__":
     unittest.main()

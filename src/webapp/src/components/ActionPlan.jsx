@@ -6,6 +6,10 @@ import {
   getActionPlanRenderState,
   splitActionPlanContent,
 } from '../utils/actionPlanContent';
+import {
+  formatPoweredByLabel,
+  formatReasoningEffortLabel,
+} from '../utils/actionPlanStats';
 import { parseActionPlanStreamLog } from '../utils/actionPlanStream';
 
 const WELCOME_ANALYSIS = [
@@ -348,6 +352,8 @@ export default function ActionPlan() {
 
   const analysisRender = getActionPlanRenderState(analysisContent);
   const planRender = getActionPlanRenderState(planContent);
+  const poweredByLabel = formatPoweredByLabel(stats);
+  const reasoningEffortLabel = formatReasoningEffortLabel(stats?.reasoning_effort);
 
   return (
     <div
@@ -403,6 +409,8 @@ export default function ActionPlan() {
                     : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`}
                 </span>
               )}
+              {poweredByLabel && <span>Powered by {poweredByLabel}</span>}
+              {reasoningEffortLabel && <span>Thinking {reasoningEffortLabel}</span>}
             </div>
           )}
 
