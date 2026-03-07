@@ -16,6 +16,7 @@ from src.services.llm_client import LLMClient
 from src.services.audio_service import AudioService
 from src.utils.data_loader import DataLoader
 from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
+from src.utils.action_plan_stream import build_action_plan_stream_printer
 
 def setup_logging():
     logging.basicConfig(
@@ -172,7 +173,11 @@ def main():
 
             
             # Send initial huge context
-            result = client.chat(analysis_messages, stream=True)
+            result = client.chat(
+                analysis_messages,
+                stream=True,
+                print_callback=build_action_plan_stream_printer("analysis"),
+            )
             
             first_round_content = result["content"]
             if first_round_content:
@@ -183,7 +188,7 @@ def main():
             # Print Stats for round 1 (Optional, but GUI might expect it at end)
             
             # === SEPARATOR FOR GUI ===
-            print("\n初始分析已完成。正在生成今日行动建议...\n")
+            print("---PLAN_START---")
             
             # === ROUND 2: Specific Action Plan ===
             
@@ -216,7 +221,11 @@ def main():
                 # and the GUI reads it.
                 # The GUI splits by "初始分析已完成..." so the second stream will go to the right panel.
                 
-                result_round_2 = client.chat(analysis_messages, stream=True)
+                result_round_2 = client.chat(
+                    analysis_messages,
+                    stream=True,
+                    print_callback=build_action_plan_stream_printer("plan"),
+                )
                 second_round_content = result_round_2["content"]
                 
                 if second_round_content:

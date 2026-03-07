@@ -6,6 +6,7 @@ import {
   getActionPlanRenderState,
   splitActionPlanContent,
 } from '../utils/actionPlanContent';
+import { parseActionPlanStreamLog } from '../utils/actionPlanStream';
 
 const WELCOME_ANALYSIS = [
   '### Welcome to Action Plan',
@@ -198,6 +199,54 @@ export default function ActionPlan() {
               if (parts[1]) {
                 log = parts[1];
               } else {
+                return;
+              }
+            }
+
+            const sectionedLog = parseActionPlanStreamLog(log);
+            if (sectionedLog) {
+              currentSection = sectionedLog.section;
+
+              if (sectionedLog.kind === 'thinking') {
+                if (sectionedLog.section === 'analysis') {
+                  setAnalysisThinking((prev) => prev + sectionedLog.content);
+                } else {
+                  setPlanThinking((prev) => prev + sectionedLog.content);
+                }
+                return;
+              }
+
+              if (sectionedLog.kind === 'content') {
+                if (sectionedLog.section === 'analysis') {
+                  setAnalysisContent((prev) => prev + sectionedLog.content);
+                } else {
+                  setPlanContent((prev) => prev + sectionedLog.content);
+                }
+
+                const estimatedTokens = Math.max(1, Math.ceil(sectionedLog.content.length * 0.7));
+                setStats((prev) => {
+                  const startTime = prev?.startTime || Date.now();
+                  const duration = (Date.now() - startTime) / 1000;
+                  const totalTokens = (prev?.total_tokens || 0) + estimatedTokens;
+                  const speed = duration > 0 ? `${(totalTokens / duration).toFixed(2)} t/s` : '0.00 t/s';
+
+                  return {
+                    ...prev,
+                    startTime,
+                    total_tokens: totalTokens,
+                    total_duration: duration,
+                    speed,
+                  };
+                });
+                return;
+              }
+
+              if (sectionedLog.kind === 'error') {
+                if (sectionedLog.section === 'analysis') {
+                  setAnalysisContent((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
+                } else {
+                  setPlanContent((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
+                }
                 return;
               }
             }

@@ -60,12 +60,22 @@ function collapseBlankLines(lines) {
   return collapsed.join('\n').trim();
 }
 
+function unwrapMarkdownDocumentFence(content) {
+  let unwrapped = content.replace(/^\s*```(?:markdown|md)?\s*\n/i, '');
+
+  if (unwrapped !== content) {
+    unwrapped = unwrapped.replace(/\n```[\t ]*$/i, '');
+  }
+
+  return unwrapped;
+}
+
 export function normalizeActionPlanContent(content) {
   if (!content) {
     return '';
   }
 
-  const normalized = content.replace(/\r\n/g, '\n');
+  const normalized = unwrapMarkdownDocumentFence(content.replace(/\r\n/g, '\n'));
   return collapseBlankLines(normalized.split('\n').map(sanitizeLine));
 }
 

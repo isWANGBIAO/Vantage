@@ -39,6 +39,22 @@ Value A<br>Value B`;
   assert.match(normalized, /Value A Value B/);
 });
 
+test('normalizeActionPlanContent unwraps fenced markdown documents', () => {
+  const raw = '```markdown\n# Plan\n\n- Item\n```';
+
+  const normalized = normalizeActionPlanContent(raw);
+
+  assert.equal(normalized, '# Plan\n\n- Item');
+});
+
+test('normalizeActionPlanContent unwraps in-progress fenced markdown streams', () => {
+  const raw = '```markdown\n# Plan\n\n- Item';
+
+  const normalized = normalizeActionPlanContent(raw);
+
+  assert.equal(normalized, '# Plan\n\n- Item');
+});
+
 test('shouldRenderActionPlanAsPlainText flags remaining html-like corruption', () => {
   assert.equal(
     shouldRenderActionPlanAsPlainText('Valid text <stronG still hanging around'),
