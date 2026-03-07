@@ -1,6 +1,20 @@
 import os
 import sys
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
 import cv2
+from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
+from src.utils.face_report_cache import (
+    FACE_REPORT_CACHE_FILE,
+    build_face_report_response,
+    load_face_report_cache,
+)
 import json
 import time
 import re
@@ -21,12 +35,6 @@ import psutil
 import shutil
 import requests
 import pandas as pd
-
-# Ensure project root is in sys.path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-sys.path.append(current_dir)
-sys.path.append(project_root)
 
 from manager.manager_main import Monitor
 from cv2_enumerate_cameras import enumerate_cameras
@@ -1123,7 +1131,7 @@ async def get_today_action_plan():
         latest_file = max(files, key=os.path.getmtime)
         
         with open(latest_file, "r", encoding="utf-8") as f:
-            content = f.read()
+            content = sanitize_action_plan_markdown(f.read())
         
         return {
             "exists": True, 
@@ -1421,68 +1429,11 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
 async def get_face_report():
     """Get the latest analysis report including extremes and plot URL"""
     try:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        script_path = os.path.join(current_dir, "scripts", "analyze_face.py")
-        if not os.path.exists(script_path):
-             script_path = os.path.abspath("src/scripts/analyze_face.py")
-             
-        # Run in background thread to avoid blocking the async event loop
-        proc = await asyncio.to_thread(
-            subprocess.run,
-            [sys.executable, script_path],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            cwd=os.getcwd()
-        )
-        
-        stdout_bytes = proc.stdout if proc.stdout else b""
-        try:
-            stdout = stdout_bytes.decode('utf-8')
-        except:
-            stdout = stdout_bytes.decode('gbk', errors='replace')
-             
-        report_json = None
-        for line in stdout.splitlines():
-            if line.startswith("REPORT_JSON:"):
-                try:
-                    report_json = json.loads(line.replace("REPORT_JSON:", ""))
-                except:
-                    pass
-                break
-                
+        report_json = load_face_report_cache(FACE_REPORT_CACHE_FILE)
         if not report_json:
-            return {"error": "No report generated", "details": stdout, "stderr": proc.stderr if proc.stderr else ""}
-            
-        def path_to_url(path):
-            if not path: return ""
-            
-            # Normalize paths
-            abs_path = os.path.abspath(path)
-            
-            if state.photos_path:
-                abs_photos = os.path.abspath(state.photos_path)
-                # Check if file is within the photos directory
-                if abs_path.startswith(abs_photos):
-                    rel = os.path.relpath(abs_path, abs_photos).replace("\\", "/")
-                    return f"/static/photos/{rel}"
-            
-            # Fallback: Use proxy for external files
-            import urllib.parse
-            encoded_path = urllib.parse.quote(abs_path)
-            return f"/api/image_proxy?path={encoded_path}" 
+            return {"error": "No report generated"}
 
-        return {
-            "heaviest": {
-                "url": path_to_url(report_json["heaviest"]["path"]),
-                "date": report_json["heaviest"]["date"],
-                "score": report_json["heaviest"]["score"]
-            },
-            "lightest": {
-                "url": path_to_url(report_json["lightest"]["path"]),
-                "date": report_json["lightest"]["date"],
-                "score": report_json["lightest"]["score"]
-            },
-            "trend_plot": "/static/plots/dark_circles_trend.png?t=" + str(time.time())
-        }
+        return build_face_report_response(report_json, state.photos_path)
         
     except Exception as e:
         import traceback

@@ -13,6 +13,13 @@ import matplotlib.dates as mdates
 from pathlib import Path
 import pandas as pd
 
+current_dir = Path(__file__).resolve().parent
+project_root = current_dir.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.append(str(project_root))
+
+from src.utils.face_report_cache import save_face_report_cache
+
 # --- Configuration ---
 CACHE_FILE = os.path.join("history", "face_analysis_cache.json")
 PROGRESS_FILE = os.path.join("history", "analysis_progress.json")
@@ -326,11 +333,13 @@ def main():
             "date": best["date"].strftime("%Y-%m-%d %H:%M:%S")
         }
     }
-    
+
+    plot_path = plot_trend(valid_results, PLOT_OUTPUT_DIR)
+    if plot_path:
+        report["trend_plot_path"] = os.path.abspath(plot_path)
+
+    save_face_report_cache(report)
     print("REPORT_JSON:" + json.dumps(report))
-    
-    # Plot
-    plot_trend(valid_results, PLOT_OUTPUT_DIR)
 
 if __name__ == "__main__":
     main()

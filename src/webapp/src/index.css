@@ -166,7 +166,7 @@ button:disabled {
 .markdown-body h3 {
   margin-top: 1.5rem;
   margin-bottom: 0.5rem;
-  color: #fff;
+  color: var(--text-primary);
   border-bottom: 1px solid var(--border-color);
   padding-bottom: 0.3rem;
 }
@@ -178,7 +178,7 @@ button:disabled {
 
 .markdown-body p {
   margin-bottom: 1rem;
-  color: #ddd;
+  color: var(--text-secondary);
 }
 
 .markdown-body ul,

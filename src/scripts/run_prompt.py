@@ -15,6 +15,7 @@ from src.core.context import ContextManager
 from src.services.llm_client import SiliconFlowClient
 from src.services.audio_service import AudioService
 from src.utils.data_loader import DataLoader
+from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
 
 def setup_logging():
     logging.basicConfig(
@@ -234,7 +235,7 @@ def main():
                         "\n\n---ANALYSIS_END---\n\n" + 
                         second_round_content
                     )
-                    output_path.write_text(combined_content, encoding="utf-8")
+                    output_path.write_text(sanitize_action_plan_markdown(combined_content), encoding="utf-8")
                     # print(f"\nResponse saved to: {output_path}")
 
                     # --- CRITICAL FIX: Reset Context for Chat ---
