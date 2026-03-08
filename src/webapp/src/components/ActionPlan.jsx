@@ -7,6 +7,11 @@ import {
   splitActionPlanContent,
 } from '../utils/actionPlanContent';
 import {
+  ACTION_PLAN_REASONING_OPTIONS,
+  loadStoredActionPlanReasoningEffort,
+  saveActionPlanReasoningEffort,
+} from '../utils/actionPlanReasoning';
+import {
   formatPoweredByLabel,
   formatReasoningEffortLabel,
 } from '../utils/actionPlanStats';
@@ -66,6 +71,7 @@ export default function ActionPlan() {
   const [analysisThinking, setAnalysisThinking] = useState('');
   const [planContent, setPlanContent] = useState('');
   const [planThinking, setPlanThinking] = useState('');
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState(() => loadStoredActionPlanReasoningEffort());
   const [stats, setStats] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
 
@@ -133,6 +139,11 @@ export default function ActionPlan() {
     setPlanContent((prev) => `${prev}\n\n> Generation stopped by user.`);
   };
 
+  const handleReasoningEffortChange = (event) => {
+    const nextValue = saveActionPlanReasoningEffort(event.target.value);
+    setSelectedReasoningEffort(nextValue);
+  };
+
   const startGeneration = async () => {
     if (isGenerating) {
       stopGeneration();
@@ -148,6 +159,7 @@ export default function ActionPlan() {
       total_duration: 0,
       total_tokens: 0,
       startTime: Date.now(),
+      reasoning_effort: selectedReasoningEffort,
     });
 
     abortControllerRef.current = new AbortController();
@@ -157,6 +169,12 @@ export default function ActionPlan() {
     try {
       const response = await fetch('http://localhost:8000/api/action_plan', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          reasoning_effort: selectedReasoningEffort,
+        }),
         signal,
       });
 
@@ -447,6 +465,39 @@ export default function ActionPlan() {
               {reasoningEffortLabel && <span>Thinking {reasoningEffortLabel}</span>}
             </div>
           )}
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              color: 'var(--text-secondary)',
+              fontSize: '0.9rem',
+            }}
+          >
+            <span>Reasoning</span>
+            <select
+              value={selectedReasoningEffort}
+              onChange={handleReasoningEffortChange}
+              disabled={isGenerating}
+              style={{
+                padding: '0.65rem 0.85rem',
+                borderRadius: '8px',
+                border: '1px solid var(--border-color)',
+                background: 'var(--bg-surface)',
+                color: 'var(--text-primary)',
+                minWidth: '140px',
+                cursor: isGenerating ? 'not-allowed' : 'pointer',
+                opacity: isGenerating ? 0.65 : 1,
+              }}
+            >
+              {ACTION_PLAN_REASONING_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
 
           <button
             onClick={isGenerating ? stopGeneration : startGeneration}

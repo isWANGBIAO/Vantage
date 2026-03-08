@@ -1146,6 +1146,19 @@ class ChatRequest(BaseModel):
     message: str
     context_file: Optional[str] = None
 
+
+_VALID_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
+
+
+def _normalize_reasoning_effort(reasoning_effort: Optional[str]) -> str:
+    if reasoning_effort in _VALID_REASONING_EFFORTS:
+        return reasoning_effort
+    return "medium"
+
+
+class ActionPlanRequest(BaseModel):
+    reasoning_effort: Optional[str] = None
+
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     # Locate run_prompt.py in src/scripts
@@ -1209,7 +1222,7 @@ async def chat_endpoint(request: ChatRequest):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/api/action_plan")
-async def generate_action_plan():
+async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
     # Locate run_prompt.py in src/scripts
     current_dir = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
@@ -1220,6 +1233,9 @@ async def generate_action_plan():
     
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    env["AI_REASONING_EFFORT"] = _normalize_reasoning_effort(
+        request.reasoning_effort if request else None,
+    )
     
     # Streaming response for real-time logs? 
     # For now, let's just return the full result or stream lines.
