@@ -1233,6 +1233,7 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
     
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
     env["AI_REASONING_EFFORT"] = _normalize_reasoning_effort(
         request.reasoning_effort if request else None,
     )
@@ -1247,7 +1248,7 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT, # Redirect stderr to stdout so errors appear in stream
+            stderr=asyncio.subprocess.PIPE,
             cwd=os.path.dirname(script_path),
             env=env
         )
@@ -1264,6 +1265,11 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
                 yield json.dumps({"log": decoded}) + "\n"
                 
             await proc.wait()
+
+            if proc.returncode != 0:
+                stderr_data = await proc.stderr.read()
+                err_msg = stderr_data.decode('utf-8', errors='replace')
+                yield json.dumps({"error": err_msg}) + "\n"
             
         except asyncio.CancelledError:
             print("Stream cancelled by client")
