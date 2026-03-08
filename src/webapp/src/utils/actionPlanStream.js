@@ -15,6 +15,38 @@ function decodeStreamPayload(raw) {
   }
 }
 
+function normalizeStreamLines(lines) {
+  return lines
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line.trim());
+}
+
+export function createNdjsonLineBuffer() {
+  let remainder = '';
+
+  return {
+    push(chunk) {
+      remainder += chunk;
+      const lines = remainder.split('\n');
+      remainder = lines.pop() ?? '';
+      return normalizeStreamLines(lines);
+    },
+    flush() {
+      const trailingLine = remainder.replace(/\r$/, '');
+      remainder = '';
+      return trailingLine.trim() ? [trailingLine] : [];
+    },
+  };
+}
+
+export function createStreamRenderScheduler({
+  schedule = (callback) => setTimeout(callback, 0),
+} = {}) {
+  return () => new Promise((resolve) => {
+    schedule(resolve);
+  });
+}
+
 export function parseActionPlanStreamLog(log) {
   if (!log) {
     return null;

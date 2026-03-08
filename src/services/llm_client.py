@@ -291,7 +291,7 @@ class LLMClient:
         try:
             response, used_model, used_route = self._post_with_failover(payload, stream=True, timeout=300)
 
-            for line in response.iter_lines():
+            for line in response.iter_lines(chunk_size=1):
                 if not line:
                     continue
                 line_str = line.decode("utf-8")

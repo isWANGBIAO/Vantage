@@ -195,6 +195,34 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(mock_post.call_args.kwargs["json"]["reasoning_effort"], "medium")
 
+    def test_streaming_chat_uses_small_iter_lines_chunk_size(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.iter_lines.return_value = [
+            b'data: {"choices":[{"delta":{"content":"A"}}]}',
+            b'data: [DONE]',
+        ]
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response),
+        ):
+            client = llm_client.LLMClient()
+            result = client.chat(
+                [{"role": "user", "content": "ping"}],
+                stream=True,
+                print_callback=lambda *_: None,
+            )
+
+        self.assertEqual(result["content"], "A")
+        fake_response.iter_lines.assert_called_once_with(chunk_size=1)
+
 
 if __name__ == "__main__":
     unittest.main()

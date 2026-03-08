@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseActionPlanStreamLog } from './actionPlanStream.js';
+import {
+  createNdjsonLineBuffer,
+  createStreamRenderScheduler,
+  parseActionPlanStreamLog,
+} from './actionPlanStream.js';
 
 test('parseActionPlanStreamLog reads analysis content events', () => {
   assert.deepEqual(
@@ -27,4 +31,52 @@ test('parseActionPlanStreamLog reads plan thinking events', () => {
 
 test('parseActionPlanStreamLog ignores unrelated logs', () => {
   assert.equal(parseActionPlanStreamLog('STATS_JSON:{}'), null);
+});
+
+test('createNdjsonLineBuffer preserves split lines across chunks', () => {
+  const lineBuffer = createNdjsonLineBuffer();
+
+  assert.deepEqual(
+    lineBuffer.push('{"log":"one"}\n{"log":"tw'),
+    ['{"log":"one"}'],
+  );
+
+  assert.deepEqual(
+    lineBuffer.push('o"}\n'),
+    ['{"log":"two"}'],
+  );
+
+  assert.deepEqual(lineBuffer.flush(), []);
+});
+
+test('createNdjsonLineBuffer flushes trailing line without newline', () => {
+  const lineBuffer = createNdjsonLineBuffer();
+
+  assert.deepEqual(lineBuffer.push('{"log":"tail"}'), []);
+  assert.deepEqual(lineBuffer.flush(), ['{"log":"tail"}']);
+});
+
+test('createStreamRenderScheduler yields after each streamed update', async () => {
+  const scheduledCallbacks = [];
+  const waitForRender = createStreamRenderScheduler({
+    schedule: (callback) => {
+      scheduledCallbacks.push(callback);
+    },
+  });
+
+  const pending = waitForRender();
+  let resolved = false;
+  pending.then(() => {
+    resolved = true;
+  });
+
+  await Promise.resolve();
+
+  assert.equal(resolved, false);
+  assert.equal(scheduledCallbacks.length, 1);
+
+  scheduledCallbacks.shift()();
+  await pending;
+
+  assert.equal(resolved, true);
 });

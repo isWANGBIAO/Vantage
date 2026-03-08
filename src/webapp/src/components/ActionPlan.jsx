@@ -10,7 +10,11 @@ import {
   formatPoweredByLabel,
   formatReasoningEffortLabel,
 } from '../utils/actionPlanStats';
-import { parseActionPlanStreamLog } from '../utils/actionPlanStream';
+import {
+  createNdjsonLineBuffer,
+  createStreamRenderScheduler,
+  parseActionPlanStreamLog,
+} from '../utils/actionPlanStream';
 
 const WELCOME_ANALYSIS = [
   '### Welcome to Action Plan',
@@ -162,145 +166,65 @@ export default function ActionPlan() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      const lineBuffer = createNdjsonLineBuffer();
+      const waitForRender = createStreamRenderScheduler();
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          break;
+      const processStreamLine = async (line) => {
+        let shouldYieldRender = false;
+
+        if (!line.trim()) {
+          return;
         }
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
+        try {
+          const data = JSON.parse(line);
+          let { log } = data;
 
-        lines.forEach((line) => {
-          if (!line.trim()) {
+          if (!log) {
             return;
           }
 
-          try {
-            const data = JSON.parse(line);
-            let { log } = data;
+          if (log.startsWith('STATS_JSON:')) {
+            try {
+              const jsonStr = log.replace('STATS_JSON:', '').trim();
+              const newStats = JSON.parse(jsonStr);
+              setStats((prev) => ({ ...prev, ...newStats }));
+            } catch (err) {
+              console.error('Stats parse error', err);
+            }
+            return;
+          }
 
-            if (!log) {
+          if (log.includes('---ANALYSIS_START---')) {
+            setAnalysisContent('');
+            setAnalysisThinking('');
+            const parts = log.split('---ANALYSIS_START---');
+            if (parts[1]) {
+              log = parts[1];
+            } else {
               return;
             }
+          }
 
-            if (log.startsWith('STATS_JSON:')) {
-              try {
-                const jsonStr = log.replace('STATS_JSON:', '').trim();
-                const newStats = JSON.parse(jsonStr);
-                setStats((prev) => ({ ...prev, ...newStats }));
-              } catch (err) {
-                console.error('Stats parse error', err);
-              }
-              return;
-            }
+          const sectionedLog = parseActionPlanStreamLog(log);
+          if (sectionedLog) {
+            currentSection = sectionedLog.section;
 
-            if (log.includes('---ANALYSIS_START---')) {
-              setAnalysisContent('');
-              setAnalysisThinking('');
-              const parts = log.split('---ANALYSIS_START---');
-              if (parts[1]) {
-                log = parts[1];
+            if (sectionedLog.kind === 'thinking') {
+              if (sectionedLog.section === 'analysis') {
+                setAnalysisThinking((prev) => prev + sectionedLog.content);
               } else {
-                return;
+                setPlanThinking((prev) => prev + sectionedLog.content);
               }
-            }
-
-            const sectionedLog = parseActionPlanStreamLog(log);
-            if (sectionedLog) {
-              currentSection = sectionedLog.section;
-
-              if (sectionedLog.kind === 'thinking') {
-                if (sectionedLog.section === 'analysis') {
-                  setAnalysisThinking((prev) => prev + sectionedLog.content);
-                } else {
-                  setPlanThinking((prev) => prev + sectionedLog.content);
-                }
-                return;
-              }
-
-              if (sectionedLog.kind === 'content') {
-                if (sectionedLog.section === 'analysis') {
-                  setAnalysisContent((prev) => prev + sectionedLog.content);
-                } else {
-                  setPlanContent((prev) => prev + sectionedLog.content);
-                }
-
-                const estimatedTokens = Math.max(1, Math.ceil(sectionedLog.content.length * 0.7));
-                setStats((prev) => {
-                  const startTime = prev?.startTime || Date.now();
-                  const duration = (Date.now() - startTime) / 1000;
-                  const totalTokens = (prev?.total_tokens || 0) + estimatedTokens;
-                  const speed = duration > 0 ? `${(totalTokens / duration).toFixed(2)} t/s` : '0.00 t/s';
-
-                  return {
-                    ...prev,
-                    startTime,
-                    total_tokens: totalTokens,
-                    total_duration: duration,
-                    speed,
-                  };
-                });
-                return;
-              }
-
-              if (sectionedLog.kind === 'error') {
-                if (sectionedLog.section === 'analysis') {
-                  setAnalysisContent((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
-                } else {
-                  setPlanContent((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
-                }
-                return;
-              }
-            }
-
-            if (
-              log.includes("Today's Action Plan") ||
-              log.includes('---PLAN_START---')
-            ) {
-              currentSection = 'plan';
-              setPlanContent('');
-              setPlanThinking('');
-              return;
-            }
-
-            if (log.startsWith('STREAM_THINKING:')) {
-              const raw = log.replace('STREAM_THINKING:', '');
-              try {
-                const thought = JSON.parse(raw);
-                if (currentSection === 'analysis') {
-                  setAnalysisThinking((prev) => prev + thought);
-                } else {
-                  setPlanThinking((prev) => prev + thought);
-                }
-              } catch {
-                if (currentSection === 'analysis') {
-                  setAnalysisThinking((prev) => prev + raw);
-                } else {
-                  setPlanThinking((prev) => prev + raw);
-                }
-              }
-              return;
-            }
-
-            if (log.startsWith('STREAM_CONTENT:')) {
-              const raw = log.replace('STREAM_CONTENT:', '');
-              let content = raw;
-
-              try {
-                content = JSON.parse(raw);
-              } catch {
-                content = raw;
-              }
-
-              if (currentSection === 'analysis') {
-                setAnalysisContent((prev) => prev + content);
+              shouldYieldRender = true;
+            } else if (sectionedLog.kind === 'content') {
+              if (sectionedLog.section === 'analysis') {
+                setAnalysisContent((prev) => prev + sectionedLog.content);
               } else {
-                setPlanContent((prev) => prev + content);
+                setPlanContent((prev) => prev + sectionedLog.content);
               }
 
-              const estimatedTokens = Math.max(1, Math.ceil(content.length * 0.7));
+              const estimatedTokens = Math.max(1, Math.ceil(sectionedLog.content.length * 0.7));
               setStats((prev) => {
                 const startTime = prev?.startTime || Date.now();
                 const duration = (Date.now() - startTime) / 1000;
@@ -315,26 +239,136 @@ export default function ActionPlan() {
                   speed,
                 };
               });
-              return;
+              shouldYieldRender = true;
+            } else if (sectionedLog.kind === 'error') {
+              if (sectionedLog.section === 'analysis') {
+                setAnalysisContent((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
+              } else {
+                setPlanContent((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
+              }
+              shouldYieldRender = true;
             }
 
-            if (log.startsWith('STREAM_DONE:') || log.startsWith('STREAM_ERROR:')) {
-              return;
+            if (shouldYieldRender) {
+              await waitForRender();
             }
-
-            if (currentSection === 'analysis') {
-              setAnalysisContent((prev) => prev + `${log}\n`);
-            } else {
-              setPlanContent((prev) => prev + `${log}\n`);
-            }
-          } catch {
-            if (currentSection === 'analysis') {
-              setAnalysisContent((prev) => prev + `${line}\n`);
-            } else {
-              setPlanContent((prev) => prev + `${line}\n`);
-            }
+            return;
           }
-        });
+
+          if (
+            log.includes("Today's Action Plan") ||
+            log.includes('---PLAN_START---')
+          ) {
+            currentSection = 'plan';
+            setPlanContent('');
+            setPlanThinking('');
+            return;
+          }
+
+          if (log.startsWith('STREAM_THINKING:')) {
+            const raw = log.replace('STREAM_THINKING:', '');
+            try {
+              const thought = JSON.parse(raw);
+              if (currentSection === 'analysis') {
+                setAnalysisThinking((prev) => prev + thought);
+              } else {
+                setPlanThinking((prev) => prev + thought);
+              }
+            } catch {
+              if (currentSection === 'analysis') {
+                setAnalysisThinking((prev) => prev + raw);
+              } else {
+                setPlanThinking((prev) => prev + raw);
+              }
+            }
+            await waitForRender();
+            return;
+          }
+
+          if (log.startsWith('STREAM_CONTENT:')) {
+            const raw = log.replace('STREAM_CONTENT:', '');
+            let content = raw;
+
+            try {
+              content = JSON.parse(raw);
+            } catch {
+              content = raw;
+            }
+
+            if (currentSection === 'analysis') {
+              setAnalysisContent((prev) => prev + content);
+            } else {
+              setPlanContent((prev) => prev + content);
+            }
+
+            const estimatedTokens = Math.max(1, Math.ceil(content.length * 0.7));
+            setStats((prev) => {
+              const startTime = prev?.startTime || Date.now();
+              const duration = (Date.now() - startTime) / 1000;
+              const totalTokens = (prev?.total_tokens || 0) + estimatedTokens;
+              const speed = duration > 0 ? `${(totalTokens / duration).toFixed(2)} t/s` : '0.00 t/s';
+
+              return {
+                ...prev,
+                startTime,
+                total_tokens: totalTokens,
+                total_duration: duration,
+                speed,
+              };
+            });
+            await waitForRender();
+            return;
+          }
+
+          if (log.startsWith('STREAM_DONE:') || log.startsWith('STREAM_ERROR:')) {
+            return;
+          }
+
+          if (currentSection === 'analysis') {
+            setAnalysisContent((prev) => prev + `${log}\n`);
+          } else {
+            setPlanContent((prev) => prev + `${log}\n`);
+          }
+          shouldYieldRender = true;
+        } catch {
+          if (currentSection === 'analysis') {
+            setAnalysisContent((prev) => prev + `${line}\n`);
+          } else {
+            setPlanContent((prev) => prev + `${line}\n`);
+          }
+          shouldYieldRender = true;
+        }
+
+        if (shouldYieldRender) {
+          await waitForRender();
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = lineBuffer.push(chunk);
+
+        for (const line of lines) {
+          await processStreamLine(line);
+        }
+      }
+
+      const trailingChunk = decoder.decode();
+      if (trailingChunk) {
+        const trailingLines = lineBuffer.push(trailingChunk);
+        for (const line of trailingLines) {
+          await processStreamLine(line);
+        }
+      }
+
+      const finalLines = lineBuffer.flush();
+      for (const line of finalLines) {
+        await processStreamLine(line);
       }
     } catch (err) {
       if (err.name === 'AbortError') {
