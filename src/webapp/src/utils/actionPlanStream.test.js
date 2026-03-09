@@ -80,3 +80,17 @@ test('createStreamRenderScheduler yields after each streamed update', async () =
 
   assert.equal(resolved, true);
 });
+
+test('createStreamRenderScheduler resolves immediately when streaming view is hidden', async () => {
+  let scheduledCount = 0;
+  const waitForRender = createStreamRenderScheduler({
+    shouldYield: () => false,
+    schedule: () => {
+      scheduledCount += 1;
+    },
+  });
+
+  await waitForRender();
+
+  assert.equal(scheduledCount, 0);
+});

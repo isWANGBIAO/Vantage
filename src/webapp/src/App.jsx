@@ -96,7 +96,7 @@ function App() {
           <Dashboard />
         </div>
         <div style={{ display: activeTab === 'action plan' ? 'block' : 'none', height: '100%' }}>
-          <ActionPlanContainer />
+          <ActionPlanContainer isVisible={activeTab === 'action plan'} />
         </div>
         <div style={{ display: activeTab === 'project progress' ? 'block' : 'none', height: '100%' }}>
           <ProjectProgress />

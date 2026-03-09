@@ -66,7 +66,7 @@ function renderMarkdownOrText(contentState) {
   );
 }
 
-export default function ActionPlan() {
+export default function ActionPlan({ isVisible = true }) {
   const [analysisContent, setAnalysisContent] = useState('');
   const [analysisThinking, setAnalysisThinking] = useState('');
   const [planContent, setPlanContent] = useState('');
@@ -78,22 +78,25 @@ export default function ActionPlan() {
   const abortControllerRef = useRef(null);
   const analysisEndRef = useRef(null);
   const planEndRef = useRef(null);
+  const visibilityRef = useRef(isVisible);
+
+  visibilityRef.current = isVisible;
 
   useEffect(() => {
     loadTodaysPlan();
   }, []);
 
   useEffect(() => {
-    if (isGenerating && analysisContent) {
+    if (isGenerating && isVisible && analysisContent) {
       analysisEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [analysisContent, isGenerating]);
+  }, [analysisContent, isGenerating, isVisible]);
 
   useEffect(() => {
-    if (isGenerating && planContent) {
+    if (isGenerating && isVisible && planContent) {
       planEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [planContent, isGenerating]);
+  }, [planContent, isGenerating, isVisible]);
 
   const applyLoadedContent = (rawContent) => {
     const sections = splitActionPlanContent(rawContent);
@@ -185,7 +188,15 @@ export default function ActionPlan() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       const lineBuffer = createNdjsonLineBuffer();
-      const waitForRender = createStreamRenderScheduler();
+      const waitForRender = createStreamRenderScheduler({
+        shouldYield: () => {
+          if (!visibilityRef.current) {
+            return false;
+          }
+
+          return !(typeof document !== 'undefined' && document.hidden);
+        },
+      });
 
       const processStreamLine = async (line) => {
         let shouldYieldRender = false;

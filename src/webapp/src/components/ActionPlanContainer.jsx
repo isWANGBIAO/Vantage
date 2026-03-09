@@ -3,7 +3,7 @@ import ActionPlan from './ActionPlan';
 import ChatInterface from './ChatInterface';
 import { FileText, MessageSquare } from 'lucide-react';
 
-export default function ActionPlanContainer() {
+export default function ActionPlanContainer({ isVisible = true }) {
   const [subTab, setSubTab] = useState('plan');
 
   return (
@@ -63,7 +63,7 @@ export default function ActionPlanContainer() {
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <div style={{ height: '100%', display: subTab === 'plan' ? 'block' : 'none' }}>
-          <ActionPlan />
+          <ActionPlan isVisible={isVisible && subTab === 'plan'} />
         </div>
         <div style={{ height: '100%', display: subTab === 'chat' ? 'block' : 'none' }}>
           <ChatInterface />

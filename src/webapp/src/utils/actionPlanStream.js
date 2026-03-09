@@ -41,8 +41,13 @@ export function createNdjsonLineBuffer() {
 
 export function createStreamRenderScheduler({
   schedule = (callback) => setTimeout(callback, 0),
+  shouldYield = () => true,
 } = {}) {
   return () => new Promise((resolve) => {
+    if (!shouldYield()) {
+      resolve();
+      return;
+    }
     schedule(resolve);
   });
 }
