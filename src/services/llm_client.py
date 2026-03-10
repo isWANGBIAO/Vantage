@@ -217,12 +217,6 @@ class LLMClient:
         """
         messages = copy.deepcopy(messages)
 
-        if messages:
-            last_msg = messages[-1]
-            if last_msg.get("role") == "user":
-                content = last_msg.get("content", "")
-                messages[-1]["content"] = f"{content}\n\n{content}"
-
         reasoning_effort = Config.get("AI_REASONING_EFFORT") or "medium"
         payload = {
             "messages": messages,
