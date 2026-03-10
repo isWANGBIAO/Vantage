@@ -84,8 +84,8 @@ def main():
             print("Thinking...")
             print("---CHAT_START---")
             
-            # Prune context before sending
-            messages_to_send = context_mgr.get_messages(prune=True)
+            # Send the full persisted chat history
+            messages_to_send = context_mgr.get_messages()
             
             # Call API
             result = client.chat(messages_to_send, stream=True)

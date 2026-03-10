@@ -5,10 +5,9 @@ from datetime import datetime
 from src.core.config import Config
 
 class ContextManager:
-    def __init__(self, context_file=None, token_limit=12000):
+    def __init__(self, context_file=None):
         self.history_dir = Config.get_history_dir()
         self.context_file = Path(context_file) if context_file else self.history_dir / "latest_context.json"
-        self.token_limit = token_limit
         self.messages = []
         self.load()
 
@@ -47,54 +46,12 @@ class ContextManager:
 
     def get_messages(self, prune=True):
         """
-        Get messages, optionally pruning to fit within token limit.
+        Get messages as deep copies to prevent external mutation.
         Returns deep copies to prevent external mutation of internal state.
-        Strategy:
-        1. Always keep the System Prompt (if present at index 0).
-        2. Keep the most recent messages that fit within the limit.
         """
         import copy
 
-        if not prune:
-            return copy.deepcopy(self.messages)
-
-        if not self.messages:
-            return []
-
-        CHAR_PER_TOKEN = 3 
-
-        current_tokens = 0
-        pruned_messages = []
-        
-        # Identify System Prompt
-        system_message = None
-        start_index = 0
-        if self.messages and self.messages[0].get("role") == "system":
-            system_message = self.messages[0]
-            current_tokens += len(system_message.get("content", "")) // CHAR_PER_TOKEN
-            start_index = 1
-        
-        # Iterate backwards from the end
-        temp_messages = []
-        for i in range(len(self.messages) - 1, start_index - 1, -1):
-            msg = self.messages[i]
-            content = msg.get("content", "")
-            est_tokens = len(content) // CHAR_PER_TOKEN + 10 # +10 for metadata overhead
-            
-            if current_tokens + est_tokens > self.token_limit:
-                break
-            
-            current_tokens += est_tokens
-            temp_messages.append(msg)
-        
-        # Reconstruct
-        if system_message:
-            pruned_messages.append(system_message)
-        
-        pruned_messages.extend(reversed(temp_messages))
-        
-        # Return deep copies to prevent external mutation
-        return copy.deepcopy(pruned_messages)
+        return copy.deepcopy(self.messages)
 
     def clear(self):
         """Clear context but keep system prompt if it exists"""
