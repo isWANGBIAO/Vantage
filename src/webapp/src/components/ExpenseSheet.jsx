@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { RefreshCw, Wallet, Clock, Coins, BarChart3, ClipboardList } from 'lucide-react';
+import { fetchBackend } from '../utils/backendRequest';
 
 const formatNumber = (value, digits = 2) => {
     if (value === null || value === undefined || Number.isNaN(value)) return '--';
@@ -70,7 +71,10 @@ export default function ExpenseSheet() {
         setIsLoading(true);
         setError('');
         try {
-            const res = await fetch('http://localhost:8000/api/balance_sheet');
+            const res = await fetchBackend('/api/balance_sheet', {
+                retryPolicy: 'load',
+                allowHttpError: true,
+            });
             if (!res.ok) {
                 const err = await res.json();
                 throw new Error(err.error || 'Failed to load balance sheet');
@@ -194,6 +198,5 @@ export default function ExpenseSheet() {
         </div>
     );
 }
-
 
 

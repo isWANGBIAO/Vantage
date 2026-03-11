@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Target, CheckCircle2, Circle, GitCommit, TrendingUp, RefreshCw, AlertCircle } from 'lucide-react';
 import './ProjectProgress.css';
+import { fetchBackendJson } from '../utils/backendRequest';
 
 const ProjectProgress = () => {
     const [data, setData] = useState(null);
@@ -13,25 +14,11 @@ const ProjectProgress = () => {
         setLoading(true);
         setError(null);
         try {
-            const response = await fetch('http://localhost:8000/api/project_progress');
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const result = await response.json();
+            const result = await fetchBackendJson('/api/project_progress', { retryPolicy: 'load' });
             setData(result);
-        } catch (e) {
-            // Fallback for production vs dev
-            try {
-                const prodResponse = await fetch('/api/project_progress');
-                if (!prodResponse.ok) {
-                    throw new Error(`HTTP error! status: ${prodResponse.status}`);
-                }
-                const prodResult = await prodResponse.json();
-                setData(prodResult);
-            } catch (e2) {
-                setError('Failed to load project progress. Make sure the backend is running.');
-                console.error(e2);
-            }
+        } catch (error) {
+            setError('Failed to load project progress. Make sure the backend is running.');
+            console.error(error);
         } finally {
             setLoading(false);
         }

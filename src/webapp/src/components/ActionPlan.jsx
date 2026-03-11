@@ -20,6 +20,7 @@ import {
   createStreamRenderScheduler,
   parseActionPlanStreamLog,
 } from '../utils/actionPlanStream';
+import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 
 const WELCOME_ANALYSIS = [
   '### Welcome to Action Plan',
@@ -43,6 +44,12 @@ const LOAD_ERROR_ANALYSIS = [
   '### Load failed',
   '',
   'The page could not reach the backend service. Refresh and try again.',
+].join('\n');
+
+const CONNECTING_ANALYSIS = [
+  '### Connecting to backend',
+  '',
+  'Waiting for the backend service to start...',
 ].join('\n');
 
 function renderMarkdownOrText(contentState) {
@@ -76,6 +83,7 @@ export default function ActionPlan({ isVisible = true }) {
   const [isGenerating, setIsGenerating] = useState(false);
 
   const abortControllerRef = useRef(null);
+  const loadAbortControllerRef = useRef(null);
   const analysisEndRef = useRef(null);
   const planEndRef = useRef(null);
   const visibilityRef = useRef(isVisible);
@@ -83,7 +91,18 @@ export default function ActionPlan({ isVisible = true }) {
   visibilityRef.current = isVisible;
 
   useEffect(() => {
-    loadTodaysPlan();
+    const controller = new AbortController();
+    loadAbortControllerRef.current = controller;
+    setAnalysisContent(CONNECTING_ANALYSIS);
+    setPlanContent(WELCOME_PLAN);
+    loadTodaysPlan(controller.signal);
+
+    return () => {
+      controller.abort();
+      if (loadAbortControllerRef.current?.signal === controller.signal) {
+        loadAbortControllerRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -107,10 +126,16 @@ export default function ActionPlan({ isVisible = true }) {
     setPlanContent(nextPlan);
   };
 
-  const loadTodaysPlan = async () => {
+  const loadTodaysPlan = async (signal) => {
     try {
-      const res = await fetch('http://localhost:8000/api/action_plan/today');
-      const data = await res.json();
+      const data = await fetchBackendJson('/api/action_plan/today', {
+        retryPolicy: 'load',
+        signal,
+      });
+
+      if (loadAbortControllerRef.current?.signal !== signal) {
+        return;
+      }
 
       if (data.exists && data.content) {
         applyLoadedContent(data.content);
@@ -126,9 +151,17 @@ export default function ActionPlan({ isVisible = true }) {
       setAnalysisContent(WELCOME_ANALYSIS);
       setPlanContent(WELCOME_PLAN);
     } catch (err) {
+      if (err.name === 'AbortError') {
+        return;
+      }
+
       console.error('Failed to load today plan:', err);
       setAnalysisContent(LOAD_ERROR_ANALYSIS);
       setPlanContent(WELCOME_PLAN);
+    } finally {
+      if (loadAbortControllerRef.current?.signal === signal) {
+        loadAbortControllerRef.current = null;
+      }
     }
   };
 
@@ -152,6 +185,11 @@ export default function ActionPlan({ isVisible = true }) {
       stopGeneration();
     }
 
+    if (loadAbortControllerRef.current) {
+      loadAbortControllerRef.current.abort();
+      loadAbortControllerRef.current = null;
+    }
+
     setIsGenerating(true);
     setAnalysisThinking('');
     setPlanThinking('');
@@ -170,7 +208,7 @@ export default function ActionPlan({ isVisible = true }) {
     let currentSection = 'analysis';
 
     try {
-      const response = await fetch('http://localhost:8000/api/action_plan', {
+      const response = await fetchBackend('/api/action_plan', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -179,6 +217,7 @@ export default function ActionPlan({ isVisible = true }) {
           reasoning_effort: selectedReasoningEffort,
         }),
         signal,
+        retryPolicy: 'stream',
       });
 
       if (!response.body) {

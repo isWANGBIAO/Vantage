@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Mic, Send, StopCircle, Bot, User, Trash2 } from 'lucide-react';
+import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 
 export default function ChatInterface() {
     const [messages, setMessages] = useState([]);
@@ -133,10 +134,11 @@ export default function ChatInterface() {
         setIsLoading(true);
 
         try {
-            const res = await fetch('http://localhost:8000/api/chat', {
+            const res = await fetchBackend('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: userMsg }),
+                retryPolicy: 'stream',
             });
 
             await processStreamResponse(res);
@@ -199,13 +201,11 @@ export default function ChatInterface() {
 
                 try {
                     console.log("[Voice] Sending to /api/transcribe...");
-                    const res = await fetch('http://localhost:8000/api/transcribe', {
+                    const data = await fetchBackendJson('/api/transcribe', {
                         method: 'POST',
-                        body: formData
+                        body: formData,
+                        retryPolicy: 'mutation',
                     });
-
-                    console.log("[Voice] Transcribe response status:", res.status);
-                    const data = await res.json();
                     console.log("[Voice] Transcribe result:", data);
 
                     if (data.transcription && data.transcription.trim()) {
@@ -219,10 +219,11 @@ export default function ChatInterface() {
 
                         // 调用聊天 API (reuse shared stream processor)
                         try {
-                            const chatRes = await fetch('http://localhost:8000/api/chat', {
+                            const chatRes = await fetchBackend('/api/chat', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ message: transcribedText }),
+                                retryPolicy: 'stream',
                             });
 
                             await processStreamResponse(chatRes);

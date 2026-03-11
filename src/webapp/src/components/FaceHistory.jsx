@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
 import { getFaceReportState } from '../utils/faceReportState';
+import {
+  buildBackendUrl,
+  fetchBackend,
+  fetchBackendJson,
+} from '../utils/backendRequest';
 
 const initialProgress = { percent: 0, status: 'idle', current_file: '' };
 
@@ -19,10 +24,10 @@ export default function FaceHistory() {
     }
 
     try {
-      const res = await fetch('http://localhost:8000/api/face/report', {
+      const json = await fetchBackendJson('/api/face/report', {
+        retryPolicy: 'load',
         signal: controller.signal,
       });
-      const json = await res.json();
       const nextState = getFaceReportState(json);
 
       setData(nextState.data);
@@ -49,7 +54,10 @@ export default function FaceHistory() {
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch('http://localhost:8000/api/face/progress');
+        const res = await fetchBackend('/api/face/progress', {
+          retryPolicy: 'poll',
+          allowHttpError: true,
+        });
         if (!res.ok) {
           return;
         }
@@ -81,7 +89,10 @@ export default function FaceHistory() {
       setLoading(true);
       setError(null);
       setProgress({ percent: 0, status: 'starting', current_file: '' });
-      await fetch('http://localhost:8000/api/face/analyze', { method: 'POST' });
+      await fetchBackend('/api/face/analyze', {
+        method: 'POST',
+        retryPolicy: 'mutation',
+      });
     } catch (err) {
       setError(err.message);
       setReportStatus('error');
@@ -91,7 +102,10 @@ export default function FaceHistory() {
 
   const handleExport = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/face/export_excel');
+      const res = await fetchBackend('/api/face/export_excel', {
+        retryPolicy: 'download',
+        allowHttpError: true,
+      });
       if (!res.ok) {
         const json = await res.json();
         alert(`Export failed: ${json.error || 'Unknown error'}`);
@@ -162,7 +176,7 @@ export default function FaceHistory() {
           <h3 style={{ marginBottom: '1rem', opacity: 0.8 }}>Severity Trend</h3>
           <div style={{ width: '100%', borderRadius: '12px', overflow: 'hidden' }}>
             <img
-              src={`http://localhost:8000${data.trend_plot}`}
+              src={buildBackendUrl(data.trend_plot)}
               alt="Dark Circles Trend"
               style={{ width: '100%', height: 'auto', display: 'block' }}
             />
@@ -182,7 +196,7 @@ export default function FaceHistory() {
             <p style={{ opacity: 0.7, marginBottom: '1rem' }}>{data.lightest.date}</p>
             <div style={{ borderRadius: '12px', overflow: 'hidden', aspectRatio: '16/9' }}>
               <img
-                src={`http://localhost:8000${data.lightest.url}`}
+                src={buildBackendUrl(data.lightest.url)}
                 alt="Best Condition"
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               />
@@ -202,7 +216,7 @@ export default function FaceHistory() {
             <p style={{ opacity: 0.7, marginBottom: '1rem' }}>{data.heaviest.date}</p>
             <div style={{ borderRadius: '12px', overflow: 'hidden', aspectRatio: '16/9' }}>
               <img
-                src={`http://localhost:8000${data.heaviest.url}`}
+                src={buildBackendUrl(data.heaviest.url)}
                 alt="Worst Condition"
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               />

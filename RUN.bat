@@ -10,6 +10,9 @@ echo.
 :: 获取脚本所在目录（项目根目录）
 set "PROJECT_ROOT=%~dp0"
 cd /d "%PROJECT_ROOT%"
+set "ELECTRON_RUN_AS_NODE="
+set "BACKEND_STATUS_URL=http://127.0.0.1:8000/api/status"
+set "BACKEND_WAIT_TIMEOUT=60"
 
 :: 清理残留进程
 echo [0/3] 清理残留进程...
@@ -38,7 +41,8 @@ start "Vantage Backend" /min cmd /c "cd /d %PROJECT_ROOT% && python src/server.p
 
 :: 等待后端启动
 echo       等待后端就绪...
-timeout /t 3 /nobreak >nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$elapsed = 0; while ($elapsed -lt %BACKEND_WAIT_TIMEOUT%) { try { $response = Invoke-WebRequest -Uri '%BACKEND_STATUS_URL%' -UseBasicParsing -TimeoutSec 2; if ($response.StatusCode -eq 200) { Write-Host '      Backend ready'; exit 0 } } catch { }; $elapsed += 1; Write-Host ('      Waiting for backend... ' + $elapsed + '/%BACKEND_WAIT_TIMEOUT%s'); Start-Sleep -Seconds 1 }; Write-Host '      Backend did not become ready within %BACKEND_WAIT_TIMEOUT% seconds'; if (Test-Path '%PROJECT_ROOT%logs\server.log') { Write-Host '      Last 20 lines of logs\server.log:'; Get-Content '%PROJECT_ROOT%logs\server.log' -Tail 20 }; exit 1"
+if errorlevel 1 exit /b 1
 
 :: 检查 node_modules
 echo [2/3] 检查依赖...

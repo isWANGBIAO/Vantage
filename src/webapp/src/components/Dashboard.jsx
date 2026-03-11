@@ -13,6 +13,7 @@ import {
   Wind,
   Heart,
 } from 'lucide-react';
+import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
@@ -25,8 +26,8 @@ export default function Dashboard() {
   const estimateStorage = async (photoUrl, screenUrl) => {
     try {
       const [photoResponse, screenshotResponse] = await Promise.all([
-        fetch(photoUrl, { method: 'HEAD' }),
-        fetch(screenUrl, { method: 'HEAD' }),
+        fetchBackend(photoUrl, { method: 'HEAD', retryPolicy: 'poll' }),
+        fetchBackend(screenUrl, { method: 'HEAD', retryPolicy: 'poll' }),
       ]);
 
       const photoSize = parseInt(photoResponse.headers.get('content-length') || 0, 10);
@@ -44,8 +45,7 @@ export default function Dashboard() {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/sys_stats');
-      const data = await res.json();
+      const data = await fetchBackendJson('/api/sys_stats', { retryPolicy: 'poll' });
       setStats(data);
     } catch (err) {
       console.error('Failed to fetch stats', err);
@@ -54,15 +54,14 @@ export default function Dashboard() {
 
   const fetchLatestImages = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/latest_images');
-      const data = await res.json();
+      const data = await fetchBackendJson('/api/latest_images', { retryPolicy: 'poll' });
 
       if (data.photo?.startsWith('/')) {
-        data.photo = `http://localhost:8000${data.photo}`;
+        data.photo = buildBackendUrl(data.photo);
       }
 
       if (data.screenshot?.startsWith('/')) {
-        data.screenshot = `http://localhost:8000${data.screenshot}`;
+        data.screenshot = buildBackendUrl(data.screenshot);
       }
 
       setLatestImages(data);
@@ -77,12 +76,12 @@ export default function Dashboard() {
 
   const fetchAqiBackend = async (lat, lon) => {
     try {
-      let url = 'http://localhost:8000/api/aqi';
+      let url = '/api/aqi';
       if (lat !== null && lon !== null) {
         url += `?lat=${lat}&lon=${lon}`;
       }
 
-      const res = await fetch(url);
+      const res = await fetchBackend(url, { retryPolicy: 'poll', allowHttpError: true });
       if (!res.ok) {
         return;
       }
@@ -117,7 +116,10 @@ export default function Dashboard() {
 
   const fetchHealth = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/health/sedentary');
+      const res = await fetchBackend('/api/health/sedentary', {
+        retryPolicy: 'poll',
+        allowHttpError: true,
+      });
       if (!res.ok) {
         return;
       }
@@ -131,10 +133,12 @@ export default function Dashboard() {
 
   const openFolder = async (type) => {
     try {
-      const res = await fetch('http://localhost:8000/api/open_folder', {
+      const res = await fetchBackend('/api/open_folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type }),
+        retryPolicy: 'mutation',
+        allowHttpError: true,
       });
       const data = await res.json();
 

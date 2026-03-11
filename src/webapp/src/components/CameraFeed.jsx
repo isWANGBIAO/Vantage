@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { buildBackendUrl, fetchBackendJson } from '../utils/backendRequest';
 
 export default function CameraFeed() {
     const [status, setStatus] = useState({ online: false, show_person_box: true });
@@ -7,8 +8,7 @@ export default function CameraFeed() {
     useEffect(() => {
         const checkStatus = async () => {
             try {
-                const res = await fetch('http://localhost:8000/api/status');
-                const data = await res.json();
+                const data = await fetchBackendJson('/api/status', { retryPolicy: 'poll' });
                 setStatus({ online: data.camera_online, show_person_box: data.show_person_box });
             } catch (err) {
                 console.error("Failed to fetch camera status", err);
@@ -32,7 +32,7 @@ export default function CameraFeed() {
         }}>
             {status.online ? (
                 <img
-                    src="http://localhost:8000/api/stream"
+                    src={buildBackendUrl('/api/stream')}
                     alt="Live Stream"
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
@@ -52,8 +52,10 @@ export default function CameraFeed() {
                     onClick={async () => {
                         setToggling(true);
                         try {
-                            const res = await fetch('http://localhost:8000/api/toggle_detection', { method: 'POST' });
-                            const data = await res.json();
+                            const data = await fetchBackendJson('/api/toggle_detection', {
+                                method: 'POST',
+                                retryPolicy: 'mutation',
+                            });
                             setStatus(prev => ({ ...prev, show_person_box: data.show_person_box }));
                         } catch (err) {
                             console.error("Toggle error", err);

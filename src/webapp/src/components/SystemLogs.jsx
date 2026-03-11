@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { fetchBackendJson } from '../utils/backendRequest';
 
 export default function SystemLogs() {
     const [logs, setLogs] = useState([]);
@@ -9,12 +10,9 @@ export default function SystemLogs() {
     useEffect(() => {
         const fetchLogs = async () => {
             try {
-                const res = await fetch('http://localhost:8000/api/system_logs');
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.logs && Array.isArray(data.logs)) {
-                        setLogs(data.logs);
-                    }
+                const data = await fetchBackendJson('/api/system_logs', { retryPolicy: 'poll' });
+                if (data.logs && Array.isArray(data.logs)) {
+                    setLogs(data.logs);
                 }
             } catch (e) {
                 console.error("Log fetch error:", e);

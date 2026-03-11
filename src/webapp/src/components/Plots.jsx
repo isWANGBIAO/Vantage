@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, RefreshCw, Image as ImageIcon } from 'lucide-react';
+import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 
 export default function Plots() {
     const [plots, setPlots] = useState([]);
@@ -15,12 +16,11 @@ export default function Plots() {
     const fetchPlots = async () => {
         setIsLoading(true);
         try {
-            const res = await fetch('http://localhost:8000/api/plots/list');
-            const data = await res.json();
+            const data = await fetchBackendJson('/api/plots/list', { retryPolicy: 'load' });
             if (data.plots && data.plots.length > 0) {
                 // Fix URLs for production
                 data.plots.forEach(p => {
-                    if (p.url && p.url.startsWith('/')) p.url = 'http://localhost:8000' + p.url;
+                    if (p.url && p.url.startsWith('/')) p.url = buildBackendUrl(p.url);
                 });
                 setPlots(data.plots);
                 setCurrentIndex(0);
@@ -34,14 +34,14 @@ export default function Plots() {
     const refreshPlots = async () => {
         setIsRefreshing(true);
         try {
-            const res = await fetch('http://localhost:8000/api/plots/refresh', { method: 'POST' });
-            if (res.ok) {
-                // Wait for plots to be generated, then reload
-                setTimeout(() => {
-                    fetchPlots();
-                    setIsRefreshing(false);
-                }, 5000);
-            }
+            await fetchBackend('/api/plots/refresh', {
+                method: 'POST',
+                retryPolicy: 'mutation',
+            });
+            setTimeout(() => {
+                fetchPlots();
+                setIsRefreshing(false);
+            }, 5000);
         } catch (err) {
             console.error('Failed to refresh plots:', err);
             setIsRefreshing(false);
