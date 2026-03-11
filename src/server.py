@@ -1156,8 +1156,43 @@ def _normalize_reasoning_effort(reasoning_effort: Optional[str]) -> str:
     return "medium"
 
 
+def _get_history_dir() -> str:
+    return os.path.join(os.getcwd(), "history")
+
+
+def _list_today_action_plan_files(target_date: Optional[str] = None):
+    today = target_date or datetime.now().strftime("%Y%m%d")
+    pattern = os.path.join(_get_history_dir(), f"action_plan_{today}_*.md")
+    return glob.glob(pattern)
+
+
+def _replace_today_action_plan_files(previous_files):
+    current_files = _list_today_action_plan_files()
+    if not current_files:
+        return None
+
+    keep_file = max(current_files, key=os.path.getmtime)
+    previous_file_paths = {os.path.abspath(path) for path in previous_files}
+    current_file_paths = {os.path.abspath(path) for path in current_files}
+    created_files = current_file_paths - previous_file_paths
+
+    if previous_file_paths and not created_files and os.path.abspath(keep_file) in previous_file_paths:
+        return keep_file
+
+    for path in current_files:
+        if os.path.abspath(path) == os.path.abspath(keep_file):
+            continue
+        try:
+            os.remove(path)
+        except OSError as exc:
+            print(f"Failed to remove replaced action plan file {path}: {exc}")
+
+    return keep_file
+
+
 class ActionPlanRequest(BaseModel):
     reasoning_effort: Optional[str] = None
+    replace_today: bool = False
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -1237,6 +1272,8 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
     env["AI_REASONING_EFFORT"] = _normalize_reasoning_effort(
         request.reasoning_effort if request else None,
     )
+    replace_today = request.replace_today if request else False
+    previous_today_files = _list_today_action_plan_files() if replace_today else []
     
     # Streaming response for real-time logs? 
     # For now, let's just return the full result or stream lines.
@@ -1270,6 +1307,8 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
                 stderr_data = await proc.stderr.read()
                 err_msg = stderr_data.decode('utf-8', errors='replace')
                 yield json.dumps({"error": err_msg}) + "\n"
+            elif replace_today:
+                _replace_today_action_plan_files(previous_today_files)
             
         except asyncio.CancelledError:
             print("Stream cancelled by client")

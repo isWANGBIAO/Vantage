@@ -12,6 +12,10 @@ import {
   saveActionPlanReasoningEffort,
 } from '../utils/actionPlanReasoning';
 import {
+  buildActionPlanGenerationPayload,
+  shouldAutogenerateActionPlan,
+} from '../utils/actionPlanGeneration';
+import {
   formatPoweredByLabel,
   formatReasoningEffortLabel,
 } from '../utils/actionPlanStats';
@@ -25,7 +29,7 @@ import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 const WELCOME_ANALYSIS = [
   '### Welcome to Action Plan',
   '',
-  'Click **Regenerate** to create today\'s analysis.',
+  'Today\'s analysis starts automatically on app launch. Click **Regenerate** to run it again.',
 ].join('\n');
 
 const WELCOME_PLAN = [
@@ -84,6 +88,7 @@ export default function ActionPlan({ isVisible = true }) {
 
   const abortControllerRef = useRef(null);
   const loadAbortControllerRef = useRef(null);
+  const startupGenerationTriggeredRef = useRef(false);
   const analysisEndRef = useRef(null);
   const planEndRef = useRef(null);
   const visibilityRef = useRef(isVisible);
@@ -95,7 +100,23 @@ export default function ActionPlan({ isVisible = true }) {
     loadAbortControllerRef.current = controller;
     setAnalysisContent(CONNECTING_ANALYSIS);
     setPlanContent(WELCOME_PLAN);
-    loadTodaysPlan(controller.signal);
+
+    const initializeActionPlan = async () => {
+      await loadTodaysPlan(controller.signal);
+
+      if (!shouldAutogenerateActionPlan({
+        hasTriggered: startupGenerationTriggeredRef.current,
+        isGenerating,
+        isAborted: controller.signal.aborted,
+      })) {
+        return;
+      }
+
+      startupGenerationTriggeredRef.current = true;
+      await startGeneration({ replaceToday: true });
+    };
+
+    void initializeActionPlan();
 
     return () => {
       controller.abort();
@@ -180,7 +201,7 @@ export default function ActionPlan({ isVisible = true }) {
     setSelectedReasoningEffort(nextValue);
   };
 
-  const startGeneration = async () => {
+  const startGeneration = async ({ replaceToday = false } = {}) => {
     if (isGenerating) {
       stopGeneration();
     }
@@ -213,9 +234,11 @@ export default function ActionPlan({ isVisible = true }) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          reasoning_effort: selectedReasoningEffort,
-        }),
+        body: JSON.stringify(
+          buildActionPlanGenerationPayload(selectedReasoningEffort, {
+            replaceToday,
+          }),
+        ),
         signal,
         retryPolicy: 'stream',
       });
