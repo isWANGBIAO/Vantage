@@ -21,10 +21,10 @@ const DROP_LINE_PATTERNS = [
 
 function sanitizeLine(line) {
   let sanitized = line.trimEnd();
-  sanitized = sanitized.replace(/(?:<strong>-<\/strong>){2,}.*$/i, '');
-  sanitized = sanitized.replace(/<b<br>>.*$/i, '');
-  sanitized = sanitized.replace(/<b<(?:b<)+.*$/i, '');
-  sanitized = sanitized.replace(/<stron<br>.*$/i, '');
+  sanitized = sanitized.replace(/(?:<strong>-<\/strong>){2,}/gi, ' ');
+  sanitized = sanitized.replace(/<b<br>>/gi, ' ');
+  sanitized = sanitized.replace(/<b(?:<b)+<?b*/gi, ' ');
+  sanitized = sanitized.replace(/<\/?stron<br>?/gi, ' ');
   sanitized = sanitized.replace(/<br\s*\/?>/gi, ' ');
   sanitized = sanitized.replace(/<\/p>/gi, ' ');
   sanitized = sanitized.replace(/<p>/gi, '');

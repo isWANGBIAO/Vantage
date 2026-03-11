@@ -4,6 +4,27 @@ from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
 
 
 class ActionPlanSanitizerTests(unittest.TestCase):
+    def test_preserves_trailing_text_after_inline_corruption_markers(self):
+        raw = """* ✅️<b<br>> 固定起床时间，不补觉拖延。
+1. ⚠️<b<br>> 今天先确认团队碰头是否同步。
+|[21:00]<b<br>> *硬性边界*|<b<br>> **[P0]【开启夜间模式】**<b<br>> •手机电脑台灯切换至夜间模式。
+"""
+
+        cleaned = sanitize_action_plan_markdown(raw)
+
+        self.assertIn("固定起床时间，不补觉拖延。", cleaned)
+        self.assertIn("今天先确认团队碰头是否同步。", cleaned)
+        self.assertIn("手机电脑台灯切换至夜间模式。", cleaned)
+        self.assertNotIn("<b<br>>", cleaned)
+
+    def test_removes_inline_b_residue_without_dropping_following_text(self):
+        raw = "• 晚间准备：<b<b<b<b<b<bbbbbbbbbbbbb 保留后面的正文。"
+
+        cleaned = sanitize_action_plan_markdown(raw)
+
+        self.assertIn("保留后面的正文。", cleaned)
+        self.assertNotIn("bbbbbbbb", cleaned)
+
     def test_removes_known_corruption_markers(self):
         raw = """### Summary
 

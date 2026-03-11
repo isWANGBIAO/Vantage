@@ -39,6 +39,28 @@ Value A<br>Value B`;
   assert.match(normalized, /Value A Value B/);
 });
 
+test('normalizeActionPlanContent preserves trailing text after inline corruption markers', () => {
+  const raw = `* ✅️<b<br>> 固定起床时间，不补觉拖延。
+1. ⚠️<b<br>> 今天先确认团队碰头是否同步。
+|[21:00]<b<br>> *硬性边界*|<b<br>> **[P0]【开启夜间模式】**<b<br>> •手机电脑台灯切换至夜间模式。`;
+
+  const normalized = normalizeActionPlanContent(raw);
+
+  assert.match(normalized, /固定起床时间，不补觉拖延。/);
+  assert.match(normalized, /今天先确认团队碰头是否同步。/);
+  assert.match(normalized, /手机电脑台灯切换至夜间模式。/);
+  assert.doesNotMatch(normalized, /<b<br>>/);
+});
+
+test('normalizeActionPlanContent removes inline b residue without dropping following text', () => {
+  const normalized = normalizeActionPlanContent(
+    '• 晚间准备：<b<b<b<b<b<bbbbbbbbbbbbb 保留后面的正文。',
+  );
+
+  assert.match(normalized, /保留后面的正文。/);
+  assert.doesNotMatch(normalized, /bbbbbbbb/);
+});
+
 test('normalizeActionPlanContent unwraps fenced markdown documents', () => {
   const raw = '```markdown\n# Plan\n\n- Item\n```';
 

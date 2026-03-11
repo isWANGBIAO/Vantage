@@ -4,10 +4,10 @@ import re
 ANALYSIS_SEPARATOR = "\n\n---ANALYSIS_END---\n\n"
 
 _CORRUPT_LINE_PATTERNS = (
-    re.compile(r"(?:<strong>-</strong>){2,}.*$", re.IGNORECASE),
-    re.compile(r"<b<br>>.*$", re.IGNORECASE),
-    re.compile(r"<b<(?:b<)+.*$", re.IGNORECASE),
-    re.compile(r"<stron<br>.*$", re.IGNORECASE),
+    re.compile(r"(?:<strong>-</strong>){2,}", re.IGNORECASE),
+    re.compile(r"<b<br>>", re.IGNORECASE),
+    re.compile(r"<b(?:<b)+<?b*", re.IGNORECASE),
+    re.compile(r"</?stron<br>?", re.IGNORECASE),
 )
 
 _DROP_LINE_PATTERNS = (
@@ -25,7 +25,7 @@ _DROP_LINE_PATTERNS = (
 def _sanitize_line(line: str) -> str:
     sanitized = line.rstrip()
     for pattern in _CORRUPT_LINE_PATTERNS:
-        sanitized = pattern.sub("", sanitized)
+        sanitized = pattern.sub(" ", sanitized)
     sanitized = re.sub(r"<br\s*/?>", " ", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"</p>", " ", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"<p>", "", sanitized, flags=re.IGNORECASE)
