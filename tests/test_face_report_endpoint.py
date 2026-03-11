@@ -5,34 +5,34 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src import server
-from src.utils.face_report_cache import save_face_report_cache
+from src.utils.face_analysis_db import initialize_face_analysis_storage, save_face_report_cache
 
 
 class FaceReportEndpointTests(unittest.TestCase):
     def test_cached_report_returns_without_running_subprocess(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            report_path = Path(tmpdir) / "face_report.json"
+            tmp = Path(tmpdir)
+            db_path = Path(tmpdir) / "face_analysis.db"
+            initialize_face_analysis_storage(db_path)
             save_face_report_cache(
                 {
                     "heaviest": {
-                        "path": str(Path(tmpdir) / "heaviest.jpg"),
+                        "path": str(tmp / "heaviest.jpg"),
                         "date": "2026-03-07 11:00:00",
                         "score": 9.8,
                     },
                     "lightest": {
-                        "path": str(Path(tmpdir) / "lightest.jpg"),
+                        "path": str(tmp / "lightest.jpg"),
                         "date": "2026-03-06 11:00:00",
                         "score": 2.1,
                     },
-                    "trend_plot_path": str(Path(tmpdir) / "dark_circles_trend.png"),
+                    "trend_plot_path": str(tmp / "dark_circles_trend.png"),
                 },
-                report_path,
+                db_path,
             )
 
-            with patch.object(server, "FACE_REPORT_CACHE_FILE", report_path), patch.object(
-                server.asyncio,
-                "to_thread",
-                side_effect=AssertionError("GET /api/face/report should not trigger background analysis"),
+            with patch.object(server, "FACE_ANALYSIS_DB_FILE", db_path), patch.object(
+                server.asyncio, "to_thread", side_effect=AssertionError("GET /api/face/report should not trigger background analysis")
             ):
                 payload = asyncio.run(server.get_face_report())
 
@@ -42,8 +42,8 @@ class FaceReportEndpointTests(unittest.TestCase):
 
     def test_missing_cache_returns_empty_state_error(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            report_path = Path(tmpdir) / "missing.json"
-            with patch.object(server, "FACE_REPORT_CACHE_FILE", report_path):
+            db_path = Path(tmpdir) / "missing.db"
+            with patch.object(server, "FACE_ANALYSIS_DB_FILE", db_path):
                 payload = asyncio.run(server.get_face_report())
 
         self.assertEqual(payload["error"], "No report generated")

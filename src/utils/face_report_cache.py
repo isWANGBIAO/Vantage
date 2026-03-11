@@ -4,25 +4,21 @@ import time
 import urllib.parse
 from pathlib import Path
 
+from src.utils.face_analysis_db import (
+    FACE_ANALYSIS_DB_FILE,
+    load_face_report_cache as load_face_report_cache_from_db,
+    save_face_report_cache as save_face_report_cache_to_db,
+)
 
-FACE_REPORT_CACHE_FILE = Path("history") / "face_report.json"
+FACE_REPORT_CACHE_FILE = FACE_ANALYSIS_DB_FILE
 
 
 def save_face_report_cache(report: dict, report_file: str | Path = FACE_REPORT_CACHE_FILE) -> Path:
-    path = Path(report_file)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+    return save_face_report_cache_to_db(report, report_file)
 
 
 def load_face_report_cache(report_file: str | Path = FACE_REPORT_CACHE_FILE) -> dict | None:
-    path = Path(report_file)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return load_face_report_cache_from_db(report_file)
 
 
 def build_face_report_response(report: dict, photos_path: str | None = None) -> dict:

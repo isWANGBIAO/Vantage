@@ -10,8 +10,12 @@ if project_root not in sys.path:
 
 import cv2
 from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
+from src.utils.face_analysis_db import (
+    FACE_ANALYSIS_DB_FILE,
+    initialize_face_analysis_storage,
+    load_face_progress_cache,
+)
 from src.utils.face_report_cache import (
-    FACE_REPORT_CACHE_FILE,
     build_face_report_response,
     load_face_report_cache,
 )
@@ -1490,7 +1494,8 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
 async def get_face_report():
     """Get the latest analysis report including extremes and plot URL"""
     try:
-        report_json = load_face_report_cache(FACE_REPORT_CACHE_FILE)
+        initialize_face_analysis_storage(FACE_ANALYSIS_DB_FILE)
+        report_json = load_face_report_cache(FACE_ANALYSIS_DB_FILE)
         if not report_json:
             return {"error": "No report generated"}
 
@@ -1541,17 +1546,12 @@ async def export_face_excel():
 async def get_face_progress():
     """Get the current progress of face analysis"""
     try:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        # Assuming script runs in CWD, progress file is in history/
-        # server.py usually runs with CWD as project root
-        progress_file = os.path.join(os.getcwd(), "history", "analysis_progress.json")
-        
-        if not os.path.exists(progress_file):
+        initialize_face_analysis_storage(FACE_ANALYSIS_DB_FILE)
+        data = load_face_progress_cache(FACE_ANALYSIS_DB_FILE)
+
+        if not data:
             return {"status": "idle", "percent": 0}
-            
-        with open(progress_file, "r") as f:
-            data = json.load(f)
-            
+
         # Check if stale (e.g. older than 1 minute)
         if time.time() - data.get("timestamp", 0) > 60:
              return {"status": "idle", "percent": 0}
