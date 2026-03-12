@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+import csv
+import json
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -82,6 +84,170 @@ class DetectCleanupTests(unittest.TestCase):
                 for call in mock_status.call_args_list
             )
         )
+
+    def test_detect_skips_unreadable_photo_and_continues(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            photos_dir = root / "photos"
+            screenshots_dir = root / "screenshots"
+            photos_dir.mkdir()
+            screenshots_dir.mkdir()
+
+            bad_photo = photos_dir / "photo_20260312_120000.jpg"
+            good_photo = photos_dir / "photo_20260312_120001.jpg"
+            bad_photo.write_bytes(b"x")
+            good_photo.write_bytes(b"y")
+
+            def fake_detect_person_count(photo_path, model=None, conf=None):
+                if photo_path == str(bad_photo):
+                    raise ValueError("need at least one array to stack")
+                return 1
+
+            with patch.object(detect, "get_yolo_model", return_value=object()), patch.object(
+                detect,
+                "detect_person_count",
+                side_effect=fake_detect_person_count,
+            ), patch.object(detect, "emit_status") as mock_status:
+                cleanup_plan = detect.detect(str(photos_dir), str(screenshots_dir), dry_run=True)
+
+        self.assertEqual(cleanup_plan, [])
+        self.assertTrue(
+            any(
+                call.args and str(call.args[0]).startswith(f"WARNING Image Read Error {bad_photo}")
+                for call in mock_status.call_args_list
+            )
+        )
+        self.assertTrue(
+            any(
+                call.args and "Processed photos: 2/2" in str(call.args[0])
+                for call in mock_status.call_args_list
+            )
+        )
+
+    def test_detect_resumes_from_progress_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            photos_dir = root / "photos"
+            screenshots_dir = root / "screenshots"
+            result_csv = root / "results.csv"
+            resume_file = root / "resume.json"
+            photos_dir.mkdir()
+            screenshots_dir.mkdir()
+
+            photos = [
+                photos_dir / "photo_20260312_120000.jpg",
+                photos_dir / "photo_20260312_120001.jpg",
+                photos_dir / "photo_20260312_120002.jpg",
+            ]
+            for photo in photos:
+                photo.write_bytes(b"x")
+
+            processed_paths = []
+
+            def fake_detect_person_count(photo_path, model=None, conf=None):
+                processed_paths.append(photo_path)
+                return 1
+
+            progress_calls = 0
+
+            def interrupt_after_two_progress_messages(message):
+                nonlocal progress_calls
+                if str(message).startswith("Processed photos:"):
+                    progress_calls += 1
+                    if progress_calls == 2:
+                        raise RuntimeError("stop after checkpoint")
+
+            with patch.object(detect, "get_yolo_model", return_value=object()), patch.object(
+                detect,
+                "detect_person_count",
+                side_effect=fake_detect_person_count,
+            ), patch.object(detect, "emit_status", side_effect=interrupt_after_two_progress_messages):
+                with self.assertRaisesRegex(RuntimeError, "stop after checkpoint"):
+                    detect.detect(
+                        str(photos_dir),
+                        str(screenshots_dir),
+                        dry_run=True,
+                        result_csv_path=str(result_csv),
+                        resume_file_path=str(resume_file),
+                    )
+
+            with resume_file.open("r", encoding="utf-8") as fh:
+                resume_state = json.load(fh)
+
+            self.assertEqual(resume_state["processed_count"], 2)
+            self.assertEqual(resume_state["last_photo_path"], str(photos[1]))
+
+            with patch.object(detect, "get_yolo_model", return_value=object()), patch.object(
+                detect,
+                "detect_person_count",
+                side_effect=fake_detect_person_count,
+            ), patch.object(detect, "emit_status"):
+                detect.detect(
+                    str(photos_dir),
+                    str(screenshots_dir),
+                    dry_run=True,
+                    result_csv_path=str(result_csv),
+                    resume_file_path=str(resume_file),
+                )
+
+            self.assertEqual(processed_paths, [str(photo) for photo in photos])
+
+            with result_csv.open("r", encoding="utf-8", newline="") as fh:
+                rows = list(csv.DictReader(fh))
+
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([row["photo_path"] for row in rows], [str(photo) for photo in photos])
+
+    def test_detect_writes_csv_rows_in_real_time(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            photos_dir = root / "photos"
+            screenshots_dir = root / "screenshots"
+            result_csv = root / "results.csv"
+            resume_file = root / "resume.json"
+            photos_dir.mkdir()
+            screenshots_dir.mkdir()
+
+            no_person_photo = photos_dir / "photo_20260312_120000.jpg"
+            with_person_photo = photos_dir / "photo_20260312_120001.jpg"
+            no_person_photo.write_bytes(b"x")
+            with_person_photo.write_bytes(b"y")
+
+            def fake_detect_person_count(photo_path, model=None, conf=None):
+                if photo_path == str(no_person_photo):
+                    return 0
+                return 2
+
+            with patch.object(detect, "get_yolo_model", return_value=object()), patch.object(
+                detect,
+                "detect_person_count",
+                side_effect=fake_detect_person_count,
+            ), patch.object(
+                detect,
+                "get_screenshots_within_time_range",
+                return_value=["C:/shots/screenshot_20260312_120000_monitor_1.jpg"],
+            ), patch.object(detect, "emit_status"):
+                cleanup_plan = detect.detect(
+                    str(photos_dir),
+                    str(screenshots_dir),
+                    dry_run=True,
+                    result_csv_path=str(result_csv),
+                    resume_file_path=str(resume_file),
+                    reset_progress=True,
+                )
+
+            with result_csv.open("r", encoding="utf-8", newline="") as fh:
+                rows = list(csv.DictReader(fh))
+
+        self.assertEqual(len(cleanup_plan), 1)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["status"], "no_person")
+        self.assertEqual(rows[0]["photo_path"], str(no_person_photo))
+        self.assertEqual(rows[0]["screenshot_paths"], "C:/shots/screenshot_20260312_120000_monitor_1.jpg")
+        self.assertEqual(rows[1]["status"], "with_people")
+        self.assertEqual(rows[1]["person_count"], "2")
+        self.assertTrue(rows[0]["processed_at"])
+        self.assertTrue(rows[1]["processed_at"])
 
     def test_history_recheck_uses_same_confidence_as_live_capture(self):
         self.assertEqual(
