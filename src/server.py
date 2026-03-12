@@ -41,6 +41,7 @@ import requests
 import pandas as pd
 
 from manager.manager_main import Monitor
+from src.services.person_detection import PERSON_DETECTION_MODEL
 from cv2_enumerate_cameras import enumerate_cameras
 from utils.data_loader import DataLoader
 from ultralytics import YOLO
@@ -715,7 +716,7 @@ def camera_loop():
 def yolo_loop():
     print("Starting YOLO detection background thread...")
     try:
-        model = YOLO("yolo12x.pt")
+        model = YOLO(PERSON_DETECTION_MODEL)
         # Initialize an empty run to warm up the model
         import numpy as np
         dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
