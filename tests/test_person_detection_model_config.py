@@ -11,6 +11,12 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
     def test_server_uses_shared_model_constant(self):
         self.assertEqual(server.PERSON_DETECTION_MODEL, person_detection.PERSON_DETECTION_MODEL)
 
+    def test_server_uses_shared_confidence_constant(self):
+        self.assertEqual(
+            server.PERSON_DETECTION_CONFIDENCE,
+            person_detection.PERSON_DETECTION_CONFIDENCE,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -41,7 +41,10 @@ import requests
 import pandas as pd
 
 from manager.manager_main import Monitor
-from src.services.person_detection import PERSON_DETECTION_MODEL
+from src.services.person_detection import (
+    PERSON_DETECTION_CONFIDENCE,
+    PERSON_DETECTION_MODEL,
+)
 from cv2_enumerate_cameras import enumerate_cameras
 from utils.data_loader import DataLoader
 from ultralytics import YOLO
@@ -741,7 +744,12 @@ def yolo_loop():
                 # Run detection on a resized frame to save CPU/GPU if needed, 
                 # but ultralytics handles padding/resizing automatically based on imgsz.
                 # using a standard surveillance confidence threshold to reduce false positives
-                results = model.predict(source=frame_copy, verbose=False, conf=0.4, imgsz=640)
+                results = model.predict(
+                    source=frame_copy,
+                    verbose=False,
+                    conf=PERSON_DETECTION_CONFIDENCE,
+                    imgsz=640,
+                )
                 
                 boxes = []
                 if results and len(results) > 0:
