@@ -169,6 +169,8 @@ class DetectCleanupTests(unittest.TestCase):
                         dry_run=True,
                         result_csv_path=str(result_csv),
                         resume_file_path=str(resume_file),
+                        batch_size=1,
+                        progress_interval_seconds=0,
                     )
 
             with resume_file.open("r", encoding="utf-8") as fh:
@@ -188,6 +190,8 @@ class DetectCleanupTests(unittest.TestCase):
                     dry_run=True,
                     result_csv_path=str(result_csv),
                     resume_file_path=str(resume_file),
+                    batch_size=1,
+                    progress_interval_seconds=0,
                 )
 
             self.assertEqual(processed_paths, [str(photo) for photo in photos])
@@ -234,6 +238,7 @@ class DetectCleanupTests(unittest.TestCase):
                     result_csv_path=str(result_csv),
                     resume_file_path=str(resume_file),
                     reset_progress=True,
+                    batch_size=1,
                 )
 
             with result_csv.open("r", encoding="utf-8", newline="") as fh:
@@ -248,6 +253,112 @@ class DetectCleanupTests(unittest.TestCase):
         self.assertEqual(rows[1]["person_count"], "2")
         self.assertTrue(rows[0]["processed_at"])
         self.assertTrue(rows[1]["processed_at"])
+
+    def test_detect_batches_photo_inference(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            photos_dir = root / "photos"
+            screenshots_dir = root / "screenshots"
+            result_csv = root / "results.csv"
+            resume_file = root / "resume.json"
+            photos_dir.mkdir()
+            screenshots_dir.mkdir()
+
+            photos = [
+                photos_dir / "photo_20260312_120000.jpg",
+                photos_dir / "photo_20260312_120001.jpg",
+                photos_dir / "photo_20260312_120002.jpg",
+            ]
+            for photo in photos:
+                photo.write_bytes(b"x")
+
+            batch_calls = []
+
+            def fake_detect_person_counts(photo_paths, model=None, conf=None):
+                batch_calls.append(list(photo_paths))
+                return [1] * len(photo_paths)
+
+            with patch.object(detect, "get_yolo_model", return_value=object()), patch.object(
+                detect,
+                "detect_person_counts",
+                side_effect=fake_detect_person_counts,
+            ), patch.object(detect, "emit_status"):
+                detect.detect(
+                    str(photos_dir),
+                    str(screenshots_dir),
+                    dry_run=True,
+                    result_csv_path=str(result_csv),
+                    resume_file_path=str(resume_file),
+                    reset_progress=True,
+                    batch_size=2,
+                )
+
+        self.assertEqual(batch_calls, [[str(photos[0]), str(photos[1])], [str(photos[2])]])
+
+    def test_detect_falls_back_to_single_in_failed_batch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            photos_dir = root / "photos"
+            screenshots_dir = root / "screenshots"
+            result_csv = root / "results.csv"
+            resume_file = root / "resume.json"
+            photos_dir.mkdir()
+            screenshots_dir.mkdir()
+
+            photos = [
+                photos_dir / "photo_20260312_120000.jpg",
+                photos_dir / "photo_20260312_120001.jpg",
+                photos_dir / "photo_20260312_120002.jpg",
+            ]
+            for photo in photos:
+                photo.write_bytes(b"x")
+
+            batch_calls = []
+            single_calls = []
+
+            def fake_detect_person_counts(photo_paths, model=None, conf=None):
+                batch_calls.append(list(photo_paths))
+                if len(photo_paths) == 2:
+                    raise ValueError("batch failed")
+                return [1]
+
+            def fake_detect_person_count(photo_path, model=None, conf=None):
+                single_calls.append(photo_path)
+                if photo_path == str(photos[1]):
+                    return 0
+                return 1
+
+            with patch.object(detect, "get_yolo_model", return_value=object()), patch.object(
+                detect,
+                "detect_person_counts",
+                side_effect=fake_detect_person_counts,
+            ), patch.object(
+                detect,
+                "detect_person_count",
+                side_effect=fake_detect_person_count,
+            ), patch.object(
+                detect,
+                "get_screenshots_within_time_range",
+                return_value=["C:/shots/screenshot_20260312_120001_monitor_1.jpg"],
+            ), patch.object(detect, "emit_status"):
+                cleanup_plan = detect.detect(
+                    str(photos_dir),
+                    str(screenshots_dir),
+                    dry_run=True,
+                    result_csv_path=str(result_csv),
+                    resume_file_path=str(resume_file),
+                    reset_progress=True,
+                    batch_size=2,
+                )
+
+            with result_csv.open("r", encoding="utf-8", newline="") as fh:
+                rows = list(csv.DictReader(fh))
+
+        self.assertEqual(batch_calls, [[str(photos[0]), str(photos[1])], [str(photos[2])]])
+        self.assertEqual(single_calls, [str(photos[0]), str(photos[1])])
+        self.assertEqual(len(cleanup_plan), 1)
+        self.assertEqual(rows[1]["status"], "no_person")
+        self.assertEqual(rows[1]["photo_path"], str(photos[1]))
 
     def test_history_recheck_uses_same_confidence_as_live_capture(self):
         self.assertEqual(
