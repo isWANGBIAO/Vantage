@@ -4,6 +4,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from tqdm import tqdm
 
 current_dir = Path(__file__).resolve().parent
 project_root = current_dir.parent.parent
@@ -85,7 +86,10 @@ def run_analysis(search_paths, model_path, db_file, output_dir, day=None, limit=
     if total == 0:
         update_progress(1, 1, status="done")
     else:
-        for index, photo in enumerate(photos_to_analyze, start=1):
+        for index, photo in enumerate(
+            tqdm(photos_to_analyze, total=total, desc="Analyzing face photos", unit="photo"),
+            start=1,
+        ):
             update_progress(index, total, current_file=os.path.basename(photo["path"]))
             record = analyze_photo_file(photo["path"], detector=detector, parser=parser, config=config)
             upsert_face_analysis_record(record, db_file)
