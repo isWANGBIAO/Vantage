@@ -1,3 +1,24 @@
+const TREND_VIEW_LABELS = {
+  day: '最近24小时',
+  week: '最近7天',
+  month: '最近30天',
+  all: '全部历史',
+};
+
+function normalizeTrendViews(trendViews) {
+  const normalized = {};
+
+  for (const [key, label] of Object.entries(TREND_VIEW_LABELS)) {
+    const view = trendViews?.[key];
+    normalized[key] = {
+      label: view?.label || label,
+      points: Array.isArray(view?.points) ? view.points : [],
+    };
+  }
+
+  return normalized;
+}
+
 export function getFaceReportState(payload) {
   if (!payload) {
     return {
@@ -25,7 +46,10 @@ export function getFaceReportState(payload) {
 
   return {
     status: 'ready',
-    data: payload,
+    data: {
+      ...payload,
+      trend_views: normalizeTrendViews(payload.trend_views),
+    },
     error: null,
   };
 }

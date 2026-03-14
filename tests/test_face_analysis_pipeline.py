@@ -110,6 +110,7 @@ class FaceAnalysisPipelineTests(unittest.TestCase):
             {
                 "path": "invalid.jpg",
                 "datetime": "2026-03-11 10:00:00",
+                "timestamp": datetime(2026, 3, 11, 10, 0, 0).timestamp(),
                 "passed": False,
                 "score": None,
                 "fail_reason": ["NoFace"],
@@ -117,6 +118,7 @@ class FaceAnalysisPipelineTests(unittest.TestCase):
             {
                 "path": "light.jpg",
                 "datetime": "2026-03-11 11:00:00",
+                "timestamp": datetime(2026, 3, 11, 11, 0, 0).timestamp(),
                 "passed": True,
                 "score": 3.2,
                 "score_left": 3.1,
@@ -126,6 +128,7 @@ class FaceAnalysisPipelineTests(unittest.TestCase):
             {
                 "path": "heavy.jpg",
                 "datetime": "2026-03-11 12:00:00",
+                "timestamp": datetime(2026, 3, 11, 12, 0, 0).timestamp(),
                 "passed": True,
                 "score": 8.4,
                 "score_left": 8.0,
@@ -144,6 +147,88 @@ class FaceAnalysisPipelineTests(unittest.TestCase):
         self.assertEqual(report["lightest"]["path"], "light.jpg")
         self.assertEqual(report["heaviest"]["path"], "heavy.jpg")
         self.assertTrue(report["trend_plot_path"].endswith("dark_circles_trend.png"))
+        self.assertEqual(set(report["trend_views"].keys()), {"day", "week", "month", "all"})
+        self.assertEqual(report["trend_views"]["day"]["label"], "最近24小时")
+        self.assertEqual(report["trend_views"]["all"]["label"], "全部历史")
+        self.assertEqual([point["score"] for point in report["trend_views"]["day"]["points"]], [3.2, 8.4])
+        self.assertEqual([point["score"] for point in report["trend_views"]["all"]["points"]], [5.8])
+
+    def test_build_face_report_builds_windowed_trend_views_from_latest_sample(self):
+        results = [
+            {
+                "path": "old.jpg",
+                "datetime": "2026-02-01 08:00:00",
+                "timestamp": datetime(2026, 2, 1, 8, 0, 0).timestamp(),
+                "passed": True,
+                "score": 2.0,
+                "score_left": 2.0,
+                "score_right": 2.0,
+                "fail_reason": [],
+            },
+            {
+                "path": "month-a.jpg",
+                "datetime": "2026-03-01 08:00:00",
+                "timestamp": datetime(2026, 3, 1, 8, 0, 0).timestamp(),
+                "passed": True,
+                "score": 4.0,
+                "score_left": 4.0,
+                "score_right": 4.0,
+                "fail_reason": [],
+            },
+            {
+                "path": "week-a.jpg",
+                "datetime": "2026-03-10 10:00:00",
+                "timestamp": datetime(2026, 3, 10, 10, 0, 0).timestamp(),
+                "passed": True,
+                "score": 5.0,
+                "score_left": 5.0,
+                "score_right": 5.0,
+                "fail_reason": [],
+            },
+            {
+                "path": "week-b.jpg",
+                "datetime": "2026-03-10 18:00:00",
+                "timestamp": datetime(2026, 3, 10, 18, 0, 0).timestamp(),
+                "passed": True,
+                "score": 7.0,
+                "score_left": 7.0,
+                "score_right": 7.0,
+                "fail_reason": [],
+            },
+            {
+                "path": "day-a.jpg",
+                "datetime": "2026-03-12 15:00:00",
+                "timestamp": datetime(2026, 3, 12, 15, 0, 0).timestamp(),
+                "passed": True,
+                "score": 8.0,
+                "score_left": 8.0,
+                "score_right": 8.0,
+                "fail_reason": [],
+            },
+            {
+                "path": "day-b.jpg",
+                "datetime": "2026-03-13 10:00:00",
+                "timestamp": datetime(2026, 3, 13, 10, 0, 0).timestamp(),
+                "passed": True,
+                "score": 10.0,
+                "score_left": 10.0,
+                "score_right": 10.0,
+                "fail_reason": [],
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = build_face_report(results, Path(tmpdir))
+
+        day_scores = [point["score"] for point in report["trend_views"]["day"]["points"]]
+        week_scores = [point["score"] for point in report["trend_views"]["week"]["points"]]
+        month_scores = [point["score"] for point in report["trend_views"]["month"]["points"]]
+        all_scores = [point["score"] for point in report["trend_views"]["all"]["points"]]
+
+        self.assertEqual(day_scores, [8.0, 10.0])
+        self.assertEqual(week_scores, [6.0, 8.0, 10.0])
+        self.assertEqual(month_scores, [4.0, 6.0, 8.0, 10.0])
+        self.assertEqual(all_scores, [2.0, 4.0, 6.0, 8.0, 10.0])
 
     def test_plot_trend_only_keeps_sample_moving_average_curve(self):
         results = [

@@ -9,6 +9,7 @@ from src.utils.face_analysis_db import (
     load_face_report_cache as load_face_report_cache_from_db,
     save_face_report_cache as save_face_report_cache_to_db,
 )
+from src.services.face_analysis_pipeline import empty_trend_views
 
 FACE_REPORT_CACHE_FILE = FACE_ANALYSIS_DB_FILE
 
@@ -41,6 +42,15 @@ def build_face_report_response(report: dict, photos_path: str | None = None) -> 
     if trend_plot_path:
         trend_plot = f"/static/plots/{os.path.basename(trend_plot_path)}?t={int(time.time())}"
 
+    trend_views = empty_trend_views()
+    for key, value in (report.get("trend_views") or {}).items():
+        if key not in trend_views or not isinstance(value, dict):
+            continue
+        trend_views[key] = {
+            "label": value.get("label", trend_views[key]["label"]),
+            "points": value.get("points", []),
+        }
+
     return {
         "heaviest": {
             "url": path_to_url(report.get("heaviest", {}).get("path", "")),
@@ -53,4 +63,5 @@ def build_face_report_response(report: dict, photos_path: str | None = None) -> 
             "score": report.get("lightest", {}).get("score", 0),
         },
         "trend_plot": trend_plot,
+        "trend_views": trend_views,
     }

@@ -5,8 +5,313 @@ import {
   fetchBackend,
   fetchBackendJson,
 } from '../utils/backendRequest';
+import {
+  buildChartModel,
+  buildPulseFrame,
+} from './faceTrendChart';
 
 const initialProgress = { percent: 0, status: 'idle', current_file: '' };
+const trendViewOrder = ['day', 'week', 'month', 'all'];
+const trendCardPalette = ['#00d2d3', '#74b9ff', '#fdcb6e', '#a29bfe'];
+const pulseDimensions = { width: 960, height: 180 };
+const trendDimensions = { width: 420, height: 180 };
+
+function formatScore(score) {
+  return Number.isFinite(Number(score)) ? Number(score).toFixed(2) : '--';
+}
+
+function getLatestPoint(data) {
+  const dayPoints = data?.trend_views?.day?.points || [];
+  if (dayPoints.length) {
+    return dayPoints[dayPoints.length - 1];
+  }
+
+  const allPoints = data?.trend_views?.all?.points || [];
+  if (allPoints.length) {
+    return allPoints[allPoints.length - 1];
+  }
+
+  return null;
+}
+
+function StatPill({ label, value, accent }) {
+  return (
+    <div
+      style={{
+        padding: '0.8rem 1rem',
+        borderRadius: '14px',
+        border: `1px solid ${accent}22`,
+        background: `linear-gradient(180deg, ${accent}14 0%, rgba(255,255,255,0.02) 100%)`,
+        minWidth: 0,
+      }}
+    >
+      <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>{label}</div>
+      <div style={{ fontSize: '1rem', fontWeight: 700 }}>{value}</div>
+    </div>
+  );
+}
+
+function PulseCard({ latestPoint, frame }) {
+  const pulseFrame = buildPulseFrame({
+    latestScore: latestPoint?.score,
+    frame,
+    width: pulseDimensions.width,
+    height: pulseDimensions.height,
+  });
+
+  return (
+    <div
+      className="glass-panel"
+      style={{
+        padding: '1.5rem',
+        overflow: 'hidden',
+        position: 'relative',
+        background: 'radial-gradient(circle at top right, rgba(0,210,211,0.18), transparent 28%), var(--bg-glass)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: '1rem',
+          flexWrap: 'wrap',
+          marginBottom: '1rem',
+        }}
+      >
+        <div>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.82rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+            实时黑眼圈脉冲
+          </div>
+          <h3 style={{ margin: '0.35rem 0 0', fontSize: '1.45rem' }}>Latest Severity Pulse</h3>
+        </div>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <StatPill label="最新分数" value={formatScore(latestPoint?.score)} accent="#00d2d3" />
+          <StatPill label="最近时间" value={latestPoint?.datetime?.slice(0, 16) || '--'} accent="#74b9ff" />
+        </div>
+      </div>
+
+      <div
+        style={{
+          borderRadius: '20px',
+          overflow: 'hidden',
+          border: '1px solid rgba(0, 210, 211, 0.18)',
+          background: 'linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))',
+        }}
+      >
+        <svg
+          viewBox={`0 0 ${pulseDimensions.width} ${pulseDimensions.height}`}
+          style={{ width: '100%', height: 'auto', display: 'block' }}
+          role="img"
+          aria-label="实时黑眼圈脉冲图"
+        >
+          <defs>
+            <linearGradient id="pulseStroke" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="rgba(0, 210, 211, 0.15)" />
+              <stop offset="20%" stopColor="#00d2d3" />
+              <stop offset="80%" stopColor="#7cf3ff" />
+              <stop offset="100%" stopColor="rgba(124, 243, 255, 0.15)" />
+            </linearGradient>
+            <filter id="pulseGlow">
+              <feGaussianBlur stdDeviation="4" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+
+          <rect x="0" y="0" width={pulseDimensions.width} height={pulseDimensions.height} fill="rgba(4, 10, 16, 0.92)" />
+
+          {[0.2, 0.4, 0.6, 0.8].map((ratio) => (
+            <line
+              key={ratio}
+              x1="0"
+              y1={pulseDimensions.height * ratio}
+              x2={pulseDimensions.width}
+              y2={pulseDimensions.height * ratio}
+              stroke="rgba(255,255,255,0.08)"
+              strokeDasharray="6 10"
+            />
+          ))}
+
+          <path
+            d={pulseFrame.path}
+            fill="none"
+            stroke="url(#pulseStroke)"
+            strokeWidth="4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            filter="url(#pulseGlow)"
+          />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function TrendCard({ title, accent, points }) {
+  const model = buildChartModel({
+    points,
+    width: trendDimensions.width,
+    height: trendDimensions.height,
+  });
+
+  return (
+    <div
+      className="glass-panel"
+      style={{
+        padding: '1.25rem',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '1rem',
+        minHeight: '320px',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ color: accent, fontSize: '0.8rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+            趋势窗口
+          </div>
+          <h3 style={{ margin: '0.3rem 0 0', fontSize: '1.15rem' }}>{title}</h3>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{model.summary.latestScore}</div>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Latest Score</div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+          gap: '0.75rem',
+        }}
+      >
+        <StatPill label="均值" value={model.summary.averageScore} accent={accent} />
+        <StatPill label="样本数" value={String(model.summary.sampleCount)} accent={accent} />
+        <StatPill label="最新时间" value={model.summary.latestLabel} accent={accent} />
+      </div>
+
+      <div
+        style={{
+          borderRadius: '18px',
+          overflow: 'hidden',
+          border: `1px solid ${accent}1f`,
+          background: 'linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))',
+          minHeight: '180px',
+        }}
+      >
+        {model.points.length === 0 ? (
+          <div
+            style={{
+              minHeight: '180px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--text-muted)',
+              fontSize: '0.95rem',
+            }}
+          >
+            暂无趋势数据
+          </div>
+        ) : (
+          <svg
+            viewBox={`0 0 ${trendDimensions.width} ${trendDimensions.height}`}
+            style={{ width: '100%', height: 'auto', display: 'block' }}
+            role="img"
+            aria-label={`${title}黑眼圈趋势图`}
+          >
+            <rect x="0" y="0" width={trendDimensions.width} height={trendDimensions.height} fill="rgba(6, 10, 20, 0.9)" />
+
+            {[0.2, 0.4, 0.6, 0.8].map((ratio) => (
+              <line
+                key={ratio}
+                x1="0"
+                y1={trendDimensions.height * ratio}
+                x2={trendDimensions.width}
+                y2={trendDimensions.height * ratio}
+                stroke="rgba(255,255,255,0.06)"
+                strokeDasharray="4 10"
+              />
+            ))}
+
+            <path
+              d={model.path}
+              fill="none"
+              stroke={accent}
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+
+            {model.points.map((point) => (
+              <circle
+                key={`${title}-${point.index}-${point.timestamp}`}
+                cx={point.x}
+                cy={point.y}
+                r="4"
+                fill={accent}
+                stroke="rgba(5,5,8,0.95)"
+                strokeWidth="2"
+              />
+            ))}
+
+            {model.ticks.map((tick) => (
+              <g key={`${title}-${tick.label}-${tick.x}`}>
+                <line
+                  x1={tick.x}
+                  y1={trendDimensions.height - 22}
+                  x2={tick.x}
+                  y2={trendDimensions.height - 14}
+                  stroke="rgba(255,255,255,0.18)"
+                />
+                <text
+                  x={tick.x}
+                  y={trendDimensions.height - 4}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill="rgba(255,255,255,0.72)"
+                >
+                  {tick.label}
+                </text>
+              </g>
+            ))}
+          </svg>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ExtremeCard({ title, date, score, imageUrl, accent }) {
+  return (
+    <div
+      style={{
+        backgroundColor: `${accent}14`,
+        padding: '1.5rem',
+        borderRadius: '16px',
+        border: `1px solid ${accent}55`,
+      }}
+    >
+      <h3 style={{ color: accent, marginBottom: '0.5rem' }}>{title}</h3>
+      <p style={{ opacity: 0.7, marginBottom: '1rem' }}>{date || '--'}</p>
+      <div style={{ borderRadius: '12px', overflow: 'hidden', aspectRatio: '16/9', background: 'rgba(0,0,0,0.15)' }}>
+        {imageUrl ? (
+          <img
+            src={buildBackendUrl(imageUrl)}
+            alt={title}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        ) : (
+          <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', color: 'var(--text-muted)' }}>
+            暂无图片
+          </div>
+        )}
+      </div>
+      <p style={{ marginTop: '0.5rem', fontWeight: 'bold' }}>Score: {formatScore(score)}</p>
+    </div>
+  );
+}
 
 export default function FaceHistory() {
   const [loading, setLoading] = useState(false);
@@ -14,6 +319,7 @@ export default function FaceHistory() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [reportStatus, setReportStatus] = useState('loading');
+  const [pulseFrame, setPulseFrame] = useState(0);
 
   const fetchReport = async ({ showLoading = false } = {}) => {
     const controller = new AbortController();
@@ -44,6 +350,14 @@ export default function FaceHistory() {
 
   useEffect(() => {
     fetchReport({ showLoading: true });
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setPulseFrame((current) => (current + 1) % 1000);
+    }, 120);
+
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -165,64 +479,39 @@ export default function FaceHistory() {
       return null;
     }
 
+    const latestPoint = getLatestPoint(data);
+
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-        <div
-          className="glass-panel"
-          style={{
-            padding: '1.5rem',
-          }}
-        >
-          <h3 style={{ marginBottom: '1rem', opacity: 0.8 }}>Severity Trend</h3>
-          <div style={{ width: '100%', borderRadius: '12px', overflow: 'hidden' }}>
-            <img
-              src={buildBackendUrl(data.trend_plot)}
-              alt="Dark Circles Trend"
-              style={{ width: '100%', height: 'auto', display: 'block' }}
+        <PulseCard latestPoint={latestPoint} frame={pulseFrame} />
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
+          {trendViewOrder.map((key, index) => (
+            <TrendCard
+              key={key}
+              title={data.trend_views[key].label}
+              points={data.trend_views[key].points}
+              accent={trendCardPalette[index]}
             />
-          </div>
+          ))}
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '2rem' }}>
-          <div
-            style={{
-              backgroundColor: 'rgba(46, 204, 113, 0.1)',
-              padding: '1.5rem',
-              borderRadius: '16px',
-              border: '1px solid rgba(46, 204, 113, 0.3)',
-            }}
-          >
-            <h3 style={{ color: '#2ecc71', marginBottom: '0.5rem' }}>Lightest (Best Condition)</h3>
-            <p style={{ opacity: 0.7, marginBottom: '1rem' }}>{data.lightest.date}</p>
-            <div style={{ borderRadius: '12px', overflow: 'hidden', aspectRatio: '16/9' }}>
-              <img
-                src={buildBackendUrl(data.lightest.url)}
-                alt="Best Condition"
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              />
-            </div>
-            <p style={{ marginTop: '0.5rem', fontWeight: 'bold' }}>Score: {data.lightest.score.toFixed(2)}</p>
-          </div>
+          <ExtremeCard
+            title="Lightest (Best Condition)"
+            date={data.lightest.date}
+            score={data.lightest.score}
+            imageUrl={data.lightest.url}
+            accent="#2ecc71"
+          />
 
-          <div
-            style={{
-              backgroundColor: 'rgba(231, 76, 60, 0.1)',
-              padding: '1.5rem',
-              borderRadius: '16px',
-              border: '1px solid rgba(231, 76, 60, 0.3)',
-            }}
-          >
-            <h3 style={{ color: '#e74c3c', marginBottom: '0.5rem' }}>Heaviest (Worst Condition)</h3>
-            <p style={{ opacity: 0.7, marginBottom: '1rem' }}>{data.heaviest.date}</p>
-            <div style={{ borderRadius: '12px', overflow: 'hidden', aspectRatio: '16/9' }}>
-              <img
-                src={buildBackendUrl(data.heaviest.url)}
-                alt="Worst Condition"
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              />
-            </div>
-            <p style={{ marginTop: '0.5rem', fontWeight: 'bold' }}>Score: {data.heaviest.score.toFixed(2)}</p>
-          </div>
+          <ExtremeCard
+            title="Heaviest (Worst Condition)"
+            date={data.heaviest.date}
+            score={data.heaviest.score}
+            imageUrl={data.heaviest.url}
+            accent="#e74c3c"
+          />
         </div>
       </div>
     );
@@ -240,7 +529,12 @@ export default function FaceHistory() {
           marginBottom: '2rem',
         }}
       >
-        <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0 }}>Face Dark Circles History</h2>
+        <div>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0 }}>Face Dark Circles History</h2>
+          <div style={{ color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+            同页展示实时脉冲、日/周/月/全部历史五张黑眼圈趋势图
+          </div>
+        </div>
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           {loading && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginRight: '1rem' }}>

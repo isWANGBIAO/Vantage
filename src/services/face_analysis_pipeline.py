@@ -13,6 +13,13 @@ matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 
+TREND_VIEW_LABELS = {
+    "day": "最近24小时",
+    "week": "最近7天",
+    "month": "最近30天",
+    "all": "全部历史",
+}
+
 
 CLASS_IDX = {
     "background": 0,
@@ -601,6 +608,83 @@ def plot_trend(results, output_dir):
     return str(output_path.resolve())
 
 
+def empty_trend_views():
+    return {
+        key: {
+            "label": label,
+            "points": [],
+        }
+        for key, label in TREND_VIEW_LABELS.items()
+    }
+
+
+def _trend_points_from_df(df):
+    if df.empty:
+        return []
+
+    points = []
+    for row in df.itertuples(index=False):
+        timestamp = getattr(row, "timestamp", None)
+        observed_at = getattr(row, "date", None)
+        score = getattr(row, "score", None)
+        if pd.isna(timestamp) or pd.isna(score) or pd.isna(observed_at):
+            continue
+        points.append(
+            {
+                "timestamp": float(timestamp),
+                "datetime": observed_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "score": round(float(score), 4),
+            }
+        )
+    return points
+
+
+def _aggregate_daily_scores(df):
+    if df.empty:
+        return df
+
+    daily = (
+        df.assign(day=df["date"].dt.normalize())
+        .groupby("day", as_index=False)
+        .agg(score=("score", "mean"))
+        .rename(columns={"day": "date"})
+    )
+    daily["timestamp"] = daily["date"].apply(lambda value: value.timestamp())
+    return daily[["date", "timestamp", "score"]]
+
+
+def build_trend_views(results):
+    df = pd.DataFrame(results)
+    if df.empty:
+        return empty_trend_views()
+
+    df["date"] = pd.to_datetime(df.get("datetime"), errors="coerce")
+    if "timestamp" not in df.columns:
+        df["timestamp"] = df["date"].apply(lambda value: value.timestamp() if pd.notna(value) else np.nan)
+
+    df = df.dropna(subset=["date", "timestamp", "score"]).sort_values("date").copy()
+    if df.empty:
+        return empty_trend_views()
+
+    latest_date = df["date"].max()
+    windows = {
+        "day": (latest_date - pd.Timedelta(hours=24), False),
+        "week": (latest_date - pd.Timedelta(days=7), True),
+        "month": (latest_date - pd.Timedelta(days=30), True),
+        "all": (None, True),
+    }
+
+    trend_views = empty_trend_views()
+    for key, (cutoff, aggregate_daily) in windows.items():
+        subset = df if cutoff is None else df[df["date"] >= cutoff]
+        subset = subset.sort_values("date")
+        if aggregate_daily:
+            subset = _aggregate_daily_scores(subset)
+        trend_views[key]["points"] = _trend_points_from_df(subset)
+
+    return trend_views
+
+
 def build_face_report(results, output_dir):
     valid_rows = [row for row in results if row.get("passed") and row.get("score") is not None]
     failed_rows = [row for row in results if not row.get("passed")]
@@ -634,6 +718,7 @@ def build_face_report(results, output_dir):
             "date": lightest["datetime"],
         },
         "trend_plot_path": trend_plot_path,
+        "trend_views": build_trend_views(valid_rows),
         "quality": {
             "passed": len(valid_rows),
             "failed": len(failed_rows),
