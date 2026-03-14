@@ -12,6 +12,7 @@ from src.services.face_analysis_pipeline import (
     analyze_image_data,
     build_face_report,
     compute_trend_series,
+    filter_report_outlier_points,
     filter_stable_trend_points,
     plot_trend,
     trend_axis_date_format,
@@ -344,6 +345,112 @@ class FaceAnalysisPipelineTests(unittest.TestCase):
         scores = [row["score"] for row in filtered]
 
         self.assertEqual(scores, [30.0, 31.0, 29.5, 30.5])
+
+    def test_filter_report_outlier_points_removes_isolated_high_and_low_spikes(self):
+        base_time = datetime(2026, 3, 12, 10, 0, 0)
+        results = [
+            {
+                "path": f"sample-{index}.jpg",
+                "datetime": (base_time.replace(minute=index * 5)).strftime("%Y-%m-%d %H:%M:%S"),
+                "timestamp": (base_time.replace(minute=index * 5)).timestamp(),
+                "score": score,
+                "score_left": score - 1,
+                "score_right": score + 1,
+                "passed": True,
+                "fail_reason": [],
+            }
+            for index, score in enumerate([30.0, 31.0, 66.0, 30.5, 29.8, 4.0, 30.2, 31.1])
+        ]
+
+        filtered = filter_report_outlier_points(results)
+
+        self.assertEqual([row["score"] for row in filtered], [30.0, 31.0, 30.5, 29.8, 30.2, 31.1])
+
+    def test_filter_report_outlier_points_keeps_consistent_rise(self):
+        base_time = datetime(2026, 3, 12, 14, 0, 0)
+        results = [
+            {
+                "path": f"rise-{index}.jpg",
+                "datetime": (base_time.replace(minute=index * 5)).strftime("%Y-%m-%d %H:%M:%S"),
+                "timestamp": (base_time.replace(minute=index * 5)).timestamp(),
+                "score": score,
+                "score_left": score - 0.8,
+                "score_right": score + 0.8,
+                "passed": True,
+                "fail_reason": [],
+            }
+            for index, score in enumerate([29.0, 31.0, 34.0, 37.0, 39.0])
+        ]
+
+        filtered = filter_report_outlier_points(results)
+
+        self.assertEqual([row["score"] for row in filtered], [29.0, 31.0, 34.0, 37.0, 39.0])
+
+    def test_build_face_report_ignores_report_outliers_for_extremes_and_trends(self):
+        base_time = datetime(2026, 3, 12, 18, 0, 0)
+        results = [
+            {
+                "path": "steady-1.jpg",
+                "datetime": base_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "timestamp": base_time.timestamp(),
+                "passed": True,
+                "score": 30.0,
+                "score_left": 29.0,
+                "score_right": 31.0,
+                "fail_reason": [],
+            },
+            {
+                "path": "spike-high.jpg",
+                "datetime": datetime(2026, 3, 12, 18, 5, 0).strftime("%Y-%m-%d %H:%M:%S"),
+                "timestamp": datetime(2026, 3, 12, 18, 5, 0).timestamp(),
+                "passed": True,
+                "score": 66.0,
+                "score_left": 65.0,
+                "score_right": 67.0,
+                "fail_reason": [],
+            },
+            {
+                "path": "steady-2.jpg",
+                "datetime": datetime(2026, 3, 12, 18, 10, 0).strftime("%Y-%m-%d %H:%M:%S"),
+                "timestamp": datetime(2026, 3, 12, 18, 10, 0).timestamp(),
+                "passed": True,
+                "score": 31.0,
+                "score_left": 30.0,
+                "score_right": 32.0,
+                "fail_reason": [],
+            },
+            {
+                "path": "spike-low.jpg",
+                "datetime": datetime(2026, 3, 12, 18, 15, 0).strftime("%Y-%m-%d %H:%M:%S"),
+                "timestamp": datetime(2026, 3, 12, 18, 15, 0).timestamp(),
+                "passed": True,
+                "score": 4.0,
+                "score_left": 3.5,
+                "score_right": 4.5,
+                "fail_reason": [],
+            },
+            {
+                "path": "steady-3.jpg",
+                "datetime": datetime(2026, 3, 12, 18, 20, 0).strftime("%Y-%m-%d %H:%M:%S"),
+                "timestamp": datetime(2026, 3, 12, 18, 20, 0).timestamp(),
+                "passed": True,
+                "score": 32.0,
+                "score_left": 31.0,
+                "score_right": 33.0,
+                "fail_reason": [],
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = build_face_report(results, Path(tmpdir))
+
+        self.assertEqual(report["count"], 3)
+        self.assertEqual(report["lightest"]["path"], "steady-1.jpg")
+        self.assertEqual(report["heaviest"]["path"], "steady-3.jpg")
+        self.assertEqual(
+            [point["score"] for point in report["trend_views"]["day"]["points"]],
+            [30.0, 31.0, 32.0],
+        )
 
     def test_analyze_image_data_falls_back_when_parser_misses_eye_masks(self):
         result = analyze_image_data(

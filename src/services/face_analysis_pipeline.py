@@ -573,6 +573,66 @@ def filter_stable_trend_points(
     return filtered.drop(columns=["date", "lr_gap"]).to_dict("records")
 
 
+def filter_report_outlier_points(
+    results,
+    lr_gap_threshold: float = 20.0,
+    jump_threshold: float = 25.0,
+    neighbor_similarity_threshold: float = 12.0,
+    local_window: int = 5,
+    local_deviation_threshold: float = 18.0,
+    segment_gap_minutes: float = 30.0,
+):
+    df = pd.DataFrame(results)
+    if df.empty:
+        return []
+
+    df["date"] = pd.to_datetime(df.get("datetime"), errors="coerce")
+    if "timestamp" not in df.columns:
+        df["timestamp"] = df["date"].apply(lambda value: value.timestamp() if pd.notna(value) else np.nan)
+
+    df = df.dropna(subset=["date", "timestamp", "score"]).sort_values("date").copy()
+    if df.empty:
+        return []
+
+    score_left = df["score_left"] if "score_left" in df.columns else df["score"]
+    score_right = df["score_right"] if "score_right" in df.columns else df["score"]
+    df["lr_gap"] = (score_left - score_right).abs()
+    keep_mask = df["lr_gap"] <= lr_gap_threshold
+
+    gap_limit = pd.Timedelta(minutes=segment_gap_minutes)
+    df["segment_id"] = (df["date"].diff() > gap_limit).cumsum()
+
+    for _, segment in df.groupby("segment_id"):
+        if len(segment) < 3:
+            continue
+
+        scores = segment["score"]
+        prev_gap = scores.diff().abs()
+        next_gap = scores.diff(-1).abs()
+        neighbor_gap = (scores.shift(-1) - scores.shift(1)).abs()
+        local_median = scores.rolling(window=local_window, center=True, min_periods=3).median()
+        local_dev = (scores - local_median).abs()
+
+        isolated_spike = (
+            prev_gap >= jump_threshold
+        ) & (
+            next_gap >= jump_threshold
+        ) & (
+            neighbor_gap <= neighbor_similarity_threshold
+        ) & (
+            local_median.notna()
+        ) & (
+            local_dev >= local_deviation_threshold
+        )
+
+        keep_mask.loc[segment.index] &= ~isolated_spike.fillna(False)
+
+    filtered = df[keep_mask].copy()
+    if filtered.empty:
+        return df.drop(columns=["date", "lr_gap", "segment_id"]).to_dict("records")
+    return filtered.drop(columns=["date", "lr_gap", "segment_id"]).to_dict("records")
+
+
 def plot_trend(results, output_dir):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -700,13 +760,17 @@ def build_face_report(results, output_dir):
             },
         }
 
-    valid_rows = sorted(valid_rows, key=lambda row: row["score"])
-    lightest = valid_rows[0]
-    heaviest = valid_rows[-1]
-    trend_plot_path = plot_trend(valid_rows, output_dir)
+    valid_rows = sorted(valid_rows, key=lambda row: row["timestamp"])
+    filtered_rows = filter_report_outlier_points(valid_rows)
+    filtered_outlier_count = max(0, len(valid_rows) - len(filtered_rows))
+
+    filtered_rows = sorted(filtered_rows, key=lambda row: row["score"])
+    lightest = filtered_rows[0]
+    heaviest = filtered_rows[-1]
+    trend_plot_path = plot_trend(filtered_rows, output_dir)
 
     return {
-        "count": len(valid_rows),
+        "count": len(filtered_rows),
         "heaviest": {
             "path": heaviest["path"],
             "score": heaviest["score"],
@@ -718,10 +782,11 @@ def build_face_report(results, output_dir):
             "date": lightest["datetime"],
         },
         "trend_plot_path": trend_plot_path,
-        "trend_views": build_trend_views(valid_rows),
+        "trend_views": build_trend_views(filtered_rows),
         "quality": {
-            "passed": len(valid_rows),
+            "passed": len(filtered_rows),
             "failed": len(failed_rows),
+            "filtered_outliers": filtered_outlier_count,
             "fail_reason_counts": dict(fail_counts),
         },
     }

@@ -7,31 +7,24 @@ import {
 } from '../utils/backendRequest';
 import {
   buildChartModel,
-  buildPulseFrame,
 } from './faceTrendChart';
 
 const initialProgress = { percent: 0, status: 'idle', current_file: '' };
+const initialLiveData = {
+  camera_online: false,
+  window_seconds: 60,
+  latest_score: null,
+  latest_datetime: '',
+  points: [],
+};
 const trendViewOrder = ['day', 'week', 'month', 'all'];
 const trendCardPalette = ['#00d2d3', '#74b9ff', '#fdcb6e', '#a29bfe'];
 const pulseDimensions = { width: 960, height: 180 };
 const trendDimensions = { width: 420, height: 180 };
+const livePollIntervalMs = 100;
 
 function formatScore(score) {
   return Number.isFinite(Number(score)) ? Number(score).toFixed(2) : '--';
-}
-
-function getLatestPoint(data) {
-  const dayPoints = data?.trend_views?.day?.points || [];
-  if (dayPoints.length) {
-    return dayPoints[dayPoints.length - 1];
-  }
-
-  const allPoints = data?.trend_views?.all?.points || [];
-  if (allPoints.length) {
-    return allPoints[allPoints.length - 1];
-  }
-
-  return null;
 }
 
 function StatPill({ label, value, accent }) {
@@ -51,13 +44,85 @@ function StatPill({ label, value, accent }) {
   );
 }
 
-function PulseCard({ latestPoint, frame }) {
-  const pulseFrame = buildPulseFrame({
-    latestScore: latestPoint?.score,
-    frame,
+function LineChartSvg({
+  ariaLabel,
+  width,
+  height,
+  model,
+  stroke,
+  background,
+  gridStroke,
+  gridDasharray,
+}) {
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      style={{ width: '100%', height: 'auto', display: 'block' }}
+      role="img"
+      aria-label={ariaLabel}
+    >
+      <rect x="0" y="0" width={width} height={height} fill={background} />
+
+      {[0.2, 0.4, 0.6, 0.8].map((ratio) => (
+        <line
+          key={ratio}
+          x1="0"
+          y1={height * ratio}
+          x2={width}
+          y2={height * ratio}
+          stroke={gridStroke}
+          strokeDasharray={gridDasharray}
+        />
+      ))}
+
+      <path
+        d={model.path}
+        fill="none"
+        stroke={stroke}
+        strokeWidth="3.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+
+      {model.ticks.map((tick) => (
+        <g key={`${ariaLabel}-${tick.label}-${tick.x}`}>
+          <line
+            x1={tick.x}
+            y1={height - 22}
+            x2={tick.x}
+            y2={height - 14}
+            stroke="rgba(255,255,255,0.18)"
+          />
+          <text
+            x={tick.x}
+            y={height - 4}
+            textAnchor="middle"
+            fontSize="11"
+            fill="rgba(255,255,255,0.72)"
+          >
+            {tick.label}
+          </text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+function PulseCard({ liveData }) {
+  const liveWindowSeconds = Number(liveData?.window_seconds) || 60;
+  const liveWindowEndTimestamp = Date.now() / 1000;
+  const model = buildChartModel({
+    points: liveData?.points || [],
     width: pulseDimensions.width,
     height: pulseDimensions.height,
+    minTimestamp: liveWindowEndTimestamp - liveWindowSeconds,
+    maxTimestamp: liveWindowEndTimestamp,
   });
+  const latestLabel = liveData?.latest_datetime?.slice(0, 19) || '--';
+  const cameraStatus = liveData?.camera_online ? 'Online' : 'Offline';
+  const emptyMessage = liveData?.camera_online
+    ? 'Waiting for passing live dark-circle samples'
+    : 'Camera offline';
 
   return (
     <div
@@ -80,13 +145,15 @@ function PulseCard({ latestPoint, frame }) {
       >
         <div>
           <div style={{ color: 'var(--text-muted)', fontSize: '0.82rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-            实时黑眼圈脉冲
+            Live camera score
           </div>
-          <h3 style={{ margin: '0.35rem 0 0', fontSize: '1.45rem' }}>Latest Severity Pulse</h3>
+          <h3 style={{ margin: '0.35rem 0 0', fontSize: '1.45rem' }}>Real-time Dark Circle Pulse</h3>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <StatPill label="最新分数" value={formatScore(latestPoint?.score)} accent="#00d2d3" />
-          <StatPill label="最近时间" value={latestPoint?.datetime?.slice(0, 16) || '--'} accent="#74b9ff" />
+          <StatPill label="Latest Score" value={formatScore(liveData?.latest_score)} accent="#00d2d3" />
+          <StatPill label="Latest Time" value={latestLabel} accent="#74b9ff" />
+          <StatPill label="Camera" value={cameraStatus} accent="#fdcb6e" />
+          <StatPill label="Samples" value={String(model.summary.sampleCount)} accent="#7cf3ff" />
         </div>
       </div>
 
@@ -98,52 +165,38 @@ function PulseCard({ latestPoint, frame }) {
           background: 'linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))',
         }}
       >
-        <svg
-          viewBox={`0 0 ${pulseDimensions.width} ${pulseDimensions.height}`}
-          style={{ width: '100%', height: 'auto', display: 'block' }}
-          role="img"
-          aria-label="实时黑眼圈脉冲图"
-        >
-          <defs>
-            <linearGradient id="pulseStroke" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="rgba(0, 210, 211, 0.15)" />
-              <stop offset="20%" stopColor="#00d2d3" />
-              <stop offset="80%" stopColor="#7cf3ff" />
-              <stop offset="100%" stopColor="rgba(124, 243, 255, 0.15)" />
-            </linearGradient>
-            <filter id="pulseGlow">
-              <feGaussianBlur stdDeviation="4" result="blur" />
-              <feMerge>
-                <feMergeNode in="blur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
-
-          <rect x="0" y="0" width={pulseDimensions.width} height={pulseDimensions.height} fill="rgba(4, 10, 16, 0.92)" />
-
-          {[0.2, 0.4, 0.6, 0.8].map((ratio) => (
-            <line
-              key={ratio}
-              x1="0"
-              y1={pulseDimensions.height * ratio}
-              x2={pulseDimensions.width}
-              y2={pulseDimensions.height * ratio}
-              stroke="rgba(255,255,255,0.08)"
-              strokeDasharray="6 10"
+        {model.points.length === 0 ? (
+          <svg
+            viewBox={`0 0 ${pulseDimensions.width} ${pulseDimensions.height}`}
+            style={{ width: '100%', height: 'auto', display: 'block' }}
+            role="img"
+            aria-label="实时黑眼圈分数图"
+          >
+            <rect x="0" y="0" width={pulseDimensions.width} height={pulseDimensions.height} fill="rgba(4, 10, 16, 0.92)" />
+            <text
+              x={pulseDimensions.width / 2}
+              y={pulseDimensions.height / 2}
+              textAnchor="middle"
+              fontSize="18"
+              fill="rgba(255,255,255,0.56)"
+            >
+              {emptyMessage}
+            </text>
+          </svg>
+        ) : (
+          <div style={{ filter: 'drop-shadow(0 0 12px rgba(0, 210, 211, 0.22))' }}>
+            <LineChartSvg
+              ariaLabel="实时黑眼圈分数图"
+              width={pulseDimensions.width}
+              height={pulseDimensions.height}
+              model={model}
+              stroke="#7cf3ff"
+              background="rgba(4, 10, 16, 0.92)"
+              gridStroke="rgba(255,255,255,0.08)"
+              gridDasharray="6 10"
             />
-          ))}
-
-          <path
-            d={pulseFrame.path}
-            fill="none"
-            stroke="url(#pulseStroke)"
-            strokeWidth="4"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            filter="url(#pulseGlow)"
-          />
-        </svg>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -170,7 +223,7 @@ function TrendCard({ title, accent, points }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <div style={{ color: accent, fontSize: '0.8rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-            趋势窗口
+            Trend window
           </div>
           <h3 style={{ margin: '0.3rem 0 0', fontSize: '1.15rem' }}>{title}</h3>
         </div>
@@ -187,9 +240,9 @@ function TrendCard({ title, accent, points }) {
           gap: '0.75rem',
         }}
       >
-        <StatPill label="均值" value={model.summary.averageScore} accent={accent} />
-        <StatPill label="样本数" value={String(model.summary.sampleCount)} accent={accent} />
-        <StatPill label="最新时间" value={model.summary.latestLabel} accent={accent} />
+        <StatPill label="Average" value={model.summary.averageScore} accent={accent} />
+        <StatPill label="Samples" value={String(model.summary.sampleCount)} accent={accent} />
+        <StatPill label="Latest Time" value={model.summary.latestLabel} accent={accent} />
       </div>
 
       <div
@@ -212,71 +265,19 @@ function TrendCard({ title, accent, points }) {
               fontSize: '0.95rem',
             }}
           >
-            暂无趋势数据
+            No trend data
           </div>
         ) : (
-          <svg
-            viewBox={`0 0 ${trendDimensions.width} ${trendDimensions.height}`}
-            style={{ width: '100%', height: 'auto', display: 'block' }}
-            role="img"
-            aria-label={`${title}黑眼圈趋势图`}
-          >
-            <rect x="0" y="0" width={trendDimensions.width} height={trendDimensions.height} fill="rgba(6, 10, 20, 0.9)" />
-
-            {[0.2, 0.4, 0.6, 0.8].map((ratio) => (
-              <line
-                key={ratio}
-                x1="0"
-                y1={trendDimensions.height * ratio}
-                x2={trendDimensions.width}
-                y2={trendDimensions.height * ratio}
-                stroke="rgba(255,255,255,0.06)"
-                strokeDasharray="4 10"
-              />
-            ))}
-
-            <path
-              d={model.path}
-              fill="none"
-              stroke={accent}
-              strokeWidth="3"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-
-            {model.points.map((point) => (
-              <circle
-                key={`${title}-${point.index}-${point.timestamp}`}
-                cx={point.x}
-                cy={point.y}
-                r="4"
-                fill={accent}
-                stroke="rgba(5,5,8,0.95)"
-                strokeWidth="2"
-              />
-            ))}
-
-            {model.ticks.map((tick) => (
-              <g key={`${title}-${tick.label}-${tick.x}`}>
-                <line
-                  x1={tick.x}
-                  y1={trendDimensions.height - 22}
-                  x2={tick.x}
-                  y2={trendDimensions.height - 14}
-                  stroke="rgba(255,255,255,0.18)"
-                />
-                <text
-                  x={tick.x}
-                  y={trendDimensions.height - 4}
-                  textAnchor="middle"
-                  fontSize="11"
-                  fill="rgba(255,255,255,0.72)"
-                >
-                  {tick.label}
-                </text>
-              </g>
-            ))}
-          </svg>
+          <LineChartSvg
+            ariaLabel={`${title} dark circle trend`}
+            width={trendDimensions.width}
+            height={trendDimensions.height}
+            model={model}
+            stroke={accent}
+            background="rgba(6, 10, 20, 0.9)"
+            gridStroke="rgba(255,255,255,0.06)"
+            gridDasharray="4 10"
+          />
         )}
       </div>
     </div>
@@ -304,7 +305,7 @@ function ExtremeCard({ title, date, score, imageUrl, accent }) {
           />
         ) : (
           <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', color: 'var(--text-muted)' }}>
-            暂无图片
+            No image
           </div>
         )}
       </div>
@@ -317,9 +318,9 @@ export default function FaceHistory() {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(initialProgress);
   const [data, setData] = useState(null);
+  const [liveData, setLiveData] = useState(initialLiveData);
   const [error, setError] = useState(null);
   const [reportStatus, setReportStatus] = useState('loading');
-  const [pulseFrame, setPulseFrame] = useState(0);
 
   const fetchReport = async ({ showLoading = false } = {}) => {
     const controller = new AbortController();
@@ -335,7 +336,6 @@ export default function FaceHistory() {
         signal: controller.signal,
       });
       const nextState = getFaceReportState(json);
-
       setData(nextState.data);
       setError(nextState.error);
       setReportStatus(nextState.status);
@@ -348,14 +348,32 @@ export default function FaceHistory() {
     }
   };
 
+  const fetchLive = async () => {
+    try {
+      const json = await fetchBackendJson('/api/face/live', {
+        retryPolicy: 'poll',
+      });
+      setLiveData({
+        camera_online: Boolean(json?.camera_online),
+        window_seconds: Number(json?.window_seconds) || 60,
+        latest_score: json?.latest_score ?? null,
+        latest_datetime: json?.latest_datetime || '',
+        points: Array.isArray(json?.points) ? json.points : [],
+      });
+    } catch (err) {
+      console.error('Live face poll error', err);
+    }
+  };
+
   useEffect(() => {
     fetchReport({ showLoading: true });
+    fetchLive();
   }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setPulseFrame((current) => (current + 1) % 1000);
-    }, 120);
+      fetchLive();
+    }, livePollIntervalMs);
 
     return () => clearInterval(interval);
   }, []);
@@ -440,7 +458,7 @@ export default function FaceHistory() {
     }
   };
 
-  const renderBody = () => {
+  const renderHistoryBody = () => {
     if (reportStatus === 'loading' && !data) {
       return (
         <div className="glass-panel" style={{ padding: '1.5rem' }}>
@@ -479,12 +497,8 @@ export default function FaceHistory() {
       return null;
     }
 
-    const latestPoint = getLatestPoint(data);
-
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-        <PulseCard latestPoint={latestPoint} frame={pulseFrame} />
-
+      <>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
           {trendViewOrder.map((key, index) => (
             <TrendCard
@@ -513,7 +527,7 @@ export default function FaceHistory() {
             accent="#e74c3c"
           />
         </div>
-      </div>
+      </>
     );
   };
 
@@ -532,7 +546,7 @@ export default function FaceHistory() {
         <div>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0 }}>Face Dark Circles History</h2>
           <div style={{ color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
-            同页展示实时脉冲、日/周/月/全部历史五张黑眼圈趋势图
+            Live pulse uses camera scores. Historical charts use saved-photo samples.
           </div>
         </div>
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -628,7 +642,10 @@ export default function FaceHistory() {
         </div>
       )}
 
-      {renderBody()}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+        <PulseCard liveData={liveData} />
+        {renderHistoryBody()}
+      </div>
     </div>
   );
 }

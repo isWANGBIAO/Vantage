@@ -21,6 +21,7 @@ test('buildChartModel returns svg path and mapped points for trend data', () => 
   assert.equal(model.points.length, 2);
   assert.ok(model.points[0].x < model.points[1].x);
   assert.ok(model.summary.latestLabel);
+  assert.equal(model.showMarkers, false);
 });
 
 test('buildChartModel returns empty state when no points are provided', () => {
@@ -33,6 +34,21 @@ test('buildChartModel returns empty state when no points are provided', () => {
   assert.equal(model.path, '');
   assert.equal(model.points.length, 0);
   assert.equal(model.summary.latestLabel, '--');
+  assert.equal(model.showMarkers, false);
+});
+
+test('buildChartModel sorts realtime points by timestamp before drawing the line', () => {
+  const model = buildChartModel({
+    points: [
+      { timestamp: 3, datetime: '2026-03-13 08:00:03', score: 8 },
+      { timestamp: 1, datetime: '2026-03-13 08:00:01', score: 5 },
+      { timestamp: 2, datetime: '2026-03-13 08:00:02', score: 6 },
+    ],
+    width: 320,
+    height: 120,
+  });
+
+  assert.deepEqual(model.points.map((point) => point.timestamp), [1, 2, 3]);
 });
 
 test('buildPulseFrame builds a scrolling pulse path from latest score', () => {

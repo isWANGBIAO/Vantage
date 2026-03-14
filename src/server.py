@@ -12,12 +12,16 @@ import cv2
 from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
 from src.utils.face_analysis_db import (
     FACE_ANALYSIS_DB_FILE,
+    clear_face_report_cache,
     initialize_face_analysis_storage,
+    load_face_analysis_records,
     load_face_progress_cache,
+    upsert_face_analysis_record,
 )
 from src.utils.face_report_cache import (
     build_face_report_response,
     load_face_report_cache,
+    save_face_report_cache,
 )
 import json
 import time
@@ -28,7 +32,9 @@ import glob
 import asyncio
 import math
 import calendar
+from collections import deque
 from datetime import datetime, date, timedelta
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, Request, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,6 +47,14 @@ import requests
 import pandas as pd
 
 from manager.manager_main import Monitor
+from src.services.face_analysis_pipeline import (
+    AnalysisConfig,
+    FaceParser,
+    MediaPipeFaceDetector,
+    analyze_image_data,
+    analyze_photo_file,
+    build_face_report,
+)
 from src.services.person_detection import (
     PERSON_DETECTION_CONFIDENCE,
     PERSON_DETECTION_MODEL,
@@ -50,6 +64,14 @@ from utils.data_loader import DataLoader
 from ultralytics import YOLO
 
 app = FastAPI()
+
+FACE_ANALYSIS_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsing.farl.lapa.int8.onnx")
+FACE_REPORT_PLOT_OUTPUT_DIR = Path("plot_outputs")
+FACE_LIVE_WINDOW_SECONDS = 60
+FACE_LIVE_SAMPLE_INTERVAL_SECONDS = 0.1
+_face_analysis_runtime = None
+_face_analysis_runtime_lock = threading.Lock()
+_face_report_refresh_lock = threading.Lock()
 
 # Allow CORS for development
 app.add_middleware(
@@ -76,8 +98,95 @@ class SystemState:
         self.screenshots_size = 0  # Cache for screenshots storage size
         self.show_person_box = True
         self.person_boxes = []
+        self.live_face_points = deque()
+        self.last_processed_face_photo_path = None
 
 state = SystemState()
+
+
+def get_face_analysis_runtime():
+    global _face_analysis_runtime
+
+    if _face_analysis_runtime is not None:
+        return _face_analysis_runtime
+
+    with _face_analysis_runtime_lock:
+        if _face_analysis_runtime is None:
+            config = AnalysisConfig()
+            detector = MediaPipeFaceDetector(min_detection_confidence=config.min_detection_confidence)
+            parser = FaceParser(FACE_ANALYSIS_MODEL_PATH)
+            _face_analysis_runtime = (detector, parser, config)
+
+    return _face_analysis_runtime
+
+
+def _camera_online():
+    camera = state.camera
+    return bool(camera and camera.isOpened())
+
+
+def _ensure_live_face_points_deque():
+    if not isinstance(state.live_face_points, deque):
+        state.live_face_points = deque(state.live_face_points)
+
+
+def _prune_live_face_points(now_ts=None):
+    _ensure_live_face_points_deque()
+    now_ts = float(now_ts if now_ts is not None else time.time())
+    cutoff = now_ts - FACE_LIVE_WINDOW_SECONDS
+    while state.live_face_points and state.live_face_points[0]["timestamp"] < cutoff:
+        state.live_face_points.popleft()
+
+
+def store_live_face_result(result):
+    if not result or not result.get("passed") or result.get("score") is None:
+        return
+
+    with state.lock:
+        _ensure_live_face_points_deque()
+        state.live_face_points.append(
+            {
+                "timestamp": float(result["timestamp"]),
+                "datetime": result["datetime"],
+                "score": float(result["score"]),
+            }
+        )
+        _prune_live_face_points(result["timestamp"])
+
+
+def snapshot_live_face_points(now_ts=None):
+    with state.lock:
+        _prune_live_face_points(now_ts)
+        return list(state.live_face_points)
+
+
+def refresh_face_report_cache(db_file=FACE_ANALYSIS_DB_FILE, output_dir=FACE_REPORT_PLOT_OUTPUT_DIR):
+    initialize_face_analysis_storage(db_file)
+    with _face_report_refresh_lock:
+        records = load_face_analysis_records(db_file)
+        report = build_face_report(records, Path(output_dir))
+        if report.get("count", 0) > 0:
+            save_face_report_cache(report, db_file)
+        else:
+            clear_face_report_cache(db_file)
+        return report
+
+
+def process_captured_face_photo(photo_path):
+    if not photo_path or not os.path.exists(photo_path):
+        return False
+
+    initialize_face_analysis_storage(FACE_ANALYSIS_DB_FILE)
+    detector, parser, config = get_face_analysis_runtime()
+    record = analyze_photo_file(photo_path, detector=detector, parser=parser, config=config)
+    upsert_face_analysis_record(record, FACE_ANALYSIS_DB_FILE)
+
+    try:
+        refresh_face_report_cache(FACE_ANALYSIS_DB_FILE, FACE_REPORT_PLOT_OUTPUT_DIR)
+    except Exception as exc:
+        print(f"Face report refresh failed for {photo_path}: {exc}")
+
+    return True
 
 def update_legacy_storage_stats():
     """Background task to calculate legacy storage usage once to avoid blocking main loop"""
@@ -596,6 +705,9 @@ async def startup_event():
         
         # Start background frame reading thread
         threading.Thread(target=camera_loop, daemon=True).start()
+
+        # Start background live face analysis thread
+        threading.Thread(target=face_live_loop, daemon=True).start()
         
         # Start background monitor task thread (every 10s)
         threading.Thread(target=monitor_loop, daemon=True).start()
@@ -661,6 +773,11 @@ def monitor_loop():
                 
                 # Run the periodic task (take photo, screenshot, etc.)
                 state.monitor.run_task()
+
+                photo_path = state.paths.get("photo")
+                if photo_path and photo_path != state.last_processed_face_photo_path:
+                    if process_captured_face_photo(photo_path):
+                        state.last_processed_face_photo_path = photo_path
         except Exception as e:
             print(f"Monitor loop error: {e}")
         time.sleep(10)
@@ -715,6 +832,25 @@ def camera_loop():
              state.camera = None
              time.sleep(2)
         time.sleep(0.03)
+
+
+def face_live_loop():
+    print("Starting live face analysis loop...")
+    while state.is_running:
+        frame_copy = None
+        with state.lock:
+            if state.latest_frame is not None:
+                frame_copy = state.latest_frame.copy()
+
+        if frame_copy is not None:
+            try:
+                detector, parser, config = get_face_analysis_runtime()
+                result = analyze_image_data(frame_copy, detector=detector, parser=parser, config=config)
+                store_live_face_result(result)
+            except Exception as exc:
+                print(f"Live face analysis error: {exc}")
+
+        time.sleep(FACE_LIVE_SAMPLE_INTERVAL_SECONDS)
 
 def yolo_loop():
     print("Starting YOLO detection background thread...")
@@ -1498,6 +1634,29 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(run_analysis)
     return {"message": "Analysis started in background"}
+
+
+@app.get("/api/face/live")
+async def get_face_live():
+    camera_online = _camera_online()
+    if not camera_online:
+        return {
+            "camera_online": False,
+            "window_seconds": FACE_LIVE_WINDOW_SECONDS,
+            "latest_score": None,
+            "latest_datetime": "",
+            "points": [],
+        }
+
+    points = snapshot_live_face_points()
+    latest = points[-1] if points else None
+    return {
+        "camera_online": True,
+        "window_seconds": FACE_LIVE_WINDOW_SECONDS,
+        "latest_score": latest["score"] if latest else None,
+        "latest_datetime": latest["datetime"] if latest else "",
+        "points": points,
+    }
 
 @app.get("/api/face/report")
 async def get_face_report():
