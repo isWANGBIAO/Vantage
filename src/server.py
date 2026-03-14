@@ -69,6 +69,12 @@ FACE_ANALYSIS_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsin
 FACE_REPORT_PLOT_OUTPUT_DIR = Path("plot_outputs")
 FACE_LIVE_WINDOW_SECONDS = 60
 FACE_LIVE_SAMPLE_INTERVAL_SECONDS = 0.1
+FACE_OVERLAY_BASE_SCORE_FONT_SCALE = 1.9
+FACE_OVERLAY_SCORE_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
+FACE_OVERLAY_SCORE_THICKNESS = 8
+FACE_OVERLAY_SCORE_PADDING = 24
+FACE_OVERLAY_PERSON_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
+FACE_OVERLAY_PERSON_THICKNESS = 6
 _face_analysis_runtime = None
 _face_analysis_runtime_lock = threading.Lock()
 _face_report_refresh_lock = threading.Lock()
@@ -99,6 +105,7 @@ class SystemState:
         self.show_person_box = True
         self.person_boxes = []
         self.live_face_points = deque()
+        self.latest_live_face_score = None
         self.last_processed_face_photo_path = None
 
 state = SystemState()
@@ -158,6 +165,21 @@ def snapshot_live_face_points(now_ts=None):
     with state.lock:
         _prune_live_face_points(now_ts)
         return list(state.live_face_points)
+
+
+def update_live_face_overlay_state(result):
+    latest_score = None
+    if result and result.get("passed") and result.get("score") is not None:
+        latest_score = float(result["score"])
+
+    with state.lock:
+        state.latest_live_face_score = latest_score
+
+
+def format_live_face_score_label(score):
+    if score is None or not math.isfinite(float(score)):
+        return "Dark Circle Score: --"
+    return f"Dark Circle Score: {float(score):.2f}"
 
 
 def refresh_face_report_cache(db_file=FACE_ANALYSIS_DB_FILE, output_dir=FACE_REPORT_PLOT_OUTPUT_DIR):
@@ -846,6 +868,7 @@ def face_live_loop():
             try:
                 detector, parser, config = get_face_analysis_runtime()
                 result = analyze_image_data(frame_copy, detector=detector, parser=parser, config=config)
+                update_live_face_overlay_state(result)
                 store_live_face_result(result)
             except Exception as exc:
                 print(f"Live face analysis error: {exc}")
@@ -907,6 +930,7 @@ def yolo_loop():
 def generate_frames():
     while True:
         frame = None
+        overlay_score = None
         with state.lock:
             if state.latest_frame is not None:
                 frame = state.latest_frame.copy()
@@ -915,14 +939,50 @@ def generate_frames():
                 import numpy as np
                 frame = np.zeros((720, 1280, 3), dtype=np.uint8)
                 cv2.putText(frame, "Camera Offline", (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 2)
+            overlay_score = state.latest_live_face_score
             
             # Draw YOLO bounding boxes if enabled
             if state.show_person_box and frame is not None:
                 for (x1, y1, x2, y2) in state.person_boxes:
                     # Neon Green box
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                    # Label - increased size
-                    cv2.putText(frame, "Person", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.8, (0, 255, 0), 3)
+                    # Keep the person label above the box even when using a large font.
+                    person_font = cv2.FONT_HERSHEY_SIMPLEX
+                    person_label = "Person"
+                    (_, person_text_height), person_baseline = cv2.getTextSize(
+                        person_label,
+                        person_font,
+                        FACE_OVERLAY_PERSON_FONT_SCALE,
+                        FACE_OVERLAY_PERSON_THICKNESS,
+                    )
+                    person_y = max(person_text_height + person_baseline + 8, y1 - 16)
+                    cv2.putText(
+                        frame,
+                        person_label,
+                        (x1, person_y),
+                        person_font,
+                        FACE_OVERLAY_PERSON_FONT_SCALE,
+                        (0, 255, 0),
+                        FACE_OVERLAY_PERSON_THICKNESS,
+                    )
+                    score_label = format_live_face_score_label(overlay_score)
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = FACE_OVERLAY_SCORE_FONT_SCALE
+                    thickness = FACE_OVERLAY_SCORE_THICKNESS
+                    padding = FACE_OVERLAY_SCORE_PADDING
+                    (text_width, text_height), baseline = cv2.getTextSize(score_label, font, font_scale, thickness)
+                    text_x = max(6, x2 - text_width)
+                    text_y = max(text_height + baseline + padding, y1 - 12)
+                    background_tl = (
+                        max(0, text_x - padding),
+                        max(0, text_y - text_height - baseline - padding),
+                    )
+                    background_br = (
+                        min(frame.shape[1] - 1, text_x + text_width + padding),
+                        min(frame.shape[0] - 1, text_y + padding),
+                    )
+                    cv2.rectangle(frame, background_tl, background_br, (0, 255, 0), -1)
+                    cv2.putText(frame, score_label, (text_x, text_y), font, font_scale, (0, 0, 0), thickness)
 
         
         ret, buffer = cv2.imencode('.jpg', frame)

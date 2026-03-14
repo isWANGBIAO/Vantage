@@ -17,10 +17,12 @@ class FaceLiveEndpointTests(unittest.TestCase):
     def setUp(self):
         self.original_points = getattr(server.state, "live_face_points", None)
         self.original_camera = server.state.camera
+        self.original_latest_live_face_score = getattr(server.state, "latest_live_face_score", None)
 
     def tearDown(self):
         server.state.live_face_points = [] if self.original_points is None else self.original_points
         server.state.camera = self.original_camera
+        server.state.latest_live_face_score = self.original_latest_live_face_score
 
     def test_store_live_face_result_keeps_only_passing_points_within_window(self):
         server.state.live_face_points = []
@@ -83,6 +85,24 @@ class FaceLiveEndpointTests(unittest.TestCase):
 
     def test_live_sampling_interval_is_100ms(self):
         self.assertEqual(server.FACE_LIVE_SAMPLE_INTERVAL_SECONDS, 0.1)
+
+    def test_format_live_face_score_label_formats_numeric_and_missing(self):
+        self.assertEqual(server.format_live_face_score_label(31.234), "Dark Circle Score: 31.23")
+        self.assertEqual(server.format_live_face_score_label(None), "Dark Circle Score: --")
+
+    def test_update_live_face_overlay_state_tracks_current_score(self):
+        server.state.latest_live_face_score = 12.3
+
+        server.update_live_face_overlay_state({"passed": False, "score": None})
+        self.assertIsNone(server.state.latest_live_face_score)
+
+        server.update_live_face_overlay_state({"passed": True, "score": 29.875})
+        self.assertEqual(server.state.latest_live_face_score, 29.875)
+
+    def test_live_overlay_fonts_are_double_the_previous_score_size(self):
+        self.assertEqual(server.FACE_OVERLAY_BASE_SCORE_FONT_SCALE, 1.9)
+        self.assertEqual(server.FACE_OVERLAY_SCORE_FONT_SCALE, 3.8)
+        self.assertEqual(server.FACE_OVERLAY_PERSON_FONT_SCALE, 3.8)
 
 
 if __name__ == "__main__":

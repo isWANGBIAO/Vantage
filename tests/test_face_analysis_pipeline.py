@@ -75,6 +75,13 @@ class FaceAnalysisPipelineTests(unittest.TestCase):
         image[44:48, 66:78] = (190, 190, 190)
         return image
 
+    def make_warm_lit_test_image(self):
+        image = self.make_test_image().astype(np.int16)
+        image[:, :, 2] = np.clip(image[:, :, 2] + 100, 0, 255)
+        image[:, :, 1] = np.clip(image[:, :, 1] + 55, 0, 255)
+        image[:, :, 0] = np.clip(image[:, :, 0] - 35, 0, 255)
+        return image.astype(np.uint8)
+
     def test_analyze_image_data_rejects_missing_face_without_zero_score(self):
         result = analyze_image_data(
             self.make_test_image(),
@@ -105,6 +112,45 @@ class FaceAnalysisPipelineTests(unittest.TestCase):
         self.assertGreater(result["score_right"], 0)
         self.assertGreater(result["score"], 0)
         self.assertEqual(result["fail_reason"], [])
+
+    def test_analyze_image_data_exposes_feature_breakdown_and_lighting_quality(self):
+        result = analyze_image_data(
+            self.make_test_image(),
+            detector=FakeDetector(bbox=(0, 0, 100, 100)),
+            parser=FakeParser(),
+            source_path="photo.jpg",
+            observed_at=datetime(2026, 3, 11, 12, 6, 0),
+            config=AnalysisConfig(min_face_size=80),
+        )
+
+        self.assertTrue(result["passed"])
+        self.assertIn("features", result)
+        self.assertIn("quality", result)
+        self.assertGreater(result["features"]["relative_luminance_left"], 0)
+        self.assertGreaterEqual(result["quality"]["lighting_confidence"], 0.0)
+        self.assertLessEqual(result["quality"]["lighting_confidence"], 1.0)
+
+    def test_analyze_image_data_reduces_warm_lighting_score_drift(self):
+        base_result = analyze_image_data(
+            self.make_test_image(),
+            detector=FakeDetector(bbox=(0, 0, 100, 100)),
+            parser=FakeParser(),
+            source_path="base.jpg",
+            observed_at=datetime(2026, 3, 11, 12, 6, 0),
+            config=AnalysisConfig(min_face_size=80),
+        )
+        warm_result = analyze_image_data(
+            self.make_warm_lit_test_image(),
+            detector=FakeDetector(bbox=(0, 0, 100, 100)),
+            parser=FakeParser(),
+            source_path="warm.jpg",
+            observed_at=datetime(2026, 3, 11, 12, 6, 5),
+            config=AnalysisConfig(min_face_size=80),
+        )
+
+        self.assertTrue(base_result["passed"])
+        self.assertTrue(warm_result["passed"])
+        self.assertLess(abs(base_result["score"] - warm_result["score"]), 4.0)
 
     def test_build_face_report_ignores_failed_rows(self):
         results = [

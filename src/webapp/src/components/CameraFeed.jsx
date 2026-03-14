@@ -71,7 +71,7 @@ export default function CameraFeed() {
                         border: `1px solid ${status.show_person_box ? 'var(--accent-color)' : 'rgba(255,255,255,0.2)'}`,
                         padding: '4px 8px',
                         borderRadius: '4px',
-                        display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem',
+                        display: 'flex', alignItems: 'center', gap: '6px', fontSize: '8px',
                         color: status.show_person_box ? 'var(--accent-color)' : '#999',
                         zIndex: 20,
                         cursor: toggling ? 'wait' : 'pointer',
@@ -96,7 +96,7 @@ export default function CameraFeed() {
                 background: 'rgba(0,0,0,0.6)',
                 padding: '4px 8px',
                 borderRadius: '4px',
-                display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem',
+                display: 'flex', alignItems: 'center', gap: '6px', fontSize: '8px',
                 color: status.online ? 'var(--accent-color)' : '#999',
                 zIndex: 20
             }}>

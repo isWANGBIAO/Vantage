@@ -55,6 +55,10 @@ class AnalysisConfig:
     cheek_offset_ratio: float = 0.75
     score_delta_e_weight: float = 0.6
     score_delta_l_weight: float = 0.4
+    score_relative_l_weight: float = 0.5
+    score_shadow_contrast_weight: float = 0.35
+    score_normalized_delta_e_weight: float = 0.15
+    score_scale: float = 60.0
     max_face_center_offset_ratio: float = 0.32
     min_face_box_aspect_ratio: float = 0.75
     max_face_box_aspect_ratio: float = 1.35
@@ -68,6 +72,12 @@ class AnalysisConfig:
     max_brightness_l_gap: float = 18.0
     max_eye_center_y_ratio: float = 0.1
     max_eye_width_ratio: float = 1.8
+    illumination_clahe_clip_limit: float = 2.0
+    illumination_clahe_grid_size: int = 8
+    illumination_blur_sigma: float = 21.0
+    skin_tone_target_a: float = 128.0
+    skin_tone_target_b: float = 128.0
+    max_skin_l_std_ratio: float = 0.28
 
 
 class MediaPipeFaceDetector:
@@ -279,7 +289,47 @@ def _mask_box(mask):
     return cv2.boundingRect(coords)
 
 
-def _analyze_eye_region(parsing_map, resized_img, eye_class_idx, skin_mask, config: AnalysisConfig):
+def _normalize_face_lab(resized_img, skin_mask, config: AnalysisConfig):
+    lab = cv2.cvtColor(resized_img, cv2.COLOR_BGR2LAB).astype(np.float32)
+    gray = cv2.cvtColor(resized_img, cv2.COLOR_BGR2GRAY).astype(np.float32) + 1.0
+    background = cv2.GaussianBlur(
+        gray,
+        (0, 0),
+        sigmaX=max(1.0, float(config.illumination_blur_sigma)),
+        sigmaY=max(1.0, float(config.illumination_blur_sigma)),
+    )
+    retinex_l = np.log(gray) - np.log(background + 1e-6)
+    normalized_l = cv2.normalize(retinex_l, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+    lab[:, :, 0] = normalized_l
+
+    skin_lab = lab[skin_mask == 1]
+    if skin_lab.size:
+        a_shift = float(config.skin_tone_target_a) - float(np.median(skin_lab[:, 1]))
+        b_shift = float(config.skin_tone_target_b) - float(np.median(skin_lab[:, 2]))
+        lab[:, :, 1] = np.clip(lab[:, :, 1] + a_shift, 0, 255)
+        lab[:, :, 2] = np.clip(lab[:, :, 2] + b_shift, 0, 255)
+        skin_lab = lab[skin_mask == 1]
+
+    if skin_lab.size:
+        face_l_reference = 255.0
+        skin_l_std_ratio = float(np.std(skin_lab[:, 0])) / face_l_reference
+    else:
+        face_l_reference = 255.0
+        skin_l_std_ratio = 0.0
+
+    return lab, {
+        "face_l_reference": face_l_reference,
+        "skin_l_std_ratio": skin_l_std_ratio,
+    }
+
+
+def _shadow_contrast(values):
+    if values.size == 0:
+        return 0.0
+    return float(np.percentile(values, 90) - np.percentile(values, 10))
+
+
+def _analyze_eye_region(parsing_map, normalized_lab, eye_class_idx, skin_mask, face_stats, config: AnalysisConfig):
     eye_mask = (parsing_map == eye_class_idx).astype(np.uint8)
     box = _mask_box(eye_mask)
     if box is None:
@@ -307,26 +357,51 @@ def _analyze_eye_region(parsing_map, resized_img, eye_class_idx, skin_mask, conf
     if cv2.countNonZero(cheek_mask) < config.min_mask_pixels:
         return None
 
-    lab = cv2.cvtColor(resized_img, cv2.COLOR_BGR2LAB).astype(np.float32)
-    under_pixels = lab[under_mask == 1]
-    cheek_pixels = lab[cheek_mask == 1]
+    under_pixels = normalized_lab[under_mask == 1]
+    cheek_pixels = normalized_lab[cheek_mask == 1]
     under_med = np.median(under_pixels, axis=0)
     cheek_med = np.median(cheek_pixels, axis=0)
 
     delta_l = max(0.0, float(cheek_med[0] - under_med[0]))
     delta_e = float(np.linalg.norm(cheek_med - under_med))
-    score = (config.score_delta_e_weight * delta_e) + (config.score_delta_l_weight * delta_l)
+    face_l_reference = max(1.0, float(face_stats["face_l_reference"]))
+    relative_luminance = delta_l / face_l_reference
+    shadow_contrast = max(
+        0.0,
+        _shadow_contrast(under_pixels[:, 0]) - _shadow_contrast(cheek_pixels[:, 0]),
+    ) / face_l_reference
+    normalized_delta_e = delta_e / face_l_reference
+    score = config.score_scale * (
+        (config.score_relative_l_weight * relative_luminance)
+        + (config.score_shadow_contrast_weight * shadow_contrast)
+        + (config.score_normalized_delta_e_weight * normalized_delta_e)
+    )
 
     return {
         "score": score,
         "delta_l": delta_l,
         "delta_e": delta_e,
+        "relative_luminance": relative_luminance,
+        "shadow_contrast": shadow_contrast,
+        "normalized_delta_e": normalized_delta_e,
         "under_mask_pixels": int(cv2.countNonZero(under_mask)),
         "cheek_mask_pixels": int(cv2.countNonZero(cheek_mask)),
         "under_l": float(under_med[0]),
         "cheek_l": float(cheek_med[0]),
         "eye_box": (ex, ey, ew, eh),
     }
+
+
+def _compute_lighting_confidence(left_metrics, right_metrics, face_stats, config: AnalysisConfig):
+    face_l_reference = max(1.0, float(face_stats.get("face_l_reference", 128.0)))
+    brightness_gap_ratio = max(
+        abs(left_metrics["under_l"] - right_metrics["under_l"]),
+        abs(left_metrics["cheek_l"] - right_metrics["cheek_l"]),
+    ) / face_l_reference
+    skin_l_std_ratio = max(0.0, float(face_stats.get("skin_l_std_ratio", 0.0)))
+    excess_skin_variance = max(0.0, skin_l_std_ratio - float(config.max_skin_l_std_ratio))
+    confidence = 1.0 - min(1.0, (brightness_gap_ratio * 2.0) + (excess_skin_variance * 2.5))
+    return float(np.clip(confidence, 0.0, 1.0))
 
 
 def _face_box_fail_reasons(image_bgr, bbox, config: AnalysisConfig):
@@ -376,10 +451,13 @@ def _stability_fail_reasons(left_metrics, right_metrics, resized_img, config: An
     if abs(left_metrics["score"] - right_metrics["score"]) > config.max_left_right_score_gap:
         fail_reasons.append("UnstableLeftRightGap")
 
-    brightness_gap = max(
-        abs(left_metrics["under_l"] - right_metrics["under_l"]),
-        abs(left_metrics["cheek_l"] - right_metrics["cheek_l"]),
-    )
+    if "relative_luminance" in left_metrics and "relative_luminance" in right_metrics:
+        brightness_gap = abs(left_metrics["relative_luminance"] - right_metrics["relative_luminance"]) * 100.0
+    else:
+        brightness_gap = max(
+            abs(left_metrics["under_l"] - right_metrics["under_l"]),
+            abs(left_metrics["cheek_l"] - right_metrics["cheek_l"]),
+        )
     if brightness_gap > config.max_brightness_l_gap:
         fail_reasons.append("UnstableBrightness")
 
@@ -418,6 +496,10 @@ def analyze_image_data(image_bgr, detector, parser, source_path="", observed_at=
         "delta_e_right": None,
         "delta_l_left": None,
         "delta_l_right": None,
+        "features": {},
+        "quality": {
+            "lighting_confidence": 0.0,
+        },
     }
 
     if image_bgr is None or image_bgr.size == 0:
@@ -459,8 +541,23 @@ def analyze_image_data(image_bgr, detector, parser, source_path="", observed_at=
         result["fail_reason"].append("FaceMaskTooSmall")
         return result
 
-    left_metrics = _analyze_eye_region(parsing_map, resized_img, CLASS_IDX["l_eye"], skin_mask, config)
-    right_metrics = _analyze_eye_region(parsing_map, resized_img, CLASS_IDX["r_eye"], skin_mask, config)
+    normalized_lab, face_stats = _normalize_face_lab(resized_img, skin_mask, config)
+    left_metrics = _analyze_eye_region(
+        parsing_map,
+        normalized_lab,
+        CLASS_IDX["l_eye"],
+        skin_mask,
+        face_stats,
+        config,
+    )
+    right_metrics = _analyze_eye_region(
+        parsing_map,
+        normalized_lab,
+        CLASS_IDX["r_eye"],
+        skin_mask,
+        face_stats,
+        config,
+    )
 
     if left_metrics is None:
         result["fail_reason"].append("LeftEyeROIInvalid")
@@ -480,6 +577,17 @@ def analyze_image_data(image_bgr, detector, parser, source_path="", observed_at=
     result["delta_e_right"] = right_metrics["delta_e"]
     result["delta_l_left"] = left_metrics["delta_l"]
     result["delta_l_right"] = right_metrics["delta_l"]
+    result["features"] = {
+        "relative_luminance_left": left_metrics.get("relative_luminance"),
+        "relative_luminance_right": right_metrics.get("relative_luminance"),
+        "shadow_contrast_left": left_metrics.get("shadow_contrast"),
+        "shadow_contrast_right": right_metrics.get("shadow_contrast"),
+        "normalized_delta_e_left": left_metrics.get("normalized_delta_e"),
+        "normalized_delta_e_right": right_metrics.get("normalized_delta_e"),
+    }
+    result["quality"] = {
+        "lighting_confidence": _compute_lighting_confidence(left_metrics, right_metrics, face_stats, config),
+    }
     result["passed"] = True
     return result
 
