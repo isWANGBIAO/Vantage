@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -72,8 +73,6 @@ class FaceAnalysisDbTests(unittest.TestCase):
             save_face_report_cache({"count": 1}, db_path)
             save_face_progress_cache({"status": "done"}, db_path)
 
-            import sqlite3
-
             conn = sqlite3.connect(db_path)
             try:
                 conn.execute(
@@ -96,6 +95,86 @@ class FaceAnalysisDbTests(unittest.TestCase):
         self.assertEqual(rows, [])
         self.assertIsNone(report)
         self.assertIsNone(progress)
+
+    def test_initialize_storage_migrates_v2_scores_in_place(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "face_analysis.db"
+            ensure_face_analysis_db(db_path)
+            upsert_face_analysis_record(
+                {
+                    "path": "valid-photo.jpg",
+                    "datetime": "2026-03-11 10:00:00",
+                    "timestamp": 1773194400.0,
+                    "passed": True,
+                    "score": 1.23,
+                    "score_left": 1.0,
+                    "score_right": 1.46,
+                    "delta_e_left": 10.0,
+                    "delta_e_right": 11.0,
+                    "delta_l_left": 9.0,
+                    "delta_l_right": 10.0,
+                    "fail_reason": [],
+                },
+                db_path,
+            )
+            upsert_face_analysis_record(
+                {
+                    "path": "failed-photo.jpg",
+                    "datetime": "2026-03-11 11:00:00",
+                    "timestamp": 1773198000.0,
+                    "passed": False,
+                    "score": None,
+                    "score_left": None,
+                    "score_right": None,
+                    "delta_e_left": None,
+                    "delta_e_right": None,
+                    "delta_l_left": None,
+                    "delta_l_right": None,
+                    "fail_reason": ["NoFace"],
+                },
+                db_path,
+            )
+            save_face_report_cache({"count": 1}, db_path)
+            save_face_progress_cache({"status": "done"}, db_path)
+
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO face_analysis_meta (meta_key, meta_value)
+                    VALUES (?, ?)
+                    ON CONFLICT(meta_key) DO UPDATE SET meta_value=excluded.meta_value
+                    """,
+                    ("analysis_algorithm_version", "dark_circle_v2"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            initialize_face_analysis_storage(db_path)
+            rows = load_face_analysis_records(db_path)
+            report = load_face_report_cache(db_path)
+            progress = load_face_progress_cache(db_path)
+
+            conn = sqlite3.connect(db_path)
+            try:
+                version = conn.execute(
+                    "SELECT meta_value FROM face_analysis_meta WHERE meta_key = ?",
+                    ("analysis_algorithm_version",),
+                ).fetchone()[0]
+            finally:
+                conn.close()
+
+        self.assertEqual(len(rows), 2)
+        valid_row = next(row for row in rows if row["path"] == "valid-photo.jpg")
+        failed_row = next(row for row in rows if row["path"] == "failed-photo.jpg")
+        self.assertAlmostEqual(valid_row["score"], 12.3)
+        self.assertAlmostEqual(valid_row["score_left"], 10.0)
+        self.assertAlmostEqual(valid_row["score_right"], 14.6)
+        self.assertIsNone(failed_row["score"])
+        self.assertIsNone(report)
+        self.assertIsNone(progress)
+        self.assertEqual(version, "dark_circle_v3")
 
     def test_save_and_load_report_and_progress_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -64,6 +64,28 @@ test('buildPulseFrame builds a scrolling pulse path from latest score', () => {
   assert.ok(pulse.points.every((point) => point.y >= 0 && point.y <= 120));
 });
 
+test('buildPulseFrame uses the full 0-100 severity range', () => {
+  const medium = buildPulseFrame({
+    latestScore: 40,
+    frame: 10,
+    width: 500,
+    height: 120,
+  });
+  const heavy = buildPulseFrame({
+    latestScore: 100,
+    frame: 10,
+    width: 500,
+    height: 120,
+  });
+
+  const getAmplitude = (pulse) => {
+    const ys = pulse.points.map((point) => point.y);
+    return Math.max(...ys) - Math.min(...ys);
+  };
+
+  assert.ok(getAmplitude(heavy) > getAmplitude(medium));
+});
+
 test('getTrendSummary reports latest and average scores', () => {
   const summary = getTrendSummary([
     { timestamp: 1, datetime: '2026-03-13 08:00:00', score: 5 },

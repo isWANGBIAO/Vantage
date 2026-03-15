@@ -14,6 +14,7 @@ from src.services.face_analysis_pipeline import (
     compute_trend_series,
     filter_report_outlier_points,
     filter_stable_trend_points,
+    normalize_dark_circle_score,
     plot_trend,
     trend_axis_date_format,
 )
@@ -63,6 +64,12 @@ class FakeParserWithSparsePrimarySkin(FakeParserWithoutEyes):
 
 
 class FaceAnalysisPipelineTests(unittest.TestCase):
+    def test_normalize_dark_circle_score_maps_raw_values_to_0_100(self):
+        self.assertIsNone(normalize_dark_circle_score(None))
+        self.assertEqual(normalize_dark_circle_score(0.0), 0.0)
+        self.assertEqual(normalize_dark_circle_score(1.23), 12.3)
+        self.assertEqual(normalize_dark_circle_score(17.0), 100.0)
+
     def make_test_image(self):
         image = np.full((100, 100, 3), 90, dtype=np.uint8)
 

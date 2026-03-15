@@ -4,11 +4,11 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-
 FACE_ANALYSIS_DB_FILE = Path("history") / "face_analysis.db"
 REPORT_CACHE_KEY = "latest"
 PROGRESS_CACHE_KEY = "latest"
-CURRENT_ALGORITHM_VERSION = "dark_circle_v2"
+CURRENT_ALGORITHM_VERSION = "dark_circle_v3"
+MIGRATABLE_ALGORITHM_VERSIONS = {"dark_circle_v2"}
 
 
 def _db_path(db_file):
@@ -130,6 +130,30 @@ def _set_meta(conn, meta_key, meta_value):
     )
 
 
+def _migrate_scores_to_current_algorithm(conn):
+    conn.execute(
+        """
+        UPDATE face_analysis_results
+        SET score = CASE
+                WHEN passed = 1 AND score IS NOT NULL THEN MIN(100.0, MAX(0.0, score * 10.0))
+                ELSE score
+            END,
+            score_left = CASE
+                WHEN passed = 1 AND score_left IS NOT NULL THEN MIN(100.0, MAX(0.0, score_left * 10.0))
+                ELSE score_left
+            END,
+            score_right = CASE
+                WHEN passed = 1 AND score_right IS NOT NULL THEN MIN(100.0, MAX(0.0, score_right * 10.0))
+                ELSE score_right
+            END,
+            updated_at = ?
+        """,
+        (time.time(),),
+    )
+    conn.execute("DELETE FROM face_report_cache")
+    conn.execute("DELETE FROM face_progress_cache")
+
+
 def initialize_face_analysis_storage(
     db_file=FACE_ANALYSIS_DB_FILE,
     algorithm_version=CURRENT_ALGORITHM_VERSION,
@@ -137,7 +161,9 @@ def initialize_face_analysis_storage(
     ensure_face_analysis_db(db_file)
     with _open_db(db_file) as conn:
         existing_version = _get_meta(conn, "analysis_algorithm_version")
-        if existing_version != algorithm_version:
+        if existing_version != algorithm_version and existing_version in MIGRATABLE_ALGORITHM_VERSIONS:
+            _migrate_scores_to_current_algorithm(conn)
+        elif existing_version != algorithm_version:
             conn.execute("DELETE FROM face_analysis_results")
             conn.execute("DELETE FROM face_report_cache")
             conn.execute("DELETE FROM face_progress_cache")

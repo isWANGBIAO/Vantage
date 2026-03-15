@@ -180,7 +180,7 @@ export function buildPulseFrame({
 }) {
   const resolvedScore = Number.isFinite(Number(latestScore)) ? Number(latestScore) : 6;
   const baseline = height * 0.58;
-  const severity = clamp(resolvedScore, 0, 40);
+  const severity = clamp(resolvedScore, 0, 100);
   const waveAmplitude = 4 + (severity * 0.35);
   const spikeAmplitude = 18 + (severity * 0.8);
   const cycleWidth = 140;

@@ -12,6 +12,7 @@ import pandas as pd
 matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+from src.utils.face_score import normalize_dark_circle_score
 
 TREND_VIEW_LABELS = {
     "day": "最近24小时",
@@ -371,14 +372,15 @@ def _analyze_eye_region(parsing_map, normalized_lab, eye_class_idx, skin_mask, f
         _shadow_contrast(under_pixels[:, 0]) - _shadow_contrast(cheek_pixels[:, 0]),
     ) / face_l_reference
     normalized_delta_e = delta_e / face_l_reference
-    score = config.score_scale * (
+    raw_score = config.score_scale * (
         (config.score_relative_l_weight * relative_luminance)
         + (config.score_shadow_contrast_weight * shadow_contrast)
         + (config.score_normalized_delta_e_weight * normalized_delta_e)
     )
 
     return {
-        "score": score,
+        "raw_score": raw_score,
+        "score": normalize_dark_circle_score(raw_score),
         "delta_l": delta_l,
         "delta_e": delta_e,
         "relative_luminance": relative_luminance,
@@ -444,11 +446,13 @@ def _exposure_fail_reasons(crop_gray, config: AnalysisConfig):
 
 def _stability_fail_reasons(left_metrics, right_metrics, resized_img, config: AnalysisConfig):
     fail_reasons = []
+    left_raw_score = float(left_metrics.get("raw_score", left_metrics.get("score", 0.0)))
+    right_raw_score = float(right_metrics.get("raw_score", right_metrics.get("score", 0.0)))
 
     if min(left_metrics["under_mask_pixels"], right_metrics["under_mask_pixels"]) < config.min_under_eye_pixels:
         fail_reasons.append("UnderEyePixelsTooSmall")
 
-    if abs(left_metrics["score"] - right_metrics["score"]) > config.max_left_right_score_gap:
+    if abs(left_raw_score - right_raw_score) > config.max_left_right_score_gap:
         fail_reasons.append("UnstableLeftRightGap")
 
     if "relative_luminance" in left_metrics and "relative_luminance" in right_metrics:
