@@ -473,7 +473,7 @@ export default function Dashboard() {
         <StatCard
           icon={<Wind size={24} color={aqi?.color || '#b2bec3'} />}
           title="Air Quality (US)"
-          value={aqi ? aqi.aqi : '--'}
+          value={aqi?.aqi ?? '--'}
           subValue={aqi ? `${aqi.city} - ${aqi.level}` : 'Loading...'}
           color={aqi?.color || '#b2bec3'}
           titleColor={aqi?.color}

@@ -7,6 +7,7 @@ export default function Plots() {
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [imageVersion, setImageVersion] = useState(0);
     const currentPlot = plots[currentIndex];
 
     const fetchPlots = useCallback(async () => {
@@ -20,6 +21,7 @@ export default function Plots() {
                 });
                 setPlots(data.plots);
                 setCurrentIndex(0);
+                setImageVersion(prev => prev + 1);
             }
         } catch (err) {
             console.error('Failed to fetch plots:', err);
@@ -76,7 +78,7 @@ export default function Plots() {
         if (e.deltaY < 0) goToPrev();
         else if (e.deltaY > 0) goToNext();
     };
-    const currentPlotSrc = currentPlot?.url || '';
+    const currentPlotSrc = currentPlot?.url ? `${currentPlot.url}?v=${imageVersion}` : '';
 
     return (
         <div style={{

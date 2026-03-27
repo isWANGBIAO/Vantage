@@ -96,9 +96,13 @@ export default function ActionPlan({ isVisible = true }) {
   const planEndRef = useRef(null);
   const visibilityRef = useRef(isVisible);
   const isGeneratingRef = useRef(isGenerating);
+  const selectedModelRef = useRef(selectedModel);
+  const selectedReasoningEffortRef = useRef(selectedReasoningEffort);
 
   visibilityRef.current = isVisible;
   isGeneratingRef.current = isGenerating;
+  selectedModelRef.current = selectedModel;
+  selectedReasoningEffortRef.current = selectedReasoningEffort;
 
   useEffect(() => {
     if (isGenerating && isVisible && analysisContent) {
@@ -196,18 +200,20 @@ export default function ActionPlan({ isVisible = true }) {
     setPlanThinking('');
     setAnalysisContent('### Analyzing data\n\nStreaming analysis output...');
     setPlanContent('### Waiting for analysis\n\nThe action plan will start once the first pass completes.');
+    const effectiveReasoningEffort = selectedReasoningEffortRef.current;
+
     setStats({
       speed: '0 t/s',
       total_duration: 0,
       total_tokens: 0,
       startTime: Date.now(),
-      reasoning_effort: selectedReasoningEffort,
+      reasoning_effort: effectiveReasoningEffort,
     });
 
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
     let currentSection = 'analysis';
-    const effectiveModel = modelOverride || selectedModel;
+    const effectiveModel = modelOverride || selectedModelRef.current;
 
     try {
       const response = await fetchBackend('/api/action_plan', {
@@ -216,7 +222,7 @@ export default function ActionPlan({ isVisible = true }) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(
-          buildActionPlanGenerationPayload(selectedReasoningEffort, {
+          buildActionPlanGenerationPayload(effectiveReasoningEffort, {
             replaceToday,
             model: effectiveModel,
           }),
@@ -455,7 +461,7 @@ export default function ActionPlan({ isVisible = true }) {
         abortControllerRef.current = null;
       }
     }
-  }, [selectedModel, selectedReasoningEffort, stopGeneration]);
+  }, [stopGeneration]);
 
   useEffect(() => {
     const initializeModels = async () => {
