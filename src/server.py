@@ -97,7 +97,14 @@ class SystemState:
         self.monitor = None
         self.latest_frame = None
         self.is_running = True
-        self.startup_initialized = False
+        self.background_thread_status = {
+            "camera_loop": False,
+            "face_live_loop": False,
+            "monitor_loop": False,
+            "update_legacy_storage_stats": False,
+            "update_storage_stats": False,
+            "yolo_loop": False,
+        }
         self.lock = threading.Lock()
         self.paths = {'photo': None, 'screenshot': None}
         self.photos_path = None
@@ -118,11 +125,29 @@ def _mount_static_once(route_path, directory, name):
     if not directory or not os.path.exists(directory):
         return False
 
+    normalized_directory = os.path.abspath(directory)
     for route in app.router.routes:
-        if getattr(route, "path", None) == route_path:
+        if getattr(route, "path", None) != route_path:
+            continue
+
+        mounted_app = getattr(route, "app", None)
+        current_directory = getattr(mounted_app, "directory", None)
+        if current_directory is None or os.path.abspath(current_directory) != normalized_directory:
+            route.app = StaticFiles(directory=directory)
             return False
 
+        return False
+
     app.mount(route_path, StaticFiles(directory=directory), name=name)
+    return True
+
+
+def _start_background_thread_once(thread_name, target):
+    if state.background_thread_status.get(thread_name):
+        return False
+
+    threading.Thread(target=target, daemon=True).start()
+    state.background_thread_status[thread_name] = True
     return True
 
 
@@ -732,11 +757,6 @@ def find_latest_file_recursive(directory, extensions={'.jpg', '.png'}):
     return latest_file
 
 async def startup_event():
-    if state.startup_initialized:
-        state.is_running = True
-        print("Startup already initialized; skipping duplicate startup.")
-        return
-
     print("Starting up server...")
     state.is_running = True
     try:
@@ -759,23 +779,16 @@ async def startup_event():
         
         state.monitor = Monitor(state.camera, state.paths, state.photos_path, state.screenshots_path)
 
-        # Start background frame reading thread
-        threading.Thread(target=camera_loop, daemon=True).start()
-
-        # Start background live face analysis thread
-        threading.Thread(target=face_live_loop, daemon=True).start()
-        
-        # Start background monitor task thread (every 10s)
-        threading.Thread(target=monitor_loop, daemon=True).start()
-        
-        # Start background legacy storage calculation (doesn't block startup)
-        threading.Thread(target=update_legacy_storage_stats, daemon=True).start()
-        
-        # Start background storage size cache update (every 60s)
-        threading.Thread(target=update_storage_stats, daemon=True).start()
-
-        # Start background YOLO detection thread
-        threading.Thread(target=yolo_loop, daemon=True).start()
+        thread_specs = (
+            ("camera_loop", camera_loop),
+            ("face_live_loop", face_live_loop),
+            ("monitor_loop", monitor_loop),
+            ("update_legacy_storage_stats", update_legacy_storage_stats),
+            ("update_storage_stats", update_storage_stats),
+            ("yolo_loop", yolo_loop),
+        )
+        for thread_name, thread_target in thread_specs:
+            _start_background_thread_once(thread_name, thread_target)
 
         # Mount static directories for photos and plots
         _mount_static_once("/static/photos", state.photos_path, "photos")
@@ -787,8 +800,6 @@ async def startup_event():
         
         _mount_static_once("/static/screenshots", state.screenshots_path, "screenshots")
 
-        state.startup_initialized = True
-                
         # Attempt to find latest existing files to populate state
         try:
             print("Scanning for latest existing images...")
@@ -812,7 +823,8 @@ async def startup_event():
 
 async def shutdown_event():
     state.is_running = False
-    state.startup_initialized = False
+    for thread_name in state.background_thread_status:
+        state.background_thread_status[thread_name] = False
 
     camera = state.camera
     state.camera = None
