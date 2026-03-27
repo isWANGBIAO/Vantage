@@ -7,13 +7,9 @@ export default function Plots() {
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const currentPlot = plots[currentIndex];
 
-    // Fetch plot list on mount
-    useEffect(() => {
-        fetchPlots();
-    }, []);
-
-    const fetchPlots = async () => {
+    const fetchPlots = useCallback(async () => {
         setIsLoading(true);
         try {
             const data = await fetchBackendJson('/api/plots/list', { retryPolicy: 'load' });
@@ -29,7 +25,16 @@ export default function Plots() {
             console.error('Failed to fetch plots:', err);
         }
         setIsLoading(false);
-    };
+    }, []);
+
+    // Fetch plot list on mount
+    useEffect(() => {
+        const bootstrapTimer = setTimeout(() => {
+            void fetchPlots();
+        }, 0);
+
+        return () => clearTimeout(bootstrapTimer);
+    }, [fetchPlots]);
 
     const refreshPlots = async () => {
         setIsRefreshing(true);
@@ -71,8 +76,7 @@ export default function Plots() {
         if (e.deltaY < 0) goToPrev();
         else if (e.deltaY > 0) goToNext();
     };
-
-    const currentPlot = plots[currentIndex];
+    const currentPlotSrc = currentPlot?.url || '';
 
     return (
         <div style={{
@@ -175,7 +179,7 @@ export default function Plots() {
 
                         {/* Image */}
                         <img
-                            src={`${currentPlot.url}?t=${Date.now()}`}
+                            src={currentPlotSrc}
                             alt={currentPlot.name}
                             style={{
                                 maxWidth: '100%',

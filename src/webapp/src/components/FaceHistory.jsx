@@ -110,9 +110,13 @@ function LineChartSvg({
 
 function PulseCard({ liveData }) {
   const liveWindowSeconds = Number(liveData?.window_seconds) || 60;
-  const liveWindowEndTimestamp = Date.now() / 1000;
+  const points = liveData?.points || [];
+  const latestPoint = points[points.length - 1];
+  const liveWindowEndTimestamp = liveData?.latest_timestamp
+    ? Number(liveData.latest_timestamp)
+    : Number(latestPoint?.timestamp || 0);
   const model = buildChartModel({
-    points: liveData?.points || [],
+    points,
     width: pulseDimensions.width,
     height: pulseDimensions.height,
     minTimestamp: liveWindowEndTimestamp - liveWindowSeconds,

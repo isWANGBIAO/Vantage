@@ -112,12 +112,12 @@ export default function ChatInterface() {
                             const raw = text.replace("STREAM_THINKING:", "");
                             try {
                                 assistantThinking += JSON.parse(raw);
-                            } catch (e) { assistantThinking += raw; }
+                            } catch { assistantThinking += raw; }
                         } else if (text.startsWith("STREAM_CONTENT:")) {
                             const raw = text.replace("STREAM_CONTENT:", "");
                             try {
                                 assistantContent += JSON.parse(raw);
-                            } catch (e) { assistantContent += raw; }
+                            } catch { assistantContent += raw; }
                         } else if (
                             text.startsWith("STREAM_DONE:") ||
                             text.startsWith("STREAM_ERROR:") ||

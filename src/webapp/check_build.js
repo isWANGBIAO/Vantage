@@ -41,11 +41,11 @@ try {
     const distTime = fs.existsSync(distPath) ? fs.statSync(distPath).mtimeMs : 0;
 
     if (srcTime > distTime) {
-        process.exit(1); // Needs rebuild
+        globalThis.process.exit(1); // Needs rebuild
     } else {
-        process.exit(0); // Up to date
+        globalThis.process.exit(0); // Up to date
     }
 } catch (error) {
     console.error("Error checking build status:", error);
-    process.exit(1); // Safe fallback: rebuild
+    globalThis.process.exit(1); // Safe fallback: rebuild
 }

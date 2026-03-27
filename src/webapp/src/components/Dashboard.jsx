@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import CameraFeed from './CameraFeed';
 import './Dashboard.css';
 import {
@@ -23,7 +23,7 @@ export default function Dashboard() {
   const [aqi, setAqi] = useState(null);
   const [healthStats, setHealthStats] = useState(null);
 
-  const estimateStorage = async (photoUrl, screenUrl) => {
+  const estimateStorage = useCallback(async (photoUrl, screenUrl) => {
     try {
       const [photoResponse, screenshotResponse] = await Promise.all([
         fetchBackend(photoUrl, { method: 'HEAD', retryPolicy: 'poll' }),
@@ -41,18 +41,18 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Error estimating storage', err);
     }
-  };
+  }, []);
 
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     try {
       const data = await fetchBackendJson('/api/sys_stats', { retryPolicy: 'poll' });
       setStats(data);
     } catch (err) {
       console.error('Failed to fetch stats', err);
     }
-  };
+  }, []);
 
-  const fetchLatestImages = async () => {
+  const fetchLatestImages = useCallback(async () => {
     try {
       const data = await fetchBackendJson('/api/latest_images', { retryPolicy: 'poll' });
 
@@ -72,9 +72,9 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Failed to fetch latest images', err);
     }
-  };
+  }, [estimateStorage]);
 
-  const fetchAqiBackend = async (lat, lon) => {
+  const fetchAqiBackend = useCallback(async (lat, lon) => {
     try {
       let url = '/api/aqi';
       if (lat !== null && lon !== null) {
@@ -91,30 +91,30 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Failed to fetch AQI', err);
     }
-  };
+  }, []);
 
-  const fetchAqi = async () => {
+  const fetchAqi = useCallback(async () => {
     if (!navigator.geolocation) {
-      fetchAqiBackend(null, null);
+      void fetchAqiBackend(null, null);
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
-        fetchAqiBackend(latitude, longitude);
+        void fetchAqiBackend(latitude, longitude);
       },
       (error) => {
         if (error.code !== 1) {
           console.error('Geolocation error:', error);
         }
-        fetchAqiBackend(null, null);
+        void fetchAqiBackend(null, null);
       },
       { timeout: 10000, maximumAge: 600000 },
     );
-  };
+  }, [fetchAqiBackend]);
 
-  const fetchHealth = async () => {
+  const fetchHealth = useCallback(async () => {
     try {
       const res = await fetchBackend('/api/health/sedentary', {
         retryPolicy: 'poll',
@@ -129,7 +129,7 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Failed to fetch health stats', err);
     }
-  };
+  }, []);
 
   const openFolder = async (type) => {
     try {
@@ -153,25 +153,27 @@ export default function Dashboard() {
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
+    const bootstrapTimer = setTimeout(() => {
+      void fetchStats();
+      void fetchLatestImages();
+      void fetchAqi();
+      void fetchHealth();
+    }, 0);
 
-    fetchStats();
-    fetchLatestImages();
-    fetchAqi();
-    fetchHealth();
-
-    const statsInterval = setInterval(fetchStats, 5000);
-    const imagesInterval = setInterval(fetchLatestImages, 10000);
-    const aqiInterval = setInterval(fetchAqi, 600000);
-    const healthInterval = setInterval(fetchHealth, 10000);
+    const statsInterval = setInterval(() => void fetchStats(), 5000);
+    const imagesInterval = setInterval(() => void fetchLatestImages(), 10000);
+    const aqiInterval = setInterval(() => void fetchAqi(), 600000);
+    const healthInterval = setInterval(() => void fetchHealth(), 10000);
 
     return () => {
       clearInterval(timer);
+      clearTimeout(bootstrapTimer);
       clearInterval(statsInterval);
       clearInterval(imagesInterval);
       clearInterval(aqiInterval);
       clearInterval(healthInterval);
     };
-  }, []);
+  }, [fetchStats, fetchLatestImages, fetchAqi, fetchHealth]);
 
   const daysLeft = stats && storageEstimate.groupSizeBytes > 0
     ? ((stats.disk_free_gb * 1024 * 1024 * 1024) / storageEstimate.groupSizeBytes) * 10 / 86400

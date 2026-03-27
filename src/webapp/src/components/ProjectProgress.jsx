@@ -151,7 +151,7 @@ const ProjectProgress = () => {
                     <div className="activity-scroll-area">
                         {commits.length > 0 ? (
                             <div className="timeline">
-                                {commits.map((commit, idx) => (
+                                {commits.map((commit) => (
                                     <div key={commit.hash} className="timeline-item">
                                         <div className="timeline-marker"></div>
                                         <div className="timeline-content">

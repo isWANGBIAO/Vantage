@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { RotateCcw, FileText, CheckSquare, Activity } from 'lucide-react';
@@ -95,60 +95,10 @@ export default function ActionPlan({ isVisible = true }) {
   const analysisEndRef = useRef(null);
   const planEndRef = useRef(null);
   const visibilityRef = useRef(isVisible);
+  const isGeneratingRef = useRef(isGenerating);
 
   visibilityRef.current = isVisible;
-
-  useEffect(() => {
-    const initializeModels = async () => {
-      try {
-        const data = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load' });
-        const modelList = Array.isArray(data?.models) ? data.models : [];
-        setAvailableModels(modelList);
-        setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
-
-        const storageModel = localStorage.getItem('preferred_llm_model');
-        if (modelList.length > 0) {
-          const nextModel = modelList.includes(storageModel) ? storageModel : modelList[0];
-          setSelectedModel(nextModel);
-          return nextModel;
-        }
-      } catch (error) {
-        console.error('Failed to load model list:', error);
-      }
-
-      return null;
-    };
-
-    const controller = new AbortController();
-    loadAbortControllerRef.current = controller;
-    setAnalysisContent(CONNECTING_ANALYSIS);
-    setPlanContent(WELCOME_PLAN);
-
-    const initializeActionPlan = async () => {
-      const initialModel = await initializeModels();
-      await loadTodaysPlan(controller.signal);
-
-      if (!shouldAutogenerateActionPlan({
-        hasTriggered: startupGenerationTriggeredRef.current,
-        isGenerating,
-        isAborted: controller.signal.aborted,
-      })) {
-        return;
-      }
-
-      startupGenerationTriggeredRef.current = true;
-      await startGeneration({ replaceToday: true, modelOverride: initialModel });
-    };
-
-    void initializeActionPlan();
-
-    return () => {
-      controller.abort();
-      if (loadAbortControllerRef.current?.signal === controller.signal) {
-        loadAbortControllerRef.current = null;
-      }
-    };
-  }, []);
+  isGeneratingRef.current = isGenerating;
 
   useEffect(() => {
     if (isGenerating && isVisible && analysisContent) {
@@ -162,16 +112,16 @@ export default function ActionPlan({ isVisible = true }) {
     }
   }, [planContent, isGenerating, isVisible]);
 
-  const applyLoadedContent = (rawContent) => {
+  const applyLoadedContent = useCallback((rawContent) => {
     const sections = splitActionPlanContent(rawContent);
     const nextAnalysis = sections.analysis || LEGACY_ANALYSIS;
     const nextPlan = sections.plan || WELCOME_PLAN;
 
     setAnalysisContent(nextAnalysis);
     setPlanContent(nextPlan);
-  };
+  }, []);
 
-  const loadTodaysPlan = async (signal) => {
+  const loadTodaysPlan = useCallback(async (signal) => {
     try {
       const data = await fetchBackendJson('/api/action_plan/today', {
         retryPolicy: 'load',
@@ -208,9 +158,9 @@ export default function ActionPlan({ isVisible = true }) {
         loadAbortControllerRef.current = null;
       }
     }
-  };
+  }, [applyLoadedContent]);
 
-  const stopGeneration = () => {
+  const stopGeneration = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -218,7 +168,7 @@ export default function ActionPlan({ isVisible = true }) {
 
     setIsGenerating(false);
     setPlanContent((prev) => `${prev}\n\n> Generation stopped by user.`);
-  };
+  }, []);
 
   const handleReasoningEffortChange = (event) => {
     const nextValue = saveActionPlanReasoningEffort(event.target.value);
@@ -231,8 +181,8 @@ export default function ActionPlan({ isVisible = true }) {
     localStorage.setItem('preferred_llm_model', nextModel);
   };
 
-  const startGeneration = async ({ replaceToday = false, modelOverride = null } = {}) => {
-    if (isGenerating) {
+  const startGeneration = useCallback(async ({ replaceToday = false, modelOverride = null } = {}) => {
+    if (isGeneratingRef.current) {
       stopGeneration();
     }
 
@@ -505,7 +455,59 @@ export default function ActionPlan({ isVisible = true }) {
         abortControllerRef.current = null;
       }
     }
-  };
+  }, [selectedModel, selectedReasoningEffort, stopGeneration]);
+
+  useEffect(() => {
+    const initializeModels = async () => {
+      try {
+        const data = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load' });
+        const modelList = Array.isArray(data?.models) ? data.models : [];
+        setAvailableModels(modelList);
+        setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
+
+        const storageModel = localStorage.getItem('preferred_llm_model');
+        if (modelList.length > 0) {
+          const nextModel = modelList.includes(storageModel) ? storageModel : modelList[0];
+          setSelectedModel(nextModel);
+          return nextModel;
+        }
+      } catch (error) {
+        console.error('Failed to load model list:', error);
+      }
+
+      return null;
+    };
+
+    const controller = new AbortController();
+    loadAbortControllerRef.current = controller;
+    setAnalysisContent(CONNECTING_ANALYSIS);
+    setPlanContent(WELCOME_PLAN);
+
+    const initializeActionPlan = async () => {
+      const initialModel = await initializeModels();
+      await loadTodaysPlan(controller.signal);
+
+      if (!shouldAutogenerateActionPlan({
+        hasTriggered: startupGenerationTriggeredRef.current,
+        isGenerating: isGeneratingRef.current,
+        isAborted: controller.signal.aborted,
+      })) {
+        return;
+      }
+
+      startupGenerationTriggeredRef.current = true;
+      await startGeneration({ replaceToday: true, modelOverride: initialModel });
+    };
+
+    void initializeActionPlan();
+
+    return () => {
+      controller.abort();
+      if (loadAbortControllerRef.current?.signal === controller.signal) {
+        loadAbortControllerRef.current = null;
+      }
+    };
+  }, [loadTodaysPlan, startGeneration]);
 
   const analysisRender = getActionPlanRenderState(analysisContent);
   const planRender = getActionPlanRenderState(planContent);
