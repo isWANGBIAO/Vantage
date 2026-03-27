@@ -6,6 +6,7 @@ import os
 import json
 from tqdm import tqdm
 from openai import OpenAI  # 阿里云兼容openai sdk
+from src.utils.data_loader import DataLoader
 
 
 def llm_classify(text):
@@ -136,7 +137,8 @@ def llm_extract_diarrhea_info(text):
 
 
 def read_and_preprocess_data():
-    df = pd.read_excel(r'C:\Users\97012\OneDrive\Mine\Time.xlsx')
+    time_sheet_path = DataLoader.resolve_data_path("Time.xlsx")
+    df = pd.read_excel(time_sheet_path)
     # 只保留日期、饮食和健康情况三列
     eat_col = '生活（饮食+社交+运动）'
     health_col = '健康情况'

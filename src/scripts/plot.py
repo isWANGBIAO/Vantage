@@ -22,6 +22,7 @@ from matplotlib import rcParams
 from matplotlib.ticker import FuncFormatter
 from matplotlib.ticker import MaxNLocator
 from PIL import Image
+from src.utils.data_loader import DataLoader
 
 COLORS = {
     "blue": "#2F6FED",
@@ -157,39 +158,12 @@ def get_project_root():
         current = current.parent
     return Path.cwd() # Fallback
 
-def resolve_data_root():
-    env_root = os.environ.get("AI_DATA_ROOT") or os.environ.get("DATA_ROOT")
-    if env_root:
-        return Path(env_root)
-
-    candidates = [
-        Path(r"C:\Users\97012\OneDrive\Mine"),
-        Path("/mnt/c/Users/97012/OneDrive/Mine"),
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    return get_project_root()
+def resolve_data_root(user_home=None, onedrive_env=None):
+    return DataLoader.resolve_data_root(user_home=user_home, onedrive_env=onedrive_env)
 
 
-def resolve_data_path(filename):
-    root = resolve_data_root()
-    path = root / filename
-    if path.exists():
-        return path
-        
-    # Check Project Root
-    project_root = get_project_root()
-    path_project = project_root / filename
-    if path_project.exists():
-        return path_project
-        
-    # Check CWD
-    fallback = Path.cwd() / filename
-    if fallback.exists():
-        return fallback
-    return path
+def resolve_data_path(filename, user_home=None, onedrive_env=None):
+    return DataLoader.resolve_data_path(filename, user_home=user_home, onedrive_env=onedrive_env)
 
 
 def register_font_files():

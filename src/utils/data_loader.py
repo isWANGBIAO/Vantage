@@ -9,24 +9,31 @@ from src.core.config import Config
 
 class DataLoader:
     @staticmethod
-    def resolve_data_root():
+    def resolve_data_root(user_home=None, onedrive_env=None):
         env_root = os.environ.get("AI_DATA_ROOT") or os.environ.get("DATA_ROOT")
         if env_root:
             return Path(env_root)
 
-        candidates = [
-            Path(r"C:\Users\97012\OneDrive\Mine"),
-            Path("/mnt/c/Users/97012/OneDrive/Mine"),
-        ]
+        user_home = user_home or os.path.expanduser("~")
+        if onedrive_env is None:
+            onedrive_env = os.environ.get("OneDrive") or os.environ.get("OneDriveConsumer")
+
+        candidates = []
+        if onedrive_env:
+            candidates.append(Path(onedrive_env) / "Mine")
+            candidates.append(Path(onedrive_env))
+        candidates.append(Path(user_home) / "OneDrive" / "Mine")
+        candidates.append(Path(user_home) / "OneDrive")
+        candidates.append(Path(user_home))
         for candidate in candidates:
             if candidate.exists():
                 return candidate
-        
+
         return Config.get_project_root()
 
     @staticmethod
-    def resolve_data_path(filename):
-        root = DataLoader.resolve_data_root()
+    def resolve_data_path(filename, user_home=None, onedrive_env=None):
+        root = DataLoader.resolve_data_root(user_home=user_home, onedrive_env=onedrive_env)
         path = root / filename
         if path.exists():
             return path

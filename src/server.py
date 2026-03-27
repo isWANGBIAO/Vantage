@@ -662,29 +662,43 @@ def get_camera_index():
     return camera_index
 
 def identify_logs_folder():
-    # User requested D:\WANGBIAO as the base path
-    onedrive_path = "D:\\WANGBIAO"
-    if not os.path.exists(onedrive_path):
-        try:
-            os.makedirs(onedrive_path, exist_ok=True)
-        except:
-             # Fallback if D drive doesn't exist or permission error, though user asked for it.
-             onedrive_path = os.environ.get("OneDrive", os.path.expanduser("~"))
+    onedrive_env = os.environ.get("OneDrive") or os.environ.get("OneDriveConsumer")
+    user_home = os.path.expanduser("~")
+    roots_to_check = []
+    if onedrive_env:
+        roots_to_check.append(onedrive_env)
+    roots_to_check.append(os.path.join(user_home, "OneDrive"))
+    roots_to_check.append(user_home)
 
-    pictures_path = os.path.join(onedrive_path, "Pictures")
+    picture_dirs = ("Pictures", "图片")
+    screenshot_dirs = ("Screenshots", "屏幕截图")
+    photo_dir_name = "本机照片"
+
+    for root in roots_to_check:
+        for picture_dir in picture_dirs:
+            picture_root = os.path.join(root, picture_dir)
+            photos_path = os.path.join(picture_root, photo_dir_name)
+            if not os.path.exists(photos_path):
+                continue
+            for screenshot_dir_name in screenshot_dirs:
+                screenshots_path = os.path.join(picture_root, screenshot_dir_name)
+                if os.path.exists(screenshots_path):
+                    os.makedirs(photos_path, exist_ok=True)
+                    os.makedirs(screenshots_path, exist_ok=True)
+                    return photos_path, screenshots_path
+
+    default_root = onedrive_env or os.path.join(user_home, "OneDrive")
+    pictures_path = os.path.join(default_root, "Pictures")
     if not os.path.exists(pictures_path):
-        pictures_path = os.path.join(onedrive_path, "图片")
-        
+        pictures_path = os.path.join(default_root, "图片")
+
     screenshots_path = os.path.join(pictures_path, "Screenshots")
     if not os.path.exists(screenshots_path):
-         screenshots_path = os.path.join(pictures_path, "屏幕截图")
+        screenshots_path = os.path.join(pictures_path, "屏幕截图")
 
     photos_path = os.path.join(pictures_path, "本机照片")
-    
-    # Ensure directories exist
     os.makedirs(photos_path, exist_ok=True)
     os.makedirs(screenshots_path, exist_ok=True)
-
     return photos_path, screenshots_path
 
 def find_latest_file_recursive(directory, extensions={'.jpg', '.png'}):
@@ -1091,6 +1105,20 @@ async def open_folder(request: Request):
 @app.get("/api/aqi")
 async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None):
     """Fetch current AQI (US) based on Location (Default: SJTU Minhang)"""
+    def build_unavailable_payload(error_message: str | None = None):
+        payload = {
+            "aqi": None,
+            "city": city,
+            "level": "Unavailable",
+            "color": "#b2bec3",
+            "status": "unavailable",
+            "lat": target_lat,
+            "lon": target_lon,
+        }
+        if error_message:
+            payload["error"] = error_message
+        return payload
+
     try:
         # Default to Shanghai Jiao Tong University Minhang Campus
         # Lat: 31.025, Lon: 121.433
@@ -1120,15 +1148,15 @@ async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None
         
         aqi_res = await asyncio.to_thread(requests.get, aqi_url, timeout=5)
         if not aqi_res.ok:
-            return JSONResponse(status_code=502, content={"error": "AQI API failed"})
+            return build_unavailable_payload(f"AQI API failed with status {aqi_res.status_code}")
             
         aqi_data = aqi_res.json()
         current = aqi_data.get("current", {})
         us_aqi = current.get("us_aqi")
         
         if us_aqi is None:
-             return JSONResponse(status_code=404, content={"error": "No AQI data"})
-             
+             return build_unavailable_payload("No AQI data")
+              
         # Determine Level
         level = "Good"
         color = "#00e400" # Green
@@ -1153,13 +1181,14 @@ async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None
             "city": city,
             "level": level,
             "color": color,
+            "status": "ok",
             "lat": target_lat,
             "lon": target_lon
         }
         
     except Exception as e:
         print(f"AQI Error: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return build_unavailable_payload(str(e))
 
 @app.get("/api/latest_images")
 def get_latest_images():
