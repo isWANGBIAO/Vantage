@@ -70,6 +70,29 @@ class CleanupVantagePythonProcessesTests(unittest.TestCase):
 
         self.assertFalse(cleanup_script.is_vantage_server_process(process, self.project_root))
 
+    def test_matches_project_electron_process(self):
+        process = _FakeProcess(
+            pid=2468,
+            name="electron.exe",
+            cmdline=[
+                "electron.exe",
+                str(self.project_root / "src" / "webapp" / "main.cjs"),
+            ],
+            cwd=str(self.project_root / "src" / "webapp"),
+        )
+
+        self.assertTrue(cleanup_script.is_vantage_desktop_process(process, self.project_root))
+
+    def test_skips_unrelated_electron_process(self):
+        process = _FakeProcess(
+            pid=8642,
+            name="electron.exe",
+            cmdline=["electron.exe", "D:/other-app/main.cjs"],
+            cwd="D:/other-app",
+        )
+
+        self.assertFalse(cleanup_script.is_vantage_desktop_process(process, self.project_root))
+
 
 if __name__ == "__main__":
     unittest.main()

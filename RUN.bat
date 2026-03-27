@@ -15,17 +15,7 @@ set "BACKEND_WAIT_TIMEOUT=60"
 
 echo [0/3] Cleaning residual processes...
 
-taskkill /F /IM electron.exe >nul 2>&1
-
-for /f "tokens=5" %%a in ('netstat -aon ^| find ":5173" ^| find "LISTENING"') do (
-    taskkill /f /pid %%a >nul 2>&1
-)
-
-for /f "tokens=5" %%a in ('netstat -aon ^| find ":8000" ^| find "LISTENING"') do (
-    taskkill /f /pid %%a >nul 2>&1
-)
-
-python src\scripts\cleanup_vantage_python_processes.py >nul 2>&1
+python src\scripts\cleanup_vantage_python_processes.py --include-desktop >nul 2>&1
 
 echo       Cleanup complete
 timeout /t 2 /nobreak >nul

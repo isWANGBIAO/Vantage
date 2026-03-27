@@ -720,6 +720,7 @@ def find_latest_file_recursive(directory, extensions={'.jpg', '.png'}):
 @app.on_event("startup")
 async def startup_event():
     print("Starting up server...")
+    state.is_running = True
     try:
         # DEPRECATED IN FAVOR OF camera_loop: 
         # idx = get_camera_index()
@@ -792,6 +793,19 @@ async def startup_event():
 
     except Exception as e:
         print(f"Startup logic error: {e}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    state.is_running = False
+
+    camera = state.camera
+    state.camera = None
+    if camera is not None:
+        try:
+            camera.release()
+        except Exception as e:
+            print(f"Shutdown camera release error: {e}")
 
 def monitor_loop():
     print("Starting monitor loop (10s interval)...")

@@ -5,6 +5,7 @@ argon2-cffi-bindings==21.2.0
 arrow==1.2.3
 asttokens==2.2.1
 attrs==23.1.0
+APScheduler==3.11.0
 backcall==0.2.0
 beautifulsoup4==4.12.2
 bleach==6.0.0
@@ -14,6 +15,7 @@ charset-normalizer==2.1.1
 colorama==0.4.6
 comm==0.1.3
 contourpy==1.1.1
+cv2-enumerate-cameras==1.1.18.2
 cycler==0.12.1
 debugpy==1.6.7
 decorator==5.1.1
@@ -24,6 +26,7 @@ et-xmlfile==1.1.0
 exceptiongroup==1.2.2
 executing==1.2.0
 fastjsonschema==2.16.3
+fastapi==0.128.0
 filelock==3.9.0
 fonttools==4.55.6
 fqdn==1.5.1
@@ -58,6 +61,7 @@ MarkupSafe==2.1.2
 matplotlib==3.7.5
 matplotlib-inline==0.1.6
 mdurl==0.1.2
+mediapipe==0.10.21
 meshio==5.3.4
 mistune==2.0.5
 mpmath==1.2.1
@@ -73,6 +77,8 @@ notebook_shim==0.2.3
 numpy==1.24.4
 numpy-stl==3.0.1
 openai==1.61.0
+onnxruntime-gpu==1.23.2; sys_platform == "win32"
+onnxruntime==1.23.2; sys_platform != "win32"
 opencv-python==4.11.0.86
 openpyxl==3.1.5
 overrides==7.3.1
@@ -82,6 +88,7 @@ pandocfilters==1.5.0
 parso==0.8.3
 pickleshare==0.7.5
 pillow==10.4.0
+piexif==1.1.3
 platformdirs==3.5.1
 prometheus-client==0.17.1
 prompt-toolkit==3.0.38
@@ -96,6 +103,7 @@ pystray==0.19.5
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
 python-json-logger==2.0.7
+python-multipart==0.0.21
 python-utils==3.7.0
 pytz==2023.3
 pywin32==308
@@ -132,10 +140,13 @@ typing_extensions==4.12.2
 tzdata==2023.3
 uri-template==1.2.0
 urllib3==1.26.13
+ultralytics==8.4.0
+uvicorn==0.40.0
 vtk==9.2.6
 wcwidth==0.2.6
 webcolors==1.13
 webencodings==0.5.1
 websocket-client==1.5.1
 WMI==1.5.1
+winsdk==1.0.0b10
 zipp==3.20.2
