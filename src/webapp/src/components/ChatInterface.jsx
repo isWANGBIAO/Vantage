@@ -3,10 +3,17 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Mic, Send, StopCircle, Bot, User, Trash2 } from 'lucide-react';
 import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
+import {
+  formatModelReasoningSupportLabel,
+  parseModelReasoningSupport,
+} from '../utils/modelReasoningSupport';
 
 export default function ChatInterface() {
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
+    const [availableModels, setAvailableModels] = useState([]);
+    const [modelReasoningSupport, setModelReasoningSupport] = useState({});
+    const [selectedModel, setSelectedModel] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
     const [recordingTime, setRecordingTime] = useState(0);
@@ -23,6 +30,25 @@ export default function ChatInterface() {
 
     // Load chat history from localStorage on mount
     useEffect(() => {
+        const initializeModels = async () => {
+            try {
+                const data = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load' });
+                const modelList = Array.isArray(data?.models) ? data.models : [];
+                setAvailableModels(modelList);
+                setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
+
+                const storageModel = localStorage.getItem('preferred_llm_model');
+                if (modelList.length > 0) {
+                    const nextModel = modelList.includes(storageModel) ? storageModel : modelList[0];
+                    setSelectedModel(nextModel);
+                }
+            } catch (error) {
+                console.error('Failed to load model list:', error);
+            }
+        };
+
+        initializeModels();
+
         try {
             const saved = localStorage.getItem('chat_history');
             if (saved) {
@@ -44,6 +70,12 @@ export default function ChatInterface() {
     const clearChat = () => {
         setMessages([]);
         localStorage.removeItem('chat_history');
+    };
+
+    const handleModelChange = (event) => {
+        const nextModel = event.target.value;
+        setSelectedModel(nextModel);
+        localStorage.setItem('preferred_llm_model', nextModel);
     };
 
     // Shared stream processing function to avoid code duplication
@@ -134,10 +166,15 @@ export default function ChatInterface() {
         setIsLoading(true);
 
         try {
+            const payload = { message: userMsg };
+            if (selectedModel) {
+                payload.model = selectedModel;
+            }
+
             const res = await fetchBackend('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: userMsg }),
+                body: JSON.stringify(payload),
                 retryPolicy: 'stream',
             });
 
@@ -219,10 +256,15 @@ export default function ChatInterface() {
 
                         // 调用聊天 API (reuse shared stream processor)
                         try {
+                            const chatPayload = { message: transcribedText };
+                            if (selectedModel) {
+                                chatPayload.model = selectedModel;
+                            }
+
                             const chatRes = await fetchBackend('/api/chat', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ message: transcribedText }),
+                                body: JSON.stringify(chatPayload),
                                 retryPolicy: 'stream',
                             });
 
@@ -283,6 +325,37 @@ export default function ChatInterface() {
                     AI Assistant
                 </h3>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <label
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            color: 'var(--text-secondary)',
+                            fontSize: '0.8rem',
+                        }}
+                    >
+                        <span>模型</span>
+                        <select
+                            value={selectedModel}
+                            onChange={handleModelChange}
+                            disabled={isLoading || availableModels.length === 0}
+                            style={{
+                                padding: '0.3rem 0.6rem',
+                                borderRadius: '6px',
+                                border: '1px solid var(--border-color)',
+                                background: 'var(--bg-surface)',
+                                color: 'var(--text-primary)',
+                                cursor: isLoading || availableModels.length === 0 ? 'not-allowed' : 'pointer',
+                            }}
+                        >
+                            {availableModels.length === 0 && <option value="">默认模型</option>}
+                            {availableModels.map((model) => (
+                                <option key={model} value={model}>
+                                    {`${model}${formatModelReasoningSupportLabel(model, modelReasoningSupport)}`}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Powered by Gemini</span>
                     {messages.length > 0 && (
                         <button

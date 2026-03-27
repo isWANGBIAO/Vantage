@@ -35,8 +35,10 @@ def main():
     parser.add_argument("--transcribe", help="Path to audio file to transcribe")
     parser.add_argument("--chat_message", help="User message for chat mode")
     parser.add_argument("--context_file", help="Path to load context from")
+    parser.add_argument("--model", help="Model name override for this run")
     
     args = parser.parse_args()
+    model_override = args.model.strip() if args.model else None
     
     try:
         Config.load_env()
@@ -88,7 +90,7 @@ def main():
             messages_to_send = context_mgr.get_messages()
             
             # Call API
-            result = client.chat(messages_to_send, stream=True)
+            result = client.chat(messages_to_send, stream=True, model=model_override)
             
             # Handle Result
             content = result["content"]
@@ -179,6 +181,7 @@ def main():
                 analysis_messages,
                 stream=True,
                 print_callback=build_action_plan_stream_printer("analysis"),
+                model=model_override,
             )
             
             first_round_content = result["content"]
@@ -227,6 +230,7 @@ def main():
                     analysis_messages,
                     stream=True,
                     print_callback=build_action_plan_stream_printer("plan"),
+                    model=model_override,
                 )
                 second_round_content = result_round_2["content"]
                 

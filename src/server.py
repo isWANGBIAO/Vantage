@@ -55,6 +55,7 @@ from src.services.face_analysis_pipeline import (
     analyze_photo_file,
     build_face_report,
 )
+from src.services.llm_client import LLMClient
 from src.services.person_detection import (
     PERSON_DETECTION_CONFIDENCE,
     PERSON_DETECTION_MODEL,
@@ -1353,6 +1354,7 @@ async def get_today_action_plan():
 
 class ChatRequest(BaseModel):
     message: str
+    model: Optional[str] = None
     context_file: Optional[str] = None
 
 
@@ -1401,7 +1403,31 @@ def _replace_today_action_plan_files(previous_files):
 
 class ActionPlanRequest(BaseModel):
     reasoning_effort: Optional[str] = None
+    model: Optional[str] = None
     replace_today: bool = False
+
+
+@app.get("/api/llm_models")
+async def list_llm_models():
+    try:
+        client = LLMClient()
+    except Exception as error:
+        return {"models": [], "providers": [], "default_model": None, "error": str(error)}
+
+    providers = client.get_model_catalog()
+    seen = set()
+    models = []
+    for provider in providers:
+        for model in provider.get("models", []):
+            if model and model not in seen:
+                seen.add(model)
+                models.append(model)
+
+    return {
+        "models": models,
+        "providers": providers,
+        "default_model": providers[0]["model"] if providers else None,
+    }
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -1422,6 +1448,8 @@ async def chat_endpoint(request: ChatRequest):
         "--chat_message", request.message,
         "--context_file", context_file
     ]
+    if request.model:
+        cmd.extend(["--model", request.model])
     
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -1481,6 +1509,9 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
     env["AI_REASONING_EFFORT"] = _normalize_reasoning_effort(
         request.reasoning_effort if request else None,
     )
+    selected_model = request.model if request else None
+    if selected_model:
+        cmd.append(f"--model={selected_model}")
     replace_today = request.replace_today if request else False
     previous_today_files = _list_today_action_plan_files() if replace_today else []
     

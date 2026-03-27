@@ -23,9 +23,13 @@ class LLMClientTests(unittest.TestCase):
     def _models_response(self, model_ids):
         response = Mock()
         response.raise_for_status.return_value = None
-        response.json.return_value = {
-            "data": [{"id": model_id} for model_id in model_ids],
-        }
+        models = []
+        for model_id in model_ids:
+            if isinstance(model_id, dict):
+                models.append(model_id)
+            else:
+                models.append({"id": model_id})
+        response.json.return_value = {"data": models}
         return response
 
     def _make_client(self, discovered_models=None, discovery_error=None):
@@ -82,7 +86,7 @@ class LLMClientTests(unittest.TestCase):
             [provider["model"] for provider in providers],
             ["gpt-5.2", "gemini-3.1-pro-high", "Pro/deepseek-ai/DeepSeek-V3.2"],
         )
-        self.assertEqual(providers[0]["models"], ["gpt-5.2", "gpt-5.1", "gpt-5"])
+        self.assertEqual(providers[0]["models"], ["gpt-5.2", "gpt-5.2-codex", "gpt-5.1", "gpt-5"])
 
     def test_retries_next_primary_model_after_model_error(self):
         client = self._make_client(discovered_models=["gpt-5.2", "gpt-5.1", "gpt-5"])
@@ -111,6 +115,20 @@ class LLMClientTests(unittest.TestCase):
             [call.kwargs["json"]["model"] for call in mock_post.call_args_list],
             ["gpt-5.2", "gpt-5.1"],
         )
+
+    def test_code_variant_models_are_detected(self):
+        client = self._make_client(
+            discovered_models=["gpt-5.3", "gpt-5.3-code-x", "gpt-5.2-codex", "gpt-5.2", "gpt-5.1-code"],
+        )
+
+        self.assertEqual(client.providers[0]["model"], "gpt-5.3")
+        self.assertEqual(
+            client.providers[0]["models"][:2],
+            ["gpt-5.3", "gpt-5.3-code-x"],
+        )
+        self.assertIn("gpt-5.2", client.providers[0]["models"])
+        self.assertIn("gpt-5.2-codex", client.providers[0]["models"])
+        self.assertIn("gpt-5.1-code", client.providers[0]["models"])
 
     def test_retries_secondary_provider_after_primary_failure(self):
         client = self._make_client()
@@ -168,6 +186,96 @@ class LLMClientTests(unittest.TestCase):
             client.chat([{"role": "user", "content": "ping"}], stream=False)
 
         self.assertEqual(mock_post.call_args.kwargs["json"]["reasoning_effort"], "xhigh")
+
+    def test_chat_omits_reasoning_effort_when_model_lacks_support(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+        models = [
+            {"id": "gpt-5.2", "supported_parameters": ["reasoning_effort", "max_tokens"]},
+            {"id": "gpt-5.1", "supported_parameters": ["max_tokens", "temperature"]},
+        ]
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(
+                os.environ,
+                {
+                    **self._env(),
+                    "AI_REASONING_EFFORT": "xhigh",
+                },
+                clear=True,
+            ),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(models),
+            ),
+            patch.object(
+                llm_client.requests,
+                "post",
+                return_value=fake_response,
+            ) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            result_payload = client._post_with_failover(
+                {"model": "gpt-5.1", "reasoning_effort": "xhigh", "messages": [{"role": "user", "content": "ping"}]},
+                stream=False,
+                timeout=12,
+                requested_model="gpt-5.1",
+            )
+
+            used_request = mock_post.call_args.kwargs["json"]
+            self.assertNotIn("reasoning_effort", used_request)
+            self.assertEqual(result_payload[1], "gpt-5.1")
+
+    def test_chat_includes_reasoning_effort_when_model_supports_it(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+        models = [
+            {"id": "gpt-5.2", "supported_parameters": ["reasoning_effort", "max_tokens"]},
+            {"id": "gpt-5.1", "supported_parameters": ["max_tokens", "temperature"]},
+        ]
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(
+                os.environ,
+                {
+                    **self._env(),
+                    "AI_REASONING_EFFORT": "xhigh",
+                },
+                clear=True,
+            ),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(models),
+            ),
+            patch.object(
+                llm_client.requests,
+                "post",
+                return_value=fake_response,
+            ) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            result_payload = client._post_with_failover(
+                {"model": "gpt-5.2", "reasoning_effort": "xhigh", "messages": [{"role": "user", "content": "ping"}]},
+                stream=False,
+                timeout=12,
+                requested_model="gpt-5.2",
+            )
+
+            used_request = mock_post.call_args.kwargs["json"]
+            self.assertEqual(used_request["reasoning_effort"], "xhigh")
+            self.assertEqual(result_payload[1], "gpt-5.2")
 
     def test_chat_defaults_reasoning_effort_to_medium(self):
         fake_response = Mock()

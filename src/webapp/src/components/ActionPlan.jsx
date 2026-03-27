@@ -16,9 +16,9 @@ import {
   shouldAutogenerateActionPlan,
 } from '../utils/actionPlanGeneration';
 import {
-  formatPoweredByLabel,
-  formatReasoningEffortLabel,
-} from '../utils/actionPlanStats';
+  formatModelReasoningSupportLabel,
+  parseModelReasoningSupport,
+} from '../utils/modelReasoningSupport';
 import {
   createNdjsonLineBuffer,
   createStreamRenderScheduler,
@@ -84,6 +84,9 @@ export default function ActionPlan({ isVisible = true }) {
   const [planThinking, setPlanThinking] = useState('');
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState(() => loadStoredActionPlanReasoningEffort());
   const [stats, setStats] = useState(null);
+  const [availableModels, setAvailableModels] = useState([]);
+  const [modelReasoningSupport, setModelReasoningSupport] = useState({});
+  const [selectedModel, setSelectedModel] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
 
   const abortControllerRef = useRef(null);
@@ -96,12 +99,33 @@ export default function ActionPlan({ isVisible = true }) {
   visibilityRef.current = isVisible;
 
   useEffect(() => {
+    const initializeModels = async () => {
+      try {
+        const data = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load' });
+        const modelList = Array.isArray(data?.models) ? data.models : [];
+        setAvailableModels(modelList);
+        setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
+
+        const storageModel = localStorage.getItem('preferred_llm_model');
+        if (modelList.length > 0) {
+          const nextModel = modelList.includes(storageModel) ? storageModel : modelList[0];
+          setSelectedModel(nextModel);
+          return nextModel;
+        }
+      } catch (error) {
+        console.error('Failed to load model list:', error);
+      }
+
+      return null;
+    };
+
     const controller = new AbortController();
     loadAbortControllerRef.current = controller;
     setAnalysisContent(CONNECTING_ANALYSIS);
     setPlanContent(WELCOME_PLAN);
 
     const initializeActionPlan = async () => {
+      const initialModel = await initializeModels();
       await loadTodaysPlan(controller.signal);
 
       if (!shouldAutogenerateActionPlan({
@@ -113,7 +137,7 @@ export default function ActionPlan({ isVisible = true }) {
       }
 
       startupGenerationTriggeredRef.current = true;
-      await startGeneration({ replaceToday: true });
+      await startGeneration({ replaceToday: true, modelOverride: initialModel });
     };
 
     void initializeActionPlan();
@@ -201,7 +225,13 @@ export default function ActionPlan({ isVisible = true }) {
     setSelectedReasoningEffort(nextValue);
   };
 
-  const startGeneration = async ({ replaceToday = false } = {}) => {
+  const handleModelChange = (event) => {
+    const nextModel = event.target.value;
+    setSelectedModel(nextModel);
+    localStorage.setItem('preferred_llm_model', nextModel);
+  };
+
+  const startGeneration = async ({ replaceToday = false, modelOverride = null } = {}) => {
     if (isGenerating) {
       stopGeneration();
     }
@@ -227,6 +257,7 @@ export default function ActionPlan({ isVisible = true }) {
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
     let currentSection = 'analysis';
+    const effectiveModel = modelOverride || selectedModel;
 
     try {
       const response = await fetchBackend('/api/action_plan', {
@@ -237,6 +268,7 @@ export default function ActionPlan({ isVisible = true }) {
         body: JSON.stringify(
           buildActionPlanGenerationPayload(selectedReasoningEffort, {
             replaceToday,
+            model: effectiveModel,
           }),
         ),
         signal,
@@ -477,8 +509,7 @@ export default function ActionPlan({ isVisible = true }) {
 
   const analysisRender = getActionPlanRenderState(analysisContent);
   const planRender = getActionPlanRenderState(planContent);
-  const poweredByLabel = formatPoweredByLabel(stats);
-  const reasoningEffortLabel = formatReasoningEffortLabel(stats?.reasoning_effort);
+  const modelReasoningSupportLabel = formatModelReasoningSupportLabel(selectedModel, modelReasoningSupport);
 
   return (
     <div
@@ -534,10 +565,46 @@ export default function ActionPlan({ isVisible = true }) {
                     : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`}
                 </span>
               )}
-              {poweredByLabel && <span>Powered by {poweredByLabel}</span>}
-              {reasoningEffortLabel && <span>Thinking {reasoningEffortLabel}</span>}
             </div>
           )}
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              color: 'var(--text-secondary)',
+              fontSize: '0.9rem',
+            }}
+          >
+            <span>Model</span>
+            <select
+              value={selectedModel}
+              onChange={handleModelChange}
+              disabled={isGenerating || availableModels.length === 0}
+              style={{
+                padding: '0.65rem 0.85rem',
+                borderRadius: '8px',
+                border: '1px solid var(--border-color)',
+                background: 'var(--bg-surface)',
+                color: 'var(--text-primary)',
+                minWidth: '180px',
+                cursor: isGenerating || availableModels.length === 0 ? 'not-allowed' : 'pointer',
+                opacity: isGenerating || availableModels.length === 0 ? 0.65 : 1,
+              }}
+            >
+              {availableModels.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+            {modelReasoningSupportLabel && (
+              <span style={{ color: 'rgba(255, 77, 79, 0.95)' }}>
+                {modelReasoningSupportLabel}
+              </span>
+            )}
+          </label>
 
           <label
             style={{

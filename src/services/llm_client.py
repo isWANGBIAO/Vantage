@@ -37,10 +37,99 @@ class LLMClient:
         }
 
     def _model_version_key(self, model_id):
-        match = re.match(r"^gpt-(\d+)(?:\.(\d+))?(?:\.(\d+))?$", model_id.lower())
+        match = re.match(
+            r"^gpt-(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-(.+))?$",
+            model_id.lower(),
+        )
         if not match:
             return None
-        return tuple(int(part) if part is not None else -1 for part in match.groups())
+        major, minor, patch, suffix = match.groups()
+        suffix_key = (suffix or "").lower()
+        is_code_variant = "code" in suffix_key or "codex" in suffix_key
+        return (
+            int(major),
+            int(minor or -1),
+            int(patch or -1),
+            0 if is_code_variant else 1,
+        )
+
+    def _normalize_parameter_name(self, name):
+        return str(name).strip().lower().replace("-", "_")
+
+    def _extract_supported_parameters(self, model_item):
+        if not isinstance(model_item, dict):
+            return None
+
+        for key in ("supported_parameters", "supportedParameters", "parameters"):
+            raw = model_item.get(key)
+            if raw:
+                return self._normalize_supported_parameters(raw)
+
+        metadata = model_item.get("metadata")
+        if isinstance(metadata, dict):
+            for key in ("supported_parameters", "supportedParameters", "parameters"):
+                raw = metadata.get(key)
+                if raw:
+                    return self._normalize_supported_parameters(raw)
+
+        return None
+
+    def _normalize_supported_parameters(self, raw_parameters):
+        if raw_parameters is None:
+            return None
+        if isinstance(raw_parameters, dict):
+            raw_parameters = [name for name, enabled in raw_parameters.items() if bool(enabled)]
+        if not isinstance(raw_parameters, (list, tuple, set)):
+            return None
+
+        normalized = set()
+        for item in raw_parameters:
+            if not isinstance(item, str):
+                continue
+            parameter = self._normalize_parameter_name(item)
+            if not parameter:
+                continue
+            normalized.add(parameter)
+
+        return normalized
+
+    def _supports_reasoning_parameter(self, supported_parameters):
+        if supported_parameters is None:
+            return True
+        if "reasoning_effort" in supported_parameters:
+            return True
+        return any(
+            parameter in {"reasoning", "reasoning_effort"}
+            or parameter.startswith("reasoning_")
+            for parameter in supported_parameters
+        )
+
+    def _can_model_use_reasoning(self, provider, model):
+        model_capabilities = provider.get("model_capabilities")
+        if not isinstance(model_capabilities, dict):
+            return True
+
+        supported_parameters = model_capabilities.get(model)
+        if supported_parameters is None:
+            return True
+
+        return self._supports_reasoning_parameter(supported_parameters)
+
+    def _apply_model_capabilities_to_payload(self, payload, provider, model):
+        if not isinstance(payload, dict) or "reasoning_effort" not in payload:
+            return payload
+
+        if self._can_model_use_reasoning(provider, model):
+            return payload
+
+        filtered_payload = dict(payload)
+        filtered_payload.pop("reasoning_effort", None)
+        logging.info(
+            "Model %s does not advertise reasoning_effort support on route %s, omitting parameter",
+            model,
+            provider.get("route"),
+        )
+        return filtered_payload
 
     def _discover_primary_models(self, provider):
         url = provider["base_url"] + "/models"
@@ -58,19 +147,39 @@ class LLMClient:
             return []
 
         candidates = []
-        for item in payload.get("data", []):
+        for index, item in enumerate(payload.get("data", [])):
+            if not isinstance(item, dict):
+                continue
+
             model_id = str(item.get("id", "")).strip()
             if not model_id:
+                model_id = str(item.get("name", "")).strip()
+            if not model_id:
                 continue
-            if "codex" in model_id.lower():
-                continue
-            version_key = self._model_version_key(model_id)
-            if version_key is None:
-                continue
-            candidates.append((version_key, model_id))
 
+            version_key = self._model_version_key(model_id)
+            supported_parameters = self._extract_supported_parameters(item)
+            if version_key is None:
+                # Keep non-standard aliases in the catalog instead of dropping them.
+                # This makes custom aliases (including provider-prefix forms) visible in UI
+                # and usable for manual override.
+                sort_key = (0, 0, 0, 0, index)
+            else:
+                # Preserve existing version-priority behavior for standard GPT-family ids.
+                major, minor, patch, is_code_variant = version_key
+                sort_key = (1, major, minor, patch, is_code_variant, index)
+
+            candidates.append((sort_key, model_id, index, supported_parameters))
+
+        # Keep latest/most specific versions first, then fall back to other aliases.
         candidates.sort(reverse=True)
-        return [model_id for _, model_id in candidates]
+        return [
+            {
+                "id": model_id,
+                "supported_parameters": supported_parameters,
+            }
+            for _, model_id, _, supported_parameters in candidates
+        ]
 
     def _build_provider_chain(self):
         providers = []
@@ -86,18 +195,23 @@ class LLMClient:
             raise ValueError("Missing environment variables: CLIPROXYAPI_API_KEY and CLIPROXYAPI_MODEL")
         discovered_models = self._discover_primary_models(primary)
         if discovered_models:
-            primary["model"] = discovered_models[0]
-            primary["models"] = discovered_models
+            primary["model"] = discovered_models[0]["id"]
+            primary["models"] = [model_info["id"] for model_info in discovered_models]
+            primary["model_capabilities"] = {
+                model_info["id"]: model_info.get("supported_parameters")
+                for model_info in discovered_models
+            }
             logging.info(
                 "Auto-selected CLIProxyAPI primary model %s from candidates: %s",
                 primary["model"],
-                ", ".join(discovered_models),
+                ", ".join(model_info["id"] for model_info in discovered_models),
             )
         else:
             logging.info(
                 "CLIProxyAPI model discovery unavailable; using configured primary model %s",
                 primary["model"],
             )
+            primary["model_capabilities"] = {primary["model"]: None}
         providers.append(primary)
 
         secondary = self._provider_from_env(
@@ -108,6 +222,7 @@ class LLMClient:
             default_base_url="http://127.0.0.1:8045/v1",
         )
         if secondary:
+            secondary["model_capabilities"] = {secondary["model"]: None}
             providers.append(secondary)
 
         fallback = self._provider_from_env(
@@ -118,6 +233,7 @@ class LLMClient:
             default_base_url="https://api.siliconflow.cn/v1",
         )
         if fallback:
+            fallback["model_capabilities"] = {fallback["model"]: None}
             providers.append(fallback)
 
         logging.info(
@@ -161,15 +277,77 @@ class LLMClient:
             or "unsupported" in text
         )
 
-    def _post_with_failover(self, payload, stream=False, timeout=120):
-        errors = []
+    def _ordered_providers(self, requested_model):
+        requested_model = (requested_model or "").strip()
+        if not requested_model:
+            return self.providers
+
+        prioritized = []
+        fallback = []
 
         for provider in self.providers:
+            models = [str(model) for model in (provider.get("models") or [provider.get("model")]) if model]
+            if requested_model in models:
+                provider_snapshot = dict(provider)
+                provider_snapshot["models"] = [requested_model] + [model for model in models if model != requested_model]
+                prioritized.append(provider_snapshot)
+            else:
+                fallback.append(provider)
+
+        return prioritized + fallback
+
+    def get_model_catalog(self):
+        catalog = []
+
+        for provider in self.providers:
+            models = [str(model) for model in (provider.get("models") or [provider.get("model")]) if model]
+            seen = set()
+            normalized_models = []
+            for model in models:
+                if model in seen:
+                    continue
+                seen.add(model)
+                normalized_models.append(model)
+
+            raw_capabilities = provider.get("model_capabilities", {})
+            model_capabilities = {}
+            if isinstance(raw_capabilities, dict):
+                for model in normalized_models:
+                    supported = raw_capabilities.get(model)
+                    if supported is None:
+                        model_capabilities[model] = None
+                        continue
+                    if isinstance(supported, set):
+                        model_capabilities[model] = sorted(supported)
+                    elif isinstance(supported, (list, tuple)):
+                        model_capabilities[model] = list(supported)
+                    else:
+                        model_capabilities[model] = None
+
+            catalog.append({
+                "route": provider["route"],
+                "model": provider["model"],
+                "models": normalized_models,
+                "base_url": provider["base_url"],
+                "model_capabilities": model_capabilities,
+            })
+
+        return catalog
+
+    def _post_with_failover(self, payload, stream=False, timeout=120, requested_model=None):
+        provider_chain = self._ordered_providers(requested_model)
+        errors = []
+
+        for provider in provider_chain:
             url = provider["base_url"] + "/chat/completions"
             model_candidates = list(provider.get("models") or [provider["model"]])
 
             for index, model in enumerate(model_candidates):
-                provider_payload = self._apply_model_settings(payload, model)
+                provider_payload = self._apply_model_capabilities_to_payload(
+                    self._apply_model_settings(payload, model),
+                    provider,
+                    model,
+                )
 
                 try:
                     response = requests.post(
@@ -206,7 +384,7 @@ class LLMClient:
 
         raise requests.RequestException("All LLM providers failed: " + " | ".join(errors))
 
-    def chat(self, messages, stream=True, print_callback=None):
+    def chat(self, messages, stream=True, print_callback=None, model=None):
         """
         Send chat request to LLM.
 
@@ -233,8 +411,14 @@ class LLMClient:
         start_time = time.time()
 
         if stream:
-            return self._handle_stream(payload, start_time, print_callback, reasoning_effort)
-        return self._handle_sync(payload, start_time, reasoning_effort)
+            return self._handle_stream(
+                payload,
+                start_time,
+                print_callback,
+                reasoning_effort,
+                model,
+            )
+        return self._handle_sync(payload, start_time, reasoning_effort, model)
 
     def _extract_content(self, message):
         content = message.get("content", "")
@@ -248,8 +432,13 @@ class LLMClient:
             return "".join(text_parts)
         return ""
 
-    def _handle_sync(self, payload, start_time, reasoning_effort):
-        response, used_model, used_route = self._post_with_failover(payload, stream=False, timeout=120)
+    def _handle_sync(self, payload, start_time, reasoning_effort, model=None):
+        response, used_model, used_route = self._post_with_failover(
+            payload,
+            stream=False,
+            timeout=120,
+            requested_model=model,
+        )
         data = response.json()
 
         message = data["choices"][0]["message"]
@@ -266,7 +455,7 @@ class LLMClient:
             "reasoning_effort": reasoning_effort,
         }
 
-    def _handle_stream(self, payload, start_time, print_callback, reasoning_effort):
+    def _handle_stream(self, payload, start_time, print_callback, reasoning_effort, model=None):
         full_content = ""
         full_thinking = ""
         usage_data = {}
@@ -283,7 +472,12 @@ class LLMClient:
                     print(f"STREAM_ERROR:{json.dumps(content)}", flush=True)
 
         try:
-            response, used_model, used_route = self._post_with_failover(payload, stream=True, timeout=300)
+            response, used_model, used_route = self._post_with_failover(
+                payload,
+                stream=True,
+                timeout=300,
+                requested_model=model,
+            )
 
             for line in response.iter_lines(chunk_size=1):
                 if not line:
