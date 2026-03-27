@@ -72,6 +72,10 @@ def save_image_with_gps(photo_path, frame, latitude, longitude):
     # 保存图像
     cv2.imwrite(photo_path, frame)
 
+    if latitude is None or longitude is None:
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Location unavailable, skip GPS EXIF for {photo_path}")
+        return
+
     # 准备GPS EXIF数据
     gps_ifd = {
         piexif.GPSIFD.GPSLatitudeRef: 'N' if latitude >= 0 else 'S',

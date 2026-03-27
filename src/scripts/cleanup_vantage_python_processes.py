@@ -7,7 +7,13 @@ import psutil
 
 SERVER_SCRIPT_TOKENS = ("src/server.py", "src\\server.py")
 INLINE_SERVER_TOKENS = ("from src.server import app", "uvicorn.run(app")
-DESKTOP_PROCESS_NAMES = ("electron", "electron.exe", "node", "node.exe")
+DESKTOP_PROCESS_NAMES = ("electron", "electron.exe", "node", "node.exe", "npm", "npm.exe")
+DESKTOP_ENTRYPOINT_TOKENS = (
+    "src/webapp/main.cjs",
+    "node_modules/electron/cli.js",
+    "electron:start",
+    "electron:dev",
+)
 
 
 def _normalize_text(value):
@@ -47,6 +53,54 @@ def _is_process_in_project(process, project_root):
     return normalized_cwd.startswith(normalized_root) or normalized_root in normalized_cmdline
 
 
+def _desktop_webapp_root(project_root):
+    return _normalized_project_root(Path(project_root) / "src" / "webapp")
+
+
+def _is_same_or_descendant_path(candidate, root):
+    return candidate == root or candidate.startswith(f"{root}/")
+
+
+def _belongs_to_current_project(normalized_cmdline, normalized_cwd, project_root):
+    normalized_root = _normalized_project_root(project_root)
+    normalized_webapp_root = _desktop_webapp_root(project_root)
+
+    return (
+        _is_same_or_descendant_path(normalized_cwd, normalized_webapp_root)
+        or _is_same_or_descendant_path(normalized_cwd, normalized_root)
+        or normalized_webapp_root in normalized_cmdline
+        or normalized_root in normalized_cmdline
+    )
+
+
+def _is_vantage_desktop_entrypoint(normalized_cmdline, normalized_cwd, process_name, project_root):
+    if not _belongs_to_current_project(normalized_cmdline, normalized_cwd, project_root):
+        return False
+
+    normalized_webapp_root = _desktop_webapp_root(project_root)
+
+    if process_name in ("electron", "electron.exe") and _is_same_or_descendant_path(
+        normalized_cwd, normalized_webapp_root
+    ):
+        return True
+
+    if any(token in normalized_cmdline for token in ("electron:start", "electron:dev")) and _is_same_or_descendant_path(
+        normalized_cwd, normalized_webapp_root
+    ):
+        return True
+
+    if "--app-path=" in normalized_cmdline and normalized_webapp_root in normalized_cmdline:
+        return True
+
+    if "electron/cli.js" in normalized_cmdline and normalized_webapp_root in normalized_cmdline:
+        return True
+
+    if "main.cjs" in normalized_cmdline and normalized_webapp_root in normalized_cmdline:
+        return True
+
+    return False
+
+
 def is_vantage_server_process(process, project_root):
     if process.pid == os.getpid():
         return False
@@ -80,7 +134,9 @@ def is_vantage_desktop_process(process, project_root):
     if process_name not in DESKTOP_PROCESS_NAMES:
         return False
 
-    return _is_process_in_project(process, project_root)
+    normalized_cmdline = _normalize_text(_safe_process_cmdline(process))
+    normalized_cwd = _normalize_text(_safe_process_cwd(process)).rstrip("/")
+    return _is_vantage_desktop_entrypoint(normalized_cmdline, normalized_cwd, process_name, project_root)
 
 
 def iter_vantage_server_processes(project_root):
