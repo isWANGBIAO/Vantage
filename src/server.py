@@ -33,6 +33,7 @@ import asyncio
 import math
 import calendar
 from collections import deque
+from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, Request, UploadFile, File, BackgroundTasks
@@ -717,7 +718,6 @@ def find_latest_file_recursive(directory, extensions={'.jpg', '.png'}):
                     pass
     return latest_file
 
-@app.on_event("startup")
 async def startup_event():
     print("Starting up server...")
     state.is_running = True
@@ -795,7 +795,6 @@ async def startup_event():
         print(f"Startup logic error: {e}")
 
 
-@app.on_event("shutdown")
 async def shutdown_event():
     state.is_running = False
 
@@ -806,6 +805,18 @@ async def shutdown_event():
             camera.release()
         except Exception as e:
             print(f"Shutdown camera release error: {e}")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    await startup_event()
+    try:
+        yield
+    finally:
+        await shutdown_event()
+
+
+app.router.lifespan_context = lifespan
 
 def monitor_loop():
     print("Starting monitor loop (10s interval)...")
