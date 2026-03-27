@@ -97,6 +97,7 @@ class SystemState:
         self.monitor = None
         self.latest_frame = None
         self.is_running = True
+        self.startup_initialized = False
         self.lock = threading.Lock()
         self.paths = {'photo': None, 'screenshot': None}
         self.photos_path = None
@@ -111,6 +112,18 @@ class SystemState:
         self.last_processed_face_photo_path = None
 
 state = SystemState()
+
+
+def _mount_static_once(route_path, directory, name):
+    if not directory or not os.path.exists(directory):
+        return False
+
+    for route in app.router.routes:
+        if getattr(route, "path", None) == route_path:
+            return False
+
+    app.mount(route_path, StaticFiles(directory=directory), name=name)
+    return True
 
 
 def get_face_analysis_runtime():
@@ -719,6 +732,11 @@ def find_latest_file_recursive(directory, extensions={'.jpg', '.png'}):
     return latest_file
 
 async def startup_event():
+    if state.startup_initialized:
+        state.is_running = True
+        print("Startup already initialized; skipping duplicate startup.")
+        return
+
     print("Starting up server...")
     state.is_running = True
     try:
@@ -740,7 +758,7 @@ async def startup_event():
         print(f"----------------------------------------------------------------")
         
         state.monitor = Monitor(state.camera, state.paths, state.photos_path, state.screenshots_path)
-        
+
         # Start background frame reading thread
         threading.Thread(target=camera_loop, daemon=True).start()
 
@@ -760,19 +778,16 @@ async def startup_event():
         threading.Thread(target=yolo_loop, daemon=True).start()
 
         # Mount static directories for photos and plots
-        if state.photos_path and os.path.exists(state.photos_path):
-            app.mount("/static/photos", StaticFiles(directory=state.photos_path), name="photos")
+        _mount_static_once("/static/photos", state.photos_path, "photos")
         
         plot_dir = os.path.join(os.getcwd(), "plot_outputs")
         if not os.path.exists(plot_dir):
             os.makedirs(plot_dir)
-        app.mount("/static/plots", StaticFiles(directory=plot_dir), name="plots")
+        _mount_static_once("/static/plots", plot_dir, "plots")
         
-        if state.screenshots_path and os.path.exists(state.screenshots_path):
-            if state.screenshots_path != state.photos_path:
-                app.mount("/static/screenshots", StaticFiles(directory=state.screenshots_path), name="screenshots")
-            else:
-                app.mount("/static/screenshots", StaticFiles(directory=state.screenshots_path), name="screenshots")
+        _mount_static_once("/static/screenshots", state.screenshots_path, "screenshots")
+
+        state.startup_initialized = True
                 
         # Attempt to find latest existing files to populate state
         try:
@@ -797,6 +812,7 @@ async def startup_event():
 
 async def shutdown_event():
     state.is_running = False
+    state.startup_initialized = False
 
     camera = state.camera
     state.camera = None
