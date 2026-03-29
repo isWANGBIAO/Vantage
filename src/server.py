@@ -1907,7 +1907,22 @@ def get_sedentary_stats():
     try:
         if not state.monitor:
              return {"status": "inactive"}
-             
+
+        now = time.time()
+        heartbeat = getattr(state.monitor, "last_monitor_heartbeat", None)
+        stale_timeout = getattr(
+            state.monitor,
+            "monitor_stale_timeout",
+            getattr(state.monitor, "grace_period", None),
+        )
+        if heartbeat is not None and stale_timeout is not None and (now - heartbeat) >= stale_timeout:
+             return {
+                 "status": "active",
+                 "is_sitting": False,
+                 "duration_minutes": 0,
+                 "threshold_minutes": state.monitor.sedentary_threshold // 60
+             }
+
         start = state.monitor.continuous_sit_start
         if start is None:
              return {
@@ -1916,8 +1931,8 @@ def get_sedentary_stats():
                  "duration_minutes": 0,
                  "threshold_minutes": state.monitor.sedentary_threshold // 60
              }
-             
-        duration_sec = time.time() - start
+
+        duration_sec = now - start
         return {
              "status": "active",
              "is_sitting": True,
