@@ -33,13 +33,11 @@ class BackendPathResolutionTests(unittest.TestCase):
         self.assertEqual(payload["status"], "unavailable")
         self.assertIn("error", payload)
 
-    def test_identify_logs_folder_prefers_user_one_drive_over_personal_drive(self):
+    def test_identify_logs_folder_prefers_d_drive_over_user_home(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir)
-            photos_dir = home / "OneDrive" / "Pictures" / "本机照片"
-            screenshots_dir = home / "OneDrive" / "Pictures" / "Screenshots"
-            photos_dir.mkdir(parents=True)
-            screenshots_dir.mkdir(parents=True)
+            photos_dir = Path(r"D:\\WANGBIAO\\Pictures\\本机照片")
+            screenshots_dir = Path(r"D:\\WANGBIAO\\Pictures\\Screenshots")
 
             def fake_exists(path):
                 path_str = str(path)
@@ -116,3 +114,5 @@ class BackendPathResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+

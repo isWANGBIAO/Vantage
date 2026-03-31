@@ -703,7 +703,10 @@ def get_camera_index():
 def identify_logs_folder():
     onedrive_env = os.environ.get("OneDrive") or os.environ.get("OneDriveConsumer")
     user_home = os.path.expanduser("~")
+    d_drive_root = "D:\\WANGBIAO"
     roots_to_check = []
+    if os.path.exists(d_drive_root):
+        roots_to_check.append(d_drive_root)
     if onedrive_env:
         roots_to_check.append(onedrive_env)
     roots_to_check.append(os.path.join(user_home, "OneDrive"))
@@ -726,7 +729,7 @@ def identify_logs_folder():
                     os.makedirs(screenshots_path, exist_ok=True)
                     return photos_path, screenshots_path
 
-    default_root = onedrive_env or os.path.join(user_home, "OneDrive")
+    default_root = roots_to_check[0] if roots_to_check else (onedrive_env or os.path.join(user_home, "OneDrive"))
     pictures_path = os.path.join(default_root, "Pictures")
     if not os.path.exists(pictures_path):
         pictures_path = os.path.join(default_root, "图片")
