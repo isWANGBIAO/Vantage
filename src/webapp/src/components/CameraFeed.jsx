@@ -83,7 +83,7 @@ export default function CameraFeed() {
                     <span style={{
                         display: 'inline-flex', alignItems: 'center', justifyContent: 'center'
                     }}>
-                        {status.show_person_box ? '👁️ DETECTING' : '👁️‍🗨️ OFF'}
+                        {status.show_person_box ? 'DETECTING' : 'OFF'}
                     </span>
                 </button>
             )}

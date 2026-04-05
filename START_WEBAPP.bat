@@ -1,5 +1,7 @@
 @echo off
 echo Starting Vantage WebApp...
+set "PROJECT_ROOT=%~dp0"
+cd /d "%PROJECT_ROOT%"
 
 :: Check if node_modules exists
 if not exist "src\webapp\node_modules" (
@@ -10,7 +12,7 @@ if not exist "src\webapp\node_modules" (
 )
 
 :: Start Backend
-start "Backend Server" cmd /k "python src/server.py"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath python -ArgumentList 'src/scripts/run_server_background.py' -WorkingDirectory '%PROJECT_ROOT%' -WindowStyle Hidden"
 
 :: Start Frontend
 cd src\webapp

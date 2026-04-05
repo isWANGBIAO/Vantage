@@ -1,0 +1,79 @@
+import os
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+def _resolve_npm_executable() -> str:
+    return "npm.cmd" if os.name == "nt" else "npm"
+
+
+def _build_frontend_command(mode: str, npm_executable: str | None = None) -> list[str]:
+    resolved_npm = npm_executable or _resolve_npm_executable()
+    if mode == "production":
+        return [resolved_npm, "run", "electron:start"]
+    if mode == "development":
+        return [resolved_npm, "run", "electron:dev"]
+    raise ValueError(f"Unsupported frontend launch mode: {mode}")
+
+
+def _build_frontend_env(mode: str, base_env: dict[str, str] | None = None) -> dict[str, str]:
+    env = dict(base_env or os.environ)
+    if mode == "production":
+        env["NODE_ENV"] = "production"
+    else:
+        env.pop("NODE_ENV", None)
+    return env
+
+
+def _get_creationflags() -> int:
+    if os.name != "nt":
+        return 0
+
+    flags = 0
+    for flag_name in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP", "CREATE_NO_WINDOW"):
+        flags |= getattr(subprocess, flag_name, 0)
+    return flags
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(argv or sys.argv[1:])
+    mode = args[0] if args else "production"
+
+    project_root = Path(__file__).resolve().parents[2]
+    webapp_dir = project_root / "src" / "webapp"
+    logs_dir = project_root / "logs"
+    logs_dir.mkdir(exist_ok=True)
+
+    timestamp = datetime.now().isoformat()
+    stdout_log = logs_dir / f"frontend_{mode}.out.log"
+    stderr_log = logs_dir / f"frontend_{mode}.err.log"
+
+    command = _build_frontend_command(mode)
+    env = _build_frontend_env(mode)
+    creationflags = _get_creationflags()
+
+    with open(stdout_log, "a", encoding="utf-8") as stdout_handle, open(
+        stderr_log, "a", encoding="utf-8"
+    ) as stderr_handle:
+        stdout_handle.write(f"\n=== Frontend launch {mode} {timestamp} ===\n")
+        stderr_handle.write(f"\n=== Frontend launch {mode} {timestamp} ===\n")
+
+        process = subprocess.Popen(
+            command,
+            cwd=webapp_dir,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            creationflags=creationflags,
+            close_fds=True,
+        )
+
+    print(f"Frontend launch requested: mode={mode}, pid={process.pid}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

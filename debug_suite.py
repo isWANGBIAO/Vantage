@@ -11,6 +11,7 @@ SERVER_PORT = 8000
 BASE_URL = f"http://localhost:{SERVER_PORT}"
 SERVER_SCRIPT = "src/server.py"
 LOG_FILE = "logs/debug_server.log"
+WAIT_FOR_SERVER_TIMEOUT_SECONDS = 60
 
 
 def console_print(*args, **kwargs):
@@ -50,7 +51,7 @@ def start_server():
     return process
 
 
-def wait_for_server(timeout=10):
+def wait_for_server(timeout=WAIT_FOR_SERVER_TIMEOUT_SECONDS):
     start = time.time()
     while time.time() - start < timeout:
         try:
@@ -108,12 +109,12 @@ def main():
     if is_port_in_use(SERVER_PORT):
         console_print("Port 8000 is already in use. Assuming user's server is running.")
         existing_server = True
-        if not wait_for_server(timeout=5):
+        if not wait_for_server(timeout=WAIT_FOR_SERVER_TIMEOUT_SECONDS):
             console_print("Port is used but /api/status is not responding. Aborting.")
             return
     else:
         server_process = start_server()
-        if not wait_for_server():
+        if not wait_for_server(timeout=WAIT_FOR_SERVER_TIMEOUT_SECONDS):
             server_process.terminate()
             return
 

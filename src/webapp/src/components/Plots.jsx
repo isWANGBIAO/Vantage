@@ -98,7 +98,7 @@ export default function Plots() {
                     </h2>
                     <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                         Data visualization
-                        {plots.length > 0 && <span style={{ marginLeft: '1rem' }}>📊 {currentIndex + 1} / {plots.length}</span>}
+                        {plots.length > 0 && <span style={{ marginLeft: '1rem' }}>{currentIndex + 1} / {plots.length}</span>}
                     </p>
                 </div>
 
@@ -147,10 +147,10 @@ export default function Plots() {
                 onWheel={handleWheel}
             >
                 {isLoading ? (
-                    <div style={{ color: 'var(--text-muted)' }}>⏳ Loading plots...</div>
+                    <div style={{ color: 'var(--text-muted)' }}>Loading plots...</div>
                 ) : plots.length === 0 ? (
                     <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
-                        <p>📊 No plots found</p>
+                        <p>No plots found</p>
                         <p style={{ fontSize: '0.9rem' }}>Click "Refresh Plots" to generate</p>
                     </div>
                 ) : (
