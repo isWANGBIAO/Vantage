@@ -24,6 +24,7 @@ import {
   createStreamRenderScheduler,
   parseActionPlanStreamLog,
 } from '../utils/actionPlanStream';
+import { CHAT_CONTEXT_BASE_UPDATED_EVENT } from '../utils/chatContextState';
 import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 
 const WELCOME_ANALYSIS = [
@@ -184,6 +185,23 @@ export default function ActionPlan({ isVisible = true }) {
     setSelectedModel(nextModel);
     localStorage.setItem('preferred_llm_model', nextModel);
   };
+
+  const refreshChatContextBase = useCallback(async () => {
+    try {
+      const data = await fetchBackendJson('/api/chat/context', {
+        retryPolicy: 'load',
+      });
+
+      window.dispatchEvent(new CustomEvent(CHAT_CONTEXT_BASE_UPDATED_EVENT, {
+        detail: {
+          baseContextVersion: data?.base_context_version || 'empty',
+          displayMessages: Array.isArray(data?.display_messages) ? data.display_messages : [],
+        },
+      }));
+    } catch (error) {
+      console.error('Failed to refresh chat context base:', error);
+    }
+  }, []);
 
   const startGeneration = useCallback(async ({ replaceToday = false, modelOverride = null } = {}) => {
     if (isGeneratingRef.current) {
@@ -449,6 +467,8 @@ export default function ActionPlan({ isVisible = true }) {
       for (const line of finalLines) {
         await processStreamLine(line);
       }
+
+      await refreshChatContextBase();
     } catch (err) {
       if (err.name === 'AbortError') {
         console.log('Generation aborted');
@@ -461,7 +481,7 @@ export default function ActionPlan({ isVisible = true }) {
         abortControllerRef.current = null;
       }
     }
-  }, [stopGeneration]);
+  }, [refreshChatContextBase, stopGeneration]);
 
   useEffect(() => {
     const initializeModels = async () => {

@@ -267,6 +267,11 @@ def main():
                     context_mgr.add_message("assistant", second_round_content)
                     
                     context_mgr.save()
+                    action_plan_context_file = context_mgr.context_file.parent / "latest_action_plan_context.json"
+                    action_plan_context_file.write_text(
+                        json.dumps(context_mgr.messages, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
 
                     # Print Stats
                     usage1 = result.get("usage", {})

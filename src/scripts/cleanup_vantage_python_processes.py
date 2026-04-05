@@ -5,7 +5,12 @@ from pathlib import Path
 import psutil
 
 
-SERVER_SCRIPT_TOKENS = ("src/server.py", "src\\server.py")
+SERVER_SCRIPT_TOKENS = (
+    "src/server.py",
+    "src\\server.py",
+    "src/scripts/run_server_background.py",
+    "src\\scripts\\run_server_background.py",
+)
 INLINE_SERVER_TOKENS = ("from src.server import app", "uvicorn.run(app")
 DESKTOP_PROCESS_NAMES = ("electron", "electron.exe", "node", "node.exe", "npm", "npm.exe")
 DESKTOP_ENTRYPOINT_TOKENS = (

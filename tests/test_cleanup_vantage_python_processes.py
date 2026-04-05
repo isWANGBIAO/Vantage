@@ -50,6 +50,16 @@ class CleanupVantagePythonProcessesTests(unittest.TestCase):
 
         self.assertTrue(cleanup_script.is_vantage_server_process(process, self.project_root))
 
+    def test_matches_background_server_wrapper_process(self):
+        process = _FakeProcess(
+            pid=1235,
+            name="python.exe",
+            cmdline=["python.exe", "src/scripts/run_server_background.py"],
+            cwd=str(self.project_root),
+        )
+
+        self.assertTrue(cleanup_script.is_vantage_server_process(process, self.project_root))
+
     def test_skips_unrelated_python_processes(self):
         process = _FakeProcess(
             pid=5678,

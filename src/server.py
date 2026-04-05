@@ -24,6 +24,7 @@ from src.utils.face_report_cache import (
     save_face_report_cache,
 )
 import json
+import hashlib
 import time
 import re
 import subprocess
@@ -1302,7 +1303,15 @@ async def image_proxy(path: str):
         os.path.join(os.getcwd(), "plot_outputs"),
         os.path.join(os.getcwd(), "history"),
     ]
-    if not any(abs_path.startswith(os.path.abspath(d)) for d in allowed_dirs if d):
+    def _is_within_allowed_dir(candidate_path, allowed_dir):
+        if not allowed_dir:
+            return False
+        try:
+            return os.path.commonpath([candidate_path, os.path.abspath(allowed_dir)]) == os.path.abspath(allowed_dir)
+        except ValueError:
+            return False
+
+    if not any(_is_within_allowed_dir(abs_path, d) for d in allowed_dirs if d):
         return JSONResponse(status_code=403, content={"error": "Access denied: path not in allowed directories"})
          
     return FileResponse(abs_path)
@@ -1358,13 +1367,13 @@ async def list_plots():
         os.makedirs(thumb_dir, exist_ok=True)
     
     try:
-        # Get all PNG files except collages and screen files
-        files = [f for f in os.listdir(plot_dir) 
-                 if f.endswith(".png") 
-                 and not f.startswith("plot_collage") 
-                 and not f.endswith("_screen.png")]
+        files = [
+            f for f in os.listdir(plot_dir)
+            if f.endswith(".png")
+            and not f.startswith("plot_collage")
+            and not f.endswith("_screen.png")
+        ]
         
-        # Sort by predefined order (same as PyQt version)
         order = [
             "weight_bodyfat", "time_allocation_bar", "time_trend_screen_remaining",
             "time_trend_averages", "time_trend_delta", "running_pace",
@@ -1379,15 +1388,11 @@ async def list_plots():
         
         sorted_files = sorted(files, key=sort_key)
         
-        # Generate thumbnails and build response
         plot_list = []
         for f in sorted_files:
             file_path = os.path.join(plot_dir, f)
             thumb_path = os.path.join(thumb_dir, f)
-            
-            # Use threading to avoid blocking event loop for image processing
             await asyncio.to_thread(ensure_thumbnail, file_path, thumb_path)
-            
             plot_list.append({
                 "name": f,
                 "url": f"/static/plots/{f}",
@@ -1407,14 +1412,13 @@ async def get_today_action_plan():
     """Return today's latest action plan if it exists"""
     from datetime import datetime
     
-    today = datetime.now().strftime("%Y%m%d")  # Format: YYYYMMDD
+    today = datetime.now().strftime("%Y%m%d")
     history_dir = os.path.join(os.getcwd(), "history")
     
     if not os.path.exists(history_dir):
         return {"exists": False, "content": None, "date": today}
     
     try:
-        # Find all action_plan files for today, sorted by modification time (newest first)
         pattern = f"action_plan_{today}_*.md"
         import glob
         files = glob.glob(os.path.join(history_dir, pattern))
@@ -1422,15 +1426,14 @@ async def get_today_action_plan():
         if not files:
             return {"exists": False, "content": None, "date": today}
         
-        # Get the most recent file
         latest_file = max(files, key=os.path.getmtime)
         
         with open(latest_file, "r", encoding="utf-8") as f:
             content = sanitize_action_plan_markdown(f.read())
         
         return {
-            "exists": True, 
-            "content": content, 
+            "exists": True,
+            "content": content,
             "date": today,
             "filename": os.path.basename(latest_file)
         }
@@ -1454,6 +1457,74 @@ def _normalize_reasoning_effort(reasoning_effort: Optional[str]) -> str:
 
 def _get_history_dir() -> str:
     return os.path.join(os.getcwd(), "history")
+
+
+def _get_latest_context_file() -> str:
+    return os.path.join(_get_history_dir(), "latest_context.json")
+
+
+def _get_action_plan_context_file() -> str:
+    return os.path.join(_get_history_dir(), "latest_action_plan_context.json")
+
+
+def _load_context_messages(path: str):
+    context_path = Path(path)
+    if not context_path.exists():
+        return []
+
+    try:
+        with open(context_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return []
+
+    return payload if isinstance(payload, list) else []
+
+
+def _write_context_messages(path: str, messages):
+    context_path = Path(path)
+    context_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(context_path, "w", encoding="utf-8") as handle:
+        json.dump(messages, handle, ensure_ascii=False, indent=2)
+
+
+def _build_chat_display_messages(messages):
+    display_messages = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        display_messages.append({
+            "role": "assistant",
+            "content": content,
+        })
+    return display_messages
+
+
+def _build_chat_context_payload():
+    action_plan_context_path = Path(_get_action_plan_context_file())
+    if not action_plan_context_path.exists():
+        return {
+            "base_context_version": "empty",
+            "has_action_plan_context": False,
+            "display_messages": [],
+        }
+
+    try:
+        digest = hashlib.sha1(action_plan_context_path.read_bytes()).hexdigest()
+    except OSError:
+        digest = "empty"
+
+    action_plan_messages = _load_context_messages(str(action_plan_context_path))
+    return {
+        "base_context_version": digest or "empty",
+        "has_action_plan_context": True,
+        "display_messages": _build_chat_display_messages(action_plan_messages),
+    }
 
 
 def _list_today_action_plan_files(target_date: Optional[str] = None):
@@ -1492,6 +1563,18 @@ class ActionPlanRequest(BaseModel):
     replace_today: bool = False
 
 
+@app.get("/api/chat/context")
+async def get_chat_context():
+    return _build_chat_context_payload()
+
+
+@app.delete("/api/chat/context")
+async def reset_chat_context():
+    action_plan_messages = _load_context_messages(_get_action_plan_context_file())
+    _write_context_messages(_get_latest_context_file(), action_plan_messages)
+    return _build_chat_context_payload()
+
+
 @app.get("/api/llm_models")
 async def list_llm_models():
     try:
@@ -1516,20 +1599,18 @@ async def list_llm_models():
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    # Locate run_prompt.py in src/scripts
     current_dir = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
     if not os.path.exists(script_path):
          script_path = os.path.abspath("src/scripts/run_prompt.py")
     
-    # Determine context file (similar logic to ChatWorker)
     context_file = request.context_file
     if not context_file:
-         context_file = os.path.join(os.getcwd(), "history", "latest_context.json")
+         context_file = _get_latest_context_file()
 
     cmd = [
-        sys.executable, 
-        script_path, 
+        sys.executable,
+        script_path,
         "--chat_message", request.message,
         "--context_file", context_file
     ]
@@ -1539,9 +1620,9 @@ async def chat_endpoint(request: ChatRequest):
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
 
-    try:
-        # Use StreamingResponse for real-time chat output
-        async def process_chat_stream():
+    async def process_chat_stream():
+        proc = None
+        try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -1559,34 +1640,39 @@ async def chat_endpoint(request: ChatRequest):
                 except:
                     decoded = line.decode('gbk', errors='replace').rstrip()
                 
-                # Yield as NDJSON line
-                # We strip to avoid double newlines, but keep empty lines if meaningful?
-                # Usually log lines are fine.
                 msg = decoded.strip()
                 if msg:
-                     yield json.dumps({"log": msg}) + "\n"
+                    yield json.dumps({"log": msg}) + "\n"
             
             await proc.wait()
             
             if proc.returncode != 0:
-                 stderr_data = await proc.stderr.read()
-                 err_msg = stderr_data.decode('utf-8', errors='replace')
-                 yield json.dumps({"error": err_msg}) + "\n"
+                stderr_data = await proc.stderr.read()
+                err_msg = stderr_data.decode('utf-8', errors='replace')
+                yield json.dumps({"error": err_msg}) + "\n"
+        except asyncio.CancelledError:
+            print("Stream cancelled by client")
+            if proc is not None:
+                proc.terminate()
+            raise
+        finally:
+            if proc is not None and proc.returncode is None:
+                print("Killing orphan process")
+                proc.kill()
 
+    try:
         return StreamingResponse(process_chat_stream(), media_type="application/x-ndjson")
-
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/api/action_plan")
 async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
-    # Locate run_prompt.py in src/scripts
     current_dir = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
     if not os.path.exists(script_path):
          script_path = os.path.abspath("src/scripts/run_prompt.py")
     
-    cmd = [sys.executable, script_path] # Default runs action plan generation
+    cmd = [sys.executable, script_path]
     
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -1599,12 +1685,6 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
         cmd.append(f"--model={selected_model}")
     replace_today = request.replace_today if request else False
     previous_today_files = _list_today_action_plan_files() if replace_today else []
-    
-    # Streaming response for real-time logs? 
-    # For now, let's just return the full result or stream lines.
-    # To support streaming to frontend, we might need Server Sent Events (SSE).
-    # Since existing UI accumulates text, we can just return the full text for simplicity for now,
-    # OR implement a simple generator.
     
     async def process_stream():
         proc = await asyncio.create_subprocess_exec(
@@ -1648,11 +1728,9 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
 
 @app.post("/api/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
-    # 获取上传文件的扩展名
     original_filename = file.filename or "recording.webm"
     ext = os.path.splitext(original_filename)[1] or ".webm"
     
-    # 保存临时文件到项目根目录
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     temp_filename = os.path.join(project_root, f"temp_audio_{int(time.time())}{ext}")
     
@@ -1663,7 +1741,6 @@ async def transcribe_audio(file: UploadFile = File(...)):
         buffer.write(content)
         print(f"[Transcribe] File size: {len(content)} bytes")
         
-    # Locate run_prompt.py in src/scripts
     current_dir = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
     if not os.path.exists(script_path):
@@ -1675,45 +1752,53 @@ async def transcribe_audio(file: UploadFile = File(...)):
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=project_root,  # 在项目根目录运行
-        env=env
-    )
-    
-    stdout, stderr = await proc.communicate()
-    
-    # Cleanup
-    if os.path.exists(temp_filename):
-        os.remove(temp_filename)
-        
-    output = ""
+    proc = None
     try:
-        output = stdout.decode('utf-8')
-    except:
-        output = stdout.decode('gbk', errors='replace')
-    
-    # 打印调试信息
-    if stderr:
-        try:
-            stderr_text = stderr.decode('utf-8')
-        except:
-            stderr_text = stderr.decode('gbk', errors='replace')
-        print(f"[Transcribe] Stderr: {stderr_text}")
-    
-    print(f"[Transcribe] Stdout: {output}")
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=project_root,
+            env=env
+        )
         
-    transcription = ""
-    for line in output.splitlines():
-        if line.startswith("TRANSCRIPTION_RESULT:"):
-            transcription = line.replace("TRANSCRIPTION_RESULT:", "").strip()
-            break
-    
-    print(f"[Transcribe] Result: '{transcription}'")
+        stdout, stderr = await proc.communicate()
+        
+        output = ""
+        try:
+            output = stdout.decode('utf-8')
+        except:
+            output = stdout.decode('gbk', errors='replace')
+        
+        if stderr:
+            try:
+                stderr_text = stderr.decode('utf-8')
+            except:
+                stderr_text = stderr.decode('gbk', errors='replace')
+            print(f"[Transcribe] Stderr: {stderr_text}")
+        
+        print(f"[Transcribe] Stdout: {output}")
             
-    return {"transcription": transcription}
+        transcription = ""
+        for line in output.splitlines():
+            if line.startswith("TRANSCRIPTION_RESULT:"):
+                transcription = line.replace("TRANSCRIPTION_RESULT:", "").strip()
+                break
+        
+        print(f"[Transcribe] Result: '{transcription}'")
+                
+        return {"transcription": transcription}
+    finally:
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        if os.path.exists(temp_filename):
+            try:
+                os.remove(temp_filename)
+            except OSError as exc:
+                print(f"[Transcribe] Failed to remove temp file {temp_filename}: {exc}")
 
 @app.get("/api/action_plan_content")
 async def get_action_plan_content():
@@ -1725,7 +1810,6 @@ async def get_action_plan_content():
         if not os.path.exists(history_dir):
             return {"content": ""}
             
-        # Find latest action_plan file
         files = glob.glob(os.path.join(history_dir, "action_plan_*.md"))
         if not files:
             return {"content": ""}
@@ -1749,48 +1833,12 @@ async def get_system_logs():
         if not os.path.exists(log_file):
             return {"logs": ["Log file not found."]}
             
-        # Read last 200 lines to avoid huge payload
         with open(log_file, "r", encoding="utf-8", errors='ignore') as f:
-            # Simple approach: read all then slice (optimized for small logs)
-            # For huge logs, seek would be better.
             lines = f.readlines()
             
         return {"logs": lines[-200:]}
     except Exception as e:
         return {"logs": [f"Error reading logs: {str(e)}"]}
-
-@app.get("/api/balance_sheet")
-async def get_balance_sheet():
-    try:
-        path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
-        sheets = DataLoader.load_excel_sheets(path)
-
-        if not sheets:
-            return JSONResponse(status_code=404, content={"error": "No sheets found in Balance Sheet.xlsx"})
-
-        summary = _build_balance_summary(sheets)
-        suggestions = _build_balance_suggestions(summary)
-
-        sheet_payloads = []
-        for sheet_name, df in sheets.items():
-            payload = _sheet_to_payload(df, max_rows=200)
-            payload["name"] = sheet_name
-            sheet_payloads.append(payload)
-
-        return {
-            "source": {
-                "path": str(path),
-                "sheet_count": len(sheets),
-                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            },
-            "summary": summary,
-            "suggestions": suggestions,
-            "sheets": sheet_payloads
-        }
-    except FileNotFoundError as e:
-        return JSONResponse(status_code=404, content={"error": str(e)})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/api/face/analyze")
 async def analyze_face_history(background_tasks: BackgroundTasks):
