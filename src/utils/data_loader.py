@@ -185,6 +185,64 @@ class DataLoader:
             return "无法获取昨日数据记录。"
 
     @staticmethod
+    def get_future_planned_rows(excel_file_path):
+        """
+        Retrieves future rows with actual content as a formatted summary string.
+        Blank future dates are ignored.
+        """
+        try:
+            df = DataLoader.load_excel_data(excel_file_path).copy()
+            today = datetime.now().date()
+            date_column = "日期" if "日期" in df.columns else "鏃ユ湡"
+            weekday_column = "周几" if "周几" in df.columns else None
+
+            df["date_only"] = df[date_column].dt.date
+            future_df = df[df["date_only"] > today].sort_values(by=date_column)
+
+            excluded_columns = {"Days", date_column, "date_only"}
+            if weekday_column:
+                excluded_columns.add(weekday_column)
+
+            lines = []
+            for _, row in future_df.iterrows():
+                details = []
+                for col in future_df.columns:
+                    if col in excluded_columns:
+                        continue
+
+                    value = row[col]
+                    if pd.isna(value):
+                        continue
+
+                    value_text = str(value).strip()
+                    if not value_text:
+                        continue
+
+                    clean_col_name = str(col).replace("\n", " ")
+                    details.append(f"{clean_col_name}: {value_text}")
+
+                if not details:
+                    continue
+
+                weekday_text = ""
+                if weekday_column:
+                    weekday_value = row.get(weekday_column)
+                    if pd.notna(weekday_value):
+                        weekday_text = f"（{str(weekday_value).strip()}）"
+
+                lines.append(
+                    f"- {row[date_column].strftime('%Y-%m-%d')}{weekday_text}: " + "；".join(details)
+                )
+
+            if not lines:
+                return "## Future Planned Items\n\n- 暂无已记录的未来安排\n"
+
+            return "## Future Planned Items\n\n" + "\n".join(lines) + "\n"
+        except Exception as e:
+            logging.error(f"Error getting future planned rows: {e}")
+            return "## Future Planned Items\n\n- 无法获取未来安排\n"
+
+    @staticmethod
     def construct_prompt(prompt_file_path, excel_file_path, days=90):
         prompt_file_path = Path(prompt_file_path)
         excel_file_path = Path(excel_file_path)
@@ -303,7 +361,9 @@ class DataLoader:
                         f"{latest_value}\n"
                     )
 
-        combined_content = f"{prompt_content}\n\n{data_summary}"
+        future_planned_rows = DataLoader.get_future_planned_rows(excel_file_path)
+
+        combined_content = f"{prompt_content}\n\n{data_summary}\n\n{future_planned_rows}"
 
         if project_mgmt_path.exists():
             pm_content = project_mgmt_path.read_text(encoding="utf-8")

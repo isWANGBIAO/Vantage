@@ -178,10 +178,15 @@ def main():
                 action_plan_template = action_plan_prompt_path.read_text(encoding="utf-8")
                 today_data = DataLoader.get_today_data_row(DataLoader.resolve_data_path("Time.xlsx"))
                 yesterday_data = DataLoader.get_yesterday_data_row(DataLoader.resolve_data_path("Time.xlsx"))
+                future_planned_rows = DataLoader.get_future_planned_rows(DataLoader.resolve_data_path("Time.xlsx"))
                 current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
                 action_plan_msg = action_plan_template.replace("{current_time}", current_time_str)
                 action_plan_msg = action_plan_msg.replace("{today_data_row}", today_data)
                 action_plan_msg = action_plan_msg.replace("{yesterday_data_row}", yesterday_data)
+                if "{future_planned_rows}" in action_plan_msg:
+                    action_plan_msg = action_plan_msg.replace("{future_planned_rows}", future_planned_rows)
+                else:
+                    action_plan_msg = f"{action_plan_msg}\n\n{future_planned_rows}"
             
             print("正在生成初始分析报告，请稍候...")
             print("---ANALYSIS_START---")

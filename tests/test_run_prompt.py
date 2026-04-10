@@ -1,4 +1,5 @@
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -100,6 +101,10 @@ class RunPromptTests(unittest.TestCase):
                 "get_yesterday_data_row",
                 return_value="yesterday row",
             ), patch.object(
+                run_prompt.DataLoader,
+                "get_future_planned_rows",
+                return_value="2026-06-16（周二）: 工作: 去宁波",
+            ), patch.object(
                 sys,
                 "argv",
                 ["run_prompt.py"],
@@ -110,14 +115,14 @@ class RunPromptTests(unittest.TestCase):
 
         self.assertIn('STREAM_ANALYSIS_SYSTEM:"system prompt"', output_lines)
         self.assertIn('STREAM_ANALYSIS_PROMPT:"analysis prompt"', output_lines)
-        self.assertTrue(
-            any(
-                line.startswith('STREAM_PLAN_PROMPT:')
-                and 'Yesterday yesterday row' in line
-                and 'Today today row' in line
-                for line in output_lines
-            ),
+        plan_prompt_payload = "".join(
+            json.loads(line.split(":", 1)[1])
+            for line in output_lines
+            if line.startswith("STREAM_PLAN_PROMPT:")
         )
+        self.assertIn("Yesterday yesterday row", plan_prompt_payload)
+        self.assertIn("Today today row", plan_prompt_payload)
+        self.assertIn("2026-06-16（周二）: 工作: 去宁波", plan_prompt_payload)
 
         plan_prompt_index = next(
             index for index, line in enumerate(output_lines)
