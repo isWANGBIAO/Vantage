@@ -14,6 +14,7 @@ import {
   saveStoredChatMessages,
   storeChatContextBaseVersion,
 } from '../utils/chatContextState';
+import { loadStoredActionPlanReasoningEffort } from '../utils/actionPlanReasoning';
 
 import {
 
@@ -22,6 +23,80 @@ import {
   parseModelReasoningSupport,
 
 } from '../utils/modelReasoningSupport';
+
+const PROVIDER_LABELS = {
+    cliproxyapi_primary: 'CLIProxyAPI',
+    cliproxyapi_secondary: 'CLIProxyAPI Secondary',
+    siliconflow_fallback: 'SiliconFlow',
+};
+
+function buildClientSentAt() {
+    const now = new Date();
+    const offsetMinutes = -now.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? '+' : '-';
+    const absoluteOffsetMinutes = Math.abs(offsetMinutes);
+    const offsetHours = String(Math.floor(absoluteOffsetMinutes / 60)).padStart(2, '0');
+    const offsetRemainderMinutes = String(absoluteOffsetMinutes % 60).padStart(2, '0');
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+
+    return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${sign}${offsetHours}:${offsetRemainderMinutes}`;
+}
+
+function buildModelProviderLabels(providers = []) {
+    const labels = {};
+
+    for (const provider of providers) {
+        const providerLabel = PROVIDER_LABELS[provider?.route] || provider?.route;
+        const models = Array.isArray(provider?.models) ? provider.models : [];
+
+        for (const model of models) {
+            if (!model || labels[model]) {
+                continue;
+            }
+            labels[model] = providerLabel;
+        }
+    }
+
+    return labels;
+}
+
+function renderChatMarkdownComponents(role) {
+    const isUser = role === 'user';
+
+    return {
+        p: ({ node, ...props }) => (
+            <p
+                {...props}
+                style={{
+                    color: isUser ? 'inherit' : 'var(--text-secondary)',
+                    marginBottom: '1rem',
+                }}
+            />
+        ),
+        li: ({ node, ...props }) => (
+            <li
+                {...props}
+                style={{
+                    color: 'inherit',
+                    marginBottom: '0.3rem',
+                }}
+            />
+        ),
+        strong: ({ node, ...props }) => (
+            <strong
+                {...props}
+                style={{
+                    color: isUser ? 'inherit' : 'var(--accent-color)',
+                }}
+            />
+        ),
+    };
+}
 
 
 function consumeChatStreamChunk(previousState, chunkText) {
@@ -94,6 +169,8 @@ export default function ChatInterface() {
     const [availableModels, setAvailableModels] = useState([]);
 
     const [modelReasoningSupport, setModelReasoningSupport] = useState({});
+
+    const [modelProviderLabels, setModelProviderLabels] = useState({});
 
     const [selectedModel, setSelectedModel] = useState('');
 
@@ -176,6 +253,7 @@ export default function ChatInterface() {
                 setAvailableModels(modelList);
 
                 setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
+                setModelProviderLabels(buildModelProviderLabels(data?.providers));
 
 
 
@@ -373,7 +451,11 @@ export default function ChatInterface() {
 
         try {
 
-            const payload = { message: userMsg };
+            const payload = {
+                message: userMsg,
+                client_sent_at: buildClientSentAt(),
+                reasoning_effort: loadStoredActionPlanReasoningEffort(),
+            };
 
             if (selectedModel) {
 
@@ -538,6 +620,8 @@ export default function ChatInterface() {
 
                         try {
                             const chatPayload = { message: transcribedText };
+                            chatPayload.client_sent_at = buildClientSentAt();
+                            chatPayload.reasoning_effort = loadStoredActionPlanReasoningEffort();
                             if (selectedModel) {
                                 chatPayload.model = selectedModel;
                             }
@@ -626,6 +710,8 @@ export default function ChatInterface() {
 
     const sendButtonLabel = 'SEND';
 
+    const providerLabel = selectedModel ? modelProviderLabels[selectedModel] : null;
+
 
 
     return (
@@ -674,7 +760,9 @@ export default function ChatInterface() {
                             ))}
                         </select>
                     </label>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Powered by Gemini</span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                        {providerLabel ? `Powered by ${providerLabel}` : 'Provider unavailable'}
+                    </span>
 
                     {messages.length > 0 && (
 
@@ -868,7 +956,10 @@ export default function ChatInterface() {
 
                             <div className="markdown-body" style={{ fontSize: '0.95rem' }}>
 
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                <ReactMarkdown
+                                    remarkPlugins={[remarkGfm]}
+                                    components={renderChatMarkdownComponents(msg.role)}
+                                >
 
                                     {msg.content}
 

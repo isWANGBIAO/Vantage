@@ -146,6 +146,31 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertTrue(fake_process.terminate_called)
         self.assertTrue(fake_process.kill_called)
 
+    def test_chat_endpoint_passes_reasoning_effort_and_client_timestamp_to_subprocess(self):
+        fake_process = _FakeProcess(lines=[b'STREAM_CONTENT:"ok"\n'])
+        sent_at = "2026-04-08T12:02:03+08:00"
+
+        with patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=fake_process),
+        ) as mock_create:
+            response = asyncio.run(
+                server.chat_endpoint(
+                    server.ChatRequest(
+                        message="hello",
+                        reasoning_effort="high",
+                        client_sent_at=sent_at,
+                    ),
+                ),
+            )
+            asyncio.run(_read_first_stream_chunk(response))
+
+        cmd = list(mock_create.await_args.args)
+        self.assertIn("--client_sent_at", cmd)
+        self.assertIn(sent_at, cmd)
+        self.assertEqual(mock_create.await_args.kwargs["env"]["AI_REASONING_EFFORT"], "high")
+
     def test_transcribe_audio_removes_temp_file_when_subprocess_spawn_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             fixed_time = 1234567890

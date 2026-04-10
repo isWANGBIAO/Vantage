@@ -1444,6 +1444,8 @@ class ChatRequest(BaseModel):
     message: str
     model: Optional[str] = None
     context_file: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    client_sent_at: Optional[str] = None
 
 
 _VALID_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
@@ -1616,9 +1618,12 @@ async def chat_endpoint(request: ChatRequest):
     ]
     if request.model:
         cmd.extend(["--model", request.model])
+    if request.client_sent_at:
+        cmd.extend(["--client_sent_at", request.client_sent_at])
     
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    env["AI_REASONING_EFFORT"] = _normalize_reasoning_effort(request.reasoning_effort)
 
     async def process_chat_stream():
         proc = None

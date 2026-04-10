@@ -26,6 +26,23 @@ def setup_logging():
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
+
+def format_chat_message_with_timestamp(message, raw_timestamp):
+    if not raw_timestamp:
+        return message
+
+    timestamp_text = str(raw_timestamp).strip()
+    if not timestamp_text:
+        return message
+
+    try:
+        parsed_timestamp = datetime.fromisoformat(timestamp_text.replace("Z", "+00:00"))
+        timestamp_text = parsed_timestamp.isoformat(sep=" ", timespec="seconds")
+    except ValueError:
+        pass
+
+    return f"[Message timestamp: {timestamp_text}]\n{message}"
+
 def main():
     setup_logging()
     
@@ -36,6 +53,7 @@ def main():
     parser.add_argument("--chat_message", help="User message for chat mode")
     parser.add_argument("--context_file", help="Path to load context from")
     parser.add_argument("--model", help="Model name override for this run")
+    parser.add_argument("--client_sent_at", help="Client-side timestamp for the current chat message")
     
     args = parser.parse_args()
     model_override = args.model.strip() if args.model else None
@@ -68,7 +86,7 @@ def main():
             # For now, let's just stick to adding user message
             
             # [User Request] Repeat the chat message twice to emphasize it
-            chat_msg = args.chat_message
+            chat_msg = format_chat_message_with_timestamp(args.chat_message, args.client_sent_at)
             context_mgr.add_message("user", chat_msg)
             
             # Emit initial stats (Historical only)

@@ -115,6 +115,18 @@ test('ChatInterface syncs visible history with backend chat context endpoints', 
   assert.ok(chatSource.includes('CHAT_CONTEXT_BASE_UPDATED_EVENT'));
 });
 
+test('ChatInterface sends chat timestamps and action-plan reasoning effort to backend', () => {
+  assert.ok(chatSource.includes('client_sent_at'));
+  assert.ok(chatSource.includes('reasoning_effort'));
+  assert.ok(chatSource.includes('loadStoredActionPlanReasoningEffort'));
+});
+
+test('ChatInterface does not hardcode Gemini provider copy and keeps user markdown readable', () => {
+  assert.equal(chatSource.includes('Powered by Gemini'), false);
+  assert.ok(chatSource.includes('providerLabel'));
+  assert.ok(chatSource.includes("isUser ? 'inherit'"));
+});
+
 test('ChatInterface replaces unreliable chat icons with text badges and text action buttons', () => {
   assert.ok(chatSource.includes("'AI'"));
   assert.ok(chatSource.includes("'ME'"));
