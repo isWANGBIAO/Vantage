@@ -18,6 +18,28 @@ test('parseActionPlanStreamLog reads analysis content events', () => {
   );
 });
 
+test('parseActionPlanStreamLog reads analysis prompt events', () => {
+  assert.deepEqual(
+    parseActionPlanStreamLog('STREAM_ANALYSIS_PROMPT:"prompt text"'),
+    {
+      section: 'analysis',
+      kind: 'prompt',
+      content: 'prompt text',
+    },
+  );
+});
+
+test('parseActionPlanStreamLog reads analysis system events', () => {
+  assert.deepEqual(
+    parseActionPlanStreamLog('STREAM_ANALYSIS_SYSTEM:"system text"'),
+    {
+      section: 'analysis',
+      kind: 'system',
+      content: 'system text',
+    },
+  );
+});
+
 test('parseActionPlanStreamLog reads plan thinking events', () => {
   assert.deepEqual(
     parseActionPlanStreamLog('STREAM_PLAN_THINKING:"thinking"'),

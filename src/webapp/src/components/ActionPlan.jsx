@@ -27,6 +27,8 @@ import {
 import { CHAT_CONTEXT_BASE_UPDATED_EVENT } from '../utils/chatContextState';
 import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 
+const COPY_FEEDBACK_DURATION_MS = 1500;
+
 const WELCOME_ANALYSIS = [
   '### Welcome to Action Plan',
   '',
@@ -78,11 +80,51 @@ function renderMarkdownOrText(contentState) {
   );
 }
 
+function buildAnalysisFullInput(systemPrompt, analysisPrompt) {
+  if (!systemPrompt || !analysisPrompt) {
+    return '';
+  }
+
+  return [
+    '[System]',
+    systemPrompt,
+    '',
+    '[User]',
+    analysisPrompt,
+  ].join('\n');
+}
+
+function buildPlanFullInput(systemPrompt, analysisPrompt, analysisReply, planPrompt) {
+  if (!systemPrompt || !analysisPrompt || !analysisReply || !planPrompt) {
+    return '';
+  }
+
+  return [
+    '[System]',
+    systemPrompt,
+    '',
+    '[User - Round 1]',
+    analysisPrompt,
+    '',
+    '[Assistant - Round 1]',
+    analysisReply,
+    '',
+    '[User - Round 2]',
+    planPrompt,
+  ].join('\n');
+}
+
 export default function ActionPlan({ isVisible = true }) {
   const [analysisContent, setAnalysisContent] = useState('');
   const [analysisThinking, setAnalysisThinking] = useState('');
   const [planContent, setPlanContent] = useState('');
   const [planThinking, setPlanThinking] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
+  const [analysisPrompt, setAnalysisPrompt] = useState('');
+  const [planPrompt, setPlanPrompt] = useState('');
+  const [analysisReplyReady, setAnalysisReplyReady] = useState(false);
+  const [planReplyReady, setPlanReplyReady] = useState(false);
+  const [copiedKey, setCopiedKey] = useState('');
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState(() => loadStoredActionPlanReasoningEffort());
   const [stats, setStats] = useState(null);
   const [availableModels, setAvailableModels] = useState([]);
@@ -95,6 +137,9 @@ export default function ActionPlan({ isVisible = true }) {
   const startupGenerationTriggeredRef = useRef(false);
   const analysisEndRef = useRef(null);
   const planEndRef = useRef(null);
+  const analysisContentRef = useRef('');
+  const planContentRef = useRef('');
+  const copyResetTimeoutRef = useRef(null);
   const visibilityRef = useRef(isVisible);
   const isGeneratingRef = useRef(isGenerating);
   const selectedModelRef = useRef(selectedModel);
@@ -104,6 +149,40 @@ export default function ActionPlan({ isVisible = true }) {
   isGeneratingRef.current = isGenerating;
   selectedModelRef.current = selectedModel;
   selectedReasoningEffortRef.current = selectedReasoningEffort;
+
+  const setAnalysisContentWithRef = useCallback((value) => {
+    if (typeof value === 'function') {
+      setAnalysisContent((prev) => {
+        const nextContent = value(prev);
+        analysisContentRef.current = nextContent;
+        return nextContent;
+      });
+      return;
+    }
+
+    analysisContentRef.current = value;
+    setAnalysisContent(value);
+  }, []);
+
+  const setPlanContentWithRef = useCallback((value) => {
+    if (typeof value === 'function') {
+      setPlanContent((prev) => {
+        const nextContent = value(prev);
+        planContentRef.current = nextContent;
+        return nextContent;
+      });
+      return;
+    }
+
+    planContentRef.current = value;
+    setPlanContent(value);
+  }, []);
+
+  useEffect(() => () => {
+    if (copyResetTimeoutRef.current) {
+      clearTimeout(copyResetTimeoutRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     if (isGenerating && isVisible && analysisContent) {
@@ -122,8 +201,37 @@ export default function ActionPlan({ isVisible = true }) {
     const nextAnalysis = sections.analysis || LEGACY_ANALYSIS;
     const nextPlan = sections.plan || WELCOME_PLAN;
 
-    setAnalysisContent(nextAnalysis);
-    setPlanContent(nextPlan);
+    setAnalysisContentWithRef(nextAnalysis);
+    setPlanContentWithRef(nextPlan);
+    setSystemPrompt('');
+    setAnalysisPrompt('');
+    setPlanPrompt('');
+    setAnalysisReplyReady(Boolean(sections.analysis));
+    setPlanReplyReady(Boolean(sections.plan));
+    setCopiedKey('');
+  }, []);
+
+  const copyActionPlanText = useCallback(async (content, key) => {
+    if (
+      !content ||
+      !globalThis.navigator?.clipboard ||
+      typeof globalThis.navigator.clipboard.writeText !== 'function'
+    ) {
+      return;
+    }
+
+    try {
+      await globalThis.navigator.clipboard.writeText(content);
+      setCopiedKey(key);
+      if (copyResetTimeoutRef.current) {
+        clearTimeout(copyResetTimeoutRef.current);
+      }
+      copyResetTimeoutRef.current = setTimeout(() => {
+        setCopiedKey((currentKey) => (currentKey === key ? '' : currentKey));
+      }, COPY_FEEDBACK_DURATION_MS);
+    } catch (error) {
+      console.error('Failed to copy action plan text:', error);
+    }
   }, []);
 
   const loadTodaysPlan = useCallback(async (signal) => {
@@ -148,16 +256,16 @@ export default function ActionPlan({ isVisible = true }) {
         return;
       }
 
-      setAnalysisContent(WELCOME_ANALYSIS);
-      setPlanContent(WELCOME_PLAN);
+        setAnalysisContentWithRef(WELCOME_ANALYSIS);
+        setPlanContentWithRef(WELCOME_PLAN);
     } catch (err) {
       if (err.name === 'AbortError') {
         return;
       }
 
       console.error('Failed to load today plan:', err);
-      setAnalysisContent(LOAD_ERROR_ANALYSIS);
-      setPlanContent(WELCOME_PLAN);
+      setAnalysisContentWithRef(LOAD_ERROR_ANALYSIS);
+      setPlanContentWithRef(WELCOME_PLAN);
     } finally {
       if (loadAbortControllerRef.current?.signal === signal) {
         loadAbortControllerRef.current = null;
@@ -172,7 +280,7 @@ export default function ActionPlan({ isVisible = true }) {
     }
 
     setIsGenerating(false);
-    setPlanContent((prev) => `${prev}\n\n> Generation stopped by user.`);
+    setPlanContentWithRef((prev) => `${prev}\n\n> Generation stopped by user.`);
   }, []);
 
   const handleReasoningEffortChange = (event) => {
@@ -216,8 +324,14 @@ export default function ActionPlan({ isVisible = true }) {
     setIsGenerating(true);
     setAnalysisThinking('');
     setPlanThinking('');
-    setAnalysisContent('### Analyzing data\n\nStreaming analysis output...');
-    setPlanContent('### Waiting for analysis\n\nThe action plan will start once the first pass completes.');
+    setSystemPrompt('');
+    setAnalysisPrompt('');
+    setPlanPrompt('');
+    setAnalysisReplyReady(false);
+    setPlanReplyReady(false);
+    setCopiedKey('');
+    setAnalysisContentWithRef('### Analyzing data\n\nStreaming analysis output...');
+    setPlanContentWithRef('### Waiting for analysis\n\nThe action plan will start once the first pass completes.');
     const effectiveReasoningEffort = selectedReasoningEffortRef.current;
 
     setStats({
@@ -293,7 +407,7 @@ export default function ActionPlan({ isVisible = true }) {
           }
 
           if (log.includes('---ANALYSIS_START---')) {
-            setAnalysisContent('');
+            setAnalysisContentWithRef('');
             setAnalysisThinking('');
             const parts = log.split('---ANALYSIS_START---');
             if (parts[1]) {
@@ -314,11 +428,21 @@ export default function ActionPlan({ isVisible = true }) {
                 setPlanThinking((prev) => prev + sectionedLog.content);
               }
               shouldYieldRender = true;
+            } else if (sectionedLog.kind === 'system') {
+              setSystemPrompt((prev) => prev + sectionedLog.content);
+              shouldYieldRender = true;
+            } else if (sectionedLog.kind === 'prompt') {
+              if (sectionedLog.section === 'analysis') {
+                setAnalysisPrompt((prev) => prev + sectionedLog.content);
+              } else {
+                setPlanPrompt((prev) => prev + sectionedLog.content);
+              }
+              shouldYieldRender = true;
             } else if (sectionedLog.kind === 'content') {
               if (sectionedLog.section === 'analysis') {
-                setAnalysisContent((prev) => prev + sectionedLog.content);
+                setAnalysisContentWithRef((prev) => prev + sectionedLog.content);
               } else {
-                setPlanContent((prev) => prev + sectionedLog.content);
+                setPlanContentWithRef((prev) => prev + sectionedLog.content);
               }
 
               const estimatedTokens = Math.max(1, Math.ceil(sectionedLog.content.length * 0.7));
@@ -339,9 +463,9 @@ export default function ActionPlan({ isVisible = true }) {
               shouldYieldRender = true;
             } else if (sectionedLog.kind === 'error') {
               if (sectionedLog.section === 'analysis') {
-                setAnalysisContent((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
+                setAnalysisContentWithRef((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
               } else {
-                setPlanContent((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
+                setPlanContentWithRef((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
               }
               shouldYieldRender = true;
             }
@@ -357,7 +481,8 @@ export default function ActionPlan({ isVisible = true }) {
             log.includes('---PLAN_START---')
           ) {
             currentSection = 'plan';
-            setPlanContent('');
+            setAnalysisReplyReady(Boolean(analysisContentRef.current.trim()));
+            setPlanContentWithRef('');
             setPlanThinking('');
             return;
           }
@@ -393,9 +518,9 @@ export default function ActionPlan({ isVisible = true }) {
             }
 
             if (currentSection === 'analysis') {
-              setAnalysisContent((prev) => prev + content);
+              setAnalysisContentWithRef((prev) => prev + content);
             } else {
-              setPlanContent((prev) => prev + content);
+              setPlanContentWithRef((prev) => prev + content);
             }
 
             const estimatedTokens = Math.max(1, Math.ceil(content.length * 0.7));
@@ -422,16 +547,16 @@ export default function ActionPlan({ isVisible = true }) {
           }
 
           if (currentSection === 'analysis') {
-            setAnalysisContent((prev) => prev + `${log}\n`);
+            setAnalysisContentWithRef((prev) => prev + `${log}\n`);
           } else {
-            setPlanContent((prev) => prev + `${log}\n`);
+            setPlanContentWithRef((prev) => prev + `${log}\n`);
           }
           shouldYieldRender = true;
         } catch {
           if (currentSection === 'analysis') {
-            setAnalysisContent((prev) => prev + `${line}\n`);
+            setAnalysisContentWithRef((prev) => prev + `${line}\n`);
           } else {
-            setPlanContent((prev) => prev + `${line}\n`);
+            setPlanContentWithRef((prev) => prev + `${line}\n`);
           }
           shouldYieldRender = true;
         }
@@ -468,12 +593,14 @@ export default function ActionPlan({ isVisible = true }) {
         await processStreamLine(line);
       }
 
+      setAnalysisReplyReady(Boolean(analysisContentRef.current.trim()));
+      setPlanReplyReady(Boolean(planContentRef.current.trim()));
       await refreshChatContextBase();
     } catch (err) {
       if (err.name === 'AbortError') {
         console.log('Generation aborted');
       } else {
-        setPlanContent((prev) => `${prev}\n\nError: ${err.message}`);
+        setPlanContentWithRef((prev) => `${prev}\n\nError: ${err.message}`);
       }
     } finally {
       if (abortControllerRef.current?.signal === signal) {
@@ -506,8 +633,8 @@ export default function ActionPlan({ isVisible = true }) {
 
     const controller = new AbortController();
     loadAbortControllerRef.current = controller;
-    setAnalysisContent(CONNECTING_ANALYSIS);
-    setPlanContent(WELCOME_PLAN);
+    setAnalysisContentWithRef(CONNECTING_ANALYSIS);
+    setPlanContentWithRef(WELCOME_PLAN);
 
     const initializeActionPlan = async () => {
       const initialModel = await initializeModels();
@@ -533,10 +660,17 @@ export default function ActionPlan({ isVisible = true }) {
         loadAbortControllerRef.current = null;
       }
     };
-  }, [loadTodaysPlan, startGeneration]);
+  }, [loadTodaysPlan, setAnalysisContentWithRef, setPlanContentWithRef, startGeneration]);
 
   const analysisRender = getActionPlanRenderState(analysisContent);
   const planRender = getActionPlanRenderState(planContent);
+  const analysisFullInputContent = buildAnalysisFullInput(systemPrompt, analysisPrompt);
+  const planFullInputContent = buildPlanFullInput(
+    systemPrompt,
+    analysisPrompt,
+    analysisContent,
+    planPrompt,
+  );
   const modelReasoningSupportLabel = formatModelReasoningSupportLabel(selectedModel, modelReasoningSupport);
 
   return (
@@ -702,11 +836,26 @@ export default function ActionPlan({ isVisible = true }) {
               background: 'rgba(255,255,255,0.02)',
               display: 'flex',
               alignItems: 'center',
-              gap: '0.5rem',
+              justifyContent: 'space-between',
+              gap: '0.75rem',
             }}
           >
-            <Activity size={16} color="var(--secondary-color)" />
-            <h4 style={{ margin: 0, fontSize: '0.95rem' }}>General Analysis</h4>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+              <Activity size={16} color="var(--secondary-color)" />
+              <h4 style={{ margin: 0, fontSize: '0.95rem' }}>General Analysis</h4>
+            </div>
+            <ActionPlanCopyControls
+              copiedKey={copiedKey}
+              onCopy={copyActionPlanText}
+              fullInputContent={analysisFullInputContent}
+              fullInputKey="analysis-full-input"
+              fullInputReady={Boolean(analysisFullInputContent)}
+              promptContent={analysisPrompt}
+              promptKey="analysis-prompt"
+              replyContent={analysisContent}
+              replyKey="analysis-reply"
+              replyReady={analysisReplyReady}
+            />
           </div>
           <div
             className="markdown-body compact-markdown custom-scrollbar"
@@ -726,11 +875,26 @@ export default function ActionPlan({ isVisible = true }) {
               background: 'rgba(255,255,255,0.02)',
               display: 'flex',
               alignItems: 'center',
-              gap: '0.5rem',
+              justifyContent: 'space-between',
+              gap: '0.75rem',
             }}
           >
-            <FileText size={16} color="var(--primary-color)" />
-            <h4 style={{ margin: 0, fontSize: '0.95rem' }}>Today&apos;s Action Plan</h4>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+              <FileText size={16} color="var(--primary-color)" />
+              <h4 style={{ margin: 0, fontSize: '0.95rem' }}>Today&apos;s Action Plan</h4>
+            </div>
+            <ActionPlanCopyControls
+              copiedKey={copiedKey}
+              onCopy={copyActionPlanText}
+              fullInputContent={planFullInputContent}
+              fullInputKey="plan-full-input"
+              fullInputReady={Boolean(planFullInputContent)}
+              promptContent={planPrompt}
+              promptKey="plan-prompt"
+              replyContent={planContent}
+              replyKey="plan-reply"
+              replyReady={planReplyReady}
+            />
           </div>
           <div
             className="markdown-body compact-markdown custom-scrollbar"
@@ -762,6 +926,48 @@ function ThinkingBlock({ text }) {
         Analysis Process
       </div>
       {text}
+    </div>
+  );
+}
+
+function ActionPlanCopyControls({
+  fullInputContent,
+  fullInputReady,
+  fullInputKey,
+  promptContent,
+  replyContent,
+  replyReady,
+  promptKey,
+  replyKey,
+  copiedKey,
+  onCopy,
+}) {
+  return (
+    <div className="action-plan-copy-controls">
+      <button
+        type="button"
+        className={`action-plan-copy-button${copiedKey === fullInputKey ? ' is-copied' : ''}`}
+        onClick={() => onCopy(fullInputContent, fullInputKey)}
+        disabled={!fullInputReady}
+      >
+        {copiedKey === fullInputKey ? 'Copied' : 'Copy Full Input'}
+      </button>
+      <button
+        type="button"
+        className={`action-plan-copy-button${copiedKey === promptKey ? ' is-copied' : ''}`}
+        onClick={() => onCopy(promptContent, promptKey)}
+        disabled={!promptContent}
+      >
+        {copiedKey === promptKey ? 'Copied' : 'Copy Prompt'}
+      </button>
+      <button
+        type="button"
+        className={`action-plan-copy-button${copiedKey === replyKey ? ' is-copied' : ''}`}
+        onClick={() => onCopy(replyContent, replyKey)}
+        disabled={!replyReady || !replyContent}
+      >
+        {copiedKey === replyKey ? 'Copied' : 'Copy Reply'}
+      </button>
     </div>
   );
 }

@@ -16,7 +16,10 @@ from src.services.llm_client import LLMClient
 from src.services.audio_service import AudioService
 from src.utils.data_loader import DataLoader
 from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
-from src.utils.action_plan_stream import build_action_plan_stream_printer
+from src.utils.action_plan_stream import (
+    build_action_plan_stream_printer,
+    emit_action_plan_stream_event,
+)
 from src.utils.generation_stats import build_generation_metadata
 
 def setup_logging():
@@ -168,6 +171,17 @@ def main():
             sys_content = DataLoader.get_system_prompt_content()
             analysis_messages.append({"role": "system", "content": sys_content})
             analysis_messages.append({"role": "user", "content": prompt_text})
+            action_plan_msg = None
+
+            action_plan_prompt_path = DataLoader.resolve_data_path("Prompt_Action_Plan.md")
+            if action_plan_prompt_path.exists():
+                action_plan_template = action_plan_prompt_path.read_text(encoding="utf-8")
+                today_data = DataLoader.get_today_data_row(DataLoader.resolve_data_path("Time.xlsx"))
+                yesterday_data = DataLoader.get_yesterday_data_row(DataLoader.resolve_data_path("Time.xlsx"))
+                current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+                action_plan_msg = action_plan_template.replace("{current_time}", current_time_str)
+                action_plan_msg = action_plan_msg.replace("{today_data_row}", today_data)
+                action_plan_msg = action_plan_msg.replace("{yesterday_data_row}", yesterday_data)
             
             print("正在生成初始分析报告，请稍候...")
             print("---ANALYSIS_START---")
@@ -192,6 +206,10 @@ def main():
                  initial_stats['historical_total_tokens'] = context_mgr.token_count
 
             print(f"STATS_JSON:{json.dumps(initial_stats)}")
+            emit_action_plan_stream_event("analysis", "system", sys_content)
+            emit_action_plan_stream_event("analysis", "prompt", prompt_text)
+            if action_plan_msg is not None:
+                emit_action_plan_stream_event("plan", "prompt", action_plan_msg)
 
             
             # Send initial huge context
@@ -215,31 +233,14 @@ def main():
             
             # === ROUND 2: Specific Action Plan ===
             
-            # 1. Load Action Plan Template
-            action_plan_prompt_path = DataLoader.resolve_data_path("Prompt_Action_Plan.md")
-            if action_plan_prompt_path.exists():
-                action_plan_template = action_plan_prompt_path.read_text(encoding="utf-8")
-                
-                # 2. Get Today's and Yesterday's Data Row
-                today_data = DataLoader.get_today_data_row(DataLoader.resolve_data_path("Time.xlsx"))
-                yesterday_data = DataLoader.get_yesterday_data_row(DataLoader.resolve_data_path("Time.xlsx"))
-                current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
-                
-                # 3. Fill Template
-                # Replace {current_time}
-                action_plan_msg = action_plan_template.replace("{current_time}", current_time_str)
-                # Replace {today_data_row}
-                action_plan_msg = action_plan_msg.replace("{today_data_row}", today_data)
-                # Replace {yesterday_data_row}
-                action_plan_msg = action_plan_msg.replace("{yesterday_data_row}", yesterday_data)
-                
+            if action_plan_msg is not None:
                 # [User Request] Repeat the prompt content twice for Round 2 as well
                 # Handled in llm_client now
                 
-                # 4. Append to history
+                # 1. Append to history
                 analysis_messages.append({"role": "user", "content": action_plan_msg})
                 
-                # 5. Call API Again
+                # 2. Call API Again
                 # Stream usage is tricky effectively. run_prompt.py streams to stdout, 
                 # and the GUI reads it.
                 # The GUI splits by "初始分析已完成..." so the second stream will go to the right panel.

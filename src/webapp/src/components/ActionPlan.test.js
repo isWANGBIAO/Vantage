@@ -8,3 +8,24 @@ test('ActionPlan refreshes chat context base after a new plan is generated', () 
   assert.ok(actionPlanSource.includes("fetchBackendJson('/api/chat/context'"));
   assert.ok(actionPlanSource.includes('CHAT_CONTEXT_BASE_UPDATED_EVENT'));
 });
+
+test('ActionPlan exposes copy controls for both round prompts and replies', () => {
+  assert.ok(actionPlanSource.includes('Copy Prompt'));
+  assert.ok(actionPlanSource.includes('Copy Reply'));
+  assert.ok(actionPlanSource.includes('Copy Full Input'));
+  assert.ok(actionPlanSource.includes('navigator.clipboard.writeText'));
+  assert.ok(actionPlanSource.includes('systemPrompt'));
+  assert.ok(actionPlanSource.includes('analysisReplyReady'));
+  assert.ok(actionPlanSource.includes('planReplyReady'));
+});
+
+test('ActionPlan keeps streamed reply refs in sync for copy readiness', () => {
+  assert.ok(actionPlanSource.includes('analysisContentRef.current = nextContent'));
+  assert.ok(actionPlanSource.includes('planContentRef.current = nextContent'));
+});
+
+test('ActionPlan appends streamed system and prompt chunks instead of overwriting them', () => {
+  assert.ok(actionPlanSource.includes('setSystemPrompt((prev) => prev + sectionedLog.content)'));
+  assert.ok(actionPlanSource.includes('setAnalysisPrompt((prev) => prev + sectionedLog.content)'));
+  assert.ok(actionPlanSource.includes('setPlanPrompt((prev) => prev + sectionedLog.content)'));
+});
