@@ -152,7 +152,7 @@ def main():
                 prompt_text = DataLoader.construct_prompt(
                     DataLoader.resolve_data_path("Prompt_Personal_Info.md"),
                     DataLoader.resolve_data_path("Time.xlsx"),
-                    days=90
+                    days=365
                 )
             
             # [User Request] Repeat the prompt content twice to emphasize it

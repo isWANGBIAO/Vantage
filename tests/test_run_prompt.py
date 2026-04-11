@@ -131,6 +131,67 @@ class RunPromptTests(unittest.TestCase):
         plan_start_index = output_lines.index('---PLAN_START---')
         self.assertLess(plan_prompt_index, plan_start_index)
 
+    def test_analysis_mode_uses_365_days_history_by_default(self):
+        fake_client = _FakeLLMClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history_dir = temp_path / "history"
+            history_dir.mkdir()
+            (temp_path / "Prompt_Action_Plan.md").write_text(
+                "Now {current_time}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
+                encoding="utf-8",
+            )
+            (temp_path / "Prompt_Personal_Info.md").write_text("personal info", encoding="utf-8")
+            (temp_path / "Time.xlsx").write_text("placeholder", encoding="utf-8")
+
+            def fake_resolve_data_path(filename):
+                return temp_path / filename
+
+            stdout = io.StringIO()
+
+            with patch.object(run_prompt.Config, "load_env"), patch.object(
+                run_prompt.Config,
+                "get_history_dir",
+                return_value=history_dir,
+            ), patch.object(
+                run_prompt,
+                "LLMClient",
+                return_value=fake_client,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "construct_prompt",
+                return_value="analysis prompt",
+            ) as mock_construct_prompt, patch.object(
+                run_prompt.DataLoader,
+                "get_system_prompt_content",
+                return_value="system prompt",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_today_data_row",
+                return_value="today row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_yesterday_data_row",
+                return_value="yesterday row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_future_planned_rows",
+                return_value="2026-06-16（周二）: 工作: 去宁波",
+            ), patch.object(
+                sys,
+                "argv",
+                ["run_prompt.py"],
+            ), redirect_stdout(stdout):
+                run_prompt.main()
+
+        _, kwargs = mock_construct_prompt.call_args
+        self.assertEqual(kwargs["days"], 365)
+
 
 if __name__ == "__main__":
     unittest.main()
