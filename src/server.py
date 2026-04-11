@@ -1845,6 +1845,39 @@ async def get_system_logs():
     except Exception as e:
         return {"logs": [f"Error reading logs: {str(e)}"]}
 
+@app.get("/api/balance_sheet")
+async def get_balance_sheet():
+    try:
+        path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
+        sheets = DataLoader.load_excel_sheets(path)
+
+        if not sheets:
+            return JSONResponse(status_code=404, content={"error": "No sheets found in Balance Sheet.xlsx"})
+
+        summary = _build_balance_summary(sheets)
+        suggestions = _build_balance_suggestions(summary)
+
+        sheet_payloads = []
+        for sheet_name, df in sheets.items():
+            payload = _sheet_to_payload(df, max_rows=200)
+            payload["name"] = sheet_name
+            sheet_payloads.append(payload)
+
+        return {
+            "source": {
+                "path": str(path),
+                "sheet_count": len(sheets),
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            "summary": summary,
+            "suggestions": suggestions,
+            "sheets": sheet_payloads,
+        }
+    except FileNotFoundError as exc:
+        return JSONResponse(status_code=404, content={"error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
 @app.post("/api/face/analyze")
 async def analyze_face_history(background_tasks: BackgroundTasks):
     """Trigger background analysis of face history"""
