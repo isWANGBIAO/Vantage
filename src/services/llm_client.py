@@ -8,6 +8,9 @@ import requests
 
 from src.core.config import Config
 
+SYNC_REQUEST_TIMEOUT_SECONDS = 120
+STREAM_REQUEST_TIMEOUT_SECONDS = 600
+
 
 class LLMClient:
     def __init__(self):
@@ -436,7 +439,7 @@ class LLMClient:
         response, used_model, used_route = self._post_with_failover(
             payload,
             stream=False,
-            timeout=120,
+            timeout=SYNC_REQUEST_TIMEOUT_SECONDS,
             requested_model=model,
         )
         data = response.json()
@@ -475,7 +478,7 @@ class LLMClient:
             response, used_model, used_route = self._post_with_failover(
                 payload,
                 stream=True,
-                timeout=300,
+                timeout=STREAM_REQUEST_TIMEOUT_SECONDS,
                 requested_model=model,
             )
 
