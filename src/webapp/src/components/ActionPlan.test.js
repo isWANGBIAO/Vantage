@@ -39,3 +39,11 @@ test('ActionPlan no longer depends on delimiter parsing or thinking-as-reply fal
   assert.equal(actionPlanSource.includes('splitActionPlanContent'), false);
   assert.equal(actionPlanSource.includes('coalesceActionPlanReplyContent'), false);
 });
+
+test('ActionPlan shows actual execution metadata and flags fallback runs', () => {
+  assert.ok(actionPlanSource.includes('formatPoweredByLabel(stats)'));
+  assert.ok(actionPlanSource.includes("stats.provider_route !== 'cliproxyapi_primary'"));
+  assert.ok(actionPlanSource.includes('stats.model !== selectedModel'));
+  assert.ok(actionPlanSource.includes('action-plan-fallback-warning'));
+  assert.ok(actionPlanSource.includes('Fallback'));
+});

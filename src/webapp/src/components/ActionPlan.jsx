@@ -16,6 +16,7 @@ import {
   formatModelReasoningSupportLabel,
   parseModelReasoningSupport,
 } from '../utils/modelReasoningSupport';
+import { formatPoweredByLabel } from '../utils/actionPlanStats';
 import {
   createNdjsonLineBuffer,
   createStreamRenderScheduler,
@@ -115,6 +116,17 @@ function buildPlanFullInput(systemPrompt, analysisPrompt, analysisReply, planPro
     '[User - Round 2]',
     planPrompt,
   ].join('\n');
+}
+
+function isFallbackExecution(stats, selectedModel) {
+  if (!stats) {
+    return false;
+  }
+
+  return Boolean(
+    (stats.provider_route && stats.provider_route !== 'cliproxyapi_primary')
+    || (stats.model && selectedModel && stats.model !== selectedModel)
+  );
 }
 
 export default function ActionPlan({ isVisible = true }) {
@@ -657,6 +669,8 @@ export default function ActionPlan({ isVisible = true }) {
     planPrompt,
   );
   const modelReasoningSupportLabel = formatModelReasoningSupportLabel(selectedModel, modelReasoningSupport);
+  const actualExecutionLabel = formatPoweredByLabel(stats);
+  const fallbackExecutionActive = isFallbackExecution(stats, selectedModel);
 
   return (
     <div
@@ -749,6 +763,20 @@ export default function ActionPlan({ isVisible = true }) {
             {modelReasoningSupportLabel && (
               <span style={{ color: 'rgba(255, 77, 79, 0.95)' }}>
                 {modelReasoningSupportLabel}
+              </span>
+            )}
+            {actualExecutionLabel && (
+              <span
+                className={fallbackExecutionActive ? 'action-plan-fallback-warning' : 'action-plan-actual-model'}
+                style={{
+                  color: fallbackExecutionActive ? 'rgba(255, 77, 79, 0.95)' : 'var(--text-secondary)',
+                  fontWeight: fallbackExecutionActive ? 700 : 500,
+                }}
+                title={fallbackExecutionActive
+                  ? 'This run used a fallback model or provider route.'
+                  : 'This run used the selected model on the primary route.'}
+              >
+                {fallbackExecutionActive ? `Fallback ${actualExecutionLabel}` : `Actual ${actualExecutionLabel}`}
               </span>
             )}
           </label>
