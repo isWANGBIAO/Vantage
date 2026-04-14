@@ -29,3 +29,13 @@ test('ActionPlan appends streamed system and prompt chunks instead of overwritin
   assert.ok(actionPlanSource.includes('setAnalysisPrompt((prev) => prev + sectionedLog.content)'));
   assert.ok(actionPlanSource.includes('setPlanPrompt((prev) => prev + sectionedLog.content)'));
 });
+
+test('ActionPlan loads structured analysis and plan bodies from the backend response', () => {
+  assert.ok(actionPlanSource.includes('data.analysis?.body'));
+  assert.ok(actionPlanSource.includes('data.plan?.body'));
+});
+
+test('ActionPlan no longer depends on delimiter parsing or thinking-as-reply fallback', () => {
+  assert.equal(actionPlanSource.includes('splitActionPlanContent'), false);
+  assert.equal(actionPlanSource.includes('coalesceActionPlanReplyContent'), false);
+});

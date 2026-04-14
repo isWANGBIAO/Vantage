@@ -101,33 +101,6 @@ export function toPlainTextActionPlanContent(content) {
     .trim();
 }
 
-export function splitActionPlanContent(content) {
-  if (!content) {
-    return { analysis: '', plan: '' };
-  }
-
-  if (content.includes('---ANALYSIS_END---')) {
-    const [analysis, plan] = content.split('---ANALYSIS_END---');
-    return {
-      analysis: analysis.trim(),
-      plan: (plan || '').trim(),
-    };
-  }
-
-  if (content.includes('---PLAN_START---')) {
-    const [analysis, plan] = content.split('---PLAN_START---');
-    return {
-      analysis: analysis.replace('---ANALYSIS_START---', '').trim(),
-      plan: (plan || '').trim(),
-    };
-  }
-
-  return {
-    analysis: '',
-    plan: content.trim(),
-  };
-}
-
 export function getActionPlanRenderState(content) {
   const plainText = shouldRenderActionPlanAsPlainText(content);
   return {

@@ -46,6 +46,43 @@ def format_chat_message_with_timestamp(message, raw_timestamp):
 
     return f"[Message timestamp: {timestamp_text}]\n{message}"
 
+
+def get_action_plan_round_content(result):
+    if not isinstance(result, dict):
+        return ""
+    return (result.get("content") or "").strip()
+
+
+def build_action_plan_payload(
+    *,
+    generated_at: datetime,
+    analysis_body: str,
+    plan_body: str,
+    stats: dict,
+    metadata: dict,
+):
+    timestamp_id = generated_at.strftime("%Y%m%d_%H%M%S")
+    normalized_stats = dict(stats or {})
+    normalized_metadata = dict(metadata or {})
+
+    return {
+        "id": timestamp_id,
+        "date": generated_at.strftime("%Y-%m-%d"),
+        "analysis": {
+            "body": sanitize_action_plan_markdown(analysis_body),
+        },
+        "plan": {
+            "body": sanitize_action_plan_markdown(plan_body),
+        },
+        "meta": {
+            "generated_at": generated_at.isoformat(timespec="seconds"),
+            "model": normalized_metadata.get("model"),
+            "provider_route": normalized_metadata.get("provider_route"),
+            "reasoning_effort": normalized_metadata.get("reasoning_effort") or "medium",
+            "stats": normalized_stats,
+        },
+    }
+
 def main():
     setup_logging()
     
@@ -189,8 +226,6 @@ def main():
                     action_plan_msg = f"{action_plan_msg}\n\n{future_planned_rows}"
             
             print("正在生成初始分析报告，请稍候...")
-            print("---ANALYSIS_START---")
-            
             # === ROUND 1: General Analysis ===
             # Emit initial stats
             initial_stats = {
@@ -211,6 +246,7 @@ def main():
                  initial_stats['historical_total_tokens'] = context_mgr.token_count
 
             print(f"STATS_JSON:{json.dumps(initial_stats)}")
+            emit_action_plan_stream_event("analysis", "start", "")
             emit_action_plan_stream_event("analysis", "system", sys_content)
             emit_action_plan_stream_event("analysis", "prompt", prompt_text)
             if action_plan_msg is not None:
@@ -225,16 +261,13 @@ def main():
                 model=model_override,
             )
             
-            first_round_content = result["content"]
+            first_round_content = get_action_plan_round_content(result)
             if first_round_content:
                 # We do NOT save the full history context yet, or maybe we do?
                 # For this specific dual-turn flow, let's keep it simple.
                 analysis_messages.append({"role": "assistant", "content": first_round_content})
             
             # Print Stats for round 1 (Optional, but GUI might expect it at end)
-            
-            # === SEPARATOR FOR GUI ===
-            print("---PLAN_START---")
             
             # === ROUND 2: Specific Action Plan ===
             
@@ -244,6 +277,7 @@ def main():
                 
                 # 1. Append to history
                 analysis_messages.append({"role": "user", "content": action_plan_msg})
+                emit_action_plan_stream_event("plan", "start", "")
                 
                 # 2. Call API Again
                 # Stream usage is tricky effectively. run_prompt.py streams to stdout, 
@@ -256,31 +290,14 @@ def main():
                     print_callback=build_action_plan_stream_printer("plan"),
                     model=model_override,
                 )
-                second_round_content = result_round_2["content"]
+                second_round_content = get_action_plan_round_content(result_round_2)
                 
-                if second_round_content:
-                    # Save Output to File
-                    if args.output_file:
-                        output_path = Path(args.output_file)
-                    else:
-                        history_dir = Config.get_history_dir()
-                        prefix = "action_plan"
-                        output_path = history_dir / f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
-                    
-                    # Save BOTH rounds with a separator so Web UI can display both panels
-                    # Format: [Analysis Content]---ANALYSIS_END---[Plan Content]
-                    combined_content = (
-                        first_round_content + 
-                        "\n\n---ANALYSIS_END---\n\n" + 
-                        second_round_content
-                    )
-                    output_path.write_text(sanitize_action_plan_markdown(combined_content), encoding="utf-8")
-                    # print(f"\nResponse saved to: {output_path}")
+                if first_round_content and second_round_content:
+                    generated_at = datetime.now()
 
                     # --- CRITICAL FIX: Reset Context for Chat ---
                     # The user wants the Chat to start with ONLY the context of this Action Plan session.
                     # So we clear the old context and save the messages from this session.
-                    
                     context_mgr.messages = [] # Clear existing history
                     
                     # Add all messages from the analysis session (System, User1, Assistant1, User2)
@@ -315,8 +332,34 @@ def main():
                         "speed": f"{total_completion_tokens / total_duration:.2f} tokens/s" if total_duration > 0 else "0.00 tokens/s",
                         "historical_total_tokens": total_total_tokens
                     }
-                    stats_output.update(build_generation_metadata(result, result_round_2))
+                    metadata = build_generation_metadata(result, result_round_2)
+                    stats_output.update(metadata)
                     print(f"STATS_JSON:{json.dumps(stats_output)}")
+
+                    action_plan_payload = build_action_plan_payload(
+                        generated_at=generated_at,
+                        analysis_body=first_round_content,
+                        plan_body=second_round_content,
+                        stats=stats_output,
+                        metadata=metadata,
+                    )
+
+                    if args.output_file:
+                        output_path = Path(args.output_file)
+                    else:
+                        history_dir = Config.get_history_dir()
+                        output_path = history_dir / f"action_plan_{generated_at.strftime('%Y%m%d_%H%M%S')}.json"
+
+                    output_path.write_text(
+                        json.dumps(action_plan_payload, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                else:
+                    logging.error(
+                        "Action plan generation incomplete: analysis_has_content=%s plan_has_content=%s",
+                        bool(first_round_content),
+                        bool(second_round_content),
+                    )
 
             else:
                 print("Error: Prompt_Action_Plan.md not found. Skipping second round.")

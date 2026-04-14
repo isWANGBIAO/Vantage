@@ -128,7 +128,7 @@ class RunPromptTests(unittest.TestCase):
             index for index, line in enumerate(output_lines)
             if line.startswith('STREAM_PLAN_PROMPT:')
         )
-        plan_start_index = output_lines.index('---PLAN_START---')
+        plan_start_index = output_lines.index('STREAM_PLAN_START:""')
         self.assertLess(plan_prompt_index, plan_start_index)
 
     def test_analysis_mode_uses_365_days_history_by_default(self):
@@ -191,6 +191,73 @@ class RunPromptTests(unittest.TestCase):
 
         _, kwargs = mock_construct_prompt.call_args
         self.assertEqual(kwargs["days"], 365)
+
+    def test_analysis_mode_persists_structured_json_history(self):
+        fake_client = _FakeLLMClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history_dir = temp_path / "history"
+            history_dir.mkdir()
+            (temp_path / "Prompt_Action_Plan.md").write_text(
+                "Now {current_time}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
+                encoding="utf-8",
+            )
+            (temp_path / "Prompt_Personal_Info.md").write_text("personal info", encoding="utf-8")
+            (temp_path / "Time.xlsx").write_text("placeholder", encoding="utf-8")
+
+            def fake_resolve_data_path(filename):
+                return temp_path / filename
+
+            with patch.object(run_prompt.Config, "load_env"), patch.object(
+                run_prompt.Config,
+                "get_history_dir",
+                return_value=history_dir,
+            ), patch.object(
+                run_prompt,
+                "LLMClient",
+                return_value=fake_client,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "construct_prompt",
+                return_value="analysis prompt",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_system_prompt_content",
+                return_value="system prompt",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_today_data_row",
+                return_value="today row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_yesterday_data_row",
+                return_value="yesterday row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_future_planned_rows",
+                return_value="future rows",
+            ), patch.object(
+                sys,
+                "argv",
+                ["run_prompt.py"],
+            ):
+                run_prompt.main()
+
+            output_files = sorted(history_dir.glob("action_plan_*.json"))
+            self.assertEqual(len(output_files), 1)
+            self.assertEqual(list(history_dir.glob("action_plan_*.md")), [])
+            saved_payload = json.loads(output_files[0].read_text(encoding="utf-8"))
+
+        self.assertEqual(saved_payload["analysis"]["body"], "analysis reply")
+        self.assertEqual(saved_payload["plan"]["body"], "plan reply")
+        self.assertEqual(saved_payload["meta"]["reasoning_effort"], "medium")
+        self.assertIn("generated_at", saved_payload["meta"])
+        self.assertEqual(saved_payload["meta"]["stats"]["total_tokens"], 43)
 
 
 if __name__ == "__main__":

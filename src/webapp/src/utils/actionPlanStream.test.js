@@ -18,6 +18,17 @@ test('parseActionPlanStreamLog reads analysis content events', () => {
   );
 });
 
+test('parseActionPlanStreamLog reads plan start events', () => {
+  assert.deepEqual(
+    parseActionPlanStreamLog('STREAM_PLAN_START:""'),
+    {
+      section: 'plan',
+      kind: 'start',
+      content: '',
+    },
+  );
+});
+
 test('parseActionPlanStreamLog reads analysis prompt events', () => {
   assert.deepEqual(
     parseActionPlanStreamLog('STREAM_ANALYSIS_PROMPT:"prompt text"'),

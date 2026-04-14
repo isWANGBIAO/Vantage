@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   normalizeActionPlanContent,
   shouldRenderActionPlanAsPlainText,
-  splitActionPlanContent,
   toPlainTextActionPlanContent,
 } from './actionPlanContent.js';
+
+const actionPlanContentSource = readFileSync(new URL('./actionPlanContent.js', import.meta.url), 'utf8');
 
 test('normalizeActionPlanContent removes broken html fragments', () => {
   const raw = `### Summary
@@ -96,9 +98,7 @@ test('toPlainTextActionPlanContent converts html fragments into readable text', 
   assert.doesNotMatch(plainText, /<p>|<li>/);
 });
 
-test('splitActionPlanContent keeps both sections around analysis separator', () => {
-  const sections = splitActionPlanContent('Analysis\n\n---ANALYSIS_END---\n\nPlan');
-
-  assert.equal(sections.analysis, 'Analysis');
-  assert.equal(sections.plan, 'Plan');
+test('actionPlanContent no longer exposes delimiter splitters or thinking fallback helpers', () => {
+  assert.equal(actionPlanContentSource.includes('splitActionPlanContent'), false);
+  assert.equal(actionPlanContentSource.includes('coalesceActionPlanReplyContent'), false);
 });

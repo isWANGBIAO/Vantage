@@ -1,9 +1,11 @@
 const SECTIONED_LOG_PREFIXES = {
+  'STREAM_ANALYSIS_START:': { section: 'analysis', kind: 'start' },
   'STREAM_ANALYSIS_SYSTEM:': { section: 'analysis', kind: 'system' },
   'STREAM_ANALYSIS_PROMPT:': { section: 'analysis', kind: 'prompt' },
   'STREAM_ANALYSIS_THINKING:': { section: 'analysis', kind: 'thinking' },
   'STREAM_ANALYSIS_CONTENT:': { section: 'analysis', kind: 'content' },
   'STREAM_ANALYSIS_ERROR:': { section: 'analysis', kind: 'error' },
+  'STREAM_PLAN_START:': { section: 'plan', kind: 'start' },
   'STREAM_PLAN_PROMPT:': { section: 'plan', kind: 'prompt' },
   'STREAM_PLAN_THINKING:': { section: 'plan', kind: 'thinking' },
   'STREAM_PLAN_CONTENT:': { section: 'plan', kind: 'content' },

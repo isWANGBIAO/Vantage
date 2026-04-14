@@ -2,7 +2,7 @@ import json
 
 
 _VALID_SECTIONS = {"ANALYSIS", "PLAN"}
-_VALID_EVENT_TYPES = {"thinking", "content", "error", "prompt", "system"}
+_VALID_EVENT_TYPES = {"start", "thinking", "content", "error", "prompt", "system"}
 _MAX_STREAM_CHUNK_CHARS = 12000
 
 

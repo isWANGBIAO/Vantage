@@ -231,9 +231,9 @@ class ActionPlanEndpointTests(unittest.TestCase):
             history_dir = Path(temp_dir) / "history"
             history_dir.mkdir()
 
-            old_file_a = history_dir / f"action_plan_{today}_010101.md"
-            old_file_b = history_dir / f"action_plan_{today}_020202.md"
-            new_file = history_dir / f"action_plan_{today}_030303.md"
+            old_file_a = history_dir / f"action_plan_{today}_010101.json"
+            old_file_b = history_dir / f"action_plan_{today}_020202.json"
+            new_file = history_dir / f"action_plan_{today}_030303.json"
             old_file_a.write_text("old a", encoding="utf-8")
             old_file_b.write_text("old b", encoding="utf-8")
 
@@ -264,8 +264,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
             history_dir = Path(temp_dir) / "history"
             history_dir.mkdir()
 
-            old_file_a = history_dir / f"action_plan_{today}_010101.md"
-            old_file_b = history_dir / f"action_plan_{today}_020202.md"
+            old_file_a = history_dir / f"action_plan_{today}_010101.json"
+            old_file_b = history_dir / f"action_plan_{today}_020202.json"
             old_file_a.write_text("old a", encoding="utf-8")
             old_file_b.write_text("old b", encoding="utf-8")
 
@@ -283,6 +283,35 @@ class ActionPlanEndpointTests(unittest.TestCase):
 
             self.assertTrue(old_file_a.exists())
             self.assertTrue(old_file_b.exists())
+
+    def test_get_today_action_plan_returns_structured_json_payload(self):
+        today = datetime.now().strftime("%Y%m%d")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_dir = Path(temp_dir) / "history"
+            history_dir.mkdir()
+            latest_file = history_dir / f"action_plan_{today}_112348.json"
+            latest_file.write_text(
+                json.dumps(
+                    {
+                        "id": f"{today}_112348",
+                        "date": "2026-04-14",
+                        "analysis": {"body": "analysis markdown"},
+                        "plan": {"body": "plan markdown"},
+                        "meta": {"generated_at": "2026-04-14T11:23:48+08:00"},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(server.os, "getcwd", return_value=temp_dir):
+                payload = asyncio.run(server.get_today_action_plan())
+
+        self.assertEqual(payload["exists"], True)
+        self.assertEqual(payload["analysis"]["body"], "analysis markdown")
+        self.assertEqual(payload["plan"]["body"], "plan markdown")
+        self.assertEqual(payload["filename"], latest_file.name)
 
     def test_generate_action_plan_passes_reasoning_effort_to_subprocess(self):
         fake_process = _FakeProcess()

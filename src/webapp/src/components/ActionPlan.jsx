@@ -2,10 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { RotateCcw, FileText, CheckSquare, Activity } from 'lucide-react';
-import {
-  getActionPlanRenderState,
-  splitActionPlanContent,
-} from '../utils/actionPlanContent';
+import { getActionPlanRenderState } from '../utils/actionPlanContent';
 import {
   ACTION_PLAN_REASONING_OPTIONS,
   loadStoredActionPlanReasoningEffort,
@@ -41,16 +38,22 @@ const WELCOME_PLAN = [
   'Today\'s action items will appear here after the run completes.',
 ].join('\n');
 
-const LEGACY_ANALYSIS = [
-  '### Historical plan loaded',
-  '',
-  'This record uses the old single-section format, so no standalone analysis is available.',
-].join('\n');
-
 const LOAD_ERROR_ANALYSIS = [
   '### Load failed',
   '',
   'The page could not reach the backend service. Refresh and try again.',
+].join('\n');
+
+const INCOMPLETE_ANALYSIS = [
+  '### Analysis unavailable',
+  '',
+  'The saved record does not contain a standalone analysis reply.',
+].join('\n');
+
+const INCOMPLETE_PLAN = [
+  '### Action plan unavailable',
+  '',
+  'The saved record does not contain a standalone action plan reply.',
 ].join('\n');
 
 const CONNECTING_ANALYSIS = [
@@ -196,20 +199,32 @@ export default function ActionPlan({ isVisible = true }) {
     }
   }, [planContent, isGenerating, isVisible]);
 
-  const applyLoadedContent = useCallback((rawContent) => {
-    const sections = splitActionPlanContent(rawContent);
-    const nextAnalysis = sections.analysis || LEGACY_ANALYSIS;
-    const nextPlan = sections.plan || WELCOME_PLAN;
+  const applyLoadedActionPlan = useCallback((data) => {
+    const analysisBody = data.analysis?.body || '';
+    const planBody = data.plan?.body || '';
+    const savedStats = data.meta?.stats;
 
-    setAnalysisContentWithRef(nextAnalysis);
-    setPlanContentWithRef(nextPlan);
+    setAnalysisContentWithRef(analysisBody || INCOMPLETE_ANALYSIS);
+    setAnalysisThinking('');
+    setPlanContentWithRef(planBody || INCOMPLETE_PLAN);
+    setPlanThinking('');
     setSystemPrompt('');
     setAnalysisPrompt('');
     setPlanPrompt('');
-    setAnalysisReplyReady(Boolean(sections.analysis));
-    setPlanReplyReady(Boolean(sections.plan));
+    setAnalysisReplyReady(Boolean(analysisBody));
+    setPlanReplyReady(Boolean(planBody));
     setCopiedKey('');
-  }, []);
+    setStats(
+      savedStats && typeof savedStats === 'object'
+        ? savedStats
+        : {
+            speed: 'loaded',
+            total_duration: 0,
+            total_tokens: 0,
+            historical_total_tokens: undefined,
+          },
+    );
+  }, [setAnalysisContentWithRef, setPlanContentWithRef]);
 
   const copyActionPlanText = useCallback(async (content, key) => {
     if (
@@ -245,19 +260,22 @@ export default function ActionPlan({ isVisible = true }) {
         return;
       }
 
-      if (data.exists && data.content) {
-        applyLoadedContent(data.content);
-        setStats({
-          speed: 'loaded',
-          total_duration: 0,
-          total_tokens: 0,
-          historical_total_tokens: undefined,
-        });
+      if (data.exists) {
+        applyLoadedActionPlan(data);
         return;
       }
 
-        setAnalysisContentWithRef(WELCOME_ANALYSIS);
-        setPlanContentWithRef(WELCOME_PLAN);
+      setAnalysisContentWithRef(WELCOME_ANALYSIS);
+      setAnalysisThinking('');
+      setPlanContentWithRef(WELCOME_PLAN);
+      setPlanThinking('');
+      setSystemPrompt('');
+      setAnalysisPrompt('');
+      setPlanPrompt('');
+      setAnalysisReplyReady(false);
+      setPlanReplyReady(false);
+      setCopiedKey('');
+      setStats(null);
     } catch (err) {
       if (err.name === 'AbortError') {
         return;
@@ -265,13 +283,26 @@ export default function ActionPlan({ isVisible = true }) {
 
       console.error('Failed to load today plan:', err);
       setAnalysisContentWithRef(LOAD_ERROR_ANALYSIS);
+      setAnalysisThinking('');
       setPlanContentWithRef(WELCOME_PLAN);
+      setPlanThinking('');
+      setSystemPrompt('');
+      setAnalysisPrompt('');
+      setPlanPrompt('');
+      setAnalysisReplyReady(false);
+      setPlanReplyReady(false);
+      setCopiedKey('');
+      setStats(null);
     } finally {
       if (loadAbortControllerRef.current?.signal === signal) {
         loadAbortControllerRef.current = null;
       }
     }
-  }, [applyLoadedContent]);
+  }, [
+    applyLoadedActionPlan,
+    setAnalysisContentWithRef,
+    setPlanContentWithRef,
+  ]);
 
   const stopGeneration = useCallback(() => {
     if (abortControllerRef.current) {
@@ -406,22 +437,30 @@ export default function ActionPlan({ isVisible = true }) {
             return;
           }
 
-          if (log.includes('---ANALYSIS_START---')) {
-            setAnalysisContentWithRef('');
-            setAnalysisThinking('');
-            const parts = log.split('---ANALYSIS_START---');
-            if (parts[1]) {
-              log = parts[1];
-            } else {
-              return;
-            }
-          }
-
           const sectionedLog = parseActionPlanStreamLog(log);
           if (sectionedLog) {
-            currentSection = sectionedLog.section;
+            if (
+              sectionedLog.kind === 'start' ||
+              sectionedLog.kind === 'thinking' ||
+              sectionedLog.kind === 'content' ||
+              sectionedLog.kind === 'error'
+            ) {
+              currentSection = sectionedLog.section;
+            }
 
-            if (sectionedLog.kind === 'thinking') {
+            if (sectionedLog.kind === 'start') {
+              if (sectionedLog.section === 'analysis') {
+                setAnalysisContentWithRef('');
+                setAnalysisThinking('');
+                setAnalysisReplyReady(false);
+              } else {
+                setAnalysisReplyReady(Boolean(analysisContentRef.current.trim()));
+                setPlanContentWithRef('');
+                setPlanThinking('');
+                setPlanReplyReady(false);
+              }
+              shouldYieldRender = true;
+            } else if (sectionedLog.kind === 'thinking') {
               if (sectionedLog.section === 'analysis') {
                 setAnalysisThinking((prev) => prev + sectionedLog.content);
               } else {
@@ -473,72 +512,6 @@ export default function ActionPlan({ isVisible = true }) {
             if (shouldYieldRender) {
               await waitForRender();
             }
-            return;
-          }
-
-          if (
-            log.includes("Today's Action Plan") ||
-            log.includes('---PLAN_START---')
-          ) {
-            currentSection = 'plan';
-            setAnalysisReplyReady(Boolean(analysisContentRef.current.trim()));
-            setPlanContentWithRef('');
-            setPlanThinking('');
-            return;
-          }
-
-          if (log.startsWith('STREAM_THINKING:')) {
-            const raw = log.replace('STREAM_THINKING:', '');
-            try {
-              const thought = JSON.parse(raw);
-              if (currentSection === 'analysis') {
-                setAnalysisThinking((prev) => prev + thought);
-              } else {
-                setPlanThinking((prev) => prev + thought);
-              }
-            } catch {
-              if (currentSection === 'analysis') {
-                setAnalysisThinking((prev) => prev + raw);
-              } else {
-                setPlanThinking((prev) => prev + raw);
-              }
-            }
-            await waitForRender();
-            return;
-          }
-
-          if (log.startsWith('STREAM_CONTENT:')) {
-            const raw = log.replace('STREAM_CONTENT:', '');
-            let content = raw;
-
-            try {
-              content = JSON.parse(raw);
-            } catch {
-              content = raw;
-            }
-
-            if (currentSection === 'analysis') {
-              setAnalysisContentWithRef((prev) => prev + content);
-            } else {
-              setPlanContentWithRef((prev) => prev + content);
-            }
-
-            const estimatedTokens = Math.max(1, Math.ceil(content.length * 0.7));
-            setStats((prev) => {
-              const startTime = prev?.startTime || Date.now();
-              const duration = (Date.now() - startTime) / 1000;
-              const totalTokens = (prev?.total_tokens || 0) + estimatedTokens;
-              const speed = duration > 0 ? `${(totalTokens / duration).toFixed(2)} t/s` : '0.00 t/s';
-
-              return {
-                ...prev,
-                startTime,
-                total_tokens: totalTokens,
-                total_duration: duration,
-                speed,
-              };
-            });
-            await waitForRender();
             return;
           }
 
@@ -608,7 +581,12 @@ export default function ActionPlan({ isVisible = true }) {
         abortControllerRef.current = null;
       }
     }
-  }, [refreshChatContextBase, stopGeneration]);
+  }, [
+    refreshChatContextBase,
+    setAnalysisContentWithRef,
+    setPlanContentWithRef,
+    stopGeneration,
+  ]);
 
   useEffect(() => {
     const initializeModels = async () => {
@@ -634,7 +612,9 @@ export default function ActionPlan({ isVisible = true }) {
     const controller = new AbortController();
     loadAbortControllerRef.current = controller;
     setAnalysisContentWithRef(CONNECTING_ANALYSIS);
+    setAnalysisThinking('');
     setPlanContentWithRef(WELCOME_PLAN);
+    setPlanThinking('');
 
     const initializeActionPlan = async () => {
       const initialModel = await initializeModels();
@@ -660,7 +640,12 @@ export default function ActionPlan({ isVisible = true }) {
         loadAbortControllerRef.current = null;
       }
     };
-  }, [loadTodaysPlan, setAnalysisContentWithRef, setPlanContentWithRef, startGeneration]);
+  }, [
+    loadTodaysPlan,
+    setAnalysisContentWithRef,
+    setPlanContentWithRef,
+    startGeneration,
+  ]);
 
   const analysisRender = getActionPlanRenderState(analysisContent);
   const planRender = getActionPlanRenderState(planContent);

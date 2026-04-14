@@ -9,7 +9,6 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 import cv2
-from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
 from src.utils.face_analysis_db import (
     FACE_ANALYSIS_DB_FILE,
     clear_face_report_cache,
@@ -1410,35 +1409,48 @@ async def list_plots():
 @app.get("/api/action_plan/today")
 async def get_today_action_plan():
     """Return today's latest action plan if it exists"""
-    from datetime import datetime
-    
     today = datetime.now().strftime("%Y%m%d")
-    history_dir = os.path.join(os.getcwd(), "history")
-    
-    if not os.path.exists(history_dir):
-        return {"exists": False, "content": None, "date": today}
-    
+
     try:
-        pattern = f"action_plan_{today}_*.md"
-        import glob
-        files = glob.glob(os.path.join(history_dir, pattern))
-        
-        if not files:
-            return {"exists": False, "content": None, "date": today}
-        
-        latest_file = max(files, key=os.path.getmtime)
-        
-        with open(latest_file, "r", encoding="utf-8") as f:
-            content = sanitize_action_plan_markdown(f.read())
-        
+        latest_file = _get_latest_action_plan_file(today)
+        if latest_file is None:
+            return {
+                "exists": False,
+                "analysis": None,
+                "plan": None,
+                "meta": None,
+                "date": today,
+            }
+
+        payload = _load_action_plan_payload(latest_file)
+        if not payload:
+            return {
+                "exists": False,
+                "analysis": None,
+                "plan": None,
+                "meta": None,
+                "date": today,
+                "error": f"Invalid action plan payload: {os.path.basename(latest_file)}",
+            }
+
         return {
             "exists": True,
-            "content": content,
-            "date": today,
-            "filename": os.path.basename(latest_file)
+            "analysis": payload.get("analysis"),
+            "plan": payload.get("plan"),
+            "meta": payload.get("meta"),
+            "date": payload.get("date") or today,
+            "filename": os.path.basename(latest_file),
+            "id": payload.get("id"),
         }
     except Exception as e:
-        return {"exists": False, "content": None, "error": str(e), "date": today}
+        return {
+            "exists": False,
+            "analysis": None,
+            "plan": None,
+            "meta": None,
+            "error": str(e),
+            "date": today,
+        }
 
 class ChatRequest(BaseModel):
     message: str
@@ -1529,9 +1541,30 @@ def _build_chat_context_payload():
     }
 
 
+def _load_action_plan_payload(path: str):
+    action_plan_path = Path(path)
+    if not action_plan_path.exists():
+        return None
+
+    try:
+        with open(action_plan_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+
+    return payload if isinstance(payload, dict) else None
+
+
+def _get_latest_action_plan_file(target_date: Optional[str] = None):
+    files = _list_today_action_plan_files(target_date)
+    if not files:
+        return None
+    return max(files, key=os.path.getmtime)
+
+
 def _list_today_action_plan_files(target_date: Optional[str] = None):
     today = target_date or datetime.now().strftime("%Y%m%d")
-    pattern = os.path.join(_get_history_dir(), f"action_plan_{today}_*.md")
+    pattern = os.path.join(_get_history_dir(), f"action_plan_{today}_*.json")
     return glob.glob(pattern)
 
 
@@ -1808,23 +1841,23 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/api/action_plan_content")
 async def get_action_plan_content():
     try:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(current_dir)
-        history_dir = os.path.join(project_root, "history")
-        
-        if not os.path.exists(history_dir):
-            return {"content": ""}
-            
-        files = glob.glob(os.path.join(history_dir, "action_plan_*.md"))
-        if not files:
-            return {"content": ""}
-            
-        latest_file = max(files, key=os.path.getctime)
-        
-        with open(latest_file, "r", encoding="utf-8") as f:
-            content = f.read()
-            
-        return {"content": content, "timestamp": os.path.getctime(latest_file)}
+        latest_file = _get_latest_action_plan_file()
+        if latest_file is None:
+            return {"exists": False, "analysis": None, "plan": None, "meta": None}
+
+        payload = _load_action_plan_payload(latest_file)
+        if not payload:
+            return {"exists": False, "analysis": None, "plan": None, "meta": None}
+
+        return {
+            "exists": True,
+            "analysis": payload.get("analysis"),
+            "plan": payload.get("plan"),
+            "meta": payload.get("meta"),
+            "timestamp": os.path.getctime(latest_file),
+            "filename": os.path.basename(latest_file),
+            "id": payload.get("id"),
+        }
     except Exception as e:
         return {"error": str(e)}
 

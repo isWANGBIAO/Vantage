@@ -31,6 +31,16 @@ class ActionPlanStreamPrinterTests(unittest.TestCase):
             ['STREAM_ANALYSIS_SYSTEM:"System body"'],
         )
 
+    def test_emits_section_prefixed_start_events(self):
+        emitted = []
+
+        emit_action_plan_stream_event("analysis", "start", "", emit=emitted.append)
+
+        self.assertEqual(
+            emitted,
+            ['STREAM_ANALYSIS_START:""'],
+        )
+
     def test_emits_section_prefixed_prompt_events(self):
         emitted = []
 
