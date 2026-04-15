@@ -5,6 +5,7 @@ const SOCIAL_SHEET_NAMES = ['人情'];
 
 const REQUIRED_TOKENS = ['必须', '必需', '是', 'yes', 'y'];
 const OPTIONAL_TOKENS = ['非必须', '不必须', '否', 'no', 'n'];
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function normalizeText(value) {
   return String(value ?? '').trim();
@@ -45,8 +46,27 @@ function roundMetric(value) {
 function parseDateValue(value) {
   const text = normalizeText(value);
   if (!text) return null;
+
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)) {
+    const timestamp = Date.parse(text.replace(' ', 'T'));
+    return Number.isNaN(timestamp) ? null : timestamp;
+  }
+
   const timestamp = Date.parse(text);
   return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+function resolveAnchorTimestamp(payload, options = {}) {
+  if (Number.isFinite(Number(options.anchorTimestamp))) {
+    return Number(options.anchorTimestamp);
+  }
+
+  const sourceTimestamp = parseDateValue(payload?.source?.updated_at);
+  if (sourceTimestamp !== null) {
+    return sourceTimestamp;
+  }
+
+  return Date.now();
 }
 
 function findSheet(sheets, candidates) {
@@ -100,31 +120,34 @@ function getMonthlyBudgetValue(sheet, row) {
   return null;
 }
 
-function buildRecentSpending(sheet) {
+function buildRecentSpending(sheet, anchorTimestamp) {
   if (!sheet) return [];
 
   return sheet.rows
     .map((row) => {
       const date = normalizeText(getCell(sheet, row, ['日期', 'date']));
+      const sortValue = parseDateValue(date);
       const periodSpend = toNumber(getCell(sheet, row, ['期间支出', '支出']));
-      const dailyAverage = toNumber(getCell(sheet, row, ['日均支出']));
+      const dailyAverage = toNumber(getCell(sheet, row, ['日均支出', '日均开销']));
       const incomeNote = normalizeText(getCell(sheet, row, ['收入说明']));
       const note = normalizeText(getCell(sheet, row, ['大支出说明']));
 
-      if (!date) return null;
+      if (!date || sortValue === null) return null;
+      if (sortValue > anchorTimestamp) return null;
       if (periodSpend === null && dailyAverage === null && !incomeNote && !note) return null;
 
       return {
         date,
+        timestamp: sortValue,
         periodSpend,
         dailyAverage,
         incomeNote,
         note,
-        sortValue: parseDateValue(date) ?? 0,
+        sortValue,
       };
     })
     .filter(Boolean)
-    .sort((a, b) => b.sortValue - a.sortValue)
+    .sort((left, right) => right.sortValue - left.sortValue)
     .slice(0, 6);
 }
 
@@ -159,7 +182,7 @@ function buildBudgetSection(sheet, summaryBudget = {}) {
       };
     })
     .filter(Boolean)
-    .sort((a, b) => (b.monthlyValue ?? 0) - (a.monthlyValue ?? 0));
+    .sort((left, right) => (right.monthlyValue ?? 0) - (left.monthlyValue ?? 0));
 
   const groupsMap = new Map();
   for (const item of items) {
@@ -173,7 +196,7 @@ function buildBudgetSection(sheet, summaryBudget = {}) {
     groupsMap.set(item.category, current);
   }
 
-  const groups = [...groupsMap.values()].sort((a, b) => b.total - a.total);
+  const groups = [...groupsMap.values()].sort((left, right) => right.total - left.total);
 
   return {
     monthlyRequired: summaryBudget.monthly_required ?? null,
@@ -210,7 +233,7 @@ function buildAssetSection(sheet) {
       };
     })
     .filter(Boolean)
-    .sort((a, b) => (b.totalPrice ?? 0) - (a.totalPrice ?? 0));
+    .sort((left, right) => (right.totalPrice ?? 0) - (left.totalPrice ?? 0));
 
   const totalValue = items.reduce((sum, item) => sum + (item.totalPrice ?? 0), 0);
 
@@ -233,6 +256,7 @@ function buildSocialEvents(sheet) {
       const date = normalizeText(getCell(sheet, row, ['日期', 'date']));
       const title = normalizeText(getCell(sheet, row, ['内容', '项目', 'content']));
       const amount = toNumber(getCell(sheet, row, ['金额', 'amount']));
+      const sortValue = parseDateValue(date) ?? 0;
 
       if (!title) return null;
 
@@ -240,11 +264,11 @@ function buildSocialEvents(sheet) {
         date,
         title,
         amount,
-        sortValue: parseDateValue(date) ?? 0,
+        sortValue,
       };
     })
     .filter(Boolean)
-    .sort((a, b) => b.sortValue - a.sortValue);
+    .sort((left, right) => right.sortValue - left.sortValue);
 
   const totalAmount = items.reduce((sum, item) => sum + (item.amount ?? 0), 0);
 
@@ -254,29 +278,155 @@ function buildSocialEvents(sheet) {
   };
 }
 
-export function buildExpenseSheetViewModel(payload = {}) {
-  payload = payload ?? {};
-  const sheets = payload.sheets || [];
+function getTrendDefaultRange(points) {
+  if (points.length < 2) return 'all';
+
+  const spanDays = (points[points.length - 1].timestamp - points[0].timestamp) / DAY_MS;
+  if (spanDays > 365) return '1y';
+  if (spanDays > 183) return '6m';
+  return 'all';
+}
+
+function normalizeTrendPoint(point, anchorTimestamp) {
+  const date = normalizeText(point?.date);
+  const timestamp = parseDateValue(date);
+  const balance = toNumber(point?.balance ?? point?.cash_and_stock ?? point?.cashAndStock);
+  const dailyAverage = toNumber(point?.daily_average ?? point?.dailyAverage);
+  const periodSpend = toNumber(point?.period_spend ?? point?.periodSpend ?? point?.spend);
+
+  if (!date || timestamp === null) return null;
+  if (timestamp > anchorTimestamp) return null;
+  if (balance === null && dailyAverage === null && periodSpend === null) return null;
+
+  return {
+    date,
+    timestamp,
+    balance,
+    dailyAverage,
+    periodSpend,
+  };
+}
+
+function buildSheetTrendPoints(sheet, anchorTimestamp) {
+  if (!sheet) return [];
+
+  return sheet.rows
+    .map((row) =>
+      normalizeTrendPoint(
+        {
+          date: getCell(sheet, row, ['日期', 'date']),
+          balance: getCell(sheet, row, [
+            '现金及现金等价物+股票',
+            '现金及现金等价物',
+            '现金',
+            '股票',
+          ]),
+          daily_average: getCell(sheet, row, ['日均支出', '日均开销']),
+          period_spend: getCell(sheet, row, ['期间支出', '支出']),
+        },
+        anchorTimestamp
+      )
+    )
+    .filter(Boolean)
+    .sort((left, right) => left.timestamp - right.timestamp);
+}
+
+function buildTrendPoints(payload, sheet, anchorTimestamp) {
+  const payloadTrendPoints = Array.isArray(payload?.trend_points)
+    ? payload.trend_points
+    : Array.isArray(payload?.expense_trend_points)
+      ? payload.expense_trend_points
+      : [];
+
+  const normalizedPayloadPoints = payloadTrendPoints
+    .map((point) => normalizeTrendPoint(point, anchorTimestamp))
+    .filter(Boolean)
+    .sort((left, right) => left.timestamp - right.timestamp);
+
+  if (normalizedPayloadPoints.length) {
+    return normalizedPayloadPoints;
+  }
+
+  return buildSheetTrendPoints(sheet, anchorTimestamp);
+}
+
+function buildTrendChartSection(payload, sheet, summary = {}, anchorTimestamp) {
+  const points = buildTrendPoints(payload, sheet, anchorTimestamp);
+
+  if (!points.length) {
+    return {
+      points: [],
+      summary: {
+        latestBalance: null,
+        latestDailyAverage: null,
+        balanceChange: null,
+        coverageDays: null,
+        latestDate: '--',
+      },
+      defaultRange: 'all',
+    };
+  }
+
+  const latestPoint = points.at(-1) || null;
+  const firstBalancePoint = points.find((point) => point.balance !== null) || null;
+  const latestBalancePoint = [...points].reverse().find((point) => point.balance !== null) || null;
+  const latestSpendPoint = [...points].reverse().find((point) => point.dailyAverage !== null) || null;
+
+  const latestBalance =
+    latestBalancePoint?.balance ?? toNumber(summary?.assets?.cash_and_stock?.value);
+  const latestDailyAverage =
+    latestSpendPoint?.dailyAverage ?? toNumber(summary?.time_cost?.daily_average);
+  const balanceChange =
+    firstBalancePoint && latestBalance !== null
+      ? roundMetric(latestBalance - (firstBalancePoint.balance ?? 0))
+      : null;
+  const coverageDays =
+    latestBalance !== null && latestDailyAverage !== null && latestDailyAverage > 0
+      ? roundMetric(latestBalance / latestDailyAverage)
+      : null;
+
+  return {
+    points,
+    summary: {
+      latestBalance,
+      latestDailyAverage,
+      balanceChange,
+      coverageDays,
+      latestDate: latestPoint?.date ?? '--',
+    },
+    defaultRange: getTrendDefaultRange(points),
+  };
+}
+
+export function buildExpenseSheetViewModel(payload = {}, options = {}) {
+  const resolvedPayload = payload ?? {};
+  const sheets = resolvedPayload.sheets || [];
+  const anchorTimestamp = resolveAnchorTimestamp(resolvedPayload, options);
 
   const expenseSheet = findSheet(sheets, EXPENSE_SHEET_NAMES);
   const budgetSheet = findSheet(sheets, BUDGET_SHEET_NAMES);
   const assetSheet = findSheet(sheets, ASSET_SHEET_NAMES);
   const socialSheet = findSheet(sheets, SOCIAL_SHEET_NAMES);
 
-  const dailyAverage = toNumber(payload.summary?.time_cost?.daily_average);
-  const cashAndStock = toNumber(payload.summary?.assets?.cash_and_stock?.value);
-  const monthlyRequired = toNumber(payload.summary?.budget?.monthly_required);
+  const trendChart = buildTrendChartSection(resolvedPayload, expenseSheet, resolvedPayload.summary, anchorTimestamp);
+  const dailyAverage =
+    trendChart.summary.latestDailyAverage ?? toNumber(resolvedPayload.summary?.time_cost?.daily_average);
+  const cashAndStock =
+    trendChart.summary.latestBalance ?? toNumber(resolvedPayload.summary?.assets?.cash_and_stock?.value);
+  const monthlyRequired = toNumber(resolvedPayload.summary?.budget?.monthly_required);
   const coverageDays =
-    cashAndStock !== null && dailyAverage !== null && dailyAverage > 0
+    trendChart.summary.coverageDays ?? (
+      cashAndStock !== null && dailyAverage !== null && dailyAverage > 0
       ? roundMetric(cashAndStock / dailyAverage)
-      : null;
+      : null
+    );
 
   return {
     meta: {
-      fileName: compactFileName(payload.source?.path),
-      fullPath: payload.source?.path ?? '',
-      updatedAt: payload.source?.updated_at ?? '--',
-      sheetCount: payload.source?.sheet_count ?? sheets.length,
+      fileName: compactFileName(resolvedPayload.source?.path),
+      fullPath: resolvedPayload.source?.path ?? '',
+      updatedAt: resolvedPayload.source?.updated_at ?? '--',
+      sheetCount: resolvedPayload.source?.sheet_count ?? sheets.length,
     },
     kpis: [
       { id: 'cashAndStock', label: '现金及等价物', value: cashAndStock, unit: 'currency' },
@@ -284,8 +434,9 @@ export function buildExpenseSheetViewModel(payload = {}) {
       { id: 'requiredBudget', label: '每月必须预算', value: monthlyRequired, unit: 'currency' },
       { id: 'coverageDays', label: '现金覆盖天数', value: coverageDays, unit: 'days' },
     ],
-    recentSpending: buildRecentSpending(expenseSheet),
-    budget: buildBudgetSection(budgetSheet, payload.summary?.budget),
+    trendChart,
+    recentSpending: buildRecentSpending(expenseSheet, anchorTimestamp),
+    budget: buildBudgetSection(budgetSheet, resolvedPayload.summary?.budget),
     assets: buildAssetSection(assetSheet),
     socialEvents: buildSocialEvents(socialSheet),
     rawSheets: sheets,

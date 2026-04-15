@@ -396,6 +396,34 @@ def _find_latest_date_in_df(df):
                 return latest.date()
     return None
 
+def _find_date_column(df):
+    if df is None or df.empty:
+        return None
+
+    preferred = [
+        col
+        for col in df.columns
+        if any(k in str(col) for k in ["日期", "时间", "Date", "date", "Time", "time", "月份"])
+    ]
+
+    for col in preferred:
+        try:
+            series = pd.to_datetime(df[col], errors="coerce")
+        except Exception:
+            continue
+        if series.notna().any():
+            return col
+
+    for col in df.columns:
+        try:
+            series = pd.to_datetime(df[col], errors="coerce")
+        except Exception:
+            continue
+        if series.notna().sum() >= max(3, min(10, len(df))):
+            return col
+
+    return None
+
 def _find_metric_from_columns(df, keywords):
     if df is None or df.empty:
         return None
@@ -477,11 +505,44 @@ def _find_first_column(columns_or_df, keywords):
         columns = columns_or_df.columns
     else:
         columns = columns_or_df
+
+    keyword_texts = [str(keyword) for keyword in keywords if keyword is not None]
+
     for col in columns:
         name = str(col)
-        if any(k in name for k in keywords):
+        if any(name == keyword for keyword in keyword_texts):
+            return col
+
+    for col in columns:
+        name = str(col)
+        if any(keyword in name for keyword in keyword_texts):
             return col
     return None
+
+def _find_expense_sheet(sheets):
+    if not sheets:
+        return None, None
+
+    for sheet_name, df in sheets.items():
+        normalized_name = str(sheet_name).strip().lower()
+        if normalized_name == "expense":
+            return sheet_name, df
+
+    for sheet_name, df in sheets.items():
+        name = str(sheet_name)
+        if "开销" in name or "Expense" in name or "expense" in name:
+            return sheet_name, df
+
+    for sheet_name, df in sheets.items():
+        date_col = _find_date_column(df)
+        balance_col = _find_first_column(df, ["现金及现金等价物+股票", "现金及现金等价物", "现金", "股票"])
+        daily_average_col = _find_first_column(df, ["日均支出", "日均开销", "日均成本"])
+        period_spend_col = _find_first_column(df, ["期间支出", "支出"])
+
+        if date_col is not None and any(col is not None for col in [balance_col, daily_average_col, period_spend_col]):
+            return sheet_name, df
+
+    return None, None
 
 def _compute_monthly_from_row(row, days_in_month):
     month_col = _find_first_column(row.index, ["每月", "月消费", "月支出", "月开销", "月均", "月度"])
@@ -546,7 +607,16 @@ def _sheet_to_payload(df, max_rows=200):
     columns = [str(c) for c in df.columns]
     row_count = len(df)
     truncated = row_count > max_rows
-    sliced = df.head(max_rows)
+    sliced = df
+    if truncated:
+        date_col = _find_date_column(df)
+        if date_col is not None:
+            dated = df.copy()
+            dated["__payload_date__"] = pd.to_datetime(dated[date_col], errors="coerce")
+            dated = dated.sort_values("__payload_date__", kind="stable")
+            sliced = dated.tail(max_rows).drop(columns="__payload_date__")
+        else:
+            sliced = df.head(max_rows)
     rows = []
     for row in sliced.itertuples(index=False, name=None):
         rows.append([_normalize_cell_value(v) for v in row])
@@ -556,6 +626,52 @@ def _sheet_to_payload(df, max_rows=200):
         "row_count": row_count,
         "truncated": truncated
     }
+
+def _build_expense_trend_points(sheets):
+    sheet_name, df = _find_expense_sheet(sheets)
+    if df is None or df.empty:
+        return []
+
+    date_col = _find_date_column(df)
+    if date_col is None:
+        return []
+
+    balance_col = _find_first_column(df, ["现金及现金等价物+股票", "现金及现金等价物", "现金", "股票"])
+    daily_average_col = _find_first_column(df, ["日均支出", "日均开销", "日均成本"])
+    period_spend_col = _find_first_column(df, ["期间支出", "支出"])
+
+    if balance_col is None and daily_average_col is None and period_spend_col is None:
+        return []
+
+    trend_points = []
+    for _, row in df.iterrows():
+        raw_date = _normalize_cell_value(row.get(date_col))
+        if raw_date is None:
+            continue
+
+        parsed_date = pd.to_datetime(raw_date, errors="coerce")
+        if pd.isna(parsed_date):
+            continue
+
+        balance = _coerce_number(row.get(balance_col)) if balance_col is not None else None
+        daily_average = _coerce_number(row.get(daily_average_col)) if daily_average_col is not None else None
+        period_spend = _coerce_number(row.get(period_spend_col)) if period_spend_col is not None else None
+
+        if balance is None and daily_average is None and period_spend is None:
+            continue
+
+        trend_points.append(
+            {
+                "date": parsed_date.strftime("%Y-%m-%d"),
+                "balance": balance,
+                "daily_average": daily_average,
+                "period_spend": period_spend,
+                "sheet": sheet_name,
+            }
+        )
+
+    trend_points.sort(key=lambda item: item["date"])
+    return trend_points
 
 def _build_balance_summary(sheets):
     daily_avg = _find_metric(sheets, ["日均支出", "日均开销", "日均成本"])
@@ -1889,6 +2005,7 @@ async def get_balance_sheet():
 
         summary = _build_balance_summary(sheets)
         suggestions = _build_balance_suggestions(summary)
+        trend_points = _build_expense_trend_points(sheets)
 
         sheet_payloads = []
         for sheet_name, df in sheets.items():
@@ -1904,6 +2021,7 @@ async def get_balance_sheet():
             },
             "summary": summary,
             "suggestions": suggestions,
+            "trend_points": trend_points,
             "sheets": sheet_payloads,
         }
     except FileNotFoundError as exc:

@@ -9,6 +9,28 @@ from src import server
 
 
 class BalanceSheetEndpointTests(unittest.TestCase):
+    def test_find_first_column_prefers_exact_match_over_partial_match(self):
+        columns = ["股票资产", "现金及现金等价物+股票", "期间支出", "日均支出"]
+
+        selected = server._find_first_column(columns, ["现金及现金等价物+股票", "现金及现金等价物", "现金", "股票"])
+
+        self.assertEqual(selected, "现金及现金等价物+股票")
+
+    def test_sheet_payload_keeps_latest_rows_for_dated_sheets(self):
+        frame = pd.DataFrame(
+            {
+                "日期": pd.date_range("2026-01-01", periods=205, freq="D"),
+                "日均支出": list(range(205)),
+            }
+        )
+
+        payload = server._sheet_to_payload(frame, max_rows=200)
+
+        self.assertTrue(payload["truncated"])
+        self.assertEqual(payload["row_count"], 205)
+        self.assertEqual(payload["rows"][0][0], "2026-01-06")
+        self.assertEqual(payload["rows"][-1][0], "2026-07-24")
+
     def test_balance_sheet_route_is_registered_and_returns_payload(self):
         route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
 
@@ -34,6 +56,33 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["time_cost"]["daily_average"], 100.0)
         self.assertEqual(payload["summary"]["assets"]["total_assets"]["value"], 5000.0)
         self.assertEqual(payload["sheets"][0]["name"], "Summary")
+
+    def test_balance_sheet_route_returns_full_trend_points_when_sheet_rows_are_truncated(self):
+        route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
+
+        self.assertIsNotNone(route)
+
+        expense_sheet = pd.DataFrame(
+            {
+                "日期": pd.date_range("2020-01-01", periods=240, freq="D"),
+                "现金及现金等价物+股票": [1000 + index * 5 for index in range(240)],
+                "日均支出": [50 + (index % 7) for index in range(240)],
+                "期间支出": [80 + (index % 9) for index in range(240)],
+            }
+        )
+
+        with patch.object(server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")), patch.object(
+            server.DataLoader, "load_excel_sheets", return_value={"开销": expense_sheet}
+        ):
+            payload = asyncio.run(route.endpoint())
+
+        self.assertEqual(payload["sheets"][0]["row_count"], 240)
+        self.assertEqual(len(payload["sheets"][0]["rows"]), 200)
+        self.assertEqual(len(payload["trend_points"]), 240)
+        self.assertEqual(payload["trend_points"][0]["date"], "2020-01-01")
+        self.assertEqual(payload["trend_points"][-1]["date"], "2020-08-27")
+        self.assertEqual(payload["trend_points"][0]["balance"], 1000.0)
+        self.assertEqual(payload["trend_points"][-1]["daily_average"], 51.0)
 
 
 if __name__ == "__main__":
