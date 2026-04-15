@@ -49,11 +49,19 @@ class LLMClient:
         major, minor, patch, suffix = match.groups()
         suffix_key = (suffix or "").lower()
         is_code_variant = "code" in suffix_key or "codex" in suffix_key
+        if not suffix_key:
+            family_rank = 3
+        elif suffix_key.startswith("mini"):
+            family_rank = 2
+        elif is_code_variant:
+            family_rank = 0
+        else:
+            family_rank = 1
         return (
             int(major),
             int(minor or -1),
             int(patch or -1),
-            0 if is_code_variant else 1,
+            family_rank,
         )
 
     def _normalize_parameter_name(self, name):
@@ -150,7 +158,7 @@ class LLMClient:
             return []
 
         candidates = []
-        for index, item in enumerate(payload.get("data", [])):
+        for item in payload.get("data", []):
             if not isinstance(item, dict):
                 continue
 
@@ -166,13 +174,13 @@ class LLMClient:
                 # Keep non-standard aliases in the catalog instead of dropping them.
                 # This makes custom aliases (including provider-prefix forms) visible in UI
                 # and usable for manual override.
-                sort_key = (0, 0, 0, 0, index)
+                sort_key = (0, 0, 0, 0, 0)
             else:
                 # Preserve existing version-priority behavior for standard GPT-family ids.
-                major, minor, patch, is_code_variant = version_key
-                sort_key = (1, major, minor, patch, is_code_variant, index)
+                major, minor, patch, family_rank = version_key
+                sort_key = (1, major, minor, patch, family_rank)
 
-            candidates.append((sort_key, model_id, index, supported_parameters))
+            candidates.append((sort_key, model_id, supported_parameters))
 
         # Keep latest/most specific versions first, then fall back to other aliases.
         candidates.sort(reverse=True)
@@ -181,7 +189,7 @@ class LLMClient:
                 "id": model_id,
                 "supported_parameters": supported_parameters,
             }
-            for _, model_id, _, supported_parameters in candidates
+            for _, model_id, supported_parameters in candidates
         ]
 
     def _build_provider_chain(self):
@@ -280,6 +288,19 @@ class LLMClient:
             or "unsupported" in text
         )
 
+    def _is_retryable_primary_error(self, provider, details):
+        if provider.get("route") != "cliproxyapi_primary":
+            return False
+
+        text = details.lower()
+        return (
+            "unexpected eof" in text
+            or ": eof" in text
+            or "remote end closed connection" in text
+            or "connection aborted" in text
+            or "read timed out" in text
+        )
+
     def _ordered_providers(self, requested_model):
         requested_model = (requested_model or "").strip()
         if not requested_model:
@@ -351,39 +372,55 @@ class LLMClient:
                     provider,
                     model,
                 )
+                should_try_next_model = False
+                retry_count = 0
 
-                try:
-                    response = requests.post(
-                        url,
-                        json=provider_payload,
-                        headers=provider["headers"],
-                        timeout=timeout,
-                        stream=stream,
-                    )
-                    response.raise_for_status()
-                    provider["model"] = model
-                    provider["models"] = [model] + [candidate for candidate in model_candidates if candidate != model]
-                    logging.info(
-                        "LLM route %s succeeded with model %s at %s",
-                        provider["route"],
-                        model,
-                        provider["base_url"],
-                    )
-                    return response, model, provider["route"]
-                except requests.RequestException as error:
-                    details = self._describe_request_error(error)
-                    errors.append(f"{provider['route']}[{model}]: {details}")
-                    logging.warning(
-                        "LLM route %s failed for model %s at %s: %s",
-                        provider["route"],
-                        model,
-                        provider["base_url"],
-                        details,
-                    )
-                    has_next_model = index + 1 < len(model_candidates)
-                    if has_next_model and self._is_model_compatibility_error(details):
+                while True:
+                    try:
+                        response = requests.post(
+                            url,
+                            json=provider_payload,
+                            headers=provider["headers"],
+                            timeout=timeout,
+                            stream=stream,
+                        )
+                        response.raise_for_status()
+                        provider["model"] = model
+                        provider["models"] = [model] + [candidate for candidate in model_candidates if candidate != model]
+                        logging.info(
+                            "LLM route %s succeeded with model %s at %s",
+                            provider["route"],
+                            model,
+                            provider["base_url"],
+                        )
+                        return response, model, provider["route"]
+                    except requests.RequestException as error:
+                        details = self._describe_request_error(error)
+                        errors.append(f"{provider['route']}[{model}]: {details}")
+                        logging.warning(
+                            "LLM route %s failed for model %s at %s: %s",
+                            provider["route"],
+                            model,
+                            provider["base_url"],
+                            details,
+                        )
+                        if retry_count == 0 and self._is_retryable_primary_error(provider, details):
+                            retry_count += 1
+                            logging.info(
+                                "Retrying LLM route %s with model %s after transient upstream error",
+                                provider["route"],
+                                model,
+                            )
+                            continue
+
+                        has_next_model = index + 1 < len(model_candidates)
+                        if has_next_model and self._is_model_compatibility_error(details):
+                            should_try_next_model = True
+                        break
+
+                if should_try_next_model:
                         continue
-                    break
+                break
 
         raise requests.RequestException("All LLM providers failed: " + " | ".join(errors))
 

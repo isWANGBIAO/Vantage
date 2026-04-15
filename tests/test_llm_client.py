@@ -62,6 +62,17 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(client.providers[0]["model"], "gpt-5.2")
 
+    def test_primary_provider_prefers_base_model_over_mini_variant_for_same_version(self):
+        client = self._make_client(
+            discovered_models=["gpt-5.2", "gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.4-mini"],
+        )
+
+        self.assertEqual(client.providers[0]["model"], "gpt-5.4")
+        self.assertEqual(
+            client.providers[0]["models"][:3],
+            ["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"],
+        )
+
     def test_primary_provider_uses_configured_model_when_discovery_fails(self):
         client = self._make_client(discovery_error=llm_client.requests.RequestException("discovery failed"))
 
@@ -157,6 +168,42 @@ class LLMClientTests(unittest.TestCase):
                 "http://127.0.0.1:8317/v1/chat/completions",
                 "http://127.0.0.1:8045/v1/chat/completions",
             ],
+        )
+
+    def test_retries_same_primary_model_after_transient_eof_error(self):
+        client = self._make_client(discovered_models=["gpt-5.4", "gpt-5.4-mini"])
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+
+        transient_error = llm_client.requests.HTTPError("upstream eof")
+        transient_error.response = Mock()
+        transient_error.response.status_code = 500
+        transient_error.response.text = '{"error":{"message":"unexpected EOF","type":"server_error","code":"internal_server_error"}}'
+
+        with patch.object(
+            llm_client.requests,
+            "post",
+            side_effect=[transient_error, fake_response],
+        ) as mock_post:
+            response, used_model, used_route = client._post_with_failover(
+                {"messages": [{"role": "user", "content": "ping"}]},
+                stream=False,
+                timeout=12,
+            )
+
+        self.assertIs(response, fake_response)
+        self.assertEqual(used_model, "gpt-5.4")
+        self.assertEqual(used_route, "cliproxyapi_primary")
+        self.assertEqual(
+            [call.args[0] for call in mock_post.call_args_list],
+            [
+                "http://127.0.0.1:8317/v1/chat/completions",
+                "http://127.0.0.1:8317/v1/chat/completions",
+            ],
+        )
+        self.assertEqual(
+            [call.kwargs["json"]["model"] for call in mock_post.call_args_list],
+            ["gpt-5.4", "gpt-5.4"],
         )
 
     def test_chat_includes_reasoning_effort_when_configured(self):
