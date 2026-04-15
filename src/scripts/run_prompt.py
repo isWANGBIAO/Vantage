@@ -22,6 +22,9 @@ from src.utils.action_plan_stream import (
 )
 from src.utils.generation_stats import build_generation_metadata
 
+
+ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT = 1
+
 def setup_logging():
     logging.basicConfig(
         level=logging.INFO,
@@ -51,6 +54,79 @@ def get_action_plan_round_content(result):
     if not isinstance(result, dict):
         return ""
     return (result.get("content") or "").strip()
+
+
+def _sum_usage_totals(*usage_payloads):
+    totals = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+    for usage in usage_payloads:
+        if not isinstance(usage, dict):
+            continue
+        for key in totals:
+            value = usage.get(key, 0) or 0
+            totals[key] += int(value)
+    return totals
+
+
+def run_action_plan_round(
+    *,
+    client,
+    messages,
+    section,
+    model_override,
+    emit_start_before_first_attempt,
+    max_empty_content_retries=ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT,
+):
+    total_attempts = max_empty_content_retries + 1
+    total_usage = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+    total_duration = 0.0
+    last_result = {}
+
+    for attempt in range(1, total_attempts + 1):
+        if emit_start_before_first_attempt or attempt > 1:
+            emit_action_plan_stream_event(section, "start", "")
+
+        result = client.chat(
+            messages,
+            stream=True,
+            print_callback=build_action_plan_stream_printer(section),
+            model=model_override,
+        )
+        last_result = dict(result or {})
+        total_usage = _sum_usage_totals(total_usage, last_result.get("usage"))
+        total_duration += float(last_result.get("duration", 0) or 0)
+
+        content = get_action_plan_round_content(last_result)
+        if content:
+            last_result["usage"] = total_usage
+            last_result["duration"] = total_duration
+            last_result["attempts"] = attempt
+            return last_result, content
+
+        if attempt < total_attempts:
+            logging.warning(
+                "Action plan %s round returned empty content on attempt %s/%s; retrying same round",
+                section,
+                attempt,
+                total_attempts,
+            )
+
+    last_result["usage"] = total_usage
+    last_result["duration"] = total_duration
+    last_result["attempts"] = total_attempts
+    logging.error(
+        "Action plan %s round returned empty content after %s attempts",
+        section,
+        total_attempts,
+    )
+    return last_result, ""
 
 
 def build_action_plan_payload(
@@ -259,15 +335,13 @@ def main():
                 emit_action_plan_stream_event("plan", "prompt", action_plan_msg)
 
             
-            # Send initial huge context
-            result = client.chat(
-                analysis_messages,
-                stream=True,
-                print_callback=build_action_plan_stream_printer("analysis"),
-                model=model_override,
+            result, first_round_content = run_action_plan_round(
+                client=client,
+                messages=analysis_messages,
+                section="analysis",
+                model_override=model_override,
+                emit_start_before_first_attempt=False,
             )
-            
-            first_round_content = get_action_plan_round_content(result)
             if first_round_content:
                 # We do NOT save the full history context yet, or maybe we do?
                 # For this specific dual-turn flow, let's keep it simple.
@@ -283,20 +357,19 @@ def main():
                 
                 # 1. Append to history
                 analysis_messages.append({"role": "user", "content": action_plan_msg})
-                emit_action_plan_stream_event("plan", "start", "")
                 
                 # 2. Call API Again
                 # Stream usage is tricky effectively. run_prompt.py streams to stdout, 
                 # and the GUI reads it.
                 # The GUI splits by "初始分析已完成..." so the second stream will go to the right panel.
                 
-                result_round_2 = client.chat(
-                    analysis_messages,
-                    stream=True,
-                    print_callback=build_action_plan_stream_printer("plan"),
-                    model=model_override,
+                result_round_2, second_round_content = run_action_plan_round(
+                    client=client,
+                    messages=analysis_messages,
+                    section="plan",
+                    model_override=model_override,
+                    emit_start_before_first_attempt=True,
                 )
-                second_round_content = get_action_plan_round_content(result_round_2)
                 
                 if first_round_content and second_round_content:
                     generated_at = datetime.now()

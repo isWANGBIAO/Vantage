@@ -35,6 +35,40 @@ class _FakeLLMClient:
         }
 
 
+class _RetryingFakeLLMClient:
+    def __init__(self):
+        self.call_count = 0
+
+    def chat(self, messages, stream=False, print_callback=None, model=None):
+        self.call_count += 1
+
+        if self.call_count == 1:
+            if print_callback:
+                print_callback("content", "analysis reply")
+            return {
+                "content": "analysis reply",
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                "duration": 1.0,
+            }
+
+        if self.call_count == 2:
+            if print_callback:
+                print_callback("thinking", "drafting plan")
+            return {
+                "content": "",
+                "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
+                "duration": 1.5,
+            }
+
+        if print_callback:
+            print_callback("content", "plan retry reply")
+        return {
+            "content": "plan retry reply",
+            "usage": {"prompt_tokens": 21, "completion_tokens": 9, "total_tokens": 30},
+            "duration": 1.7,
+        }
+
+
 class RunPromptTests(unittest.TestCase):
     def test_format_chat_message_with_timestamp_prefixes_sent_time(self):
         formatted = run_prompt.format_chat_message_with_timestamp(
@@ -271,6 +305,80 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(saved_payload["meta"]["reasoning_effort"], "medium")
         self.assertIn("generated_at", saved_payload["meta"])
         self.assertEqual(saved_payload["meta"]["stats"]["total_tokens"], 43)
+
+    def test_analysis_mode_retries_plan_round_when_stream_ends_without_content(self):
+        fake_client = _RetryingFakeLLMClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history_dir = temp_path / "history"
+            history_dir.mkdir()
+            (temp_path / "Prompt_Action_Plan.md").write_text(
+                "Now {current_time}\nPast {past_7_days_rows}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
+                encoding="utf-8",
+            )
+            (temp_path / "Prompt_Personal_Info.md").write_text("personal info", encoding="utf-8")
+            (temp_path / "Time.xlsx").write_text("placeholder", encoding="utf-8")
+
+            def fake_resolve_data_path(filename):
+                return temp_path / filename
+
+            stdout = io.StringIO()
+
+            with patch.object(run_prompt.Config, "load_env"), patch.object(
+                run_prompt.Config,
+                "get_history_dir",
+                return_value=history_dir,
+            ), patch.object(
+                run_prompt,
+                "LLMClient",
+                return_value=fake_client,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "construct_prompt",
+                return_value="analysis prompt",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_system_prompt_content",
+                return_value="system prompt",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_past_seven_days_rows",
+                return_value="past seven rows",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_today_data_row",
+                return_value="today row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_yesterday_data_row",
+                return_value="yesterday row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_future_planned_rows",
+                return_value="future rows",
+            ), patch.object(
+                sys,
+                "argv",
+                ["run_prompt.py"],
+            ), redirect_stdout(stdout):
+                run_prompt.main()
+
+            output_lines = stdout.getvalue().splitlines()
+            output_files = sorted(history_dir.glob("action_plan_*.json"))
+            saved_payload = json.loads(output_files[0].read_text(encoding="utf-8"))
+
+        self.assertEqual(fake_client.call_count, 3)
+        self.assertEqual(
+            output_lines.count('STREAM_PLAN_START:""'),
+            2,
+        )
+        self.assertEqual(saved_payload["plan"]["body"], "plan retry reply")
+        self.assertEqual(saved_payload["meta"]["stats"]["total_tokens"], 73)
 
 
 if __name__ == "__main__":
