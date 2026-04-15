@@ -77,7 +77,7 @@ class ActionPlanStreamPrinterTests(unittest.TestCase):
         )
 
         self.assertEqual(len(emitted), 1)
-        prefix = "STREAM_PLAN_METADATA:"
+        prefix = "STATS_JSON:"
         self.assertTrue(emitted[0].startswith(prefix))
         self.assertEqual(
             json.loads(emitted[0][len(prefix):]),

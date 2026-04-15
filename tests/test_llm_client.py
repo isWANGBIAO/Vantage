@@ -1,5 +1,7 @@
+import io
 import os
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import Mock, patch
 
 from src.services import llm_client
@@ -407,6 +409,37 @@ class LLMClientTests(unittest.TestCase):
         )
         self.assertEqual(events[1], ("content", "A"))
         self.assertEqual(events[2], ("done", ""))
+
+    def test_streaming_chat_without_callback_does_not_print_metadata_event(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.iter_lines.return_value = [
+            b'data: {"choices":[{"delta":{"content":"A"}}]}',
+            b'data: [DONE]',
+        ]
+        stdout = io.StringIO()
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response),
+            redirect_stdout(stdout),
+        ):
+            client = llm_client.LLMClient()
+            client.chat(
+                [{"role": "user", "content": "ping"}],
+                stream=True,
+                print_callback=None,
+            )
+
+        output = stdout.getvalue()
+        self.assertIn('STREAM_CONTENT:"A"', output)
+        self.assertNotIn("STREAM_METADATA:", output)
 
 
 if __name__ == "__main__":

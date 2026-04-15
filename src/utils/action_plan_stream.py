@@ -16,7 +16,7 @@ def emit_action_plan_stream_event(section: str, event_type: str, content: str, e
         raise ValueError(f"Unsupported action plan stream event type: {event_type}")
 
     if normalized_event_type == "metadata":
-        emit(f"STREAM_{normalized_section}_{normalized_event_type.upper()}:{json.dumps(content, ensure_ascii=False)}")
+        emit(f"STATS_JSON:{json.dumps(content, ensure_ascii=False)}")
         return
 
     text = content if isinstance(content, str) else str(content)
