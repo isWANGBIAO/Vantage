@@ -92,5 +92,61 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
         self.assertIn("2026-06-16（周二）: 工作: 去宁波", combined)
 
 
+class DataLoaderPastSevenDaysTests(unittest.TestCase):
+    def test_get_past_seven_days_rows_only_includes_previous_seven_days(self):
+        today = datetime.now().date()
+        df = pd.DataFrame(
+            [
+                {
+                    "日期": pd.Timestamp(today - timedelta(days=8)),
+                    "周几": "周一",
+                    "工作": "超出窗口",
+                    "运动": "老训练",
+                },
+                {
+                    "日期": pd.Timestamp(today - timedelta(days=7)),
+                    "周几": "周二",
+                    "工作": "七天前任务",
+                    "运动": "背部训练",
+                },
+                {
+                    "日期": pd.Timestamp(today - timedelta(days=3)),
+                    "周几": "周六",
+                    "工作": None,
+                    "运动": "腿部训练",
+                    "睡眠时间": "7小时20分",
+                },
+                {
+                    "日期": pd.Timestamp(today - timedelta(days=1)),
+                    "周几": "周一",
+                    "工作": "昨天任务",
+                    "运动": None,
+                    "健康情况": "轻微酸痛",
+                },
+                {
+                    "日期": pd.Timestamp(today),
+                    "周几": "周二",
+                    "工作": "今天任务",
+                    "运动": "今天训练",
+                },
+            ]
+        )
+
+        with patch.object(DataLoader, "load_excel_data", return_value=df):
+            past_rows = DataLoader.get_past_seven_days_rows(Path("Time.xlsx"))
+
+        self.assertIn("## Past 7 Days Data Records", past_rows)
+        self.assertIn("七天前任务", past_rows)
+        self.assertIn("背部训练", past_rows)
+        self.assertIn("腿部训练", past_rows)
+        self.assertIn("7小时20分", past_rows)
+        self.assertIn("昨天任务", past_rows)
+        self.assertIn("轻微酸痛", past_rows)
+        self.assertNotIn("超出窗口", past_rows)
+        self.assertNotIn("老训练", past_rows)
+        self.assertNotIn("今天任务", past_rows)
+        self.assertNotIn("今天训练", past_rows)
+
+
 if __name__ == "__main__":
     unittest.main()

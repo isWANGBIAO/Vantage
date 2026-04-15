@@ -185,6 +185,72 @@ class DataLoader:
             return "无法获取昨日数据记录。"
 
     @staticmethod
+    def get_past_seven_days_rows(excel_file_path, days=7):
+        """
+        Retrieves formatted day-by-day records for the previous seven days, excluding today.
+        """
+        try:
+            df = DataLoader.load_excel_data(excel_file_path).copy()
+            today = datetime.now().date()
+            date_column = "日期" if "日期" in df.columns else "鏃ユ湡"
+            weekday_column = "周几" if "周几" in df.columns else None
+
+            df["date_only"] = df[date_column].dt.date
+            start_date = today - timedelta(days=days)
+            recent_df = df[
+                (df["date_only"] >= start_date) & (df["date_only"] < today)
+            ].sort_values(by=date_column)
+
+            excluded_columns = {"Days", date_column, "date_only"}
+            if weekday_column:
+                excluded_columns.add(weekday_column)
+
+            sections = []
+            for _, row in recent_df.iterrows():
+                details = []
+                for col in recent_df.columns:
+                    if col in excluded_columns:
+                        continue
+
+                    value = row[col]
+                    if pd.isna(value):
+                        continue
+
+                    value_text = str(value).strip()
+                    if not value_text:
+                        continue
+
+                    clean_col_name = str(col).replace("\n", " ")
+                    details.append(f"- {clean_col_name}: {value_text}")
+
+                if not details:
+                    continue
+
+                weekday_text = ""
+                if weekday_column:
+                    weekday_value = row.get(weekday_column)
+                    if pd.notna(weekday_value):
+                        weekday_text = f"（{str(weekday_value).strip()}）"
+
+                sections.append(
+                    f"### {row[date_column].strftime('%Y-%m-%d')}{weekday_text}\n"
+                    + "\n".join(details)
+                )
+
+            if not sections:
+                return "## Past 7 Days Data Records\n\n- 过去 7 天暂无已记录的历史数据\n"
+
+            return (
+                "## Past 7 Days Data Records\n\n"
+                "过去 7 天历史数据（不含今日，含昨日）：\n\n"
+                + "\n\n".join(sections)
+                + "\n"
+            )
+        except Exception as e:
+            logging.error(f"Error getting past seven days rows: {e}")
+            return "## Past 7 Days Data Records\n\n- 无法获取过去 7 天历史数据\n"
+
+    @staticmethod
     def get_future_planned_rows(excel_file_path):
         """
         Retrieves future rows with actual content as a formatted summary string.

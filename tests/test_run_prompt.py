@@ -61,7 +61,7 @@ class RunPromptTests(unittest.TestCase):
             history_dir = temp_path / "history"
             history_dir.mkdir()
             (temp_path / "Prompt_Action_Plan.md").write_text(
-                "Now {current_time}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
+                "Now {current_time}\nPast {past_7_days_rows}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
                 encoding="utf-8",
             )
             (temp_path / "Prompt_Personal_Info.md").write_text("personal info", encoding="utf-8")
@@ -94,6 +94,10 @@ class RunPromptTests(unittest.TestCase):
                 side_effect=fake_resolve_data_path,
             ), patch.object(
                 run_prompt.DataLoader,
+                "get_past_seven_days_rows",
+                return_value="past seven rows",
+            ), patch.object(
+                run_prompt.DataLoader,
                 "get_today_data_row",
                 return_value="today row",
             ), patch.object(
@@ -120,6 +124,7 @@ class RunPromptTests(unittest.TestCase):
             for line in output_lines
             if line.startswith("STREAM_PLAN_PROMPT:")
         )
+        self.assertIn("Past past seven rows", plan_prompt_payload)
         self.assertIn("Yesterday yesterday row", plan_prompt_payload)
         self.assertIn("Today today row", plan_prompt_payload)
         self.assertIn("2026-06-16（周二）: 工作: 去宁波", plan_prompt_payload)
@@ -139,7 +144,7 @@ class RunPromptTests(unittest.TestCase):
             history_dir = temp_path / "history"
             history_dir.mkdir()
             (temp_path / "Prompt_Action_Plan.md").write_text(
-                "Now {current_time}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
+                "Now {current_time}\nPast {past_7_days_rows}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
                 encoding="utf-8",
             )
             (temp_path / "Prompt_Personal_Info.md").write_text("personal info", encoding="utf-8")
@@ -172,6 +177,10 @@ class RunPromptTests(unittest.TestCase):
                 side_effect=fake_resolve_data_path,
             ), patch.object(
                 run_prompt.DataLoader,
+                "get_past_seven_days_rows",
+                return_value="past seven rows",
+            ), patch.object(
+                run_prompt.DataLoader,
                 "get_today_data_row",
                 return_value="today row",
             ), patch.object(
@@ -200,7 +209,7 @@ class RunPromptTests(unittest.TestCase):
             history_dir = temp_path / "history"
             history_dir.mkdir()
             (temp_path / "Prompt_Action_Plan.md").write_text(
-                "Now {current_time}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
+                "Now {current_time}\nPast {past_7_days_rows}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
                 encoding="utf-8",
             )
             (temp_path / "Prompt_Personal_Info.md").write_text("personal info", encoding="utf-8")
@@ -229,6 +238,10 @@ class RunPromptTests(unittest.TestCase):
                 run_prompt.DataLoader,
                 "resolve_data_path",
                 side_effect=fake_resolve_data_path,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_past_seven_days_rows",
+                return_value="past seven rows",
             ), patch.object(
                 run_prompt.DataLoader,
                 "get_today_data_row",

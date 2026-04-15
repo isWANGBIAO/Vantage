@@ -213,11 +213,17 @@ def main():
             action_plan_prompt_path = DataLoader.resolve_data_path("Prompt_Action_Plan.md")
             if action_plan_prompt_path.exists():
                 action_plan_template = action_plan_prompt_path.read_text(encoding="utf-8")
-                today_data = DataLoader.get_today_data_row(DataLoader.resolve_data_path("Time.xlsx"))
-                yesterday_data = DataLoader.get_yesterday_data_row(DataLoader.resolve_data_path("Time.xlsx"))
-                future_planned_rows = DataLoader.get_future_planned_rows(DataLoader.resolve_data_path("Time.xlsx"))
+                time_data_path = DataLoader.resolve_data_path("Time.xlsx")
+                past_7_days_rows = DataLoader.get_past_seven_days_rows(time_data_path)
+                today_data = DataLoader.get_today_data_row(time_data_path)
+                yesterday_data = DataLoader.get_yesterday_data_row(time_data_path)
+                future_planned_rows = DataLoader.get_future_planned_rows(time_data_path)
                 current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
                 action_plan_msg = action_plan_template.replace("{current_time}", current_time_str)
+                if "{past_7_days_rows}" in action_plan_msg:
+                    action_plan_msg = action_plan_msg.replace("{past_7_days_rows}", past_7_days_rows)
+                else:
+                    action_plan_msg = f"{action_plan_msg}\n\n{past_7_days_rows}"
                 action_plan_msg = action_plan_msg.replace("{today_data_row}", today_data)
                 action_plan_msg = action_plan_msg.replace("{yesterday_data_row}", yesterday_data)
                 if "{future_planned_rows}" in action_plan_msg:
