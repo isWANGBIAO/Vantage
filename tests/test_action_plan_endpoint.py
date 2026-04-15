@@ -19,6 +19,13 @@ class _FakeStdout:
             return self._lines.pop(0)
         return b""
 
+    async def read(self):
+        if not self._lines:
+            return b""
+        remaining = b"".join(self._lines)
+        self._lines.clear()
+        return remaining
+
 
 class _CancelOnReadStdout:
     async def readline(self):
@@ -28,8 +35,8 @@ class _CancelOnReadStdout:
 class _FakeProcess:
     def __init__(self, lines=None, returncode=0, stderr_data=b""):
         self.stdout = _FakeStdout(lines or [b'STREAM_ANALYSIS_CONTENT:"ok"\n'])
-        self.stderr = AsyncMock()
-        self.stderr.read = AsyncMock(return_value=stderr_data)
+        stderr_lines = stderr_data.splitlines(keepends=True) if stderr_data else []
+        self.stderr = _FakeStdout(stderr_lines)
         self.returncode = returncode
         self.communicate = AsyncMock(return_value=(b"", stderr_data))
 
@@ -46,8 +53,7 @@ class _FakeProcess:
 class _CancelableProcess:
     def __init__(self):
         self.stdout = _CancelOnReadStdout()
-        self.stderr = AsyncMock()
-        self.stderr.read = AsyncMock(return_value=b"")
+        self.stderr = _FakeStdout([])
         self.returncode = None
         self.terminate_called = False
         self.kill_called = False
@@ -402,6 +408,39 @@ class ActionPlanEndpointTests(unittest.TestCase):
         combined = "".join(chunks)
         self.assertIn('STREAM_ANALYSIS_CONTENT', combined)
         self.assertNotIn('LLM route cliproxyapi_primary succeeded', combined)
+
+    def test_generate_action_plan_logs_stderr_fallback_lines_to_server_log(self):
+        fake_process = _FakeProcess(
+            lines=[b'STREAM_ANALYSIS_CONTENT:"ok"\n'],
+            returncode=0,
+            stderr_data=(
+                b"2026-03-08 14:58:33 - WARNING - LLM route cliproxyapi_primary failed for model gpt-5.2 at http://127.0.0.1:8317/v1: timeout\n"
+                b"2026-03-08 14:58:34 - INFO - LLM route cliproxyapi_secondary succeeded with model gemini-3.1-pro-high at http://127.0.0.1:8045/v1\n"
+            ),
+        )
+
+        with patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=fake_process),
+        ), patch.object(server.logging, "warning") as mock_warning, patch.object(
+            server.logging,
+            "info",
+        ) as mock_info:
+            response = asyncio.run(server.generate_action_plan())
+            chunks = asyncio.run(_read_all_stream_chunks(response))
+
+        combined = "".join(chunks)
+        self.assertIn('STREAM_ANALYSIS_CONTENT', combined)
+        self.assertNotIn('cliproxyapi_primary failed', combined)
+        self.assertTrue(any(
+            "cliproxyapi_primary failed" in call.args[0]
+            for call in mock_warning.call_args_list
+        ))
+        self.assertTrue(any(
+            "cliproxyapi_secondary succeeded" in call.args[0]
+            for call in mock_info.call_args_list
+        ))
 
     def test_generate_action_plan_streams_stderr_as_error_when_process_fails(self):
         fake_process = _FakeProcess(

@@ -2,7 +2,7 @@ import json
 
 
 _VALID_SECTIONS = {"ANALYSIS", "PLAN"}
-_VALID_EVENT_TYPES = {"start", "thinking", "content", "error", "prompt", "system"}
+_VALID_EVENT_TYPES = {"start", "thinking", "content", "error", "prompt", "system", "metadata"}
 _MAX_STREAM_CHUNK_CHARS = 12000
 
 
@@ -14,6 +14,10 @@ def emit_action_plan_stream_event(section: str, event_type: str, content: str, e
         raise ValueError(f"Unsupported action plan stream section: {section}")
     if normalized_event_type not in _VALID_EVENT_TYPES:
         raise ValueError(f"Unsupported action plan stream event type: {event_type}")
+
+    if normalized_event_type == "metadata":
+        emit(f"STREAM_{normalized_section}_{normalized_event_type.upper()}:{json.dumps(content, ensure_ascii=False)}")
+        return
 
     text = content if isinstance(content, str) else str(content)
     chunks = [

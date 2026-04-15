@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from src.utils.action_plan_stream import (
@@ -60,6 +61,30 @@ class ActionPlanStreamPrinterTests(unittest.TestCase):
         self.assertEqual(
             emitted,
             ['STREAM_PLAN_CONTENT:"# Today\'s Action Plan"'],
+        )
+
+    def test_emits_section_prefixed_metadata_events_with_json_payload(self):
+        emitted = []
+
+        emit_action_plan_stream_event(
+            "plan",
+            "metadata",
+            {
+                "model": "gemini-3.1-pro-high",
+                "provider_route": "cliproxyapi_secondary",
+            },
+            emit=emitted.append,
+        )
+
+        self.assertEqual(len(emitted), 1)
+        prefix = "STREAM_PLAN_METADATA:"
+        self.assertTrue(emitted[0].startswith(prefix))
+        self.assertEqual(
+            json.loads(emitted[0][len(prefix):]),
+            {
+                "model": "gemini-3.1-pro-high",
+                "provider_route": "cliproxyapi_secondary",
+            },
         )
 
     def test_emits_section_prefixed_thinking_events(self):

@@ -453,6 +453,7 @@ export default function ActionPlan({ isVisible = true }) {
           if (sectionedLog) {
             if (
               sectionedLog.kind === 'start' ||
+              sectionedLog.kind === 'metadata' ||
               sectionedLog.kind === 'thinking' ||
               sectionedLog.kind === 'content' ||
               sectionedLog.kind === 'error'
@@ -487,6 +488,11 @@ export default function ActionPlan({ isVisible = true }) {
                 setAnalysisPrompt((prev) => prev + sectionedLog.content);
               } else {
                 setPlanPrompt((prev) => prev + sectionedLog.content);
+              }
+              shouldYieldRender = true;
+            } else if (sectionedLog.kind === 'metadata') {
+              if (sectionedLog.content && typeof sectionedLog.content === 'object') {
+                setStats((prev) => ({ ...prev, ...sectionedLog.content }));
               }
               shouldYieldRender = true;
             } else if (sectionedLog.kind === 'content') {

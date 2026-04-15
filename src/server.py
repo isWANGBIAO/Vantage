@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -33,6 +34,7 @@ import asyncio
 import math
 import calendar
 from collections import deque
+from contextlib import suppress
 from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta
 from pathlib import Path
@@ -80,6 +82,41 @@ FACE_OVERLAY_PERSON_THICKNESS = 6
 _face_analysis_runtime = None
 _face_analysis_runtime_lock = threading.Lock()
 _face_report_refresh_lock = threading.Lock()
+
+
+def _decode_subprocess_chunk(data):
+    try:
+        return data.decode("utf-8").rstrip()
+    except Exception:
+        return data.decode("gbk", errors="replace").rstrip()
+
+
+def _log_subprocess_stderr_line(channel, line):
+    message = (line or "").strip()
+    if not message:
+        return
+
+    prefixed_message = f"[{channel}] {message}"
+    if " - ERROR - " in message:
+        logging.error(prefixed_message)
+    elif " - WARNING - " in message:
+        logging.warning(prefixed_message)
+    else:
+        logging.info(prefixed_message)
+
+
+async def _drain_subprocess_stderr(stderr, channel, collected_lines):
+    while True:
+        line = await stderr.readline()
+        if not line:
+            break
+
+        decoded = _decode_subprocess_chunk(line)
+        if not decoded:
+            continue
+
+        collected_lines.append(decoded)
+        _log_subprocess_stderr_line(channel, decoded)
 
 # Allow CORS for development
 app.add_middleware(
@@ -1776,6 +1813,8 @@ async def chat_endpoint(request: ChatRequest):
 
     async def process_chat_stream():
         proc = None
+        stderr_task = None
+        stderr_lines = []
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -1784,34 +1823,40 @@ async def chat_endpoint(request: ChatRequest):
                 cwd=os.path.dirname(script_path),
                 env=env
             )
+            stderr_task = asyncio.create_task(
+                _drain_subprocess_stderr(proc.stderr, "chat", stderr_lines)
+            )
             
             while True:
                 line = await proc.stdout.readline()
                 if not line:
                     break
-                try:
-                    decoded = line.decode('utf-8').rstrip()
-                except:
-                    decoded = line.decode('gbk', errors='replace').rstrip()
-                
+                decoded = _decode_subprocess_chunk(line)
+            
                 msg = decoded.strip()
                 if msg:
                     yield json.dumps({"log": msg}) + "\n"
             
             await proc.wait()
+            if stderr_task is not None:
+                await stderr_task
             
             if proc.returncode != 0:
-                stderr_data = await proc.stderr.read()
-                err_msg = stderr_data.decode('utf-8', errors='replace')
+                err_msg = "\n".join(stderr_lines).strip() or f"run_prompt.py exited with code {proc.returncode}"
+                logging.error("Chat subprocess failed: %s", err_msg)
                 yield json.dumps({"error": err_msg}) + "\n"
         except asyncio.CancelledError:
-            print("Stream cancelled by client")
+            logging.warning("Chat stream cancelled by client")
             if proc is not None:
                 proc.terminate()
             raise
         finally:
+            if stderr_task is not None and not stderr_task.done():
+                stderr_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await stderr_task
             if proc is not None and proc.returncode is None:
-                print("Killing orphan process")
+                logging.warning("Killing orphan chat subprocess")
                 proc.kill()
 
     try:
@@ -1841,6 +1886,8 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
     previous_today_files = _list_today_action_plan_files() if replace_today else []
     
     async def process_stream():
+        stderr_task = None
+        stderr_lines = []
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -1848,34 +1895,49 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
             cwd=os.path.dirname(script_path),
             env=env
         )
+        logging.info(
+            "Action plan subprocess started: model=%s reasoning_effort=%s replace_today=%s",
+            selected_model or "<auto>",
+            env["AI_REASONING_EFFORT"],
+            replace_today,
+        )
+        stderr_task = asyncio.create_task(
+            _drain_subprocess_stderr(proc.stderr, "action_plan", stderr_lines)
+        )
         
         try:
             while True:
                 line = await proc.stdout.readline()
                 if not line:
                     break
-                try:
-                    decoded = line.decode('utf-8').rstrip()
-                except:
-                    decoded = line.decode('gbk', errors='replace').rstrip()
+                decoded = _decode_subprocess_chunk(line)
                 yield json.dumps({"log": decoded}) + "\n"
                 
             await proc.wait()
+            if stderr_task is not None:
+                await stderr_task
 
             if proc.returncode != 0:
-                stderr_data = await proc.stderr.read()
-                err_msg = stderr_data.decode('utf-8', errors='replace')
+                err_msg = "\n".join(stderr_lines).strip() or f"run_prompt.py exited with code {proc.returncode}"
+                logging.error("Action plan subprocess failed: %s", err_msg)
                 yield json.dumps({"error": err_msg}) + "\n"
             elif replace_today:
+                logging.info("Action plan subprocess completed successfully; replacing today's saved files")
                 _replace_today_action_plan_files(previous_today_files)
+            else:
+                logging.info("Action plan subprocess completed successfully")
             
         except asyncio.CancelledError:
-            print("Stream cancelled by client")
+            logging.warning("Action plan stream cancelled by client")
             proc.terminate()
             raise
         finally:
+            if stderr_task is not None and not stderr_task.done():
+                stderr_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await stderr_task
             if proc.returncode is None:
-                print("Killing orphan process")
+                logging.warning("Killing orphan action plan subprocess")
                 proc.kill()
     
     return StreamingResponse(process_stream(), media_type="application/x-ndjson")

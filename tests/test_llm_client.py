@@ -358,6 +358,56 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(mock_post.call_args.kwargs["timeout"], 600)
 
+    def test_streaming_chat_emits_selected_model_metadata_before_content(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.iter_lines.return_value = [
+            b'data: {"choices":[{"delta":{"content":"A"}}]}',
+            b'data: [DONE]',
+        ]
+        events = []
+
+        def capture_event(tag, content):
+            events.append((tag, content))
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(
+                llm_client.requests,
+                "post",
+                side_effect=[llm_client.requests.RequestException("primary failed"), fake_response],
+            ),
+        ):
+            client = llm_client.LLMClient()
+            result = client.chat(
+                [{"role": "user", "content": "ping"}],
+                stream=True,
+                print_callback=capture_event,
+            )
+
+        self.assertEqual(result["model"], "gemini-3.1-pro-high")
+        self.assertEqual(result["provider_route"], "cliproxyapi_secondary")
+        self.assertGreaterEqual(len(events), 3)
+        self.assertEqual(
+            events[0],
+            (
+                "metadata",
+                {
+                    "model": "gemini-3.1-pro-high",
+                    "provider_route": "cliproxyapi_secondary",
+                    "reasoning_effort": "medium",
+                },
+            ),
+        )
+        self.assertEqual(events[1], ("content", "A"))
+        self.assertEqual(events[2], ("done", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

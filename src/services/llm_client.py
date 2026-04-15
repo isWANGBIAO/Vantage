@@ -473,6 +473,8 @@ class LLMClient:
                     print(f"STREAM_CONTENT:{json.dumps(content)}", flush=True)
                 elif tag == "error":
                     print(f"STREAM_ERROR:{json.dumps(content)}", flush=True)
+                elif tag == "metadata":
+                    print(f"STREAM_METADATA:{json.dumps(content)}", flush=True)
 
         try:
             response, used_model, used_route = self._post_with_failover(
@@ -481,6 +483,12 @@ class LLMClient:
                 timeout=STREAM_REQUEST_TIMEOUT_SECONDS,
                 requested_model=model,
             )
+
+            output("metadata", {
+                "model": used_model,
+                "provider_route": used_route,
+                "reasoning_effort": reasoning_effort,
+            })
 
             for line in response.iter_lines(chunk_size=1):
                 if not line:
