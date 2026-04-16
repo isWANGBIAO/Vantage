@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { AlertTriangle, LineChart, RefreshCw } from 'lucide-react';
 
@@ -220,7 +220,7 @@ function SummaryPill({ label, value, tone = 'default' }) {
   );
 }
 
-function WarningPanel({ warnings, onSelectChart }) {
+function WarningPanel({ warnings, onSelectChart, availableChartIds }) {
   if (!warnings.length) {
     return null;
   }
@@ -265,7 +265,7 @@ function WarningPanel({ warnings, onSelectChart }) {
       <div style={{ display: 'grid', gap: 12 }}>
         {warnings.map((warning, index) => {
           const details = getWarningDetails(warning);
-          const chartIds = getWarningCharts(warning);
+          const chartIds = getWarningCharts(warning).filter((chartId) => availableChartIds.has(chartId));
 
           return (
             <div
@@ -618,7 +618,9 @@ export default function Plots() {
     fetchPlots();
   }, [fetchPlots]);
 
-  const sections = useMemo(() => buildSections(charts), [charts]);
+  const visibleCharts = useMemo(() => charts.filter((chart) => chart.id !== 'balance'), [charts]);
+  const visibleChartIds = useMemo(() => new Set(visibleCharts.map((chart) => chart.id)), [visibleCharts]);
+  const sections = useMemo(() => buildSections(visibleCharts), [visibleCharts]);
 
   const warningCharts = useMemo(() => {
     const ids = new Set();
@@ -756,7 +758,7 @@ export default function Plots() {
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-            <SummaryPill label="图表数量" value={`${charts.length}`} />
+            <SummaryPill label="图表数量" value={`${visibleCharts.length}`} />
             <SummaryPill label="分组数量" value={`${sectionCount}`} />
             <SummaryPill label="警告数量" value={`${warningCount}`} tone={warningCount ? 'warning' : 'default'} />
             <SummaryPill label="最近生成" value={generatedText} />
@@ -802,7 +804,7 @@ export default function Plots() {
           </section>
         ) : null}
 
-        <WarningPanel warnings={warnings} onSelectChart={scrollToChart} />
+        <WarningPanel warnings={warnings} onSelectChart={scrollToChart} availableChartIds={visibleChartIds} />
 
         {isLoading ? (
           <section
@@ -827,7 +829,7 @@ export default function Plots() {
           </section>
         ) : null}
 
-        {!isLoading && !charts.length ? (
+        {!isLoading && !visibleCharts.length ? (
           <section
             style={{
               padding: 32,
@@ -857,3 +859,4 @@ export default function Plots() {
     </div>
   );
 }
+

@@ -723,7 +723,7 @@ def _build_balance_dashboard_chart():
             {'name': '银行卡资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['银行卡资产'].to_numpy(dtype=float), 0)},
             {'name': '微信资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['微信资产'].to_numpy(dtype=float), 0)},
             {'name': '股票资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['股票资产'].to_numpy(dtype=float), 0)},
-            {'name': '日均支出', 'type': 'bar', 'yAxisIndex': 1, 'data': _series_points(dates, balance_df['日均支出'].to_numpy(dtype=float), 0)},
+            {'name': '日均支出', 'type': 'line', 'showSymbol': False, 'smooth': True, 'yAxisIndex': 1, 'data': _series_points(dates, balance_df['日均支出'].to_numpy(dtype=float), 0)},
         ],
     }
 
@@ -928,4 +928,5 @@ def build_plot_dashboard_data():
         'charts': charts,
         'warnings': warnings,
     }
+
 

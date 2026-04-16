@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
   ClipboardList,
@@ -7,23 +7,12 @@ import {
   HandCoins,
   RefreshCw,
   TableProperties,
-  TrendingUp,
   Wallet,
 } from 'lucide-react';
-import { fetchBackend } from '../utils/backendRequest';
+import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import './ExpenseSheet.css';
 import { buildExpenseSheetViewModel } from './expenseSheetModel.js';
-import {
-  buildExpenseTrendChartModel,
-  filterTrendPoints,
-} from './expenseTrendChart.js';
-
-const chartDimensions = { width: 960, height: 320 };
-const trendRangeOptions = [
-  { id: '6m', label: '6个月' },
-  { id: '1y', label: '1年' },
-  { id: 'all', label: '全部' },
-];
+import PlotChartCard from './PlotChartCard.jsx';
 const kpiHints = {
   cashAndStock: '以当前可见时间窗的最新资产为准',
   dailyBurn: '按程序运行时刻倒推到最近有效记录',
@@ -47,12 +36,6 @@ const formatCurrency = (value) => {
 const formatDays = (value) => {
   if (value === null || value === undefined || Number.isNaN(value)) return '--';
   return `${formatNumber(value, 1)} 天`;
-};
-
-const formatSignedCurrency = (value) => {
-  if (value === null || value === undefined || Number.isNaN(value)) return '--';
-  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
-  return `${sign}${formatCurrency(Math.abs(value))}`;
 };
 
 function formatMetricValue(item) {
@@ -126,254 +109,32 @@ function SheetTable({ sheet }) {
   );
 }
 
-function TrendLegendItem({ color, label }) {
-  return (
-    <div className="expense-trend-legend-item">
-      <span className="expense-trend-legend-swatch" style={{ background: color }} />
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function TrendStat({ label, value, hint }) {
-  return (
-    <div className="expense-trend-stat">
-      <span className="expense-trend-stat-label">{label}</span>
-      <strong className="expense-trend-stat-value">{value}</strong>
-      {hint ? <span className="expense-trend-stat-hint">{hint}</span> : null}
-    </div>
-  );
-}
-
-function TrendChartSvg({ model }) {
-  const latestBalancePoint = model.balancePoints.at(-1) || null;
-  const latestSpendPoint = model.spendPoints.at(-1) || null;
-
-  return (
-    <svg
-      className="expense-trend-svg"
-      viewBox={`0 0 ${chartDimensions.width} ${chartDimensions.height}`}
-      role="img"
-      aria-label="资产与支出趋势图"
-    >
-      <defs>
-        <linearGradient id="expense-balance-fill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="rgba(116, 185, 255, 0.28)" />
-          <stop offset="100%" stopColor="rgba(116, 185, 255, 0)" />
-        </linearGradient>
-      </defs>
-
-      <rect
-        x="0"
-        y="0"
-        width={chartDimensions.width}
-        height={chartDimensions.height}
-        rx="18"
-        fill="rgba(4, 9, 18, 0.94)"
-      />
-
-      {model.balanceTicks.map((tick, index) => (
-        <g key={`balance-grid-${index}`}>
-          <line
-            x1={model.chartLeft}
-            y1={tick.y}
-            x2={model.chartRight}
-            y2={tick.y}
-            stroke="rgba(255,255,255,0.08)"
-            strokeDasharray="6 10"
-          />
-          <text
-            x={model.chartLeft - 14}
-            y={tick.y + 4}
-            textAnchor="end"
-            fontSize="12"
-            fill="rgba(116,185,255,0.82)"
-          >
-            {tick.label}
-          </text>
-        </g>
-      ))}
-
-      {model.xTicks.map((tick) => (
-        <g key={`x-${tick.label}-${tick.x}`}>
-          <line
-            x1={tick.x}
-            y1={model.chartTop}
-            x2={tick.x}
-            y2={model.chartBottom}
-            stroke="rgba(255,255,255,0.05)"
-          />
-          <text
-            x={tick.x}
-            y={chartDimensions.height - 16}
-            textAnchor="middle"
-            fontSize="12"
-            fill="rgba(255,255,255,0.66)"
-          >
-            {tick.label}
-          </text>
-        </g>
-      ))}
-
-      {model.spendTicks.map((tick, index) => (
-        <text
-          key={`spend-tick-${index}`}
-          x={model.chartRight + 14}
-          y={tick.y + 4}
-          textAnchor="start"
-          fontSize="12"
-          fill="rgba(255,180,99,0.82)"
-        >
-          {tick.label}
-        </text>
-      ))}
-
-      {model.balanceAreaPath ? (
-        <path d={model.balanceAreaPath} fill="url(#expense-balance-fill)" />
-      ) : null}
-      {model.balancePath ? (
-        <path
-          d={model.balancePath}
-          fill="none"
-          stroke="#74b9ff"
-          strokeWidth="4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      ) : null}
-      {model.spendPath ? (
-        <path
-          d={model.spendPath}
-          fill="none"
-          stroke="#ffb463"
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      ) : null}
-
-      {latestBalancePoint ? (
-        <circle cx={latestBalancePoint.x} cy={latestBalancePoint.y} r="5.5" fill="#74b9ff" />
-      ) : null}
-      {latestSpendPoint ? (
-        <circle cx={latestSpendPoint.x} cy={latestSpendPoint.y} r="5" fill="#ffb463" />
-      ) : null}
-
-      <text
-        x={model.chartLeft}
-        y={18}
-        fontSize="12"
-        fill="rgba(116,185,255,0.82)"
-      >
-        现金及现金等价物+股票
-      </text>
-      <text
-        x={model.chartRight}
-        y={18}
-        textAnchor="end"
-        fontSize="12"
-        fill="rgba(255,180,99,0.82)"
-      >
-        日均支出
-      </text>
-    </svg>
-  );
-}
-
-function BalanceTrendCard({ trendChart, activeRange, onRangeChange }) {
-  const availableRanges = useMemo(
-    () => trendRangeOptions.filter((item) => item.id === 'all' || filterTrendPoints(trendChart.points, item.id).length > 1),
-    [trendChart.points],
-  );
-
-  const filteredPoints = useMemo(
-    () => filterTrendPoints(trendChart.points, activeRange),
-    [activeRange, trendChart.points],
-  );
-
-  const model = useMemo(
-    () => buildExpenseTrendChartModel({ points: filteredPoints, ...chartDimensions }),
-    [filteredPoints],
-  );
-
-  return (
-    <section className="glass-panel expense-trend-card">
-      <div className="expense-trend-head">
-        <div className="expense-section-heading">
-          <span className="expense-section-icon">
-            <TrendingUp size={16} />
-          </span>
-          <div>
-            <h3>资产与支出趋势</h3>
-            <p>把资产曲线放回 Expense Sheet 主视图，保留趋势、变化和原始表格三层信息。</p>
-          </div>
-        </div>
-
-        <div className="expense-trend-range-list" role="tablist" aria-label="Chart range">
-          {availableRanges.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`expense-trend-range-button ${activeRange === item.id ? 'is-active' : ''}`}
-              onClick={() => onRangeChange(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="expense-trend-metrics">
-        <TrendStat label="最新资产" value={formatCurrency(trendChart.summary.latestBalance)} />
-        <TrendStat label="最新日均支出" value={formatCurrency(trendChart.summary.latestDailyAverage)} />
-        <TrendStat
-          label="区间资产变化"
-          value={formatSignedCurrency(trendChart.summary.balanceChange)}
-          hint="基于当前可见时间窗首尾差值"
-        />
-        <TrendStat
-          label="当前覆盖天数"
-          value={formatDays(trendChart.summary.coverageDays)}
-          hint={`最近记录 ${trendChart.summary.latestDate}`}
-        />
-      </div>
-
-      <div className="expense-trend-shell">
-        {filteredPoints.length ? (
-          <TrendChartSvg model={model} />
-        ) : (
-          <div className="expense-trend-empty">当前还没有可绘制的资产趋势数据。</div>
-        )}
-      </div>
-
-      <div className="expense-trend-footer">
-        <div className="expense-trend-legend">
-          <TrendLegendItem color="#74b9ff" label="现金及现金等价物+股票" />
-          <TrendLegendItem color="#ffb463" label="日均支出" />
-        </div>
-        <span className="expense-trend-caption">参考仪表盘常见布局，把核心时间序列放在 KPI 与明细之间。</span>
-      </div>
-    </section>
-  );
-}
-
 export default function ExpenseSheet() {
   const [data, setData] = useState(null);
+  const [balanceChart, setBalanceChart] = useState(null);
+  const [balanceChartError, setBalanceChartError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeRawSheet, setActiveRawSheet] = useState('');
-  const [activeTrendRange, setActiveTrendRange] = useState('all');
 
-  const fetchData = async () => {
+  const fetchData = async (refresh = false) => {
     setIsLoading(true);
     setError('');
+    setBalanceChartError('');
 
     try {
-      const res = await fetchBackend('/api/balance_sheet', {
-        retryPolicy: 'load',
-        allowHttpError: true,
-      });
+      const plotsPromise = fetchBackendJson('/api/plots/data' + (refresh ? '?refresh=1' : ''))
+        .then((payload) => ({ ok: true, payload }))
+        .catch((err) => ({ ok: false, error: err.message || '加载资产图表失败' }));
+
+      const [res, plotResult] = await Promise.all([
+        fetchBackend('/api/balance_sheet', {
+          retryPolicy: 'load',
+          allowHttpError: true,
+        }),
+        plotsPromise,
+      ]);
 
       if (!res.ok) {
         const err = await res.json();
@@ -382,7 +143,19 @@ export default function ExpenseSheet() {
 
       const payload = await res.json();
       setData(payload);
+
+      if (plotResult.ok) {
+        const nextChart = Array.isArray(plotResult.payload?.charts)
+          ? plotResult.payload.charts.find((item) => item.id === 'balance') || null
+          : null;
+        setBalanceChart(nextChart);
+        setBalanceChartError(nextChart ? '' : '未找到资产与支出图表');
+      } else {
+        setBalanceChart(null);
+        setBalanceChartError(plotResult.error);
+      }
     } catch (err) {
+      setBalanceChart(null);
       setError(err.message || '加载失败');
     } finally {
       setIsLoading(false);
@@ -402,17 +175,22 @@ export default function ExpenseSheet() {
     }
   }, [activeRawSheet, viewModel.defaultRawSheetName, viewModel.rawSheets]);
 
-  useEffect(() => {
-    setActiveTrendRange(viewModel.trendChart.defaultRange);
-  }, [viewModel.trendChart.defaultRange]);
-
   const handleRefresh = () => {
     setIsRefreshing(true);
-    void fetchData();
+    void fetchData(true);
   };
 
   const selectedRawSheet =
     viewModel.rawSheets.find((sheet) => sheet.name === activeRawSheet) || viewModel.rawSheets[0] || null;
+  const balanceChartCard = balanceChart || {
+    id: 'balance',
+    title: '资产与支出趋势',
+    description: '把总资产、分账户资产和日均支出放回 Expense Sheet 主视图，直接看波动和支出压力。',
+    empty: true,
+    message: balanceChartError || '当前暂时无法加载资产与支出图表。',
+    height: 430,
+    summary: [],
+  };
 
   return (
     <div className="expense-sheet">
@@ -478,10 +256,12 @@ export default function ExpenseSheet() {
             </div>
           </section>
 
-          <BalanceTrendCard
-            trendChart={viewModel.trendChart}
-            activeRange={activeTrendRange}
-            onRangeChange={setActiveTrendRange}
+          <PlotChartCard
+            chart={balanceChartCard}
+            accent="#f59f54"
+            featured
+            eyebrow="expense sheet"
+            chartHeight={430}
           />
 
           <div className="expense-workspace">
@@ -648,3 +428,4 @@ export default function ExpenseSheet() {
     </div>
   );
 }
+
