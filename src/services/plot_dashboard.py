@@ -152,17 +152,17 @@ def _build_running_data_warnings(invalid_rows):
 
     grouped_rows = {chart_id: [] for chart_id in RUNNING_WARNING_CONFIG}
     for row in reversed(invalid_rows):
-        missing_by_chart = row.get('missing_by_chart') or {}
+        issues_by_chart = row.get('issues_by_chart') or {}
         date_text = _to_chart_date(row.get('日期')) or str(row.get('日期') or '未知日期')
         raw_text = str(row.get('原文') or '').strip()
         if len(raw_text) > 96:
             raw_text = f"{raw_text[:93]}..."
 
-        for chart_id, missing_fields in missing_by_chart.items():
+        for chart_id, issues in issues_by_chart.items():
             if chart_id not in grouped_rows:
                 continue
-            missing_text = '、'.join(missing_fields) if missing_fields else '关键字段'
-            grouped_rows[chart_id].append(f"{date_text}：缺少 {missing_text}；原文：{raw_text or '空'}")
+            issue_text = '、'.join(issues) if issues else '关键字段异常'
+            grouped_rows[chart_id].append(f"{date_text}：{issue_text}；原文：{raw_text or '空'}")
 
     warnings = []
     for chart_id, config in RUNNING_WARNING_CONFIG.items():

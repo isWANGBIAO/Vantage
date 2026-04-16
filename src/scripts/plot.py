@@ -1218,7 +1218,9 @@ def compute_running_metrics(
     result["duration_mmss"] = result["用时_mmss"]
     result["pace_min_per_km"] = result["配速_min_per_km"]
     result["pace_mmss"] = result["配速_mmss"]
-    result["heart_rate_bpm"] = result["心率"]
+    heart_rate_raw = pd.to_numeric(result["心率"], errors="coerce")
+    invalid_heart_rate_mask = (heart_rate_raw < 40) | (heart_rate_raw > 230)
+    result["heart_rate_bpm"] = heart_rate_raw.where(~invalid_heart_rate_mask, np.nan)
     cadence_raw = pd.to_numeric(result["步频"], errors="coerce")
     stride_raw = pd.to_numeric(result["步幅"], errors="coerce")
     result["speed_m_per_min"] = np.where(
@@ -1246,50 +1248,58 @@ def compute_running_metrics(
         np.nan,
     )
     invalid_rows = []
-    for _, row in result.iterrows():
-        missing_by_chart = {}
+    for row_index, row in result.iterrows():
+        issues_by_chart = {}
 
-        running_missing = []
+        running_issues = []
         if pd.isna(row.get("pace_min_per_km")):
-            running_missing.append("配速")
+            running_issues.append("缺少 配速")
         if pd.isna(row.get("heart_rate_bpm")):
-            running_missing.append("心率")
+            raw_heart_rate = heart_rate_raw.loc[row_index]
+            if pd.notna(raw_heart_rate) and ((raw_heart_rate < 40) or (raw_heart_rate > 230)):
+                running_issues.append(f"心率异常值 {int(raw_heart_rate)}")
+            else:
+                running_issues.append("缺少 心率")
         if pd.isna(row.get("distance_km")):
-            running_missing.append("距离")
-        if running_missing:
-            missing_by_chart["running"] = running_missing
+            running_issues.append("缺少 距离")
+        if running_issues:
+            issues_by_chart["running"] = running_issues
 
-        running_form_missing = []
+        running_form_issues = []
         if pd.isna(row.get("duration_min")):
-            running_form_missing.append("用时")
+            running_form_issues.append("缺少 用时")
         if pd.isna(row.get("cadence_spm")):
-            running_form_missing.append("步频")
+            running_form_issues.append("缺少 步频")
         if pd.isna(row.get("stride_m")):
-            running_form_missing.append("步幅")
-        if running_form_missing:
-            missing_by_chart["running-form"] = running_form_missing
+            running_form_issues.append("缺少 步幅")
+        if running_form_issues:
+            issues_by_chart["running-form"] = running_form_issues
 
-        running_hrc_missing = []
+        running_hrc_issues = []
         if pd.isna(row.get("distance_km")):
-            running_hrc_missing.append("距离")
+            running_hrc_issues.append("缺少 距离")
         if pd.isna(row.get("duration_min")):
-            running_hrc_missing.append("用时/配速")
+            running_hrc_issues.append("缺少 用时/配速")
         if pd.isna(row.get("heart_rate_bpm")):
-            running_hrc_missing.append("心率")
+            raw_heart_rate = heart_rate_raw.loc[row_index]
+            if pd.notna(raw_heart_rate) and ((raw_heart_rate < 40) or (raw_heart_rate > 230)):
+                running_hrc_issues.append(f"心率异常值 {int(raw_heart_rate)}")
+            else:
+                running_hrc_issues.append("缺少 心率")
         if pd.isna(row.get("HRC_m_per_beat")):
-            running_hrc_missing.append("HRC")
-        if running_hrc_missing:
-            deduped_missing = list(dict.fromkeys(running_hrc_missing))
-            missing_by_chart["running-hrc"] = deduped_missing
+            running_hrc_issues.append("缺少 HRC")
+        if running_hrc_issues:
+            deduped_issues = list(dict.fromkeys(running_hrc_issues))
+            issues_by_chart["running-hrc"] = deduped_issues
 
-        if not missing_by_chart:
+        if not issues_by_chart:
             continue
 
         invalid_rows.append(
             {
                 "日期": row.get(date_col),
                 "原文": row.get("运动文本"),
-                "missing_by_chart": missing_by_chart,
+                "issues_by_chart": issues_by_chart,
             }
         )
     result.attrs["invalid_rows"] = invalid_rows
