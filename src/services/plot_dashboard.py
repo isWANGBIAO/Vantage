@@ -744,47 +744,51 @@ def _build_balance_dashboard_chart():
 
 def _build_running_dashboard_chart(data_frame):
     running_df = plot_module.compute_running_metrics(data_frame).copy()
-    running_df = running_df.dropna(subset=['配速_min_per_km']).sort_values('日期')
+    running_df = running_df.dropna(subset=['speed_m_per_min', 'heart_rate_bpm', 'distance_km'], how='all').sort_values('日期')
     if running_df.empty:
-        raise ValueError('未找到可展示的跑步配速数据')
+        raise ValueError('未找到可展示的跑步速度数据')
 
     dates = running_df['日期'].tolist()
-    series = [
-        {
-            'name': '配速（min/km）',
-            'type': 'line',
-            'showSymbol': True,
-            'symbolSize': 7,
-            'smooth': True,
-            'data': _series_points(dates, running_df['配速_min_per_km'].to_numpy(dtype=float), 3),
-        },
-        {
-            'name': '距离（km）',
-            'type': 'line',
-            'showSymbol': False,
-            'smooth': True,
-            'yAxisIndex': 1,
-            'data': _series_points(dates, running_df['距离_km'].to_numpy(dtype=float), 2),
-        },
-    ]
+    series = []
 
-    if '心率' in running_df.columns and running_df['心率'].notna().any():
+    if running_df['speed_m_per_min'].notna().any():
         series.append(
             {
-                'name': '心率',
+                'name': '速度 Speed (m/min)',
+                'type': 'line',
+                'showSymbol': True,
+                'symbolSize': 7,
+                'smooth': True,
+                'data': _series_points(dates, running_df['speed_m_per_min'].to_numpy(dtype=float), 1),
+            }
+        )
+
+    if running_df['heart_rate_bpm'].notna().any():
+        series.append(
+            {
+                'name': '心率 Heart Rate (bpm)',
                 'type': 'line',
                 'showSymbol': False,
+                'smooth': True,
+                'yAxisIndex': 1,
+                'data': _series_points(dates, running_df['heart_rate_bpm'].to_numpy(dtype=float), 0),
+            }
+        )
+
+    if running_df['distance_km'].notna().any():
+        series.append(
+            {
+                'name': '距离 Distance (km)',
+                'type': 'line',
+                'showSymbol': False,
+                'smooth': True,
                 'yAxisIndex': 2,
-                'data': _series_points(dates, running_df['心率'].to_numpy(dtype=float), 0),
+                'data': _series_points(dates, running_df['distance_km'].to_numpy(dtype=float), 2),
             }
         )
 
     option = {
-        'color': [
-            plot_module.COLORS['purple'],
-            plot_module.COLORS['lightblue'],
-            plot_module.COLORS['red'],
-        ],
+        'color': ['#4f7cff', '#f97360', '#3ea37c'],
         'tooltip': {'trigger': 'axis'},
         'legend': {'top': 8},
         'toolbox': {'right': 12, 'feature': {'saveAsImage': {}}},
@@ -792,31 +796,183 @@ def _build_running_dashboard_chart(data_frame):
             {'type': 'inside', 'start': _zoom_start(len(dates), 30), 'end': 100},
             {'type': 'slider', 'start': _zoom_start(len(dates), 30), 'end': 100, 'bottom': 8},
         ],
-        'grid': {'top': 72, 'left': 56, 'right': 88, 'bottom': 72, 'containLabel': True},
+        'grid': {'top': 72, 'left': 56, 'right': 108, 'bottom': 72, 'containLabel': True},
         'xAxis': {'type': 'time'},
         'yAxis': [
-            {'type': 'value', 'name': '配速 (min/km)', 'inverse': True},
-            {'type': 'value', 'name': '距离 (km)', 'position': 'right'},
-            {'type': 'value', 'name': '心率', 'position': 'right', 'offset': 64},
+            {'type': 'value', 'name': '速度 (m/min)', 'scale': True},
+            {'type': 'value', 'name': '心率 (bpm)', 'position': 'right', 'scale': True},
+            {'type': 'value', 'name': '距离 (km)', 'position': 'right', 'offset': 64, 'scale': True},
         ],
         'series': series,
     }
 
     latest_row = running_df.iloc[-1]
-    latest_pace = latest_row.get('配速_mmss')
-    pace_text = latest_pace if isinstance(latest_pace, str) and latest_pace else _to_chart_number(latest_row['配速_min_per_km'], 2)
+    summary = [
+        {'label': '最新速度', 'value': f"{_to_chart_number(latest_row['speed_m_per_min'], 1)} m/min"},
+        {'label': '最新距离', 'value': f"{_to_chart_number(latest_row['distance_km'], 2)} km"},
+    ]
+    if pd.notna(latest_row.get('heart_rate_bpm')):
+        summary.append({'label': '最新心率', 'value': f"{_to_chart_number(latest_row['heart_rate_bpm'], 0)} bpm"})
+    duration_value = latest_row.get('duration_mmss')
+    if isinstance(duration_value, str) and duration_value:
+        summary.append({'label': '最近用时', 'value': duration_value})
 
     return _build_chart(
         'running',
-        '跑步配速',
-        '保留跑步配速主线，同时补上距离和心率，让训练质量比静态折线更完整。',
+        '跑步速度-心率耦合',
+        '把速度、心率与距离放在同一时间轴上，直接观察输出提升时心肺负荷是否同步变化。',
         option,
-        formatter='running',
+        formatter='generic',
         height=430,
-        summary=[
-            {'label': '最新配速', 'value': f"{pace_text} /km"},
-            {'label': '最新距离', 'value': f"{_to_chart_number(latest_row['距离_km'], 2)} km"},
+        summary=summary,
+    )
+
+
+def _build_running_form_dashboard_chart(data_frame):
+    running_df = plot_module.compute_running_metrics(data_frame).copy()
+    running_df = running_df.dropna(subset=['duration_min', 'cadence_spm', 'stride_m'], how='all').sort_values('日期')
+    if running_df.empty:
+        raise ValueError('未找到可展示的跑步技术结构数据')
+
+    dates = running_df['日期'].tolist()
+    series = []
+
+    if running_df['duration_min'].notna().any():
+        series.append(
+            {
+                'name': '用时 Duration (min)',
+                'type': 'line',
+                'showSymbol': True,
+                'symbolSize': 7,
+                'smooth': True,
+                'data': _series_points(dates, running_df['duration_min'].to_numpy(dtype=float), 1),
+            }
+        )
+
+    if running_df['cadence_spm'].notna().any():
+        series.append(
+            {
+                'name': '步频 Cadence (spm)',
+                'type': 'line',
+                'showSymbol': False,
+                'smooth': True,
+                'yAxisIndex': 1,
+                'data': _series_points(dates, running_df['cadence_spm'].to_numpy(dtype=float), 0),
+            }
+        )
+
+    if running_df['stride_m'].notna().any():
+        series.append(
+            {
+                'name': '步幅 Stride (m)',
+                'type': 'line',
+                'showSymbol': False,
+                'smooth': True,
+                'yAxisIndex': 2,
+                'data': _series_points(dates, running_df['stride_m'].to_numpy(dtype=float), 2),
+            }
+        )
+
+    option = {
+        'color': ['#4f7cff', '#ff9f43', '#17a2b8'],
+        'tooltip': {'trigger': 'axis'},
+        'legend': {'top': 8},
+        'toolbox': {'right': 12, 'feature': {'saveAsImage': {}}},
+        'dataZoom': [
+            {'type': 'inside', 'start': _zoom_start(len(dates), 30), 'end': 100},
+            {'type': 'slider', 'start': _zoom_start(len(dates), 30), 'end': 100, 'bottom': 8},
         ],
+        'grid': {'top': 72, 'left': 56, 'right': 108, 'bottom': 72, 'containLabel': True},
+        'xAxis': {'type': 'time'},
+        'yAxis': [
+            {'type': 'value', 'name': '用时 (min)', 'scale': True},
+            {'type': 'value', 'name': '步频 (spm)', 'position': 'right', 'scale': True},
+            {'type': 'value', 'name': '步幅 (m)', 'position': 'right', 'offset': 64, 'scale': True},
+        ],
+        'series': series,
+    }
+
+    latest_row = running_df.iloc[-1]
+    summary = []
+    duration_value = latest_row.get('duration_mmss')
+    if isinstance(duration_value, str) and duration_value:
+        summary.append({'label': '最近用时', 'value': duration_value})
+    cadence_mean = running_df['cadence_spm'].dropna().mean()
+    if pd.notna(cadence_mean):
+        summary.append({'label': '平均步频', 'value': f"{_to_chart_number(cadence_mean, 0)} spm"})
+    stride_mean = running_df['stride_m'].dropna().mean()
+    if pd.notna(stride_mean):
+        summary.append({'label': '平均步幅', 'value': f"{_to_chart_number(stride_mean, 2)} m"})
+
+    return _build_chart(
+        'running-form',
+        '跑步技术结构',
+        '把单次用时、步频、步幅放在一起，更容易看清动作结构是否稳定，而不是只看单一配速。',
+        option,
+        formatter='generic',
+        height=400,
+        summary=summary,
+    )
+
+
+def _build_running_hrc_dashboard_chart(data_frame):
+    running_df = plot_module.compute_running_metrics(data_frame).copy()
+    running_df = running_df.dropna(subset=['HRC_m_per_beat']).sort_values('日期')
+    if running_df.empty:
+        raise ValueError('未找到可展示的 HRC 数据')
+
+    rolling_window = min(len(running_df), 5)
+    running_df['HRC_rolling'] = running_df['HRC_m_per_beat'].rolling(window=rolling_window, min_periods=1).mean()
+    dates = running_df['日期'].tolist()
+    option = {
+        'color': ['#1f7a5a', '#83c5a3'],
+        'tooltip': {'trigger': 'axis'},
+        'legend': {'top': 8},
+        'toolbox': {'right': 12, 'feature': {'saveAsImage': {}}},
+        'dataZoom': [
+            {'type': 'inside', 'start': _zoom_start(len(dates), 30), 'end': 100},
+            {'type': 'slider', 'start': _zoom_start(len(dates), 30), 'end': 100, 'bottom': 8},
+        ],
+        'grid': {'top': 72, 'left': 56, 'right': 36, 'bottom': 72, 'containLabel': True},
+        'xAxis': {'type': 'time'},
+        'yAxis': [{'type': 'value', 'name': 'HRC (m/beat)', 'scale': True}],
+        'series': [
+            {
+                'name': 'HRC (m/beat)',
+                'type': 'line',
+                'showSymbol': True,
+                'symbolSize': 7,
+                'smooth': True,
+                'data': _series_points(dates, running_df['HRC_m_per_beat'].to_numpy(dtype=float), 3),
+            },
+            {
+                'name': f'Rolling HRC ({rolling_window})',
+                'type': 'line',
+                'showSymbol': False,
+                'smooth': True,
+                'lineStyle': {'type': 'dashed', 'width': 2},
+                'data': _series_points(dates, running_df['HRC_rolling'].to_numpy(dtype=float), 3),
+            },
+        ],
+    }
+
+    latest_row = running_df.iloc[-1]
+    summary = [
+        {'label': '最新 HRC', 'value': f"{_to_chart_number(latest_row['HRC_m_per_beat'], 3)} m/beat"},
+        {'label': '最佳 HRC', 'value': f"{_to_chart_number(running_df['HRC_m_per_beat'].max(), 3)} m/beat"},
+        {'label': f'{rolling_window}次均值', 'value': f"{_to_chart_number(running_df['HRC_rolling'].iloc[-1], 3)} m/beat"},
+    ]
+    if pd.notna(latest_row.get('heart_rate_bpm')):
+        summary.append({'label': '对应心率', 'value': f"{_to_chart_number(latest_row['heart_rate_bpm'], 0)} bpm"})
+
+    return _build_chart(
+        'running-hrc',
+        'Heart Rate Cost of Running (HRC)',
+        '这里按速度 ÷ 心率计算 HRC，单位是 m/beat。数值越高，表示单位心搏支持的前进效率越高。',
+        option,
+        formatter='generic',
+        height=400,
+        summary=summary,
     )
 
 
@@ -912,13 +1068,30 @@ def build_plot_dashboard_data():
             formatter='currency',
             height=430,
         ),
+
         _safe_chart(
             'running',
-            '跑步配速',
-            '保留跑步配速主线，同时补上距离和心率，让训练质量比静态折线更完整。',
+            '跑步速度-心率耦合',
+            '把速度、心率与距离放在同一时间轴上，直接观察输出提升时心肺负荷是否同步变化。',
             lambda: _build_running_dashboard_chart(data_frame),
-            formatter='running',
+            formatter='generic',
             height=430,
+        ),
+        _safe_chart(
+            'running-form',
+            '跑步技术结构',
+            '把单次用时、步频、步幅放在一起，更容易看清动作结构是否稳定，而不是只看单一配速。',
+            lambda: _build_running_form_dashboard_chart(data_frame),
+            formatter='generic',
+            height=400,
+        ),
+        _safe_chart(
+            'running-hrc',
+            'Heart Rate Cost of Running (HRC)',
+            '这里按速度 ÷ 心率计算 HRC，单位是 m/beat。数值越高，表示单位心搏支持的前进效率越高。',
+            lambda: _build_running_hrc_dashboard_chart(data_frame),
+            formatter='generic',
+            height=400,
         ),
     ]
 
@@ -928,5 +1101,3 @@ def build_plot_dashboard_data():
         'charts': charts,
         'warnings': warnings,
     }
-
-

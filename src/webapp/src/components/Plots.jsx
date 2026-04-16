@@ -20,7 +20,7 @@ const SECTION_DEFINITIONS = [
     description: '把跑步趋势和 HHH 节律放在一起看，更容易发现执行强度与恢复节奏。',
     accent: '#4f7cff',
     leadIds: ['running'],
-    supportIds: ['hhh-frequency', 'hhh-interval'],
+    supportIds: ['running-form', 'running-hrc', 'hhh-frequency', 'hhh-interval'],
   },
   {
     key: 'finance',

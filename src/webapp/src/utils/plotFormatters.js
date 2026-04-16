@@ -92,6 +92,26 @@ function formatBySeriesName(seriesName, value) {
     return `${formatNumber(value, 2)} km`;
   }
 
+  if (normalized.includes('hrc')) {
+    return `${formatNumber(value, 3)} m/beat`;
+  }
+
+  if (normalized.includes('speed')) {
+    return `${formatNumber(value, 1)} m/min`;
+  }
+
+  if (normalized.includes('duration')) {
+    return `${formatNumber(value, 1)} min`;
+  }
+
+  if (normalized.includes('cadence')) {
+    return `${formatNumber(value, 0)} spm`;
+  }
+
+  if (normalized.includes('stride')) {
+    return `${formatNumber(value, 2)} m`;
+  }
+
   if (normalized.includes('心率') || normalized.includes('heart')) {
     return `${formatNumber(value, 0)} bpm`;
   }

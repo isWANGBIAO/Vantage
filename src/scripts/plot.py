@@ -1,4 +1,4 @@
-import os
+﻿import os
 import platform
 import re
 import shutil
@@ -1186,6 +1186,26 @@ def compute_running_metrics(
     result.sort_values(date_col, inplace=True)
     result["配速_mmss"] = result["配速_min_per_km"].apply(_format_minutes_to_mmss)
     result["用时_mmss"] = result["用时_min"].apply(_format_minutes_to_mmss)
+    result["distance_km"] = result["距离_km"]
+    result["duration_min"] = result["用时_min"]
+    result["duration_mmss"] = result["用时_mmss"]
+    result["pace_min_per_km"] = result["配速_min_per_km"]
+    result["pace_mmss"] = result["配速_mmss"]
+    result["heart_rate_bpm"] = result["心率"]
+    result["cadence_spm"] = result["步频"]
+    stride_raw = pd.to_numeric(result["步幅"], errors="coerce")
+    result["stride_m"] = np.where(stride_raw.abs() > 10, stride_raw / 100.0, stride_raw)
+    result["speed_m_per_min"] = np.where(
+        result["duration_min"] > 0,
+        result["distance_km"] * 1000.0 / result["duration_min"],
+        np.nan,
+    )
+    result["speed_km_per_h"] = result["speed_m_per_min"] * 0.06
+    result["HRC_m_per_beat"] = np.where(
+        (result["heart_rate_bpm"] > 0) & np.isfinite(result["speed_m_per_min"]),
+        result["speed_m_per_min"] / result["heart_rate_bpm"],
+        np.nan,
+    )
 
     if output_dir is not None:
         output_path = Path(output_dir) / "running_metrics.csv"
