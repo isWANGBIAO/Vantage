@@ -6,6 +6,7 @@ import tempfile
 import subprocess
 import math
 import glob
+import json
 from pathlib import Path
 
 import matplotlib
@@ -1185,6 +1186,395 @@ def _parse_running_text(text):
         "配速除以心率": pace_over_hr,
         "运动文本": text,
     }
+
+
+def _resolve_running_data_root(data_dir=None):
+    if data_dir is not None:
+        return Path(data_dir)
+    return Path(__file__).resolve().parents[2] / "data"
+
+
+def _safe_float(value):
+    number = pd.to_numeric([value], errors="coerce")[0]
+    if pd.isna(number):
+        return None
+    return float(number)
+
+
+def _unix_seconds_to_local_datetime(value):
+    number = _safe_float(value)
+    if number is None:
+        return pd.NaT
+    timestamp = pd.to_datetime(number, unit="s", utc=True, errors="coerce")
+    if pd.isna(timestamp):
+        return pd.NaT
+    return timestamp.tz_convert("Asia/Shanghai").tz_localize(None)
+
+
+def _timestamp_to_local_datetime(value):
+    timestamp = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(timestamp):
+        timestamp = pd.to_datetime(value, errors="coerce")
+        if pd.isna(timestamp):
+            return pd.NaT
+        if getattr(timestamp, "tzinfo", None) is None:
+            return timestamp
+        return timestamp.tz_convert("Asia/Shanghai").tz_localize(None)
+    return timestamp.tz_convert("Asia/Shanghai").tz_localize(None)
+
+
+def _format_duration_text(total_seconds):
+    seconds_value = _safe_float(total_seconds)
+    if seconds_value is None or seconds_value <= 0:
+        return None
+    total_seconds_int = max(int(round(seconds_value)), 1)
+    hours, remainder = divmod(total_seconds_int, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours}小时")
+    if minutes or hours:
+        parts.append(f"{minutes}分")
+    if seconds or not parts:
+        parts.append(f"{seconds}秒")
+    return "".join(parts)
+
+
+def _format_pace_text(pace_min_per_km):
+    pace_value = _safe_float(pace_min_per_km)
+    if pace_value is None or pace_value <= 0:
+        return None
+    total_seconds = max(int(round(pace_value * 60)), 1)
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes}分{seconds:02d}"
+
+
+def _build_running_export_text(
+    source_label,
+    distance_km=None,
+    duration_seconds=None,
+    pace_min_per_km=None,
+    heart_rate_bpm=None,
+    cadence_spm=None,
+    calories_kcal=None,
+    steps=None,
+):
+    title = f"{source_label} 跑步"
+    if distance_km is not None and distance_km > 0:
+        title += f"{distance_km:.2f}公里"
+    parts = [title]
+
+    duration_text = _format_duration_text(duration_seconds)
+    if duration_text:
+        parts.append(f"用时{duration_text}")
+
+    pace_text = _format_pace_text(pace_min_per_km)
+    if pace_text:
+        parts.append(f"配速{pace_text}")
+
+    heart_rate_value = _safe_float(heart_rate_bpm)
+    if heart_rate_value is not None and heart_rate_value > 0:
+        parts.append(f"心率{int(round(heart_rate_value))}")
+
+    cadence_value = _safe_float(cadence_spm)
+    if cadence_value is not None and cadence_value > 0:
+        parts.append(f"步频{int(round(cadence_value))}")
+
+    calories_value = _safe_float(calories_kcal)
+    if calories_value is not None and calories_value > 0:
+        parts.append(f"消耗{int(round(calories_value))}千卡")
+
+    steps_value = _safe_float(steps)
+    if steps_value is not None and steps_value > 0:
+        parts.append(f"步数{int(round(steps_value))}")
+
+    return "，".join(parts)
+
+
+def load_mi_fitness_running_log_frame(data_dir=None, date_col="日期", source_col="运动"):
+    columns = [date_col, source_col]
+    csv_path = (
+        _resolve_running_data_root(data_dir)
+        / "mi_fiteness_data"
+        / "20260416_881116692_MiFitness_hlth_center_sport_record.csv"
+    )
+    if not csv_path.exists():
+        return pd.DataFrame(columns=columns)
+
+    raw = pd.read_csv(csv_path, encoding="utf-8-sig")
+    if raw.empty or "Category" not in raw.columns or "Value" not in raw.columns:
+        return pd.DataFrame(columns=columns)
+
+    running = raw[raw["Category"].astype(str).str.lower() == "running"]
+    records = []
+    for _, row in running.iterrows():
+        try:
+            payload = json.loads(row["Value"]) if pd.notna(row["Value"]) else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+
+        started_at = _unix_seconds_to_local_datetime(payload.get("start_time") or row.get("Time"))
+        if pd.isna(started_at):
+            continue
+
+        distance_m = _safe_float(payload.get("distance"))
+        duration_seconds = _safe_float(payload.get("duration"))
+        distance_km = distance_m / 1000.0 if distance_m is not None and distance_m > 0 else None
+        duration_min = duration_seconds / 60.0 if duration_seconds is not None and duration_seconds > 0 else None
+
+        avg_pace_seconds = _safe_float(payload.get("avg_pace"))
+        if avg_pace_seconds is not None and avg_pace_seconds > 0:
+            pace_min_per_km = avg_pace_seconds / 60.0
+        elif distance_km and duration_min:
+            pace_min_per_km = duration_min / distance_km
+        else:
+            pace_min_per_km = None
+
+        records.append(
+            {
+                date_col: started_at,
+                source_col: _build_running_export_text(
+                    "Mi Fitness",
+                    distance_km=distance_km,
+                    duration_seconds=duration_seconds,
+                    pace_min_per_km=pace_min_per_km,
+                    heart_rate_bpm=payload.get("avg_hrm"),
+                    cadence_spm=payload.get("avg_cadence"),
+                    calories_kcal=payload.get("calories"),
+                    steps=payload.get("steps"),
+                ),
+            }
+        )
+
+    result = pd.DataFrame(records, columns=columns)
+    if result.empty:
+        return result
+    result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
+    return result.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
+
+
+def load_zepp_running_log_frame(data_dir=None, date_col="日期", source_col="运动"):
+    columns = [date_col, source_col]
+    csv_path = _resolve_running_data_root(data_dir) / "zepplift_data" / "SPORT" / "SPORT_1776331608562.csv"
+    if not csv_path.exists():
+        return pd.DataFrame(columns=columns)
+
+    raw = pd.read_csv(csv_path, encoding="utf-8-sig")
+    if raw.empty or "type" not in raw.columns:
+        return pd.DataFrame(columns=columns)
+
+    type_series = pd.to_numeric(raw["type"], errors="coerce")
+    running = raw[type_series == 1]
+    records = []
+    for _, row in running.iterrows():
+        started_at = _timestamp_to_local_datetime(row.get("startTime"))
+        if pd.isna(started_at):
+            continue
+
+        distance_m = _safe_float(row.get("distance(m)"))
+        duration_seconds = _safe_float(row.get("sportTime(s)"))
+        distance_km = distance_m / 1000.0 if distance_m is not None and distance_m > 0 else None
+        duration_min = duration_seconds / 60.0 if duration_seconds is not None and duration_seconds > 0 else None
+        pace_min_per_km = duration_min / distance_km if distance_km and duration_min else None
+
+        records.append(
+            {
+                date_col: started_at,
+                source_col: _build_running_export_text(
+                    "Zepp",
+                    distance_km=distance_km,
+                    duration_seconds=duration_seconds,
+                    pace_min_per_km=pace_min_per_km,
+                    calories_kcal=row.get("calories(kcal)"),
+                ),
+            }
+        )
+
+    result = pd.DataFrame(records, columns=columns)
+    if result.empty:
+        return result
+    result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
+    return result.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
+
+
+def load_app_running_log_frame(data_dir=None, date_col="日期", source_col="运动"):
+    mi_fitness = load_mi_fitness_running_log_frame(data_dir=data_dir, date_col=date_col, source_col=source_col)
+    zepp = load_zepp_running_log_frame(data_dir=data_dir, date_col=date_col, source_col=source_col)
+
+    if not mi_fitness.empty and not zepp.empty:
+        zepp = zepp[zepp[date_col] < mi_fitness[date_col].min()].copy()
+
+    frames = [frame for frame in (zepp, mi_fitness) if not frame.empty]
+    if not frames:
+        return pd.DataFrame(columns=[date_col, source_col])
+
+    result = pd.concat(frames, ignore_index=True)
+    result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
+    return result.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
+
+
+def _filter_invalid_rows_after(invalid_rows, cutoff):
+    cutoff_value = pd.to_datetime(cutoff, errors="coerce")
+    if pd.isna(cutoff_value):
+        return list(invalid_rows or [])
+
+    result = []
+    for item in invalid_rows or []:
+        item_date = pd.to_datetime(item.get("日期"), errors="coerce")
+        if pd.isna(item_date) or item_date > cutoff_value:
+            result.append(item)
+    return result
+
+
+def _merge_running_invalid_rows(*invalid_row_groups):
+    result = []
+    for group in invalid_row_groups:
+        result.extend(group or [])
+
+    def sort_key(item):
+        item_date = pd.to_datetime(item.get("日期"), errors="coerce")
+        if pd.isna(item_date):
+            return pd.Timestamp.min
+        return item_date
+
+    result.sort(key=sort_key, reverse=True)
+    return result
+
+
+def _build_running_excluded_row(row, reasons, date_col="日期"):
+    return {
+        "日期": row.get(date_col),
+        "原文": row.get("运动文本"),
+        "issues_by_chart": {
+            "running-excluded": list(dict.fromkeys(reasons or [])),
+        },
+    }
+
+
+def _running_primary_duration_cap(distance_km):
+    distance_value = _safe_float(distance_km)
+    if distance_value is None or distance_value <= 0:
+        return 90.0
+    return max(90.0, distance_value * 15.0)
+
+
+def _build_running_dashboard_frames(running_metrics, date_col="日期"):
+    empty_columns = list(getattr(running_metrics, "columns", []))
+    empty_frame = pd.DataFrame(columns=empty_columns)
+    if running_metrics is None or running_metrics.empty:
+        return (
+            {
+                "running": empty_frame.copy(),
+                "running-heart": empty_frame.copy(),
+                "running-form": empty_frame.copy(),
+                "running-hrc": empty_frame.copy(),
+            },
+            [],
+        )
+
+    base = running_metrics.copy()
+    base[date_col] = pd.to_datetime(base[date_col], errors="coerce")
+    base = base.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
+
+    keep_primary_mask = []
+    excluded_rows = []
+    for _, row in base.iterrows():
+        reasons = []
+        distance_value = _safe_float(row.get("distance_km"))
+        duration_value = _safe_float(row.get("duration_min"))
+        pace_value = _safe_float(row.get("pace_min_per_km"))
+
+        if distance_value is None:
+            reasons.append("缺少 距离")
+        elif distance_value < 1.0:
+            reasons.append(f"距离 < 1 km（{distance_value:.2f} km）")
+
+        if pace_value is None:
+            reasons.append("缺少 配速")
+        elif pace_value > 10.0:
+            pace_text = _format_minutes_to_mmss(pace_value) or f"{pace_value:.2f}"
+            reasons.append(f"配速 > 10:00/km（当前 {pace_text}/km）")
+
+        if duration_value is None:
+            reasons.append("缺少 用时")
+        else:
+            duration_cap = _running_primary_duration_cap(distance_value)
+            if duration_value > duration_cap:
+                duration_text = _format_minutes_to_mmss(duration_value) or f"{duration_value:.1f} min"
+                cap_text = _format_minutes_to_mmss(duration_cap) or f"{duration_cap:.1f} min"
+                reasons.append(f"用时超出阈值（上限 {cap_text}，当前 {duration_text}）")
+
+        keep_primary_mask.append(not reasons)
+        if reasons:
+            excluded_rows.append(_build_running_excluded_row(row, reasons, date_col=date_col))
+
+    primary_df = base.loc[keep_primary_mask].copy().reset_index(drop=True)
+    heart_df = primary_df.dropna(subset=["heart_rate_bpm"]).copy().reset_index(drop=True)
+    form_df = primary_df.dropna(subset=["duration_min", "cadence_spm", "stride_m"]).copy().reset_index(drop=True)
+    hrc_df = primary_df.dropna(subset=["heart_rate_bpm", "HRC_m_per_beat"]).copy().reset_index(drop=True)
+    return (
+        {
+            "running": primary_df,
+            "running-heart": heart_df,
+            "running-form": form_df,
+            "running-hrc": hrc_df,
+        },
+        excluded_rows,
+    )
+
+
+def _attach_running_dashboard_views(running_metrics, date_col="日期"):
+    dashboard_frames, excluded_rows = _build_running_dashboard_frames(running_metrics, date_col=date_col)
+    running_metrics.attrs["dashboard_frames"] = dashboard_frames
+    running_metrics.attrs["excluded_rows"] = excluded_rows
+    return running_metrics
+
+
+def compute_preferred_running_metrics(data_frame=None, source_col="运动", date_col="日期", output_dir=None):
+    app_running_frame = load_app_running_log_frame(date_col=date_col, source_col=source_col)
+    app_metrics = (
+        compute_running_metrics(app_running_frame, source_col=source_col, date_col=date_col, output_dir=output_dir)
+        if not app_running_frame.empty
+        else pd.DataFrame()
+    )
+
+    if data_frame is None:
+        data_frame = load_time_data()
+
+    manual_metrics = (
+        compute_running_metrics(data_frame, source_col=source_col, date_col=date_col, output_dir=output_dir)
+        if data_frame is not None and not data_frame.empty
+        else pd.DataFrame()
+    )
+
+    if app_metrics.empty:
+        manual_metrics = _attach_running_dashboard_views(manual_metrics, date_col=date_col)
+        manual_metrics.attrs["running_source"] = "time_xlsx"
+        return manual_metrics
+
+    if manual_metrics.empty:
+        app_metrics = _attach_running_dashboard_views(app_metrics, date_col=date_col)
+        app_metrics.attrs["running_source"] = "app_exports"
+        return app_metrics
+
+    cutoff = pd.to_datetime(app_metrics[date_col], errors="coerce").max()
+    manual_dates = pd.to_datetime(manual_metrics[date_col], errors="coerce")
+    manual_tail = manual_metrics.loc[manual_dates > cutoff].copy()
+    if manual_tail.empty:
+        app_metrics = _attach_running_dashboard_views(app_metrics, date_col=date_col)
+        app_metrics.attrs["running_source"] = "app_exports"
+        return app_metrics
+
+    combined = pd.concat([app_metrics, manual_tail], ignore_index=True)
+    combined[date_col] = pd.to_datetime(combined[date_col], errors="coerce")
+    combined = combined.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
+    combined.attrs["invalid_rows"] = _merge_running_invalid_rows(
+        app_metrics.attrs.get("invalid_rows"),
+        _filter_invalid_rows_after(manual_metrics.attrs.get("invalid_rows"), cutoff),
+    )
+    combined = _attach_running_dashboard_views(combined, date_col=date_col)
+    combined.attrs["running_source"] = "app_exports_plus_time_xlsx"
+    return combined
 
 
 def compute_running_metrics(

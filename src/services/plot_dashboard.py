@@ -26,6 +26,11 @@ RUNNING_WARNING_CONFIG = {
         'title': 'HRC 分析存在未完整提取的记录',
         'message': '这些记录无法可靠计算 HRC，会直接影响趋势判断。请优先修正缺失字段。',
     },
+    'running-excluded': {
+        'id': 'running-excluded-records',
+        'title': '已排除的异常跑步记录',
+        'message': '这些记录未参与主跑步图 / 心率分析 / 技术结构图计算，避免明显失真的脏数据污染趋势。',
+    },
 }
 
 
@@ -179,7 +184,9 @@ def _build_running_data_warnings(invalid_rows):
                 'title': config['title'],
                 'message': config['message'],
                 'details': visible_details,
-                'affected_chart_ids': [chart_id],
+                'affected_chart_ids': ['running', 'running-form', 'running-hrc']
+                if chart_id == 'running-excluded'
+                else [chart_id],
             }
         )
 
@@ -812,15 +819,23 @@ def _build_balance_dashboard_chart():
 
 
 def _build_running_dashboard_chart(running_df):
-    running_df = running_df.copy()
-    running_df = running_df.dropna(subset=['pace_min_per_km', 'heart_rate_bpm', 'distance_km'], how='all').sort_values('日期')
+    dashboard_frames = running_df.attrs.get('dashboard_frames') or {}
+    running_df = dashboard_frames.get('running', running_df).copy()
+    running_df = running_df.dropna(subset=['pace_min_per_km', 'distance_km'], how='all').sort_values('日期')
     if running_df.empty:
         raise ValueError('未找到可展示的跑步配速数据')
 
     dates = running_df['日期'].tolist()
+    pace_df = running_df.dropna(subset=['pace_min_per_km']).copy()
+    heart_df = dashboard_frames.get('running-heart')
+    if heart_df is None:
+        heart_df = running_df.dropna(subset=['heart_rate_bpm']).copy()
+    else:
+        heart_df = heart_df.copy().dropna(subset=['heart_rate_bpm']).sort_values('日期')
+    distance_df = running_df.dropna(subset=['distance_km']).copy()
     series = []
 
-    if running_df['pace_min_per_km'].notna().any():
+    if not pace_df.empty:
         series.append(
             {
                 'name': '配速 Pace (min/km)',
@@ -828,11 +843,11 @@ def _build_running_dashboard_chart(running_df):
                 'showSymbol': True,
                 'symbolSize': 7,
                 'smooth': True,
-                'data': _series_points(dates, running_df['pace_min_per_km'].to_numpy(dtype=float), 2),
+                'data': _series_points(pace_df['日期'].tolist(), pace_df['pace_min_per_km'].to_numpy(dtype=float), 2),
             }
         )
 
-    if running_df['heart_rate_bpm'].notna().any():
+    if not heart_df.empty:
         series.append(
             {
                 'name': '心率 Heart Rate (bpm)',
@@ -840,11 +855,11 @@ def _build_running_dashboard_chart(running_df):
                 'showSymbol': False,
                 'smooth': True,
                 'yAxisIndex': 1,
-                'data': _series_points(dates, running_df['heart_rate_bpm'].to_numpy(dtype=float), 0),
+                'data': _series_points(heart_df['日期'].tolist(), heart_df['heart_rate_bpm'].to_numpy(dtype=float), 0),
             }
         )
 
-    if running_df['distance_km'].notna().any():
+    if not distance_df.empty:
         series.append(
             {
                 'name': '距离 Distance (km)',
@@ -852,7 +867,7 @@ def _build_running_dashboard_chart(running_df):
                 'showSymbol': False,
                 'smooth': True,
                 'yAxisIndex': 2,
-                'data': _series_points(dates, running_df['distance_km'].to_numpy(dtype=float), 2),
+                'data': _series_points(distance_df['日期'].tolist(), distance_df['distance_km'].to_numpy(dtype=float), 2),
             }
         )
 
@@ -902,8 +917,9 @@ def _build_running_dashboard_chart(running_df):
 
 
 def _build_running_form_dashboard_chart(running_df):
-    running_df = running_df.copy()
-    running_df = running_df.dropna(subset=['duration_min', 'cadence_spm', 'stride_m'], how='all').sort_values('日期')
+    dashboard_frames = running_df.attrs.get('dashboard_frames') or {}
+    running_df = dashboard_frames.get('running-form', running_df).copy()
+    running_df = running_df.dropna(subset=['duration_min', 'cadence_spm', 'stride_m']).sort_values('日期')
     if running_df.empty:
         raise ValueError('未找到可展示的跑步技术结构数据')
 
@@ -989,8 +1005,9 @@ def _build_running_form_dashboard_chart(running_df):
 
 
 def _build_running_hrc_dashboard_chart(running_df):
-    running_df = running_df.copy()
-    running_df = running_df.dropna(subset=['HRC_m_per_beat']).sort_values('日期')
+    dashboard_frames = running_df.attrs.get('dashboard_frames') or {}
+    running_df = dashboard_frames.get('running-hrc', running_df).copy()
+    running_df = running_df.dropna(subset=['heart_rate_bpm', 'HRC_m_per_beat']).sort_values('日期')
     if running_df.empty:
         raise ValueError('未找到可展示的 HRC 数据')
 
@@ -1066,8 +1083,10 @@ def build_plot_dashboard_data():
         time_trend_error = exc
 
     try:
-        running_metrics = plot_module.compute_running_metrics(data_frame)
-        warnings.extend(_build_running_data_warnings(running_metrics.attrs.get('invalid_rows')))
+        running_metrics = plot_module.compute_preferred_running_metrics(data_frame)
+        running_warning_rows = list(running_metrics.attrs.get('invalid_rows') or [])
+        running_warning_rows.extend(running_metrics.attrs.get('excluded_rows') or [])
+        warnings.extend(_build_running_data_warnings(running_warning_rows))
     except Exception as exc:
         running_metrics_error = exc
 
