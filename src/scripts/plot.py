@@ -1250,8 +1250,8 @@ def compute_running_metrics(
         missing_by_chart = {}
 
         running_missing = []
-        if pd.isna(row.get("speed_m_per_min")):
-            running_missing.append("速度")
+        if pd.isna(row.get("pace_min_per_km")):
+            running_missing.append("配速")
         if pd.isna(row.get("heart_rate_bpm")):
             running_missing.append("心率")
         if pd.isna(row.get("distance_km")):

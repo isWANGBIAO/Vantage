@@ -14,7 +14,7 @@ RUNNING_WARNING_CONFIG = {
     'running': {
         'id': 'running-missing-main',
         'title': '跑步主图存在未完整提取的记录',
-        'message': '这些记录会让速度 / 心率 / 距离出现断点。请按原文修正 Excel 后再 refresh charts。',
+        'message': '这些记录会让配速 / 心率 / 距离出现断点。请按原文修正 Excel 后再 refresh charts。',
     },
     'running-form': {
         'id': 'running-missing-form',
@@ -45,6 +45,18 @@ def _to_chart_date(value):
     if value is None or pd.isna(value):
         return None
     return pd.to_datetime(value).strftime('%Y-%m-%d')
+
+
+def _format_total_minutes(value):
+    if value is None or pd.isna(value):
+        return None
+    total_seconds = int(round(float(value) * 60))
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    if hours > 0:
+        return f'{hours}小时{minutes:02d}分'
+    return f'{minutes}分{seconds:02d}秒'
 
 
 def _series_points(dates, values, digits=2):
@@ -801,22 +813,22 @@ def _build_balance_dashboard_chart():
 
 def _build_running_dashboard_chart(running_df):
     running_df = running_df.copy()
-    running_df = running_df.dropna(subset=['speed_m_per_min', 'heart_rate_bpm', 'distance_km'], how='all').sort_values('日期')
+    running_df = running_df.dropna(subset=['pace_min_per_km', 'heart_rate_bpm', 'distance_km'], how='all').sort_values('日期')
     if running_df.empty:
-        raise ValueError('未找到可展示的跑步速度数据')
+        raise ValueError('未找到可展示的跑步配速数据')
 
     dates = running_df['日期'].tolist()
     series = []
 
-    if running_df['speed_m_per_min'].notna().any():
+    if running_df['pace_min_per_km'].notna().any():
         series.append(
             {
-                'name': '速度 Speed (m/min)',
+                'name': '配速 Pace (min/km)',
                 'type': 'line',
                 'showSymbol': True,
                 'symbolSize': 7,
                 'smooth': True,
-                'data': _series_points(dates, running_df['speed_m_per_min'].to_numpy(dtype=float), 1),
+                'data': _series_points(dates, running_df['pace_min_per_km'].to_numpy(dtype=float), 2),
             }
         )
 
@@ -856,7 +868,7 @@ def _build_running_dashboard_chart(running_df):
         'grid': {'top': 72, 'left': 56, 'right': 108, 'bottom': 72, 'containLabel': True},
         'xAxis': {'type': 'time'},
         'yAxis': [
-            {'type': 'value', 'name': '速度 (m/min)', 'scale': True},
+            {'type': 'value', 'name': '配速 (min/km)', 'scale': True, 'inverse': True},
             {'type': 'value', 'name': '心率 (bpm)', 'position': 'right', 'scale': True},
             {'type': 'value', 'name': '距离 (km)', 'position': 'right', 'offset': 64, 'scale': True},
         ],
@@ -864,9 +876,13 @@ def _build_running_dashboard_chart(running_df):
     }
 
     latest_row = running_df.iloc[-1]
+    total_distance = running_df['distance_km'].dropna().sum()
+    total_duration = running_df['duration_min'].dropna().sum()
     summary = [
-        {'label': '最新速度', 'value': f"{_to_chart_number(latest_row['speed_m_per_min'], 1)} m/min"},
+        {'label': '最新配速', 'value': latest_row.get('pace_mmss') or f"{_to_chart_number(latest_row['pace_min_per_km'], 2)} /km"},
         {'label': '最新距离', 'value': f"{_to_chart_number(latest_row['distance_km'], 2)} km"},
+        {'label': '总跑量', 'value': f"{_to_chart_number(total_distance, 2)} km"},
+        {'label': '总跑步时间', 'value': _format_total_minutes(total_duration)},
     ]
     if pd.notna(latest_row.get('heart_rate_bpm')):
         summary.append({'label': '最新心率', 'value': f"{_to_chart_number(latest_row['heart_rate_bpm'], 0)} bpm"})
@@ -876,8 +892,8 @@ def _build_running_dashboard_chart(running_df):
 
     return _build_chart(
         'running',
-        '跑步速度-心率耦合',
-        '把速度、心率与距离放在同一时间轴上，直接观察输出提升时心肺负荷是否同步变化。',
+        '跑步配速-心率耦合',
+        '把配速、心率与距离放在同一时间轴上，直接观察节奏变化时心肺负荷是否同步变化。',
         option,
         formatter='generic',
         height=430,
@@ -1141,8 +1157,8 @@ def build_plot_dashboard_data():
 
         _safe_chart(
             'running',
-            '跑步速度-心率耦合',
-            '把速度、心率与距离放在同一时间轴上，直接观察输出提升时心肺负荷是否同步变化。',
+            '跑步配速-心率耦合',
+            '把配速、心率与距离放在同一时间轴上，直接观察节奏变化时心肺负荷是否同步变化。',
             lambda: _build_running_dashboard_chart(get_running_metrics()),
             formatter='generic',
             height=430,
