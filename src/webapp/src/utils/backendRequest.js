@@ -1,6 +1,33 @@
 import { retryAsync } from './retryAsync.js';
 
-export const BACKEND_BASE_URL = 'http://localhost:8000';
+const DEFAULT_BACKEND_PROTOCOL = 'http:';
+const DEFAULT_BACKEND_HOST = '127.0.0.1';
+const DEFAULT_BACKEND_PORT = '8000';
+
+function normalizeBackendHost(hostname) {
+  if (!hostname || hostname === 'localhost' || hostname === '::1' || hostname === '[::1]') {
+    return DEFAULT_BACKEND_HOST;
+  }
+
+  return hostname;
+}
+
+export function resolveBackendBaseUrl(locationLike = globalThis?.location) {
+  const configuredBaseUrl = import.meta.env?.VITE_BACKEND_BASE_URL?.trim();
+  if (configuredBaseUrl) {
+    return configuredBaseUrl.replace(/\/+$/, '');
+  }
+
+  if (locationLike?.protocol && /^https?:$/i.test(locationLike.protocol)) {
+    return '';
+  }
+
+  const hostname = normalizeBackendHost(locationLike?.hostname);
+
+  return `${DEFAULT_BACKEND_PROTOCOL}//${hostname}:${DEFAULT_BACKEND_PORT}`;
+}
+
+export const BACKEND_BASE_URL = resolveBackendBaseUrl();
 
 const RETRY_DELAYS_BY_POLICY = {
   load: [1000, 2000, 3000, 5000, 8000],
@@ -25,8 +52,10 @@ export class BackendRequestError extends Error {
 }
 
 export function buildBackendUrl(input) {
+  const backendBaseUrl = resolveBackendBaseUrl();
+
   if (!input) {
-    return BACKEND_BASE_URL;
+    return backendBaseUrl || '/';
   }
 
   if (/^(?:https?:|blob:|data:)/i.test(input)) {
@@ -34,10 +63,10 @@ export function buildBackendUrl(input) {
   }
 
   if (input.startsWith('/')) {
-    return `${BACKEND_BASE_URL}${input}`;
+    return backendBaseUrl ? `${backendBaseUrl}${input}` : input;
   }
 
-  return `${BACKEND_BASE_URL}/${input}`;
+  return backendBaseUrl ? `${backendBaseUrl}/${input}` : `/${input}`;
 }
 
 function isAbortError(error) {

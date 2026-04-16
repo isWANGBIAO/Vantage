@@ -1559,6 +1559,18 @@ async def list_plots():
         print(f"Error listing plots: {e}")
         return {"plots": [], "error": str(e)}
 
+
+@app.get("/api/plots/data")
+async def get_plot_dashboard_data():
+    try:
+        from src.services.plot_dashboard import build_plot_dashboard_data
+
+        payload = await asyncio.to_thread(build_plot_dashboard_data)
+        return payload
+    except Exception as e:
+        print(f"Error building plot dashboard data: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e), "charts": [], "count": 0})
+
 @app.get("/api/action_plan/today")
 async def get_today_action_plan():
     """Return today's latest action plan if it exists"""

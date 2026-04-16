@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  BACKEND_BASE_URL,
   buildBackendUrl,
   fetchBackend,
   fetchBackendJson,
+  resolveBackendBaseUrl,
 } from './backendRequest.js';
 
 function jsonResponse(body, init = {}) {
@@ -16,9 +18,32 @@ function jsonResponse(body, init = {}) {
 }
 
 test('buildBackendUrl prefixes relative backend paths', () => {
-  assert.equal(buildBackendUrl('/api/status'), 'http://localhost:8000/api/status');
-  assert.equal(buildBackendUrl('/static/demo.png'), 'http://localhost:8000/static/demo.png');
+  assert.equal(BACKEND_BASE_URL, 'http://127.0.0.1:8000');
+  assert.equal(buildBackendUrl('/api/status'), 'http://127.0.0.1:8000/api/status');
+  assert.equal(buildBackendUrl('/static/demo.png'), 'http://127.0.0.1:8000/static/demo.png');
   assert.equal(buildBackendUrl('http://example.com/demo'), 'http://example.com/demo');
+});
+
+test('resolveBackendBaseUrl prefers same-origin http pages', () => {
+  assert.equal(
+    resolveBackendBaseUrl({ protocol: 'http:', hostname: 'localhost' }),
+    '',
+  );
+  assert.equal(
+    resolveBackendBaseUrl({ protocol: 'https:', hostname: '192.168.31.8' }),
+    '',
+  );
+});
+
+test('resolveBackendBaseUrl falls back to loopback backend outside the browser', () => {
+  assert.equal(
+    resolveBackendBaseUrl({ protocol: 'file:', hostname: 'localhost' }),
+    'http://127.0.0.1:8000',
+  );
+  assert.equal(
+    resolveBackendBaseUrl({ protocol: 'file:', hostname: '::1' }),
+    'http://127.0.0.1:8000',
+  );
 });
 
 test('fetchBackendJson retries transient GET failures', async () => {

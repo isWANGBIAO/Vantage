@@ -532,33 +532,70 @@ def plot_weight_and_body_fat_rate(data_frame, recent_days=30, output_dir=None):
     save_figure(fig, output_dir, f"weight_bodyfat_{recent_days}d")
 
 
-def compute_time_allocation(data_frame):
-    filtered_df = data_frame.dropna(subset=["睡眠时间", "手机屏幕\n使用时间"])
-    valid_sleep_hours = np.array(
-        [
-            time_to_hour(value, row_index=index, column_name="睡眠时间")
-            for index, value in filtered_df["睡眠时间"].items()
-        ]
-    )
-    valid_screen_hours = np.array(
-        [
-            time_to_hour(value, row_index=index, column_name="手机屏幕\n使用时间")
-            for index, value in filtered_df["手机屏幕\n使用时间"].items()
-        ]
-    )
+def compute_time_allocation_with_warnings(data_frame):
+    filtered_df = data_frame.dropna(subset=["睡眠时间", "手机屏幕\n使用时间"]).copy()
+    if filtered_df.empty:
+        raise ValueError("时间数据为空，无法绘图")
 
+    valid_indices = []
+    valid_sleep_hours = []
+    valid_screen_hours = []
+    skipped_rows = []
+
+    for index, row in filtered_df.iterrows():
+        sleep_hours = time_to_hour(row["睡眠时间"], row_index=index, column_name="睡眠时间")
+        screen_hours = time_to_hour(
+            row["手机屏幕\n使用时间"],
+            row_index=index,
+            column_name="手机屏幕\n使用时间",
+        )
+
+        if sleep_hours is None or screen_hours is None:
+            skipped_rows.append(
+                {
+                    "日期": row.get("日期"),
+                    "睡眠时间": row.get("睡眠时间"),
+                    "手机屏幕使用时间": row.get("手机屏幕\n使用时间"),
+                    "原因": "时间格式无效",
+                }
+            )
+            continue
+
+        remaining_hours = 24 - (sleep_hours + screen_hours)
+        if remaining_hours <= 0:
+            skipped_rows.append(
+                {
+                    "日期": row.get("日期"),
+                    "睡眠时间": row.get("睡眠时间"),
+                    "手机屏幕使用时间": row.get("手机屏幕\n使用时间"),
+                    "原因": "睡眠时间+手机屏幕使用时间 > 24小时",
+                }
+            )
+            continue
+
+        valid_indices.append(index)
+        valid_sleep_hours.append(sleep_hours)
+        valid_screen_hours.append(screen_hours)
+
+    if skipped_rows:
+        print("警告：以下行的时间数据无效，已跳过，不参与时间图表统计")
+        print(pd.DataFrame(skipped_rows).to_string(index=False))
+
+    if not valid_indices:
+        raise ValueError("有效时间数据为空，无法绘图")
+
+    filtered_df = filtered_df.loc[valid_indices].copy()
+    valid_sleep_hours = np.array(valid_sleep_hours, dtype=float)
+    valid_screen_hours = np.array(valid_screen_hours, dtype=float)
     remaining_hours = 24 - (valid_sleep_hours + valid_screen_hours)
-    invalid_indices = np.where(remaining_hours <= 0)
-    if len(invalid_indices[0]) > 0:
-        print("错误：")
-        print("以下行的数据无效，睡眠时间+手机屏幕使用时间 > 24小时")
-        print("这可能是由于：")
-        print("1. 睡觉时手机没锁屏导致一直在计时")
-        print("2. 记录错误")
-        print("\n数据详情：")
-        print(filtered_df.iloc[invalid_indices])
-        raise ValueError("数据无效，请检查并修正Excel中的数据")
 
+    return filtered_df, valid_sleep_hours, valid_screen_hours, remaining_hours, skipped_rows
+
+
+def compute_time_allocation(data_frame):
+    filtered_df, valid_sleep_hours, valid_screen_hours, remaining_hours, _ = compute_time_allocation_with_warnings(
+        data_frame
+    )
     return filtered_df, valid_sleep_hours, valid_screen_hours, remaining_hours
 
 
@@ -647,10 +684,15 @@ def plot_time_allocation_bar(
 
 
 def plot_time_trends(
-    data_frame, filtered_df, remaining_hours, nearest_days=120, output_dir=None
+    filtered_df,
+    valid_sleep_hours,
+    valid_screen_hours,
+    remaining_hours,
+    nearest_days=120,
+    output_dir=None,
 ):
-    filtered_df_1 = data_frame.dropna(subset=["睡眠时间"])
-    filtered_df_2 = data_frame.dropna(subset=["手机屏幕\n使用时间"])
+    filtered_df_1 = filtered_df
+    filtered_df_2 = filtered_df
     filtered_df_3 = filtered_df
 
     if filtered_df_1.empty or filtered_df_2.empty or filtered_df_3.empty:
@@ -658,18 +700,8 @@ def plot_time_trends(
 
     nearest_days = min(nearest_days, len(filtered_df_1), len(filtered_df_2), len(filtered_df_3))
 
-    valid_1 = np.array(
-        [
-            time_to_hour(value, row_index=index, column_name="睡眠时间")
-            for index, value in filtered_df_1["睡眠时间"].items()
-        ]
-    )
-    valid_2 = np.array(
-        [
-            time_to_hour(value, row_index=index, column_name="手机屏幕\n使用时间")
-            for index, value in filtered_df_2["手机屏幕\n使用时间"].items()
-        ]
-    )
+    valid_1 = valid_sleep_hours
+    valid_2 = valid_screen_hours
 
     y1 = np.zeros(len(filtered_df_1))
     y2 = np.zeros(len(filtered_df_2))
@@ -1238,8 +1270,9 @@ def generate_all_plots(output_dir=None, is_dark_mode=False):
     )
 
     y1, y2, y3, nearest_days = plot_time_trends(
-        data_frame,
         filtered_df,
+        valid_sleep_hours,
+        valid_screen_hours,
         remaining_hours,
         nearest_days=120,
         output_dir=output_dir,
