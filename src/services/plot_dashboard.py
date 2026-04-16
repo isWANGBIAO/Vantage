@@ -10,6 +10,23 @@ TIME_WARNING_CHART_IDS = [
     'time-delta',
     'radar-goal',
 ]
+RUNNING_WARNING_CONFIG = {
+    'running': {
+        'id': 'running-missing-main',
+        'title': '跑步主图存在未完整提取的记录',
+        'message': '这些记录会让速度 / 心率 / 距离出现断点。请按原文修正 Excel 后再 refresh charts。',
+    },
+    'running-form': {
+        'id': 'running-missing-form',
+        'title': '跑步技术结构存在未完整提取的记录',
+        'message': '这些记录会让用时 / 步频 / 步幅出现断点。请补齐原始文本后再 refresh charts。',
+    },
+    'running-hrc': {
+        'id': 'running-missing-hrc',
+        'title': 'HRC 分析存在未完整提取的记录',
+        'message': '这些记录无法可靠计算 HRC，会直接影响趋势判断。请优先修正缺失字段。',
+    },
+}
 
 
 def _to_chart_number(value, digits=2):
@@ -115,6 +132,46 @@ def _build_time_data_warning(skipped_rows):
         'details': details,
         'affected_chart_ids': TIME_WARNING_CHART_IDS,
     }
+
+
+def _build_running_data_warnings(invalid_rows):
+    if not invalid_rows:
+        return []
+
+    grouped_rows = {chart_id: [] for chart_id in RUNNING_WARNING_CONFIG}
+    for row in reversed(invalid_rows):
+        missing_by_chart = row.get('missing_by_chart') or {}
+        date_text = _to_chart_date(row.get('日期')) or str(row.get('日期') or '未知日期')
+        raw_text = str(row.get('原文') or '').strip()
+        if len(raw_text) > 96:
+            raw_text = f"{raw_text[:93]}..."
+
+        for chart_id, missing_fields in missing_by_chart.items():
+            if chart_id not in grouped_rows:
+                continue
+            missing_text = '、'.join(missing_fields) if missing_fields else '关键字段'
+            grouped_rows[chart_id].append(f"{date_text}：缺少 {missing_text}；原文：{raw_text or '空'}")
+
+    warnings = []
+    for chart_id, config in RUNNING_WARNING_CONFIG.items():
+        details = grouped_rows.get(chart_id) or []
+        if not details:
+            continue
+        visible_details = details[:6]
+        remaining_count = len(details) - len(visible_details)
+        if remaining_count > 0:
+            visible_details.append(f"其余 {remaining_count} 条异常记录已省略，请直接检查 Excel 源数据。")
+        warnings.append(
+            {
+                'id': config['id'],
+                'title': config['title'],
+                'message': config['message'],
+                'details': visible_details,
+                'affected_chart_ids': [chart_id],
+            }
+        )
+
+    return warnings
 
 
 def _compute_time_trend_payload(data_frame):
@@ -742,8 +799,8 @@ def _build_balance_dashboard_chart():
     )
 
 
-def _build_running_dashboard_chart(data_frame):
-    running_df = plot_module.compute_running_metrics(data_frame).copy()
+def _build_running_dashboard_chart(running_df):
+    running_df = running_df.copy()
     running_df = running_df.dropna(subset=['speed_m_per_min', 'heart_rate_bpm', 'distance_km'], how='all').sort_values('日期')
     if running_df.empty:
         raise ValueError('未找到可展示的跑步速度数据')
@@ -828,8 +885,8 @@ def _build_running_dashboard_chart(data_frame):
     )
 
 
-def _build_running_form_dashboard_chart(data_frame):
-    running_df = plot_module.compute_running_metrics(data_frame).copy()
+def _build_running_form_dashboard_chart(running_df):
+    running_df = running_df.copy()
     running_df = running_df.dropna(subset=['duration_min', 'cadence_spm', 'stride_m'], how='all').sort_values('日期')
     if running_df.empty:
         raise ValueError('未找到可展示的跑步技术结构数据')
@@ -915,8 +972,8 @@ def _build_running_form_dashboard_chart(data_frame):
     )
 
 
-def _build_running_hrc_dashboard_chart(data_frame):
-    running_df = plot_module.compute_running_metrics(data_frame).copy()
+def _build_running_hrc_dashboard_chart(running_df):
+    running_df = running_df.copy()
     running_df = running_df.dropna(subset=['HRC_m_per_beat']).sort_values('日期')
     if running_df.empty:
         raise ValueError('未找到可展示的 HRC 数据')
@@ -980,6 +1037,8 @@ def build_plot_dashboard_data():
     data_frame = plot_module.load_time_data()
     time_trend_payload = None
     time_trend_error = None
+    running_metrics = None
+    running_metrics_error = None
     warnings = []
 
     try:
@@ -990,10 +1049,21 @@ def build_plot_dashboard_data():
     except Exception as exc:
         time_trend_error = exc
 
+    try:
+        running_metrics = plot_module.compute_running_metrics(data_frame)
+        warnings.extend(_build_running_data_warnings(running_metrics.attrs.get('invalid_rows')))
+    except Exception as exc:
+        running_metrics_error = exc
+
     def get_time_trend_payload():
         if time_trend_error is not None:
             raise time_trend_error
         return time_trend_payload
+
+    def get_running_metrics():
+        if running_metrics_error is not None:
+            raise running_metrics_error
+        return running_metrics
 
     charts = [
         _safe_chart(
@@ -1073,7 +1143,7 @@ def build_plot_dashboard_data():
             'running',
             '跑步速度-心率耦合',
             '把速度、心率与距离放在同一时间轴上，直接观察输出提升时心肺负荷是否同步变化。',
-            lambda: _build_running_dashboard_chart(data_frame),
+            lambda: _build_running_dashboard_chart(get_running_metrics()),
             formatter='generic',
             height=430,
         ),
@@ -1081,7 +1151,7 @@ def build_plot_dashboard_data():
             'running-form',
             '跑步技术结构',
             '把单次用时、步频、步幅放在一起，更容易看清动作结构是否稳定，而不是只看单一配速。',
-            lambda: _build_running_form_dashboard_chart(data_frame),
+            lambda: _build_running_form_dashboard_chart(get_running_metrics()),
             formatter='generic',
             height=400,
         ),
@@ -1089,7 +1159,7 @@ def build_plot_dashboard_data():
             'running-hrc',
             'Heart Rate Cost of Running (HRC)',
             '这里按速度 ÷ 心率计算 HRC，单位是 m/beat。数值越高，表示单位心搏支持的前进效率越高。',
-            lambda: _build_running_hrc_dashboard_chart(data_frame),
+            lambda: _build_running_hrc_dashboard_chart(get_running_metrics()),
             formatter='generic',
             height=400,
         ),

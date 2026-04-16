@@ -338,7 +338,72 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds }) {
   );
 }
 
-function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasWarning = false }) {
+function ChartInlineWarnings({ warnings }) {
+  if (!warnings.length) {
+    return null;
+  }
+
+  const detailLines = warnings.flatMap((warning) => {
+    const details = getWarningDetails(warning);
+    if (details.length) {
+      return details.map((detail) => ({
+        title: warning?.title || '异常数据',
+        detail,
+      }));
+    }
+    return [
+      {
+        title: warning?.title || '异常数据',
+        detail: warning?.message || '请检查源数据',
+      },
+    ];
+  });
+
+  const visibleLines = detailLines.slice(0, 4);
+  const remainingCount = detailLines.length - visibleLines.length;
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gap: 10,
+        padding: 14,
+        borderRadius: 20,
+        background: 'linear-gradient(135deg, rgba(255, 248, 232, 0.96) 0%, rgba(255, 241, 213, 0.92) 100%)',
+        border: '1px solid rgba(214, 154, 54, 0.18)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#7a4d02' }}>
+        <AlertTriangle size={16} />
+        <strong style={{ fontSize: 13 }}>以下记录提取不完整，会造成这张图出现断点</strong>
+      </div>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {visibleLines.map((item, index) => (
+          <div
+            key={`${item.title}-${index}`}
+            style={{
+              padding: '10px 12px',
+              borderRadius: 14,
+              background: 'rgba(255, 255, 255, 0.66)',
+              color: '#7a4d02',
+              fontSize: 12,
+              lineHeight: 1.6,
+              fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+            }}
+          >
+            <strong>{item.title}</strong>
+            <div>{item.detail}</div>
+          </div>
+        ))}
+        {remainingCount > 0 ? (
+          <div style={{ fontSize: 12, color: 'rgba(122, 77, 2, 0.76)' }}>其余 {remainingCount} 条明细已省略，请看顶部异常面板。</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasWarning = false, chartWarnings = [] }) {
   const chartHeight = featured ? Math.max(chart?.height || 420, 500) : Math.max(chart?.height || 360, 390);
   const summaries = Array.isArray(chart?.summary) ? chart.summary : [];
   const { containerRef, isReady } = useChartMountReady();
@@ -448,6 +513,7 @@ function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasW
             ))}
           </div>
         ) : null}
+        {chartWarnings.length ? <ChartInlineWarnings warnings={chartWarnings} /> : null}
       </div>
 
       {chart?.empty ? (
@@ -499,7 +565,7 @@ function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasW
   );
 }
 
-function SectionBlock({ section, chartRefs, warningCharts }) {
+function SectionBlock({ section, chartRefs, warningCharts, warningMap }) {
   return (
     <section style={{ display: 'grid', gap: 20 }}>
       <div
@@ -549,6 +615,7 @@ function SectionBlock({ section, chartRefs, warningCharts }) {
               featured
               accent={section.accent}
               hasWarning={warningCharts.has(chart.id)}
+              chartWarnings={warningMap.get(chart.id) || []}
             />
           ))}
         </div>
@@ -575,6 +642,7 @@ function SectionBlock({ section, chartRefs, warningCharts }) {
               }}
               accent={section.accent}
               hasWarning={warningCharts.has(chart.id)}
+              chartWarnings={warningMap.get(chart.id) || []}
             />
           ))}
         </div>
@@ -628,6 +696,19 @@ export default function Plots() {
       getWarningCharts(warning).forEach((chartId) => ids.add(chartId));
     });
     return ids;
+  }, [warnings]);
+
+  const warningMap = useMemo(() => {
+    const chartWarningMap = new Map();
+    warnings.forEach((warning) => {
+      getWarningCharts(warning).forEach((chartId) => {
+        if (!chartWarningMap.has(chartId)) {
+          chartWarningMap.set(chartId, []);
+        }
+        chartWarningMap.get(chartId).push(warning);
+      });
+    });
+    return chartWarningMap;
   }, [warnings]);
 
   const navigationCharts = useMemo(() => {
@@ -851,6 +932,7 @@ export default function Plots() {
                 section={section}
                 chartRefs={chartRefs}
                 warningCharts={warningCharts}
+                warningMap={warningMap}
               />
             ))}
           </main>
@@ -859,4 +941,3 @@ export default function Plots() {
     </div>
   );
 }
-

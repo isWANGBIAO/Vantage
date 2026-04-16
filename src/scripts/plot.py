@@ -1126,19 +1126,43 @@ def _format_minutes_to_mmss(value):
     return f"{minutes}:{seconds:02d}"
 
 
+def _looks_like_running_text(text):
+    if not isinstance(text, str):
+        return False
+
+    lowered = text.lower()
+    running_keywords = ("跑步", "慢跑", "快跑", "夜跑", "晨跑", "跑了", "竞速", "配速")
+    running_metric_keywords = ("步频", "步幅")
+    walking_keywords = ("走了", "走路", "散步", "步行", "徒步", "快走", "暴走", "绕湖走")
+
+    has_running_keyword = any(keyword in text for keyword in running_keywords)
+    has_running_metric_keyword = any(keyword in text for keyword in running_metric_keywords)
+    has_walking_keyword = any(keyword in text for keyword in walking_keywords)
+    has_distance_keyword = "公里" in text or "km" in lowered
+    has_time_keyword = "用时" in text or "分钟" in text or "分" in text
+
+    if has_running_keyword or has_running_metric_keyword:
+        return True
+
+    if has_walking_keyword:
+        return False
+
+    return has_distance_keyword and has_time_keyword
+
+
 def _parse_running_text(text):
     if not isinstance(text, str):
         return None
 
     distance_km = _parse_distance_km(text)
-    if distance_km is None:
-        return None
-
     time_min = _parse_time_minutes(text)
     pace_min = _parse_pace_minutes(text)
     heart_rate = _parse_int_field(text, "心率")
     cadence = _parse_int_field(text, "步频")
     stride = _parse_float_field(text, "步幅")
+
+    if not _looks_like_running_text(text):
+        return None
 
     if pace_min is None and time_min is not None and distance_km:
         pace_min = time_min / distance_km
@@ -1157,6 +1181,7 @@ def _parse_running_text(text):
         "步频": cadence,
         "步幅": stride,
         "配速除以心率": pace_over_hr,
+        "运动文本": text,
     }
 
 
@@ -1206,6 +1231,54 @@ def compute_running_metrics(
         result["speed_m_per_min"] / result["heart_rate_bpm"],
         np.nan,
     )
+    invalid_rows = []
+    for _, row in result.iterrows():
+        missing_by_chart = {}
+
+        running_missing = []
+        if pd.isna(row.get("speed_m_per_min")):
+            running_missing.append("速度")
+        if pd.isna(row.get("heart_rate_bpm")):
+            running_missing.append("心率")
+        if pd.isna(row.get("distance_km")):
+            running_missing.append("距离")
+        if running_missing:
+            missing_by_chart["running"] = running_missing
+
+        running_form_missing = []
+        if pd.isna(row.get("duration_min")):
+            running_form_missing.append("用时")
+        if pd.isna(row.get("cadence_spm")):
+            running_form_missing.append("步频")
+        if pd.isna(row.get("stride_m")):
+            running_form_missing.append("步幅")
+        if running_form_missing:
+            missing_by_chart["running-form"] = running_form_missing
+
+        running_hrc_missing = []
+        if pd.isna(row.get("distance_km")):
+            running_hrc_missing.append("距离")
+        if pd.isna(row.get("duration_min")):
+            running_hrc_missing.append("用时/配速")
+        if pd.isna(row.get("heart_rate_bpm")):
+            running_hrc_missing.append("心率")
+        if pd.isna(row.get("HRC_m_per_beat")):
+            running_hrc_missing.append("HRC")
+        if running_hrc_missing:
+            deduped_missing = list(dict.fromkeys(running_hrc_missing))
+            missing_by_chart["running-hrc"] = deduped_missing
+
+        if not missing_by_chart:
+            continue
+
+        invalid_rows.append(
+            {
+                "日期": row.get(date_col),
+                "原文": row.get("运动文本"),
+                "missing_by_chart": missing_by_chart,
+            }
+        )
+    result.attrs["invalid_rows"] = invalid_rows
 
     if output_dir is not None:
         output_path = Path(output_dir) / "running_metrics.csv"
