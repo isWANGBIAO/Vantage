@@ -1355,7 +1355,51 @@ def load_mi_fitness_running_log_frame(data_dir=None, date_col="日期", source_c
 
 def load_zepp_running_log_frame(data_dir=None, date_col="日期", source_col="运动"):
     columns = [date_col, source_col]
-    csv_path = _resolve_running_data_root(data_dir) / "zepplift_data" / "SPORT" / "SPORT_1776331608562.csv"
+    sport_dir = _resolve_running_data_root(data_dir) / "zepplift_data" / "SPORT"
+    master_path = sport_dir / "SPORT_running_master.csv"
+    csv_path = sport_dir / "SPORT_1776331608562.csv"
+
+    if master_path.exists():
+        raw = pd.read_csv(master_path, encoding="utf-8-sig")
+        if raw.empty:
+            return pd.DataFrame(columns=columns)
+
+        records = []
+        for _, row in raw.iterrows():
+            started_at = pd.to_datetime(row.get("summary_start_local"), errors="coerce")
+            if pd.isna(started_at):
+                started_at = _timestamp_to_local_datetime(row.get("summary_start_utc"))
+            if pd.isna(started_at):
+                continue
+
+            distance_km = _safe_float(row.get("distance_km"))
+            duration_seconds = _safe_float(row.get("duration_seconds"))
+            pace_min_per_km = _safe_float(row.get("avg_pace_min_per_km"))
+            heart_rate_bpm = _safe_float(row.get("detail_heart_rate_avg"))
+            cadence_spm = _safe_float(row.get("detail_cadence_avg"))
+            calories_kcal = _safe_float(row.get("calories_kcal"))
+
+            records.append(
+                {
+                    date_col: started_at,
+                    source_col: _build_running_export_text(
+                        "Zepp",
+                        distance_km=distance_km,
+                        duration_seconds=duration_seconds,
+                        pace_min_per_km=pace_min_per_km,
+                        heart_rate_bpm=int(round(heart_rate_bpm)) if heart_rate_bpm is not None else None,
+                        cadence_spm=int(round(cadence_spm)) if cadence_spm is not None else None,
+                        calories_kcal=calories_kcal,
+                    ),
+                }
+            )
+
+        result = pd.DataFrame(records, columns=columns)
+        if result.empty:
+            return result
+        result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
+        return result.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
+
     if not csv_path.exists():
         return pd.DataFrame(columns=columns)
 
@@ -1533,7 +1577,7 @@ def _attach_running_dashboard_views(running_metrics, date_col="日期"):
 def compute_preferred_running_metrics(data_frame=None, source_col="运动", date_col="日期", output_dir=None):
     app_running_frame = load_app_running_log_frame(date_col=date_col, source_col=source_col)
     app_metrics = (
-        compute_running_metrics(app_running_frame, source_col=source_col, date_col=date_col, output_dir=output_dir)
+        compute_running_metrics(app_running_frame, source_col=source_col, date_col=date_col, output_dir=None)
         if not app_running_frame.empty
         else pd.DataFrame()
     )
@@ -1542,7 +1586,7 @@ def compute_preferred_running_metrics(data_frame=None, source_col="运动", date
         data_frame = load_time_data()
 
     manual_metrics = (
-        compute_running_metrics(data_frame, source_col=source_col, date_col=date_col, output_dir=output_dir)
+        compute_running_metrics(data_frame, source_col=source_col, date_col=date_col, output_dir=None)
         if data_frame is not None and not data_frame.empty
         else pd.DataFrame()
     )
@@ -1550,11 +1594,19 @@ def compute_preferred_running_metrics(data_frame=None, source_col="运动", date
     if app_metrics.empty:
         manual_metrics = _attach_running_dashboard_views(manual_metrics, date_col=date_col)
         manual_metrics.attrs["running_source"] = "time_xlsx"
+        if output_dir is not None:
+            output_path = Path(output_dir) / "running_metrics.csv"
+            manual_metrics.to_csv(output_path, index=False, encoding="utf-8-sig")
+            print(f"跑步指标已保存: {output_path}")
         return manual_metrics
 
     if manual_metrics.empty:
         app_metrics = _attach_running_dashboard_views(app_metrics, date_col=date_col)
         app_metrics.attrs["running_source"] = "app_exports"
+        if output_dir is not None:
+            output_path = Path(output_dir) / "running_metrics.csv"
+            app_metrics.to_csv(output_path, index=False, encoding="utf-8-sig")
+            print(f"跑步指标已保存: {output_path}")
         return app_metrics
 
     cutoff = pd.to_datetime(app_metrics[date_col], errors="coerce").max()
@@ -1563,6 +1615,10 @@ def compute_preferred_running_metrics(data_frame=None, source_col="运动", date
     if manual_tail.empty:
         app_metrics = _attach_running_dashboard_views(app_metrics, date_col=date_col)
         app_metrics.attrs["running_source"] = "app_exports"
+        if output_dir is not None:
+            output_path = Path(output_dir) / "running_metrics.csv"
+            app_metrics.to_csv(output_path, index=False, encoding="utf-8-sig")
+            print(f"跑步指标已保存: {output_path}")
         return app_metrics
 
     combined = pd.concat([app_metrics, manual_tail], ignore_index=True)
@@ -1574,6 +1630,10 @@ def compute_preferred_running_metrics(data_frame=None, source_col="运动", date
     )
     combined = _attach_running_dashboard_views(combined, date_col=date_col)
     combined.attrs["running_source"] = "app_exports_plus_time_xlsx"
+    if output_dir is not None:
+        output_path = Path(output_dir) / "running_metrics.csv"
+        combined.to_csv(output_path, index=False, encoding="utf-8-sig")
+        print(f"跑步指标已保存: {output_path}")
     return combined
 
 
@@ -1703,11 +1763,13 @@ def compute_running_metrics(
 
 
 def plot_running_pace(data_frame, output_dir=None):
-    running_df = compute_running_metrics(data_frame)
+    running_df = compute_preferred_running_metrics(data_frame)
     if running_df.empty or "配速_min_per_km" not in running_df:
         print("未找到可绘制的跑步配速数据")
         return
 
+    dashboard_frames = running_df.attrs.get("dashboard_frames") or {}
+    running_df = dashboard_frames.get("running", running_df).copy()
     running_df = running_df.dropna(subset=["配速_min_per_km"])
     if running_df.empty:
         print("未找到可绘制的跑步配速数据")
@@ -1791,7 +1853,7 @@ def generate_all_plots(output_dir=None, is_dark_mode=False):
     data_frame_balance = load_balance_sheet()
     plot_balance_sheet(data_frame_balance, output_dir=output_dir)
 
-    compute_running_metrics(data_frame, output_dir=output_dir)
+    compute_preferred_running_metrics(data_frame, output_dir=output_dir)
     plot_running_pace(data_frame, output_dir=output_dir)
     merge_plot_images(output_dir, is_dark_mode=is_dark_mode)
 
