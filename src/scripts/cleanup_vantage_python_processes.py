@@ -12,6 +12,7 @@ SERVER_SCRIPT_TOKENS = (
     "src\\scripts\\run_server_background.py",
 )
 INLINE_SERVER_TOKENS = ("from src.server import app", "uvicorn.run(app")
+UVICORN_SERVER_TOKENS = ("src.server:app", "uvicorn")
 DESKTOP_PROCESS_NAMES = ("electron", "electron.exe", "node", "node.exe", "npm", "npm.exe")
 DESKTOP_ENTRYPOINT_TOKENS = (
     "src/webapp/main.cjs",
@@ -118,14 +119,19 @@ def is_vantage_server_process(process, project_root):
     normalized_cwd = _normalize_text(_safe_process_cwd(process)).rstrip("/")
     normalized_root = _normalized_project_root(project_root)
     in_project_root = normalized_cwd == normalized_root
+    belongs_to_project = _belongs_to_current_project(normalized_cmdline, normalized_cwd, project_root)
 
     has_server_script = any(token in normalized_cmdline for token in SERVER_SCRIPT_TOKENS)
     has_inline_server = all(token in normalized_cmdline for token in INLINE_SERVER_TOKENS)
+    has_uvicorn_server = all(token in normalized_cmdline for token in UVICORN_SERVER_TOKENS)
 
     if has_server_script:
         return True
 
     if has_inline_server and in_project_root:
+        return True
+
+    if has_uvicorn_server and belongs_to_project:
         return True
 
     return False

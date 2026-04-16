@@ -18,7 +18,7 @@ echo [0/3] Cleaning residual processes...
 python src\scripts\cleanup_vantage_python_processes.py --include-desktop >nul 2>&1
 
 echo       Cleanup complete
-timeout /t 2 /nobreak >nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 2"
 
 echo [1/3] Starting backend...
 
@@ -26,7 +26,7 @@ if not exist "%PROJECT_ROOT%logs" mkdir "%PROJECT_ROOT%logs"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath python -ArgumentList 'src/scripts/run_server_background.py' -WorkingDirectory '%PROJECT_ROOT%' -WindowStyle Hidden"
 
 echo       Waiting for backend...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$elapsed = 0; while ($elapsed -lt %BACKEND_WAIT_TIMEOUT%) { try { $response = Invoke-WebRequest -Uri '%BACKEND_STATUS_URL%' -UseBasicParsing -TimeoutSec 2; if ($response.StatusCode -eq 200) { Write-Host '      Backend ready'; exit 0 } } catch { }; $elapsed += 1; Write-Host ('      Waiting for backend... ' + $elapsed + '/%BACKEND_WAIT_TIMEOUT%s'); Start-Sleep -Seconds 1 }; Write-Host '      Backend did not become ready within %BACKEND_WAIT_TIMEOUT% seconds'; if (Test-Path '%PROJECT_ROOT%logs\server.log') { Write-Host '      Last 20 lines of logs\server.log:'; Get-Content '%PROJECT_ROOT%logs\server.log' -Tail 20 }; exit 1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$elapsed = 0; while ($elapsed -lt %BACKEND_WAIT_TIMEOUT%) { try { $response = Invoke-WebRequest -Uri '%BACKEND_STATUS_URL%' -UseBasicParsing -TimeoutSec 2; if ($response.StatusCode -eq 200) { $status = $response.Content | ConvertFrom-Json; if ($status.camera_online) { Write-Host '      Backend ready (camera online)'; exit 0 }; Write-Host '      Backend ready, waiting for camera...' } } catch { }; $elapsed += 1; Write-Host ('      Waiting for backend/camera... ' + $elapsed + '/%BACKEND_WAIT_TIMEOUT%s'); Start-Sleep -Seconds 1 }; Write-Host '      Backend did not become camera-ready within %BACKEND_WAIT_TIMEOUT% seconds'; try { $response = Invoke-WebRequest -Uri '%BACKEND_STATUS_URL%' -UseBasicParsing -TimeoutSec 2; if ($response.StatusCode -eq 200) { Write-Host '      Latest /api/status:'; Write-Host $response.Content } } catch { Write-Host ('      Final status check failed: ' + $_.Exception.Message) }; if (Test-Path '%PROJECT_ROOT%logs\server.log') { Write-Host '      Last 20 lines of logs\server.log:'; Get-Content '%PROJECT_ROOT%logs\server.log' -Tail 20 }; exit 1"
 if errorlevel 1 exit /b 1
 
 echo [2/3] Checking frontend dependencies...
