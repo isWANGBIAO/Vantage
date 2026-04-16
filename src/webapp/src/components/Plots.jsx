@@ -598,7 +598,7 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap }) {
           style={{
             display: 'grid',
             gap: 18,
-            gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+            gridTemplateColumns: 'minmax(0, 1fr)',
           }}
         >
           {section.leadCharts.map((chart) => (
@@ -626,7 +626,7 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap }) {
           style={{
             display: 'grid',
             gap: 16,
-            gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 620px), 1fr))',
           }}
         >
           {section.supportCharts.map((chart) => (

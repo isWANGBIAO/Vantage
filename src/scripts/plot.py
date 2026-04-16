@@ -1164,6 +1164,8 @@ def _parse_running_text(text):
     if not _looks_like_running_text(text):
         return None
 
+    if distance_km is None and time_min is not None and pace_min:
+        distance_km = time_min / pace_min
     if pace_min is None and time_min is not None and distance_km:
         pace_min = time_min / distance_km
     if time_min is None and pace_min is not None and distance_km:
@@ -1217,14 +1219,26 @@ def compute_running_metrics(
     result["pace_min_per_km"] = result["配速_min_per_km"]
     result["pace_mmss"] = result["配速_mmss"]
     result["heart_rate_bpm"] = result["心率"]
-    result["cadence_spm"] = result["步频"]
+    cadence_raw = pd.to_numeric(result["步频"], errors="coerce")
     stride_raw = pd.to_numeric(result["步幅"], errors="coerce")
-    result["stride_m"] = np.where(stride_raw.abs() > 10, stride_raw / 100.0, stride_raw)
     result["speed_m_per_min"] = np.where(
         result["duration_min"] > 0,
         result["distance_km"] * 1000.0 / result["duration_min"],
         np.nan,
     )
+    normalized_stride_m = np.where(stride_raw.abs() > 10, stride_raw / 100.0, stride_raw)
+    inferred_cadence_spm = np.where(
+        (normalized_stride_m > 0) & np.isfinite(result["speed_m_per_min"]),
+        result["speed_m_per_min"] / normalized_stride_m,
+        np.nan,
+    )
+    result["cadence_spm"] = np.where(pd.notna(cadence_raw), cadence_raw, inferred_cadence_spm)
+    inferred_stride_m = np.where(
+        (result["cadence_spm"] > 0) & np.isfinite(result["speed_m_per_min"]),
+        result["speed_m_per_min"] / result["cadence_spm"],
+        np.nan,
+    )
+    result["stride_m"] = np.where(pd.notna(normalized_stride_m), normalized_stride_m, inferred_stride_m)
     result["speed_km_per_h"] = result["speed_m_per_min"] * 0.06
     result["HRC_m_per_beat"] = np.where(
         (result["heart_rate_bpm"] > 0) & np.isfinite(result["speed_m_per_min"]),
