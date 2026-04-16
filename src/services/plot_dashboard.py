@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 import pandas as pd
 
 from src.scripts import plot as plot_module
@@ -211,9 +211,9 @@ def _build_weight_bodyfat_dashboard_chart(data_frame):
         'grid': {'top': 72, 'left': 56, 'right': 72, 'bottom': 72, 'containLabel': True},
         'xAxis': {'type': 'time'},
         'yAxis': [
-            {'type': 'value', 'name': '体重 (kg)'},
-            {'type': 'value', 'name': '体脂率 (%)', 'position': 'right'},
-            {'type': 'value', 'name': '脂肪质量 (kg)', 'position': 'right', 'offset': 64},
+            {'type': 'value', 'name': '体重 (kg)', 'scale': True},
+            {'type': 'value', 'name': '体脂率 (%)', 'position': 'right', 'scale': True},
+            {'type': 'value', 'name': '脂肪质量 (kg)', 'position': 'right', 'offset': 64, 'scale': True},
         ],
         'series': [
             {
@@ -760,9 +760,10 @@ def _build_running_dashboard_chart(data_frame):
         },
         {
             'name': '距离（km）',
-            'type': 'bar',
+            'type': 'line',
+            'showSymbol': False,
+            'smooth': True,
             'yAxisIndex': 1,
-            'barMaxWidth': 24,
             'data': _series_points(dates, running_df['距离_km'].to_numpy(dtype=float), 2),
         },
     ]
@@ -927,3 +928,4 @@ def build_plot_dashboard_data():
         'charts': charts,
         'warnings': warnings,
     }
+
