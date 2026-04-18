@@ -3,10 +3,12 @@ import json
 import logging
 import re
 import time
+import uuid
 
 import requests
 
 from src.core.config import Config
+from src.services.model_call_recorder import SessionRecorder
 
 SYNC_REQUEST_TIMEOUT_SECONDS = 120
 STREAM_REQUEST_TIMEOUT_SECONDS = 600
@@ -425,7 +427,19 @@ class LLMClient:
 
         raise requests.RequestException("All LLM providers failed: " + " | ".join(errors))
 
-    def chat(self, messages, stream=True, print_callback=None, model=None):
+    def chat(
+        self,
+        messages,
+        stream=True,
+        print_callback=None,
+        model=None,
+        session_id=None,
+        source="llm_client",
+        entrypoint="src/services/llm_client.py",
+        context_file=None,
+        history_dir=None,
+        metadata=None,
+    ):
         """
         Send chat request to LLM.
 
@@ -435,6 +449,9 @@ class LLMClient:
             print_callback: Function(tag, content) to handle stream output.
         """
         messages = copy.deepcopy(messages)
+
+        if isinstance(model, dict):
+            raise TypeError("model override must be a string when provided")
 
         reasoning_effort = Config.get("AI_REASONING_EFFORT") or "medium"
         payload = {
@@ -449,6 +466,32 @@ class LLMClient:
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
 
+        requested_model = model or (self.providers[0]["model"] if self.providers else None)
+        requested_route = self.providers[0]["route"] if self.providers else None
+        requested_base_url = self.providers[0]["base_url"] if self.providers else None
+        call_id = str(uuid.uuid4())
+        recorder = self._build_session_recorder(
+            session_id=session_id,
+            source=source,
+            entrypoint=entrypoint,
+            context_file=context_file,
+            history_dir=history_dir,
+            default_model=requested_model,
+            provider_route=requested_route,
+            base_url=requested_base_url,
+        )
+
+        self._record_call_start(
+            recorder=recorder,
+            call_id=call_id,
+            messages=messages,
+            model=requested_model,
+            provider_route=requested_route,
+            stream=stream,
+            reasoning_effort=reasoning_effort,
+            metadata=metadata,
+        )
+
         start_time = time.time()
 
         if stream:
@@ -458,8 +501,86 @@ class LLMClient:
                 print_callback,
                 reasoning_effort,
                 model,
+                recorder,
+                call_id,
+                requested_model,
+                requested_route,
             )
-        return self._handle_sync(payload, start_time, reasoning_effort, model)
+        return self._handle_sync(
+            payload,
+            start_time,
+            reasoning_effort,
+            model,
+            recorder,
+            call_id,
+            requested_model,
+            requested_route,
+        )
+
+    def _build_session_recorder(
+        self,
+        *,
+        session_id,
+        source,
+        entrypoint,
+        context_file,
+        history_dir,
+        default_model,
+        provider_route,
+        base_url,
+    ):
+        try:
+            return SessionRecorder(
+                session_id=session_id,
+                source=source or "llm_client",
+                entrypoint=entrypoint or "src/services/llm_client.py",
+                history_dir=history_dir,
+                context_file=context_file,
+                default_model=default_model,
+                provider_route=provider_route,
+                base_url=base_url,
+            )
+        except Exception as error:
+            logging.error("Failed to initialize SessionRecorder: %s", error)
+            return None
+
+    def _safe_record(self, recorder, method_name, **kwargs):
+        if recorder is None:
+            return
+        try:
+            getattr(recorder, method_name)(**kwargs)
+        except Exception as error:
+            logging.error("Failed to persist model call via SessionRecorder.%s: %s", method_name, error)
+
+    def _record_call_start(
+        self,
+        *,
+        recorder,
+        call_id,
+        messages,
+        model,
+        provider_route,
+        stream,
+        reasoning_effort,
+        metadata,
+    ):
+        self._safe_record(
+            recorder,
+            "record_request_started",
+            call_id=call_id,
+            model=model,
+            provider_route=provider_route,
+            stream=stream,
+            reasoning_effort=reasoning_effort,
+            messages=None,
+            metadata=metadata,
+        )
+        self._safe_record(
+            recorder,
+            "record_message_snapshot",
+            call_id=call_id,
+            messages=messages,
+        )
 
     def _extract_content(self, message):
         content = message.get("content", "")
@@ -473,33 +594,90 @@ class LLMClient:
             return "".join(text_parts)
         return ""
 
-    def _handle_sync(self, payload, start_time, reasoning_effort, model=None):
-        response, used_model, used_route = self._post_with_failover(
-            payload,
-            stream=False,
-            timeout=SYNC_REQUEST_TIMEOUT_SECONDS,
-            requested_model=model,
-        )
-        data = response.json()
+    def _handle_sync(
+        self,
+        payload,
+        start_time,
+        reasoning_effort,
+        model=None,
+        recorder=None,
+        call_id=None,
+        requested_model=None,
+        requested_route=None,
+    ):
+        try:
+            response, used_model, used_route = self._post_with_failover(
+                payload,
+                stream=False,
+                timeout=SYNC_REQUEST_TIMEOUT_SECONDS,
+                requested_model=model,
+            )
+            data = response.json()
 
-        message = data["choices"][0]["message"]
-        usage = data.get("usage", {})
-        duration = time.time() - start_time
+            message = data["choices"][0]["message"]
+            usage = data.get("usage", {})
+            duration = time.time() - start_time
 
-        return {
-            "content": self._extract_content(message),
-            "thinking": message.get("reasoning_content") or "",
-            "usage": usage,
-            "duration": duration,
-            "model": used_model,
-            "provider_route": used_route,
-            "reasoning_effort": reasoning_effort,
-        }
+            result = {
+                "content": self._extract_content(message),
+                "thinking": message.get("reasoning_content") or "",
+                "usage": usage,
+                "duration": duration,
+                "model": used_model,
+                "provider_route": used_route,
+                "reasoning_effort": reasoning_effort,
+            }
+            self._safe_record(
+                recorder,
+                "record_request_completed",
+                call_id=call_id,
+                model=used_model,
+                provider_route=used_route,
+                stream=False,
+                reasoning_effort=reasoning_effort,
+                content=result["content"],
+                thinking=result["thinking"],
+                usage=result["usage"],
+                duration=result["duration"],
+            )
+            self._safe_record(
+                recorder,
+                "record_token_count",
+                call_id=call_id,
+                last_token_usage=result["usage"],
+            )
+            return result
+        except Exception as error:
+            self._safe_record(
+                recorder,
+                "record_request_failed",
+                call_id=call_id,
+                error=error,
+                model=requested_model,
+                provider_route=requested_route,
+                stream=False,
+                reasoning_effort=reasoning_effort,
+                duration=time.time() - start_time,
+            )
+            raise
 
-    def _handle_stream(self, payload, start_time, print_callback, reasoning_effort, model=None):
+    def _handle_stream(
+        self,
+        payload,
+        start_time,
+        print_callback,
+        reasoning_effort,
+        model=None,
+        recorder=None,
+        call_id=None,
+        requested_model=None,
+        requested_route=None,
+    ):
         full_content = ""
         full_thinking = ""
         usage_data = {}
+        used_model = requested_model
+        used_route = requested_route
 
         def output(tag, content):
             if print_callback:
@@ -559,12 +737,23 @@ class LLMClient:
                         continue
 
         except Exception as error:
+            self._safe_record(
+                recorder,
+                "record_request_failed",
+                call_id=call_id,
+                error=error,
+                model=used_model,
+                provider_route=used_route,
+                stream=True,
+                reasoning_effort=reasoning_effort,
+                duration=time.time() - start_time,
+            )
             output("error", str(error))
             raise
 
         duration = time.time() - start_time
 
-        return {
+        result = {
             "content": full_content,
             "thinking": full_thinking,
             "usage": {
@@ -577,6 +766,26 @@ class LLMClient:
             "provider_route": used_route,
             "reasoning_effort": reasoning_effort,
         }
+        self._safe_record(
+            recorder,
+            "record_request_completed",
+            call_id=call_id,
+            model=used_model,
+            provider_route=used_route,
+            stream=True,
+            reasoning_effort=reasoning_effort,
+            content=result["content"],
+            thinking=result["thinking"],
+            usage=result["usage"],
+            duration=result["duration"],
+        )
+        self._safe_record(
+            recorder,
+            "record_token_count",
+            call_id=call_id,
+            last_token_usage=result["usage"],
+        )
+        return result
 
 
 # Backward-compatible alias for older imports.

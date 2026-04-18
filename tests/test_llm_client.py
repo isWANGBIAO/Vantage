@@ -499,6 +499,115 @@ class LLMClientTests(unittest.TestCase):
         self.assertIn('STREAM_CONTENT:"A"', output)
         self.assertNotIn("STREAM_METADATA:", output)
 
+    def test_sync_chat_records_completed_call_with_session_recorder(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
+        }
+        recorder = Mock()
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response),
+            patch.object(llm_client, "SessionRecorder", return_value=recorder),
+        ):
+            client = llm_client.LLMClient()
+            result = client.chat(
+                [{"role": "user", "content": "ping"}],
+                stream=False,
+                source="chat",
+                entrypoint="src/scripts/run_prompt.py",
+            )
+
+        self.assertEqual(result["content"], "done")
+        recorder.record_request_started.assert_called_once()
+        recorder.record_message_snapshot.assert_called_once()
+        recorder.record_request_completed.assert_called_once()
+        recorder.record_token_count.assert_called_once()
+        completed_kwargs = recorder.record_request_completed.call_args.kwargs
+        self.assertEqual(completed_kwargs["usage"]["total_tokens"], 16)
+        self.assertEqual(completed_kwargs["model"], "gpt-5.2")
+        self.assertEqual(completed_kwargs["provider_route"], "cliproxyapi_primary")
+
+    def test_streaming_chat_records_completed_call_with_session_recorder(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.iter_lines.return_value = [
+            b'data: {"choices":[{"delta":{"content":"A"}}]}',
+            b'data: {"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}',
+            b'data: [DONE]',
+        ]
+        recorder = Mock()
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response),
+            patch.object(llm_client, "SessionRecorder", return_value=recorder),
+        ):
+            client = llm_client.LLMClient()
+            result = client.chat(
+                [{"role": "user", "content": "ping"}],
+                stream=True,
+                print_callback=lambda *_: None,
+                source="chat",
+                entrypoint="src/scripts/run_prompt.py",
+            )
+
+        self.assertEqual(result["content"], "A")
+        recorder.record_request_started.assert_called_once()
+        recorder.record_message_snapshot.assert_called_once()
+        recorder.record_request_completed.assert_called_once()
+        recorder.record_token_count.assert_called_once()
+        completed_kwargs = recorder.record_request_completed.call_args.kwargs
+        self.assertEqual(completed_kwargs["usage"]["total_tokens"], 10)
+        self.assertEqual(completed_kwargs["content"], "A")
+
+    def test_sync_chat_records_failed_call_with_session_recorder(self):
+        recorder = Mock()
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(
+                llm_client.requests,
+                "post",
+                side_effect=llm_client.requests.RequestException("network down"),
+            ),
+            patch.object(llm_client, "SessionRecorder", return_value=recorder),
+        ):
+            client = llm_client.LLMClient()
+            with self.assertRaises(llm_client.requests.RequestException):
+                client.chat(
+                    [{"role": "user", "content": "ping"}],
+                    stream=False,
+                    source="chat",
+                    entrypoint="src/scripts/run_prompt.py",
+                )
+
+        recorder.record_request_started.assert_called_once()
+        recorder.record_request_failed.assert_called_once()
+        failed_kwargs = recorder.record_request_failed.call_args.kwargs
+        self.assertIn("network down", str(failed_kwargs["error"]))
+
 
 if __name__ == "__main__":
     unittest.main()

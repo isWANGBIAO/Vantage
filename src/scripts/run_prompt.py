@@ -2,6 +2,7 @@ import sys
 import json
 import argparse
 import logging
+import uuid
 from pathlib import Path
 from datetime import datetime
 
@@ -14,6 +15,7 @@ from src.core.config import Config
 from src.core.context import ContextManager
 from src.services.llm_client import LLMClient
 from src.services.audio_service import AudioService
+from src.services.model_call_recorder import get_session_usage_summary
 from src.utils.data_loader import DataLoader
 from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
 from src.utils.action_plan_stream import (
@@ -24,6 +26,21 @@ from src.utils.generation_stats import build_generation_metadata
 
 
 ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT = 1
+RUN_PROMPT_ENTRYPOINT = "src/scripts/run_prompt.py"
+
+
+def _load_session_usage_summary(history_dir, session_id):
+    if not session_id:
+        return None
+
+    try:
+        return get_session_usage_summary(
+            session_id,
+            db_file=Path(history_dir) / "state.db",
+        )
+    except Exception as error:
+        logging.warning("Failed to load session usage summary for %s: %s", session_id, error)
+        return None
 
 def setup_logging():
     logging.basicConfig(
@@ -79,6 +96,10 @@ def run_action_plan_round(
     model_override,
     emit_start_before_first_attempt,
     max_empty_content_retries=ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT,
+    session_id=None,
+    source="action_plan",
+    entrypoint=RUN_PROMPT_ENTRYPOINT,
+    context_file=None,
 ):
     total_attempts = max_empty_content_retries + 1
     total_usage = {
@@ -98,6 +119,10 @@ def run_action_plan_round(
             stream=True,
             print_callback=build_action_plan_stream_printer(section),
             model=model_override,
+            session_id=session_id,
+            source=source,
+            entrypoint=entrypoint,
+            context_file=context_file,
         )
         last_result = dict(result or {})
         total_usage = _sum_usage_totals(total_usage, last_result.get("usage"))
@@ -159,6 +184,58 @@ def build_action_plan_payload(
         },
     }
 
+
+def _get_context_session_file(context_file):
+    context_path = Path(context_file)
+    return context_path.with_name(f"{context_path.stem}_session.json")
+
+
+def _read_context_session_id(context_file):
+    session_path = _get_context_session_file(context_file)
+    if not session_path.exists():
+        return None
+
+    try:
+        payload = json.loads(session_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    session_id = payload.get("session_id")
+    return str(session_id).strip() if session_id else None
+
+
+def _write_context_session_id(context_file, session_id, source):
+    session_path = _get_context_session_file(context_file)
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "source": source,
+                "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _get_or_create_context_session_id(context_file, source):
+    session_id = _read_context_session_id(context_file)
+    if session_id:
+        return session_id
+
+    session_id = str(uuid.uuid4())
+    _write_context_session_id(context_file, session_id, source)
+    return session_id
+
+
+def _create_new_context_session_id(context_file, source):
+    session_id = str(uuid.uuid4())
+    _write_context_session_id(context_file, session_id, source)
+    return session_id
+
 def main():
     setup_logging()
     
@@ -176,6 +253,7 @@ def main():
     
     try:
         Config.load_env()
+        history_dir = Path(Config.get_history_dir())
         
         # === TRANSCRIPT MODE ===
         if args.transcribe:
@@ -215,16 +293,32 @@ def main():
                 "speed": "0.00 tokens/s",
                 "historical_total_tokens": context_mgr.token_count
             }
-            print(f"STATS_JSON:{json.dumps(initial_stats)}")
 
             print("Thinking...")
             print("---CHAT_START---")
             
             # Send the full persisted chat history
             messages_to_send = context_mgr.get_messages()
-            
+            chat_session_id = _get_or_create_context_session_id(context_mgr.context_file, "chat")
+            existing_session_summary = _load_session_usage_summary(history_dir, chat_session_id)
+
+            initial_stats["historical_total_tokens"] = (
+                existing_session_summary.get("total_tokens", 0)
+                if existing_session_summary
+                else context_mgr.token_count
+            )
+            print(f"STATS_JSON:{json.dumps(initial_stats)}")
+             
             # Call API
-            result = client.chat(messages_to_send, stream=True, model=model_override)
+            result = client.chat(
+                messages_to_send,
+                stream=True,
+                model=model_override,
+                session_id=chat_session_id,
+                source="chat",
+                entrypoint=RUN_PROMPT_ENTRYPOINT,
+                context_file=str(context_mgr.context_file),
+            )
             
             # Handle Result
             content = result["content"]
@@ -241,6 +335,8 @@ def main():
             total_tokens = usage.get("total_tokens", 0)
             duration = result.get("duration", 0)
             
+            updated_session_summary = _load_session_usage_summary(history_dir, chat_session_id)
+
             stats_output = {
                 "turns": len(context_mgr.messages), 
                 "prompt_tokens": prompt_tokens,
@@ -248,7 +344,11 @@ def main():
                 "total_tokens": total_tokens,
                 "total_duration": duration,
                 "speed": f"{completion_tokens / duration:.2f} tokens/s" if duration > 0 else "0.00 tokens/s",
-                "historical_total_tokens": context_mgr.token_count # Approximate
+                "historical_total_tokens": (
+                    updated_session_summary.get("total_tokens", total_tokens)
+                    if updated_session_summary
+                    else context_mgr.token_count
+                ),
             }
             stats_output.update(build_generation_metadata(result))
             print(f"STATS_JSON:{json.dumps(stats_output)}")
@@ -284,6 +384,7 @@ def main():
             sys_content = DataLoader.get_system_prompt_content()
             analysis_messages.append({"role": "system", "content": sys_content})
             analysis_messages.append({"role": "user", "content": prompt_text})
+            action_plan_session_id = _create_new_context_session_id(context_mgr.context_file, "action_plan")
             action_plan_msg = None
 
             action_plan_prompt_path = DataLoader.resolve_data_path("Prompt_Action_Plan.md")
@@ -317,15 +418,8 @@ def main():
                 "total_tokens": 0,
                 "total_duration": 0,
                 "speed": "0.00 tokens/s",
-                "historical_total_tokens": 0 # New session logic in script, but maybe we can read global context? 
-                # Actually, if we are in Analysis mode, we might not have loaded the global ContextManager if we initialized a new list.
-                # But let's check if we can reuse context_mgr from lines 50 involved?
-                # Line 50: context_mgr = ContextManager(context_file=args.context_file)
-                # So we have it.
+                "historical_total_tokens": 0
             }
-            # Update historical from context_mgr if available
-            if 'context_mgr' in locals():
-                 initial_stats['historical_total_tokens'] = context_mgr.token_count
 
             print(f"STATS_JSON:{json.dumps(initial_stats)}")
             emit_action_plan_stream_event("analysis", "start", "")
@@ -341,6 +435,10 @@ def main():
                 section="analysis",
                 model_override=model_override,
                 emit_start_before_first_attempt=False,
+                session_id=action_plan_session_id,
+                source="action_plan",
+                entrypoint=RUN_PROMPT_ENTRYPOINT,
+                context_file=str(context_mgr.context_file),
             )
             if first_round_content:
                 # We do NOT save the full history context yet, or maybe we do?
@@ -369,6 +467,10 @@ def main():
                     section="plan",
                     model_override=model_override,
                     emit_start_before_first_attempt=True,
+                    session_id=action_plan_session_id,
+                    source="action_plan",
+                    entrypoint=RUN_PROMPT_ENTRYPOINT,
+                    context_file=str(context_mgr.context_file),
                 )
                 
                 if first_round_content and second_round_content:
@@ -392,6 +494,8 @@ def main():
                         json.dumps(context_mgr.messages, ensure_ascii=False, indent=2),
                         encoding="utf-8",
                     )
+                    _write_context_session_id(context_mgr.context_file, action_plan_session_id, "action_plan")
+                    _write_context_session_id(action_plan_context_file, action_plan_session_id, "action_plan")
 
                     # Print Stats
                     usage1 = result.get("usage", {})
@@ -401,15 +505,41 @@ def main():
                     total_completion_tokens = usage1.get("completion_tokens", 0) + usage2.get("completion_tokens", 0)
                     total_total_tokens = usage1.get("total_tokens", 0) + usage2.get("total_tokens", 0)
                     total_duration = result.get("duration", 0) + result_round_2.get("duration", 0)
+                    session_summary = _load_session_usage_summary(history_dir, action_plan_session_id)
+
+                    summary_prompt_tokens = (
+                        session_summary.get("prompt_tokens", total_prompt_tokens)
+                        if session_summary
+                        else total_prompt_tokens
+                    )
+                    summary_completion_tokens = (
+                        session_summary.get("completion_tokens", total_completion_tokens)
+                        if session_summary
+                        else total_completion_tokens
+                    )
+                    summary_total_tokens = (
+                        session_summary.get("total_tokens", total_total_tokens)
+                        if session_summary
+                        else total_total_tokens
+                    )
+                    summary_total_duration = (
+                        session_summary.get("total_duration", total_duration)
+                        if session_summary
+                        else total_duration
+                    )
 
                     stats_output = {
                         "turns": len(context_mgr.messages),
-                        "prompt_tokens": total_prompt_tokens,
-                        "completion_tokens": total_completion_tokens,
-                        "total_tokens": total_total_tokens,
-                        "total_duration": total_duration,
-                        "speed": f"{total_completion_tokens / total_duration:.2f} tokens/s" if total_duration > 0 else "0.00 tokens/s",
-                        "historical_total_tokens": total_total_tokens
+                        "prompt_tokens": summary_prompt_tokens,
+                        "completion_tokens": summary_completion_tokens,
+                        "total_tokens": summary_total_tokens,
+                        "total_duration": summary_total_duration,
+                        "speed": (
+                            f"{summary_completion_tokens / summary_total_duration:.2f} tokens/s"
+                            if summary_total_duration > 0
+                            else "0.00 tokens/s"
+                        ),
+                        "historical_total_tokens": summary_total_tokens,
                     }
                     metadata = build_generation_metadata(result, result_round_2)
                     stats_output.update(metadata)

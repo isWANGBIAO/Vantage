@@ -104,6 +104,7 @@ function consumeChatStreamChunk(previousState, chunkText) {
         buffer: `${previousState.buffer ?? ''}${chunkText}`,
         assistantContent: previousState.assistantContent ?? '',
         assistantThinking: previousState.assistantThinking ?? '',
+        stats: previousState.stats ?? null,
         error: previousState.error ?? null,
     };
 
@@ -144,7 +145,18 @@ function consumeChatStreamChunk(previousState, chunkText) {
             }
         };
 
-        if (text.startsWith('STREAM_THINKING:')) {
+        if (text.startsWith('STATS_JSON:')) {
+            const raw = text.slice('STATS_JSON:'.length);
+            try {
+                const parsed = JSON.parse(raw);
+                nextState.stats = {
+                    ...(nextState.stats ?? {}),
+                    ...parsed,
+                };
+            } catch {
+                continue;
+            }
+        } else if (text.startsWith('STREAM_THINKING:')) {
             nextState.assistantThinking += readPayload('STREAM_THINKING:');
         } else if (text.startsWith('STREAM_CONTENT:')) {
             nextState.assistantContent += readPayload('STREAM_CONTENT:');
@@ -163,6 +175,8 @@ export default function ChatInterface() {
     const [messages, setMessages] = useState(() => loadStoredChatMessages());
 
     const [chatBaseVersion, setChatBaseVersion] = useState('empty');
+
+    const [stats, setStats] = useState(null);
 
     const [input, setInput] = useState('');
 
@@ -232,11 +246,13 @@ export default function ChatInterface() {
 
                 setMessages(syncedState.messages);
                 setChatBaseVersion(syncedState.baseVersion);
+                setStats(data?.stats || null);
 
             } catch (error) {
 
                 console.error('Failed to sync chat context:', error);
                 setMessages(loadStoredChatMessages());
+                setStats(null);
 
             }
 
@@ -330,6 +346,7 @@ export default function ChatInterface() {
             });
             setChatBaseVersion(syncedState.baseVersion);
             setMessages(syncedState.messages);
+            setStats(data?.stats || null);
 
         } catch (error) {
 
@@ -372,6 +389,7 @@ export default function ChatInterface() {
             buffer: '',
             assistantContent: '',
             assistantThinking: '',
+            stats,
             error: null,
         };
 
@@ -408,6 +426,10 @@ export default function ChatInterface() {
                 return false;
             }
 
+            if (streamState.stats) {
+                setStats(streamState.stats);
+            }
+
             syncAssistantMessage();
 
         }
@@ -424,6 +446,10 @@ export default function ChatInterface() {
         if (streamState.error) {
             syncAssistantMessage(`Error: ${streamState.error}`, streamState.assistantThinking);
             return false;
+        }
+
+        if (streamState.stats) {
+            setStats(streamState.stats);
         }
 
         syncAssistantMessage();
@@ -729,6 +755,20 @@ export default function ChatInterface() {
                 </h3>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    {stats && (
+                        <div className="action-plan-stats">
+                            <span>Speed {stats.speed}</span>
+                            <span>Time {(stats.total_duration || 0).toFixed(1)}s</span>
+                            <span>Tokens {((stats.total_tokens || 0) / 1000).toFixed(1)}k</span>
+                            {stats.historical_total_tokens !== undefined && (
+                                <span>
+                                    History {stats.historical_total_tokens >= 1000000
+                                        ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
+                                        : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`}
+                                </span>
+                            )}
+                        </div>
+                    )}
                     <label
                         style={{
                             display: 'flex',

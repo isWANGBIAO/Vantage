@@ -1,52 +1,50 @@
-from openai import OpenAI  # 使用openai库
-from openai import APIError, Timeout, RateLimitError  # 直接导入异常类
-import re  # 使用正则表达式提取代码块
+import re
+
+from openai import APIError, RateLimitError, Timeout
+
+from src.services.tracked_openai_client import TrackedOpenAIClient
 
 
 def modify_code_with_ai(code, language, client, golbal_model=None):
     """
-    使用AI模型对代码进行修改。
+    使用 AI 模型修复并改进代码，返回修改后的完整代码。
     """
-
     prompt = (
-        f"你是一个资深{language}编程的开发者。请阅读以下代码并修复潜在的错误，并且提升代码的质量。"
-        "确保它可以成功运行，并对每一行代码进行注释,在代码最前面注释说明代码是做什么的\n\n"
-        f"代码:\n{code}\n\n"
-        "请直接返回完整的修改后代码。"
+        f"你是一名资深 {language} 工程师。请阅读下面的代码，修复潜在错误并提升代码质量。\n"
+        "要求生成的代码可以直接运行，并在关键改动处加入简短注释说明修改内容。\n"
+        "请只返回完整代码。\n\n"
+        f"代码:\n{code}\n"
     )
 
-    # 用try except捕获异常
+    modified_code = ""
+    tracked_client = TrackedOpenAIClient(
+        client=client,
+        source="cursor",
+        entrypoint="src/cursor/code_modifier.py",
+    )
+
     try:
-        response = client.chat.completions.create(
-            model=golbal_model,  # 指定模型
-            messages=[
-                {'role': 'user',
-                 'content': prompt},
-            ],
-            stream=True,  # 使用流式传输获取响应
-            max_tokens=4096,  # 输出的最大 token 数
-            temperature=0.2  # 稍微提高创造性以应对复杂错误  # 控制输出的随机性，0 是最确定，1 更有创意
+        response = tracked_client.create_chat_completion(
+            model=golbal_model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+            max_tokens=4096,
+            temperature=0.2,
         )
 
-        modified_code = []
+        content_parts = []
         for chunk in response:
             if chunk.choices and chunk.choices[0].delta.content:
                 content = chunk.choices[0].delta.content
-                modified_code.append(content)
-                print(content, end='', flush=True)  # 实时显示进度
+                content_parts.append(content)
+                print(content, end="", flush=True)
 
-        full_code = ''.join(modified_code).strip()
-
-        # 提取代码块（防止模型添加额外解释）
-        code_match = re.search(r'```python\n(.*?)\n```', full_code, re.DOTALL)
+        full_code = "".join(content_parts).strip()
+        code_match = re.search(r"```(?:python)?\n(.*?)\n```", full_code, re.DOTALL)
         if code_match:
             modified_code = code_match.group(1)
         else:
-            modified_code = full_code  # 如果没有代码块标记则返回全部内容
-        # print("\n---------------\n：")
-        # print("AI修改后的代码：")
-        # print(modified_code)
-        # print("\n---------------\n：")
+            modified_code = full_code
 
     except APIError as e:
         print(f"API error: {e}")
@@ -54,4 +52,5 @@ def modify_code_with_ai(code, language, client, golbal_model=None):
         print(f"Request timed out: {e}")
     except RateLimitError as e:
         print(f"Rate limit exceeded: {e}")
+
     return modified_code

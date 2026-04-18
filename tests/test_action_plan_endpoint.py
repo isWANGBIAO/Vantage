@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from src import server
+from src.services.model_call_recorder import SessionRecorder
 
 
 class _FakeStdout:
@@ -319,6 +320,55 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertEqual(payload["plan"]["body"], "plan markdown")
         self.assertEqual(payload["filename"], latest_file.name)
 
+    def test_get_usage_dashboard_returns_aggregated_history_payload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_dir = Path(temp_dir) / "history"
+            recorder = SessionRecorder(
+                session_id="usage-session-1",
+                source="chat",
+                entrypoint="src/scripts/run_prompt.py",
+                history_dir=history_dir,
+                default_model="gpt-5.4",
+                provider_route="cliproxyapi_primary",
+                base_url="http://127.0.0.1:8317/v1",
+                created_at=datetime.fromisoformat("2026-04-18T20:00:00+08:00"),
+            )
+            with patch(
+                "src.services.model_call_recorder._now",
+                return_value=datetime.fromisoformat("2026-04-18T20:05:00+08:00"),
+            ):
+                recorder.record_request_started(
+                    call_id="usage-call-1",
+                    model="gpt-5.4",
+                    provider_route="cliproxyapi_primary",
+                    stream=False,
+                    reasoning_effort="medium",
+                    messages=[{"role": "user", "content": "hello"}],
+                )
+                recorder.record_request_completed(
+                    call_id="usage-call-1",
+                    model="gpt-5.4",
+                    provider_route="cliproxyapi_primary",
+                    stream=False,
+                    reasoning_effort="medium",
+                    content="world",
+                    thinking="",
+                    usage={"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+                    duration=4.0,
+                )
+
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
+                payload = asyncio.run(server.get_usage_dashboard())
+
+        self.assertEqual(payload["summary"]["session_count"], 1)
+        self.assertEqual(payload["summary"]["completed_call_count"], 1)
+        self.assertEqual(payload["summary"]["failed_call_count"], 0)
+        self.assertEqual(payload["summary"]["total_tokens"], 120)
+        self.assertEqual(payload["by_source"][0]["source"], "chat")
+        self.assertEqual(payload["by_source"][0]["total_tokens"], 120)
+        self.assertEqual(payload["sessions"][0]["session_id"], "usage-session-1")
+        self.assertEqual(payload["recent_calls"][0]["call_id"], "usage-call-1")
+
     def test_generate_action_plan_passes_reasoning_effort_to_subprocess(self):
         fake_process = _FakeProcess()
 
@@ -492,6 +542,45 @@ class ActionPlanEndpointTests(unittest.TestCase):
             ],
         )
 
+    def test_get_chat_context_includes_active_session_stats(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_dir = Path(temp_dir) / "history"
+            history_dir.mkdir()
+            base_context = history_dir / "latest_action_plan_context.json"
+            base_context.write_text(
+                json.dumps(
+                    [
+                        {"role": "assistant", "content": "analysis result"},
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            latest_context_session = history_dir / "latest_context_session.json"
+            latest_context_session.write_text(
+                json.dumps({"session_id": "session-chat-1"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            with patch.object(server.os, "getcwd", return_value=temp_dir), patch.object(
+                server,
+                "get_session_usage_summary",
+                return_value={
+                    "session_id": "session-chat-1",
+                    "call_count": 3,
+                    "prompt_tokens": 30,
+                    "completion_tokens": 11,
+                    "total_tokens": 41,
+                    "total_duration": 9.2,
+                    "average_duration": 3.06,
+                },
+            ):
+                payload = asyncio.run(server.get_chat_context())
+
+        self.assertEqual(payload["stats"]["session_id"], "session-chat-1")
+        self.assertEqual(payload["stats"]["total_tokens"], 41)
+        self.assertEqual(payload["stats"]["call_count"], 3)
+
     def test_reset_chat_context_restores_latest_action_plan_seed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             history_dir = Path(temp_dir) / "history"
@@ -544,6 +633,37 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertEqual(payload["has_action_plan_context"], False)
         self.assertEqual(payload["base_context_version"], "empty")
         self.assertEqual(payload["display_messages"], [])
+
+    def test_reset_chat_context_restores_action_plan_session_sidecar(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_dir = Path(temp_dir) / "history"
+            history_dir.mkdir()
+            latest_context = history_dir / "latest_context.json"
+            latest_context.write_text(
+                json.dumps([{"role": "user", "content": "stale chat"}], ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (history_dir / "latest_context_session.json").write_text(
+                json.dumps({"session_id": "chat-session"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (history_dir / "latest_action_plan_context.json").write_text(
+                json.dumps([{"role": "assistant", "content": "seed plan"}], ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (history_dir / "latest_action_plan_context_session.json").write_text(
+                json.dumps({"session_id": "action-plan-session"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            with patch.object(server.os, "getcwd", return_value=temp_dir):
+                asyncio.run(server.reset_chat_context())
+
+            restored_session_payload = json.loads(
+                (history_dir / "latest_context_session.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(restored_session_payload["session_id"], "action-plan-session")
 
 
 if __name__ == "__main__":

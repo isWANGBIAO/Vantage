@@ -7,6 +7,16 @@ import json
 from tqdm import tqdm
 from openai import OpenAI  # 阿里云兼容openai sdk
 from src.utils.data_loader import DataLoader
+from src.services.tracked_openai_client import TrackedOpenAIClient
+
+
+def _build_tracked_client(client, base_url):
+    return TrackedOpenAIClient(
+        client=client,
+        source="ai_prediction",
+        entrypoint="src/AI_Prediction/analyzer.py",
+        base_url=base_url,
+    )
 
 
 def llm_classify(text):
@@ -24,6 +34,7 @@ def llm_classify(text):
     if not api_key or not url:
         raise ValueError("请设置环境变量 ALIYUN_ACCESS_KEY 和 ALIYUN_ACCESS_BASE_URL")
     client = OpenAI(base_url=url, api_key=api_key)
+    tracked_client = _build_tracked_client(client, url)
     prompt = (
         f"请将下列文本分词并按如下JSON格式分类：'食物'、'餐厅'、'活动'，只返回JSON，不要多余解释。\n"
         f"文本：{text}\n"
@@ -32,7 +43,7 @@ def llm_classify(text):
     try:
         # 实时显示进度
         print(f"正在分析: {text[:]}", flush=True)
-        completion = client.chat.completions.create(
+        completion = tracked_client.create_chat_completion(
             model=golbal_model,
             messages=[
                 {'role': 'user', 'content': prompt},
@@ -72,11 +83,12 @@ def llm_extract_meals(text):
     if not api_key or not url:
         raise ValueError("请设置环境变量 ALIYUN_ACCESS_KEY 和 ALIYUN_ACCESS_BASE_URL")
     client = OpenAI(base_url=url, api_key=api_key)
+    tracked_client = _build_tracked_client(client, url)
     prompt = (
         f"请将下列饮食描述按餐次结构化，输出JSON，key为餐次（早餐、午餐、晚餐、小吃），value为食物列表，只返回JSON：\n{text}\n"
         "示例：{\"早餐\":[...],\"午餐\":[...],\"晚餐\":[...],\"小吃\":[...]}")
     try:
-        completion = client.chat.completions.create(
+        completion = tracked_client.create_chat_completion(
             model=golbal_model,
             messages=[{'role': 'user', 'content': prompt}],
             max_tokens=512,
@@ -110,12 +122,13 @@ def llm_extract_diarrhea_info(text):
     if not api_key or not url:
         raise ValueError("请设置环境变量 ALIYUN_ACCESS_KEY 和 ALIYUN_ACCESS_BASE_URL")
     client = OpenAI(base_url=url, api_key=api_key)
+    tracked_client = _build_tracked_client(client, url)
     prompt = (
         f"请从下列健康描述中提取所有拉稀事件，输出JSON数组，每个元素包含次数、严重程度（如轻微/中等/严重）、时间（如早上/下午/晚上/凌晨），只返回JSON：\n{text}\n"
         "示例：[{'次数':1,'程度':'轻微','时间':'早上'}]"
     )
     try:
-        completion = client.chat.completions.create(
+        completion = tracked_client.create_chat_completion(
             model=golbal_model,
             messages=[{'role': 'user', 'content': prompt}],
             max_tokens=512,

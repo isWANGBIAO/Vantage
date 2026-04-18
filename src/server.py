@@ -49,6 +49,7 @@ import shutil
 import requests
 import pandas as pd
 
+from src.core.config import Config
 from manager.manager_main import Monitor
 from src.services.face_analysis_pipeline import (
     AnalysisConfig,
@@ -59,6 +60,10 @@ from src.services.face_analysis_pipeline import (
     build_face_report,
 )
 from src.services.llm_client import LLMClient
+from src.services.model_call_recorder import (
+    get_session_usage_summary,
+    get_usage_dashboard_snapshot,
+)
 from src.services.person_detection import (
     PERSON_DETECTION_CONFIDENCE,
     PERSON_DETECTION_MODEL,
@@ -1646,6 +1651,62 @@ def _get_action_plan_context_file() -> str:
     return os.path.join(_get_history_dir(), "latest_action_plan_context.json")
 
 
+def _get_context_session_file(path: str) -> Path:
+    context_path = Path(path)
+    return context_path.with_name(f"{context_path.stem}_session.json")
+
+
+def _read_context_session_payload(path: str):
+    session_path = _get_context_session_file(path)
+    if not session_path.exists():
+        return None
+
+    try:
+        with open(session_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+
+    return payload if isinstance(payload, dict) else None
+
+
+def _read_context_session_id(path: str):
+    payload = _read_context_session_payload(path)
+    if not payload:
+        return None
+
+    session_id = payload.get("session_id")
+    return str(session_id).strip() if session_id else None
+
+
+def _write_context_session_payload(path: str, payload):
+    session_path = _get_context_session_file(path)
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(session_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+
+def _remove_context_session_payload(path: str):
+    session_path = _get_context_session_file(path)
+    if session_path.exists():
+        session_path.unlink(missing_ok=True)
+
+
+def _load_context_session_stats(path: str):
+    session_id = _read_context_session_id(path)
+    if not session_id:
+        return None
+
+    try:
+        return get_session_usage_summary(
+            session_id,
+            db_file=Path(_get_history_dir()) / "state.db",
+        )
+    except Exception as exc:
+        logging.warning("Failed to load context session stats for %s: %s", path, exc)
+        return None
+
+
 def _load_context_messages(path: str):
     context_path = Path(path)
     if not context_path.exists():
@@ -1686,11 +1747,13 @@ def _build_chat_display_messages(messages):
 
 def _build_chat_context_payload():
     action_plan_context_path = Path(_get_action_plan_context_file())
+    stats = _load_context_session_stats(_get_latest_context_file())
     if not action_plan_context_path.exists():
         return {
             "base_context_version": "empty",
             "has_action_plan_context": False,
             "display_messages": [],
+            "stats": stats,
         }
 
     try:
@@ -1703,6 +1766,7 @@ def _build_chat_context_payload():
         "base_context_version": digest or "empty",
         "has_action_plan_context": True,
         "display_messages": _build_chat_display_messages(action_plan_messages),
+        "stats": stats,
     }
 
 
@@ -1772,7 +1836,19 @@ async def get_chat_context():
 async def reset_chat_context():
     action_plan_messages = _load_context_messages(_get_action_plan_context_file())
     _write_context_messages(_get_latest_context_file(), action_plan_messages)
+    action_plan_session_payload = _read_context_session_payload(_get_action_plan_context_file())
+    if action_plan_session_payload:
+        _write_context_session_payload(_get_latest_context_file(), action_plan_session_payload)
+    else:
+        _remove_context_session_payload(_get_latest_context_file())
     return _build_chat_context_payload()
+
+
+@app.get("/api/usage")
+async def get_usage_dashboard():
+    return get_usage_dashboard_snapshot(
+        db_file=Path(Config.get_history_dir()) / "state.db",
+    )
 
 
 @app.get("/api/llm_models")

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import ActionPlan from './ActionPlan';
 import ChatInterface from './ChatInterface';
-import { FileText, MessageSquare } from 'lucide-react';
+import UsagePanel from './UsagePanel';
+import { BarChart3, FileText, MessageSquare } from 'lucide-react';
 
 export default function ActionPlanContainer({ isVisible = true }) {
   const [subTab, setSubTab] = useState('plan');
@@ -59,6 +60,22 @@ export default function ActionPlanContainer({ isVisible = true }) {
           <MessageSquare size={16} />
           Chat
         </button>
+        <button
+          onClick={() => setSubTab('usage')}
+          style={{
+            background: subTab === 'usage' ? 'var(--bg-surface-hover)' : 'transparent',
+            color: subTab === 'usage' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            boxShadow: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            padding: '0.5rem 1rem',
+            fontSize: '0.9rem',
+          }}
+        >
+          <BarChart3 size={16} />
+          Usage
+        </button>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
@@ -67,6 +84,9 @@ export default function ActionPlanContainer({ isVisible = true }) {
         </div>
         <div style={{ height: '100%', display: subTab === 'chat' ? 'block' : 'none' }}>
           <ChatInterface />
+        </div>
+        <div style={{ height: '100%', display: subTab === 'usage' ? 'block' : 'none' }}>
+          <UsagePanel />
         </div>
       </div>
     </div>

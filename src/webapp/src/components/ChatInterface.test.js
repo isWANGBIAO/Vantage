@@ -96,6 +96,7 @@ test('consumeChatStreamChunk ignores plain Thinking logs', () => {
     buffer: '',
     assistantContent: '',
     assistantThinking: '',
+    stats: null,
     error: null,
   };
 
@@ -105,6 +106,29 @@ test('consumeChatStreamChunk ignores plain Thinking logs', () => {
   );
 
   assert.equal(nextState.assistantContent, 'Hi');
+  assert.equal(nextState.assistantThinking, '');
+  assert.equal(nextState.error, null);
+});
+
+test('consumeChatStreamChunk parses stats payloads without affecting content', () => {
+  const consumeChatStreamChunk = loadConsumeChatStreamChunk();
+  const state = {
+    buffer: '',
+    assistantContent: '',
+    assistantThinking: '',
+    stats: null,
+    error: null,
+  };
+
+  const nextState = consumeChatStreamChunk(
+    state,
+    '{"log":"STATS_JSON:{\\"total_tokens\\":128,\\"historical_total_tokens\\":512,\\"speed\\":\\"3.50 tokens/s\\"}"}\n',
+  );
+
+  assert.equal(nextState.stats.total_tokens, 128);
+  assert.equal(nextState.stats.historical_total_tokens, 512);
+  assert.equal(nextState.stats.speed, '3.50 tokens/s');
+  assert.equal(nextState.assistantContent, '');
   assert.equal(nextState.assistantThinking, '');
   assert.equal(nextState.error, null);
 });
@@ -119,6 +143,15 @@ test('ChatInterface sends chat timestamps and action-plan reasoning effort to ba
   assert.ok(chatSource.includes('client_sent_at'));
   assert.ok(chatSource.includes('reasoning_effort'));
   assert.ok(chatSource.includes('loadStoredActionPlanReasoningEffort'));
+});
+
+test('ChatInterface renders chat token stats and hydrates them from backend context', () => {
+  assert.ok(chatSource.includes('setStats('));
+  assert.ok(chatSource.includes('data?.stats'));
+  assert.ok(chatSource.includes('Speed {stats.speed}'));
+  assert.ok(chatSource.includes('Time {(stats.total_duration || 0).toFixed(1)}s'));
+  assert.ok(chatSource.includes('Tokens {((stats.total_tokens || 0) / 1000).toFixed(1)}k'));
+  assert.ok(chatSource.includes('History {stats.historical_total_tokens >= 1000000'));
 });
 
 test('ChatInterface does not hardcode Gemini provider copy and keeps user markdown readable', () => {
