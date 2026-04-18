@@ -170,7 +170,7 @@ class LLMClientTests(unittest.TestCase):
             ],
         )
 
-    def test_retries_same_primary_model_after_transient_eof_error(self):
+    def test_retries_same_primary_model_after_five_extra_transient_eof_attempts(self):
         client = self._make_client(discovered_models=["gpt-5.4", "gpt-5.4-mini"])
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None
@@ -183,7 +183,14 @@ class LLMClientTests(unittest.TestCase):
         with patch.object(
             llm_client.requests,
             "post",
-            side_effect=[transient_error, fake_response],
+            side_effect=[
+                transient_error,
+                transient_error,
+                transient_error,
+                transient_error,
+                transient_error,
+                fake_response,
+            ],
         ) as mock_post:
             response, used_model, used_route = client._post_with_failover(
                 {"messages": [{"role": "user", "content": "ping"}]},
@@ -199,11 +206,15 @@ class LLMClientTests(unittest.TestCase):
             [
                 "http://127.0.0.1:8317/v1/chat/completions",
                 "http://127.0.0.1:8317/v1/chat/completions",
+                "http://127.0.0.1:8317/v1/chat/completions",
+                "http://127.0.0.1:8317/v1/chat/completions",
+                "http://127.0.0.1:8317/v1/chat/completions",
+                "http://127.0.0.1:8317/v1/chat/completions",
             ],
         )
         self.assertEqual(
             [call.kwargs["json"]["model"] for call in mock_post.call_args_list],
-            ["gpt-5.4", "gpt-5.4"],
+            ["gpt-5.4", "gpt-5.4", "gpt-5.4", "gpt-5.4", "gpt-5.4", "gpt-5.4"],
         )
 
     def test_chat_includes_reasoning_effort_when_configured(self):

@@ -10,6 +10,7 @@ from src.core.config import Config
 
 SYNC_REQUEST_TIMEOUT_SECONDS = 120
 STREAM_REQUEST_TIMEOUT_SECONDS = 600
+PRIMARY_TRANSIENT_RETRY_COUNT = 5
 
 
 class LLMClient:
@@ -404,7 +405,7 @@ class LLMClient:
                             provider["base_url"],
                             details,
                         )
-                        if retry_count == 0 and self._is_retryable_primary_error(provider, details):
+                        if retry_count < PRIMARY_TRANSIENT_RETRY_COUNT and self._is_retryable_primary_error(provider, details):
                             retry_count += 1
                             logging.info(
                                 "Retrying LLM route %s with model %s after transient upstream error",
