@@ -198,17 +198,19 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
         completed = _as_int(payload["completed_call_count"]) if "completed_call_count" in keys else (1 if payload.get("status") == "completed" else 0)
         total_duration = _as_float(payload["total_duration"]) if "total_duration" in keys else _as_float(payload.get("duration"))
         total_tokens = _as_int(payload["total_tokens"])
+        completion_tokens = _as_int(payload.get("completion_tokens"))
         payload["session_count"] = _as_int(payload.get("session_count"))
         payload["call_count"] = _as_int(payload.get("call_count")) if "call_count" in keys else 1
         payload["completed_call_count"] = completed
         payload["failed_call_count"] = _as_int(payload.get("failed_call_count")) if "failed_call_count" in keys else (1 if payload.get("status") == "failed" else 0)
         payload["prompt_tokens"] = _as_int(payload.get("prompt_tokens"))
-        payload["completion_tokens"] = _as_int(payload.get("completion_tokens"))
+        payload["completion_tokens"] = completion_tokens
         payload["total_tokens"] = total_tokens
         payload["total_duration"] = total_duration
         payload["average_duration"] = (total_duration / completed) if completed else 0.0
         payload["average_tokens_per_call"] = (total_tokens / completed) if completed else 0.0
         payload["average_tokens_per_second"] = (total_tokens / total_duration) if total_duration else 0.0
+        payload["output_tokens_per_second"] = (completion_tokens / total_duration) if total_duration else 0.0
         if "stream" in payload:
             payload["stream"] = bool(payload["stream"]) if payload["stream"] is not None else None
         return payload
@@ -349,6 +351,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
         ).fetchall()
 
     completed_call_count = _as_int(summary_row["completed_call_count"] if summary_row else 0)
+    completion_tokens = _as_int(summary_row["completion_tokens"] if summary_row else 0)
     total_tokens = _as_int(summary_row["total_tokens"] if summary_row else 0)
     total_duration = _as_float(summary_row["total_duration"] if summary_row else 0.0)
 
@@ -364,6 +367,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
             "average_duration": (total_duration / completed_call_count) if completed_call_count else 0.0,
             "average_tokens_per_call": (total_tokens / completed_call_count) if completed_call_count else 0.0,
             "average_tokens_per_second": (total_tokens / total_duration) if total_duration else 0.0,
+            "output_tokens_per_second": (completion_tokens / total_duration) if total_duration else 0.0,
             "earliest_call_at": summary_row["earliest_call_at"] if summary_row else None,
             "latest_call_at": summary_row["latest_call_at"] if summary_row else None,
         },
