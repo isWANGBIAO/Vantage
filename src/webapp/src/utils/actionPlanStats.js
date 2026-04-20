@@ -32,3 +32,15 @@ export function formatReasoningEffortLabel(reasoningEffort) {
 
   return REASONING_EFFORT_LABELS[reasoningEffort] || reasoningEffort;
 }
+
+export function computeDisplayedDurationSeconds(stats, { isActive = false, nowMs = Date.now() } = {}) {
+  const backendDuration = Number(stats?.total_duration || 0);
+  const startTime = Number(stats?.startTime || 0);
+
+  if (!isActive || !startTime || !Number.isFinite(startTime)) {
+    return backendDuration;
+  }
+
+  const liveElapsedSeconds = Math.max(0, (nowMs - startTime) / 1000);
+  return Math.max(backendDuration, liveElapsedSeconds);
+}

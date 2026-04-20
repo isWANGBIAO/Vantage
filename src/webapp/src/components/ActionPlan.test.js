@@ -47,3 +47,9 @@ test('ActionPlan shows actual execution metadata and flags fallback runs', () =>
   assert.ok(actionPlanSource.includes('action-plan-fallback-warning'));
   assert.ok(actionPlanSource.includes('Fallback'));
 });
+
+test('ActionPlan shows live elapsed time while generation is active', () => {
+  assert.ok(actionPlanSource.includes('computeDisplayedDurationSeconds'));
+  assert.ok(actionPlanSource.includes('const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now())'));
+  assert.equal(actionPlanSource.includes('Time {(stats.total_duration || 0).toFixed(1)}s'), false);
+});

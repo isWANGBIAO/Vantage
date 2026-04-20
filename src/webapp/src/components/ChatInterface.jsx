@@ -15,6 +15,7 @@ import {
   storeChatContextBaseVersion,
 } from '../utils/chatContextState';
 import { loadStoredActionPlanReasoningEffort } from '../utils/actionPlanReasoning';
+import { computeDisplayedDurationSeconds } from '../utils/actionPlanStats';
 
 import {
 
@@ -193,6 +194,7 @@ export default function ChatInterface() {
     const [isRecording, setIsRecording] = useState(false);
 
     const [recordingTime, setRecordingTime] = useState(0);
+    const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now());
 
 
 
@@ -327,6 +329,21 @@ export default function ChatInterface() {
 
     }, [chatBaseVersion]);
 
+    useEffect(() => {
+        if (!isLoading || !stats?.startTime) {
+            return undefined;
+        }
+
+        setLiveDurationNowMs(Date.now());
+        const intervalId = window.setInterval(() => {
+            setLiveDurationNowMs(Date.now());
+        }, 200);
+
+        return () => {
+            window.clearInterval(intervalId);
+        };
+    }, [isLoading, stats?.startTime]);
+
 
 
     const clearChat = async () => {
@@ -373,7 +390,7 @@ export default function ChatInterface() {
 
     // Shared stream processing function to avoid code duplication
 
-    const processStreamResponse = async (response) => {
+    const processStreamResponse = async (response, initialStats = null) => {
 
         const reader = response.body.getReader();
 
@@ -389,7 +406,7 @@ export default function ChatInterface() {
             buffer: '',
             assistantContent: '',
             assistantThinking: '',
-            stats,
+            stats: initialStats ?? stats,
             error: null,
         };
 
@@ -476,6 +493,14 @@ export default function ChatInterface() {
 
 
         try {
+            const nextStats = {
+                ...(stats ?? {}),
+                speed: '0.00 tokens/s',
+                total_duration: 0,
+                total_tokens: 0,
+                startTime: Date.now(),
+            };
+            setStats(nextStats);
 
             const payload = {
                 message: userMsg,
@@ -505,7 +530,7 @@ export default function ChatInterface() {
 
 
 
-            await processStreamResponse(res);
+            await processStreamResponse(res, nextStats);
 
 
 
@@ -645,6 +670,15 @@ export default function ChatInterface() {
                         setMessages(prev => [...prev, { role: "user", content: transcribedText }]);
 
                         try {
+                            const nextStats = {
+                                ...(stats ?? {}),
+                                speed: '0.00 tokens/s',
+                                total_duration: 0,
+                                total_tokens: 0,
+                                startTime: Date.now(),
+                            };
+                            setStats(nextStats);
+
                             const chatPayload = { message: transcribedText };
                             chatPayload.client_sent_at = buildClientSentAt();
                             chatPayload.reasoning_effort = loadStoredActionPlanReasoningEffort();
@@ -659,7 +693,7 @@ export default function ChatInterface() {
                                 retryPolicy: "stream",
                             });
 
-                            await processStreamResponse(chatRes);
+                            await processStreamResponse(chatRes, nextStats);
                         } catch (chatErr) {
                             console.error("[Voice] Chat error:", chatErr);
                             setMessages(prev => [...prev, { role: "assistant", content: `Network Error: ${chatErr.message}` }]);
@@ -737,6 +771,10 @@ export default function ChatInterface() {
     const sendButtonLabel = 'SEND';
 
     const providerLabel = selectedModel ? modelProviderLabels[selectedModel] : null;
+    const displayedDurationSeconds = computeDisplayedDurationSeconds(stats, {
+        isActive: isLoading,
+        nowMs: liveDurationNowMs,
+    });
 
 
 
@@ -758,7 +796,7 @@ export default function ChatInterface() {
                     {stats && (
                         <div className="action-plan-stats">
                             <span>Speed {stats.speed}</span>
-                            <span>Time {(stats.total_duration || 0).toFixed(1)}s</span>
+                            <span>Time {displayedDurationSeconds.toFixed(1)}s</span>
                             <span>Tokens {((stats.total_tokens || 0) / 1000).toFixed(1)}k</span>
                             {stats.historical_total_tokens !== undefined && (
                                 <span>
@@ -1220,4 +1258,3 @@ export default function ChatInterface() {
     );
 
 }
-

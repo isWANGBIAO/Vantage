@@ -149,9 +149,14 @@ test('ChatInterface renders chat token stats and hydrates them from backend cont
   assert.ok(chatSource.includes('setStats('));
   assert.ok(chatSource.includes('data?.stats'));
   assert.ok(chatSource.includes('Speed {stats.speed}'));
-  assert.ok(chatSource.includes('Time {(stats.total_duration || 0).toFixed(1)}s'));
+  assert.ok(chatSource.includes('computeDisplayedDurationSeconds'));
   assert.ok(chatSource.includes('Tokens {((stats.total_tokens || 0) / 1000).toFixed(1)}k'));
   assert.ok(chatSource.includes('History {stats.historical_total_tokens >= 1000000'));
+});
+
+test('ChatInterface seeds live timing stats as soon as a request starts', () => {
+  assert.ok(chatSource.includes('startTime: Date.now()'));
+  assert.ok(chatSource.includes('const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now())'));
 });
 
 test('ChatInterface does not hardcode Gemini provider copy and keeps user markdown readable', () => {

@@ -16,7 +16,10 @@ import {
   formatModelReasoningSupportLabel,
   parseModelReasoningSupport,
 } from '../utils/modelReasoningSupport';
-import { formatPoweredByLabel } from '../utils/actionPlanStats';
+import {
+  computeDisplayedDurationSeconds,
+  formatPoweredByLabel,
+} from '../utils/actionPlanStats';
 import {
   createNdjsonLineBuffer,
   createStreamRenderScheduler,
@@ -146,6 +149,7 @@ export default function ActionPlan({ isVisible = true }) {
   const [modelReasoningSupport, setModelReasoningSupport] = useState({});
   const [selectedModel, setSelectedModel] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now());
 
   const abortControllerRef = useRef(null);
   const loadAbortControllerRef = useRef(null);
@@ -210,6 +214,21 @@ export default function ActionPlan({ isVisible = true }) {
       planEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [planContent, isGenerating, isVisible]);
+
+  useEffect(() => {
+    if (!isGenerating || !stats?.startTime) {
+      return undefined;
+    }
+
+    setLiveDurationNowMs(Date.now());
+    const intervalId = window.setInterval(() => {
+      setLiveDurationNowMs(Date.now());
+    }, 200);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isGenerating, stats?.startTime]);
 
   const applyLoadedActionPlan = useCallback((data) => {
     const analysisBody = data.analysis?.body || '';
@@ -677,6 +696,10 @@ export default function ActionPlan({ isVisible = true }) {
   const modelReasoningSupportLabel = formatModelReasoningSupportLabel(selectedModel, modelReasoningSupport);
   const actualExecutionLabel = formatPoweredByLabel(stats);
   const fallbackExecutionActive = isFallbackExecution(stats, selectedModel);
+  const displayedDurationSeconds = computeDisplayedDurationSeconds(stats, {
+    isActive: isGenerating,
+    nowMs: liveDurationNowMs,
+  });
 
   return (
     <div
@@ -723,7 +746,7 @@ export default function ActionPlan({ isVisible = true }) {
           {stats && (
             <div className="action-plan-stats">
               <span>Speed {stats.speed}</span>
-              <span>Time {(stats.total_duration || 0).toFixed(1)}s</span>
+              <span>Time {displayedDurationSeconds.toFixed(1)}s</span>
               <span>Tokens {((stats.total_tokens || 0) / 1000).toFixed(1)}k</span>
               {stats.historical_total_tokens !== undefined && (
                 <span>
