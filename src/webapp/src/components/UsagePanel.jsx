@@ -194,9 +194,6 @@ export default function UsagePanel() {
   const promptShare = totalTokens > 0 ? (Number(summary.prompt_tokens || 0) / totalTokens) * 100 : 0;
   const completionShare = totalTokens > 0 ? (Number(summary.completion_tokens || 0) / totalTokens) * 100 : 0;
   const activeSources = sourceRows.filter((row) => (row.completed_call_count || 0) > 0 || (row.failed_call_count || 0) > 0);
-  const totalCallAttempts = Number(summary.completed_call_count || 0) + Number(summary.failed_call_count || 0);
-  const failureRate = totalCallAttempts > 0 ? (Number(summary.failed_call_count || 0) / totalCallAttempts) * 100 : 0;
-  const sessionHealth = totalCallAttempts > 0 ? ((Number(summary.completed_call_count || 0) / totalCallAttempts) * 100) : 0;
   const peakDayTokens = Math.max(...dayRows.map((row) => Number(row.total_tokens || 0)), 0);
   const peakSourceTokens = Math.max(...sourceRows.map((row) => Number(row.total_tokens || 0)), 0);
 
@@ -208,30 +205,36 @@ export default function UsagePanel() {
       accent: 'strong',
     },
     {
-      label: 'Output Speed',
-      value: formatRatio(summary.output_tokens_per_second),
-      subValue: `Based on ${formatCompactNumber(summary.completion_tokens)} completion tokens`,
+      label: 'Prompt Tokens',
+      value: formatCompactNumber(summary.prompt_tokens),
+      subValue: `${formatPercent(promptShare)} of total tokens`,
       accent: 'info',
+    },
+    {
+      label: 'Completion Tokens',
+      value: formatCompactNumber(summary.completion_tokens),
+      subValue: `${formatPercent(completionShare)} of total tokens`,
+      accent: 'success',
+    },
+    {
+      label: 'Completion tok/s',
+      value: formatRatio(summary.output_tokens_per_second),
+      subValue: 'Completion tokens / duration',
+      accent: 'calm',
+    },
+    {
+      label: 'Total tok/s',
+      value: formatRatio(summary.average_tokens_per_second),
+      subValue: 'Prompt + completion / duration',
+      accent: 'success',
     },
     {
       label: 'Active Sources',
       value: formatCompactNumber(activeSources.length),
       subValue: `${formatCompactNumber(summary.session_count)} recorded sessions`,
-      accent: 'calm',
+      accent: 'warning',
     },
-    {
-      label: 'Session Health',
-      value: formatPercent(sessionHealth),
-      subValue: `${formatCompactNumber(summary.completed_call_count)} completed / ${formatCompactNumber(summary.failed_call_count)} failed`,
-      accent: 'success',
-    },
-    {
-      label: 'Failure Rate',
-      value: formatPercent(failureRate),
-      subValue: totalCallAttempts > 0 ? `${formatCompactNumber(summary.failed_call_count)} failed attempts` : 'No recorded failures',
-      accent: failureRate > 0 ? 'warning' : 'success',
-    },
-  ]), [summary, activeSources.length, sessionHealth, failureRate, totalCallAttempts]);
+  ]), [summary, activeSources.length, promptShare, completionShare]);
 
   return (
     <div className="glass-panel usage-panel">
@@ -309,16 +312,38 @@ export default function UsagePanel() {
                     <div className="usage-source-primary">
                       <div className="usage-source-heading">
                         <ToneChip tone="neutral">{row.source}</ToneChip>
-                        <span className="usage-source-title">{formatCompactNumber(row.total_tokens)} tokens</span>
+                        <span className="usage-source-title">{formatCompactNumber(row.total_tokens)} total</span>
                       </div>
                       <div className="usage-source-subline">
                         <span>{row.session_count} sessions</span>
                         <span>{row.completed_call_count} completed</span>
                         <span>{row.failed_call_count} failed</span>
-                        <span>Output tok/s {formatRatio(row.output_tokens_per_second)}</span>
+                        <span>Duration {formatDuration(row.total_duration)}</span>
                       </div>
                     </div>
                     <div className="usage-source-analytics">
+                      <div className="usage-metric-row">
+                        <div className="usage-inline-metric">
+                          <span>Prompt</span>
+                          <strong>{formatCompactNumber(row.prompt_tokens)}</strong>
+                        </div>
+                        <div className="usage-inline-metric">
+                          <span>Completion</span>
+                          <strong>{formatCompactNumber(row.completion_tokens)}</strong>
+                        </div>
+                        <div className="usage-inline-metric">
+                          <span>Total</span>
+                          <strong>{formatCompactNumber(row.total_tokens)}</strong>
+                        </div>
+                        <div className="usage-inline-metric">
+                          <span>Completion tok/s</span>
+                          <strong>{formatRatio(row.output_tokens_per_second)}</strong>
+                        </div>
+                        <div className="usage-inline-metric">
+                          <span>Total tok/s</span>
+                          <strong>{formatRatio(row.average_tokens_per_second)}</strong>
+                        </div>
+                      </div>
                       <div className="usage-inline-metric">
                         <span>Share</span>
                         <strong>{formatPercent(share)}</strong>
@@ -360,7 +385,15 @@ export default function UsagePanel() {
                   </div>
                   <div className="usage-day-metrics">
                     <div className="usage-inline-metric">
-                      <span>Tokens</span>
+                      <span>Prompt</span>
+                      <strong>{formatCompactNumber(row.prompt_tokens)}</strong>
+                    </div>
+                    <div className="usage-inline-metric">
+                      <span>Completion</span>
+                      <strong>{formatCompactNumber(row.completion_tokens)}</strong>
+                    </div>
+                    <div className="usage-inline-metric">
+                      <span>Total</span>
                       <strong>{formatCompactNumber(row.total_tokens)}</strong>
                     </div>
                     <div className="usage-inline-metric">
@@ -368,8 +401,12 @@ export default function UsagePanel() {
                       <strong>{formatDuration(row.total_duration)}</strong>
                     </div>
                     <div className="usage-inline-metric">
-                      <span>Output tok/s</span>
+                      <span>Completion tok/s</span>
                       <strong>{formatRatio(row.output_tokens_per_second)}</strong>
+                    </div>
+                    <div className="usage-inline-metric">
+                      <span>Total tok/s</span>
+                      <strong>{formatRatio(row.average_tokens_per_second)}</strong>
                     </div>
                   </div>
                 </div>
@@ -388,8 +425,11 @@ export default function UsagePanel() {
               { key: 'source', label: 'Source', render: (row) => <ToneChip tone="neutral">{row.source}</ToneChip> },
               { key: 'completed_call_count', label: 'Completed' },
               { key: 'failed_call_count', label: 'Failed' },
-              { key: 'total_tokens', label: 'Tokens', render: (row) => formatCompactNumber(row.total_tokens) },
-              { key: 'output_tokens_per_second', label: 'Output tok/s', render: (row) => formatRatio(row.output_tokens_per_second) },
+              { key: 'prompt_tokens', label: 'Prompt', render: (row) => formatCompactNumber(row.prompt_tokens) },
+              { key: 'completion_tokens', label: 'Completion', render: (row) => formatCompactNumber(row.completion_tokens) },
+              { key: 'total_tokens', label: 'Total', render: (row) => formatCompactNumber(row.total_tokens) },
+              { key: 'output_tokens_per_second', label: 'Completion tok/s', render: (row) => formatRatio(row.output_tokens_per_second) },
+              { key: 'average_tokens_per_second', label: 'Total tok/s', render: (row) => formatRatio(row.average_tokens_per_second) },
               {
                 key: 'last_status',
                 label: 'Last Status',
@@ -422,8 +462,11 @@ export default function UsagePanel() {
                 ),
               },
               { key: 'model', label: 'Model' },
-              { key: 'total_tokens', label: 'Tokens', render: (row) => formatCompactNumber(row.total_tokens) },
-              { key: 'output_tokens_per_second', label: 'Output tok/s', render: (row) => formatRatio(row.output_tokens_per_second) },
+              { key: 'prompt_tokens', label: 'Prompt', render: (row) => formatCompactNumber(row.prompt_tokens) },
+              { key: 'completion_tokens', label: 'Completion', render: (row) => formatCompactNumber(row.completion_tokens) },
+              { key: 'total_tokens', label: 'Total', render: (row) => formatCompactNumber(row.total_tokens) },
+              { key: 'output_tokens_per_second', label: 'Completion tok/s', render: (row) => formatRatio(row.output_tokens_per_second) },
+              { key: 'average_tokens_per_second', label: 'Total tok/s', render: (row) => formatRatio(row.average_tokens_per_second) },
               { key: 'duration', label: 'Duration', render: (row) => formatDuration(row.duration) },
               { key: 'created_at', label: 'Started', render: (row) => formatTimestamp(row.created_at) },
             ]}

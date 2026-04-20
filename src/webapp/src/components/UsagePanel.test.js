@@ -30,9 +30,11 @@ test('ActionPlanContainer exposes a dedicated usage sub-tab', () => {
 test('UsagePanel fetches backend usage aggregates and renders primary sections', () => {
   assert.ok(usagePanelSource.includes("fetchBackendJson('/api/usage'"));
   assert.ok(usagePanelSource.includes('Total Tokens'));
-  assert.ok(usagePanelSource.includes('Output Speed'));
+  assert.ok(usagePanelSource.includes('Prompt Tokens'));
+  assert.ok(usagePanelSource.includes('Completion Tokens'));
+  assert.ok(usagePanelSource.includes('Completion tok/s'));
+  assert.ok(usagePanelSource.includes('Total tok/s'));
   assert.ok(usagePanelSource.includes('Active Sources'));
-  assert.ok(usagePanelSource.includes('Failure Rate'));
   assert.ok(usagePanelSource.includes('Latest Activity'));
   assert.ok(usagePanelSource.includes('By Source'));
   assert.ok(usagePanelSource.includes('Daily Usage'));
@@ -40,13 +42,19 @@ test('UsagePanel fetches backend usage aggregates and renders primary sections',
   assert.ok(usagePanelSource.includes('Recent Calls'));
 });
 
-test('UsagePanel uses output-speed semantics and richer visual analysis labels', () => {
+test('UsagePanel aligns token counts with completion and total throughput labels', () => {
   assert.ok(usagePanelSource.includes('output_tokens_per_second'));
-  assert.ok(usagePanelSource.includes('Output tok/s'));
+  assert.ok(usagePanelSource.includes('average_tokens_per_second'));
+  assert.ok(usagePanelSource.includes("label: 'Prompt'"));
+  assert.ok(usagePanelSource.includes("label: 'Completion'"));
+  assert.ok(usagePanelSource.includes("label: 'Total'"));
+  assert.ok(usagePanelSource.includes("label: 'Completion tok/s'"));
+  assert.ok(usagePanelSource.includes("label: 'Total tok/s'"));
   assert.ok(usagePanelSource.includes('Share'));
   assert.ok(usagePanelSource.includes('Prompt Share'));
   assert.ok(usagePanelSource.includes('Completion Share'));
-  assert.ok(usagePanelSource.includes('Session Health'));
+  assert.equal(usagePanelSource.includes("label: 'Tokens'"), false);
+  assert.equal(usagePanelSource.includes('Output Speed'), false);
 });
 
 test('UsagePanel keeps explicit empty and error copy for missing history', () => {
