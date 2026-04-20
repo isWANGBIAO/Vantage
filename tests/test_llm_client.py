@@ -337,6 +337,101 @@ class LLMClientTests(unittest.TestCase):
             self.assertEqual(used_request["reasoning_effort"], "xhigh")
             self.assertEqual(result_payload[1], "gpt-5.2")
 
+    def test_chat_maps_siliconflow_deepseek_reasoning_effort_to_thinking_controls(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done", "reasoning_content": "thought"}}],
+            "usage": {},
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(
+                os.environ,
+                {
+                    **self._env(),
+                    "AI_REASONING_EFFORT": "xhigh",
+                },
+                clear=True,
+            ),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(
+                llm_client.requests,
+                "post",
+                return_value=fake_response,
+            ) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            response, used_model, used_route = client._post_with_failover(
+                {
+                    "model": "Pro/deepseek-ai/DeepSeek-V3.2",
+                    "reasoning_effort": "xhigh",
+                    "messages": [{"role": "user", "content": "ping"}],
+                },
+                stream=False,
+                timeout=12,
+                requested_model="Pro/deepseek-ai/DeepSeek-V3.2",
+            )
+
+        self.assertIs(response, fake_response)
+        self.assertEqual(used_model, "Pro/deepseek-ai/DeepSeek-V3.2")
+        self.assertEqual(used_route, "siliconflow_fallback")
+        used_request = mock_post.call_args.kwargs["json"]
+        self.assertTrue(used_request["enable_thinking"])
+        self.assertEqual(used_request["thinking_budget"], 8192)
+        self.assertNotIn("reasoning_effort", used_request)
+
+    def test_chat_maps_siliconflow_deepseek_medium_reasoning_effort_to_2048_budget(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(
+                os.environ,
+                {
+                    **self._env(),
+                    "AI_REASONING_EFFORT": "medium",
+                },
+                clear=True,
+            ),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(
+                llm_client.requests,
+                "post",
+                return_value=fake_response,
+            ) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            client._post_with_failover(
+                {
+                    "model": "deepseek-ai/DeepSeek-V3.2",
+                    "reasoning_effort": "medium",
+                    "messages": [{"role": "user", "content": "ping"}],
+                },
+                stream=False,
+                timeout=12,
+                requested_model="deepseek-ai/DeepSeek-V3.2",
+            )
+
+        used_request = mock_post.call_args.kwargs["json"]
+        self.assertEqual(used_request["thinking_budget"], 2048)
+        self.assertTrue(used_request["enable_thinking"])
+        self.assertNotIn("reasoning_effort", used_request)
+
     def test_chat_defaults_reasoning_effort_to_medium(self):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None

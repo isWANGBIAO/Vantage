@@ -70,6 +70,20 @@ class LLMClient:
     def _normalize_parameter_name(self, name):
         return str(name).strip().lower().replace("-", "_")
 
+    def _normalize_model_alias(self, model_id):
+        normalized = str(model_id or "").strip().lower()
+        for prefix in ("pro/", "free/"):
+            if normalized.startswith(prefix):
+                return normalized[len(prefix):]
+        return normalized
+
+    def _models_match(self, left_model, right_model):
+        left = str(left_model or "").strip()
+        right = str(right_model or "").strip()
+        if not left or not right:
+            return False
+        return left == right or self._normalize_model_alias(left) == self._normalize_model_alias(right)
+
     def _extract_supported_parameters(self, model_item):
         if not isinstance(model_item, dict):
             return None
@@ -144,6 +158,45 @@ class LLMClient:
             provider.get("route"),
         )
         return filtered_payload
+
+    def _is_siliconflow_deepseek_v32(self, provider, model):
+        route = str((provider or {}).get("route") or "").strip().lower()
+        normalized_model = self._normalize_model_alias(model)
+        return route == "siliconflow_fallback" and normalized_model == "deepseek-ai/deepseek-v3.2"
+
+    def _map_reasoning_effort_to_thinking_budget(self, reasoning_effort):
+        budgets = {
+            "low": 1024,
+            "medium": 2048,
+            "high": 4096,
+            "xhigh": 8192,
+        }
+        normalized_effort = str(reasoning_effort or "").strip().lower()
+        return budgets.get(normalized_effort, budgets["medium"])
+
+    def _apply_provider_payload_overrides(self, payload, provider, model):
+        if not isinstance(payload, dict):
+            return payload
+
+        if not self._is_siliconflow_deepseek_v32(provider, model):
+            return payload
+
+        reasoning_effort = payload.get("reasoning_effort")
+        if not reasoning_effort:
+            return payload
+
+        adapted_payload = dict(payload)
+        adapted_payload.pop("reasoning_effort", None)
+        adapted_payload["enable_thinking"] = True
+        adapted_payload["thinking_budget"] = self._map_reasoning_effort_to_thinking_budget(reasoning_effort)
+        logging.info(
+            "Adapted SiliconFlow thinking payload for model %s on route %s: enable_thinking=%s thinking_budget=%s",
+            model,
+            provider.get("route"),
+            adapted_payload["enable_thinking"],
+            adapted_payload["thinking_budget"],
+        )
+        return adapted_payload
 
     def _discover_primary_models(self, provider):
         url = provider["base_url"] + "/models"
@@ -314,9 +367,13 @@ class LLMClient:
 
         for provider in self.providers:
             models = [str(model) for model in (provider.get("models") or [provider.get("model")]) if model]
-            if requested_model in models:
+            matched_model = next(
+                (candidate for candidate in models if self._models_match(candidate, requested_model)),
+                None,
+            )
+            if matched_model:
                 provider_snapshot = dict(provider)
-                provider_snapshot["models"] = [requested_model] + [model for model in models if model != requested_model]
+                provider_snapshot["models"] = [matched_model] + [model for model in models if model != matched_model]
                 prioritized.append(provider_snapshot)
             else:
                 fallback.append(provider)
@@ -371,7 +428,11 @@ class LLMClient:
 
             for index, model in enumerate(model_candidates):
                 provider_payload = self._apply_model_capabilities_to_payload(
-                    self._apply_model_settings(payload, model),
+                    self._apply_provider_payload_overrides(
+                        self._apply_model_settings(payload, model),
+                        provider,
+                        model,
+                    ),
                     provider,
                     model,
                 )
