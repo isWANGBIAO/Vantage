@@ -1,8 +1,11 @@
 import asyncio
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
+
+from fastapi import BackgroundTasks
 
 from src import server
 from src.utils.face_analysis_db import (
@@ -14,6 +17,42 @@ from src.utils.face_report_cache import load_face_report_cache
 
 
 class FaceReportEndpointTests(unittest.TestCase):
+    def test_face_analysis_background_task_writes_to_dedicated_runtime_log(self):
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 4, 20, 22, 15, 30)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            fake_server_py = tmp / "src" / "server.py"
+            fake_server_py.parent.mkdir(parents=True)
+            fake_server_py.write_text("# stub", encoding="utf-8")
+            background_tasks = BackgroundTasks()
+
+            with patch.object(server, "__file__", str(fake_server_py)), patch.object(
+                server, "datetime", FrozenDateTime
+            ), patch.object(server.subprocess, "run") as mock_run:
+                payload = asyncio.run(server.analyze_face_history(background_tasks))
+                self.assertEqual(payload["message"], "Analysis started in background")
+                self.assertEqual(len(background_tasks.tasks), 1)
+                task = background_tasks.tasks[0]
+                task.func(*task.args, **task.kwargs)
+                latest_pointer_content = (tmp / "logs" / "face-analysis.latest.log").read_text(encoding="utf-8")
+
+                stdout_handle = mock_run.call_args.kwargs["stdout"]
+                stderr_handle = mock_run.call_args.kwargs["stderr"]
+                self.assertEqual(Path(stdout_handle.name).name, "face-analysis-20260420_221530.log")
+                self.assertEqual(stdout_handle, stderr_handle)
+                self.assertEqual(
+                    Path(stdout_handle.name),
+                    tmp / "logs" / "face-analysis" / "face-analysis-20260420_221530.log",
+                )
+                self.assertEqual(
+                    latest_pointer_content,
+                    str((tmp / "logs" / "face-analysis" / "face-analysis-20260420_221530.log").resolve()),
+                )
+
     def test_cached_report_returns_without_running_subprocess(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

@@ -89,6 +89,52 @@ _face_analysis_runtime_lock = threading.Lock()
 _face_report_refresh_lock = threading.Lock()
 
 
+def _project_root_from_server_file():
+    return Path(os.path.abspath(__file__)).resolve().parent.parent
+
+
+def _runtime_logs_root():
+    logs_root = _project_root_from_server_file() / "logs"
+    logs_root.mkdir(parents=True, exist_ok=True)
+    return logs_root
+
+
+def _runtime_log_pointer_path(channel):
+    return _runtime_logs_root() / f"{channel}.latest.log"
+
+
+def _create_runtime_log_path(channel, prefix, launched_at=None):
+    launched_at = launched_at or datetime.now()
+    logs_root = _runtime_logs_root()
+    channel_dir = logs_root / channel
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    log_path = channel_dir / f"{prefix}-{launched_at.strftime('%Y%m%d_%H%M%S')}.log"
+    try:
+        _runtime_log_pointer_path(channel).write_text(str(log_path.resolve()), encoding="utf-8")
+    except OSError:
+        pass
+    return log_path
+
+
+def _resolve_latest_runtime_log_path(channel):
+    pointer_path = _runtime_log_pointer_path(channel)
+    if pointer_path.exists():
+        try:
+            resolved = Path(pointer_path.read_text(encoding="utf-8").strip())
+            if resolved.exists():
+                return resolved
+        except OSError:
+            pass
+
+    channel_dir = _runtime_logs_root() / channel
+    if channel_dir.exists():
+        candidates = sorted(channel_dir.glob("*.log"), key=lambda path: path.stat().st_mtime, reverse=True)
+        if candidates:
+            return candidates[0]
+
+    return None
+
+
 def _decode_subprocess_chunk(data):
     try:
         return data.decode("utf-8").rstrip()
@@ -2130,16 +2176,14 @@ async def get_action_plan_content():
 @app.get("/api/system_logs")
 async def get_system_logs():
     try:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(current_dir)
-        log_file = os.path.join(project_root, "logs", "server.log")
-        
-        if not os.path.exists(log_file):
+        log_file = _resolve_latest_runtime_log_path("server")
+
+        if log_file is None or not log_file.exists():
             return {"logs": ["Log file not found."]}
-            
+             
         with open(log_file, "r", encoding="utf-8", errors='ignore') as f:
             lines = f.readlines()
-            
+             
         return {"logs": lines[-200:]}
     except Exception as e:
         return {"logs": [f"Error reading logs: {str(e)}"]}
@@ -2190,7 +2234,17 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
     def run_analysis():
         print("Starting face analysis...")
         try:
-            subprocess.run([sys.executable, script_path], check=True, cwd=os.getcwd())
+            log_path = _create_runtime_log_path("face-analysis", "face-analysis")
+            with open(log_path, "a", encoding="utf-8", buffering=1) as log_file:
+                log_file.write(f"\n=== Face analysis launch {datetime.now().isoformat()} ===\n")
+                log_file.flush()
+                subprocess.run(
+                    [sys.executable, script_path],
+                    check=True,
+                    cwd=os.getcwd(),
+                    stdout=log_file,
+                    stderr=log_file,
+                )
             print("Face analysis complete.")
         except Exception as e:
             print(f"Face analysis failed: {e}")

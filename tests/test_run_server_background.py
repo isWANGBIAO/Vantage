@@ -12,64 +12,29 @@ def _load_launcher_module():
     return module
 
 
-def test_rotate_server_log_archives_previous_session(tmp_path):
+def test_prepare_server_runtime_log_creates_timestamped_log_and_latest_pointer(tmp_path):
     launcher = _load_launcher_module()
-    log_path = tmp_path / "server.log"
-    log_path.write_text("old session\n", encoding="utf-8")
-    archive_dir = tmp_path / "archive"
+    logs_dir = tmp_path / "logs"
+    launched_at = datetime(2026, 4, 20, 22, 15, 30)
 
-    archive_path = launcher._rotate_server_log(
-        log_path,
-        launched_at=datetime(2026, 4, 5, 21, 30, 45),
-        keep_count=5,
-    )
+    log_path, latest_pointer = launcher._prepare_server_runtime_log(logs_dir, launched_at)
 
-    assert archive_path == archive_dir / "server_20260405_213045.log"
-    assert archive_dir.exists()
-    assert archive_path.read_text(encoding="utf-8") == "old session\n"
-    assert not log_path.exists()
+    assert log_path == logs_dir / "server" / "server-20260420_221530.log"
+    assert log_path.parent.exists()
+    assert latest_pointer == logs_dir / "server.latest.log"
+    assert latest_pointer.read_text(encoding="utf-8") == str(log_path.resolve())
 
 
-def test_rotate_server_log_skips_empty_current_log(tmp_path):
+def test_prepare_server_runtime_log_does_not_require_fixed_server_log(tmp_path):
     launcher = _load_launcher_module()
-    log_path = tmp_path / "server.log"
-    log_path.touch()
-    archive_dir = tmp_path / "archive"
+    logs_dir = tmp_path / "logs"
+    launched_at = datetime(2026, 4, 20, 22, 16, 0)
+    legacy_log = logs_dir / "server.log"
+    logs_dir.mkdir()
+    legacy_log.write_text("legacy session still locked elsewhere\n", encoding="utf-8")
 
-    archive_path = launcher._rotate_server_log(
-        log_path,
-        launched_at=datetime(2026, 4, 5, 21, 31, 0),
-        keep_count=5,
-    )
+    log_path, latest_pointer = launcher._prepare_server_runtime_log(logs_dir, launched_at)
 
-    assert archive_path is None
-    assert log_path.exists()
-    assert list(archive_dir.glob("server_*.log")) == []
-
-
-def test_rotate_server_log_prunes_old_archives(tmp_path):
-    launcher = _load_launcher_module()
-    log_path = tmp_path / "server.log"
-    log_path.write_text("latest\n", encoding="utf-8")
-    archive_dir = tmp_path / "archive"
-    archive_dir.mkdir()
-
-    existing_archives = [
-        archive_dir / "server_20260405_210000.log",
-        archive_dir / "server_20260405_210500.log",
-        archive_dir / "server_20260405_211000.log",
-    ]
-    for path in existing_archives:
-        path.write_text(path.name, encoding="utf-8")
-
-    launcher._rotate_server_log(
-        log_path,
-        launched_at=datetime(2026, 4, 5, 21, 15, 0),
-        keep_count=2,
-    )
-
-    remaining = sorted(path.name for path in archive_dir.glob("server_*.log"))
-    assert remaining == [
-        "server_20260405_211000.log",
-        "server_20260405_211500.log",
-    ]
+    assert legacy_log.exists()
+    assert log_path == logs_dir / "server" / "server-20260420_221600.log"
+    assert latest_pointer.read_text(encoding="utf-8") == str(log_path.resolve())
