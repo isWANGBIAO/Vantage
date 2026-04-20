@@ -1,9 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 const actionPlanContainerSource = readFileSync(new URL('./ActionPlanContainer.jsx', import.meta.url), 'utf8');
 const usagePanelSource = readFileSync(new URL('./UsagePanel.jsx', import.meta.url), 'utf8');
+
+function loadUsagePanelSortHelper() {
+  const start = usagePanelSource.indexOf('function toTimestamp');
+  const end = usagePanelSource.indexOf('function SummaryCard');
+
+  assert.notEqual(start, -1, 'expected toTimestamp helper in UsagePanel');
+  assert.notEqual(end, -1, 'expected SummaryCard helper in UsagePanel');
+
+  const helperSource = usagePanelSource.slice(start, end);
+  const sandbox = { Date, globalThis: {} };
+
+  vm.runInNewContext(`${helperSource}\nglobalThis.sortRowsByTimestamp = sortRowsByTimestamp;`, sandbox);
+
+  return sandbox.globalThis.sortRowsByTimestamp;
+}
 
 test('ActionPlanContainer exposes a dedicated usage sub-tab', () => {
   assert.ok(actionPlanContainerSource.includes("setSubTab('usage')"));
@@ -37,4 +53,18 @@ test('UsagePanel keeps explicit empty and error copy for missing history', () =>
   assert.ok(usagePanelSource.includes('No model usage recorded yet.'));
   assert.ok(usagePanelSource.includes('Failed to load usage dashboard.'));
   assert.ok(usagePanelSource.includes('Refresh'));
+});
+
+test('UsagePanel sorts timestamped rows newest first without mutating input', () => {
+  const sortRowsByTimestamp = loadUsagePanelSortHelper();
+  const rows = [
+    { call_id: 'old', created_at: '2026-04-19T23:43:06+08:00' },
+    { call_id: 'new', created_at: '2026-04-20T09:27:49+08:00' },
+    { call_id: 'missing', created_at: null },
+  ];
+
+  const sorted = sortRowsByTimestamp(rows, 'created_at');
+
+  assert.deepEqual(Array.from(sorted, (row) => row.call_id), ['new', 'old', 'missing']);
+  assert.deepEqual(rows.map((row) => row.call_id), ['old', 'new', 'missing']);
 });

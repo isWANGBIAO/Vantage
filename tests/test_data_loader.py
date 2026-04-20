@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -90,6 +91,109 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
 
         self.assertIn("# Future Planned Items", combined)
         self.assertIn("2026-06-16（周二）: 工作: 去宁波", combined)
+
+    def test_construct_prompt_keeps_markdown_sections_and_embeds_compact_json_timeseries(self):
+        today = datetime.now().date()
+        df = pd.DataFrame(
+            [
+                {
+                    "\u65e5\u671f": pd.Timestamp(today - timedelta(days=1)),
+                    "Days": 100,
+                    "\u5468\u51e0": "\u5468\u516d",
+                    "\u4f53\u91cd": 63.5,
+                    "\u5de5\u4f5c": "\u5199\u4ee3\u7801",
+                },
+                {
+                    "\u65e5\u671f": pd.Timestamp(today),
+                    "Days": 101,
+                    "\u5468\u51e0": "\u5468\u65e5",
+                    "\u4f53\u91cd": 63.0,
+                    "\u5de5\u4f5c": "\u7ee7\u7eed\u5199\u4ee3\u7801",
+                },
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            prompt_path = temp_path / "Prompt_Personal_Info.md"
+            excel_path = temp_path / "Time.xlsx"
+            prompt_path.write_text("personal info", encoding="utf-8")
+            excel_path.write_text("placeholder", encoding="utf-8")
+            (temp_path / "Prompt_Project_Management.md").write_text("project context", encoding="utf-8")
+            (temp_path / "Prompt_Goals.md").write_text("goal text", encoding="utf-8")
+
+            def fake_resolve_data_path(filename, user_home=None, onedrive_env=None):
+                return temp_path / filename
+
+            with patch.object(DataLoader, "load_excel_data", return_value=df), patch.object(
+                DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                DataLoader,
+                "get_future_planned_rows",
+                return_value="## Future Planned Items\n\n- 2026-06-16: lab visit\n",
+            ):
+                combined = DataLoader.construct_prompt(prompt_path, excel_path, days=90)
+
+        self.assertIn("personal info", combined)
+        self.assertIn("## Time Series Data (JSON)", combined)
+        self.assertIn("# Future Planned Items", combined)
+        self.assertIn("# Project Management Context", combined)
+        self.assertIn("project context", combined)
+        self.assertIn("# Goals", combined)
+        self.assertIn("goal text", combined)
+
+        marker = "## Time Series Data (JSON)\n\n```json\n"
+        start = combined.index(marker) + len(marker)
+        end = combined.index("\n```", start)
+        payload = json.loads(combined[start:end])
+
+        self.assertEqual(payload["days_requested"], 90)
+        self.assertEqual(
+            payload["date_range"],
+            {
+                "start": str(today - timedelta(days=90)),
+                "end": str(today),
+            },
+        )
+        self.assertEqual(payload["total_days"], 91)
+        self.assertEqual(payload["days_with_data"], 2)
+        self.assertEqual(
+            payload["column_meta"],
+            {
+                "\u4f53\u91cd": {"unit": "kg"},
+            },
+        )
+        self.assertEqual(
+            payload["columns"],
+            ["date", "Days", "\u5468\u51e0", "\u4f53\u91cd", "\u5de5\u4f5c"],
+        )
+        self.assertEqual(
+            payload["rows"],
+            [
+                [str(today - timedelta(days=1)), 100, "\u5468\u516d", 63.5, "\u5199\u4ee3\u7801"],
+                [str(today), 101, "\u5468\u65e5", 63.0, "\u7ee7\u7eed\u5199\u4ee3\u7801"],
+            ],
+        )
+        self.assertEqual(
+            payload["non_null_counts"],
+            {
+                "Days": 2,
+                "\u5468\u51e0": 2,
+                "\u4f53\u91cd": 2,
+                "\u5de5\u4f5c": 2,
+            },
+        )
+        self.assertEqual(
+            payload["latest_values"],
+            {
+                "Days": {"date": str(today), "value": 101},
+                "\u5468\u51e0": {"date": str(today), "value": "\u5468\u65e5"},
+                "\u4f53\u91cd": {"date": str(today), "value": 63.0},
+                "\u5de5\u4f5c": {"date": str(today), "value": "\u7ee7\u7eed\u5199\u4ee3\u7801"},
+            },
+        )
 
 
 class DataLoaderPastSevenDaysTests(unittest.TestCase):

@@ -1,4 +1,5 @@
 import os
+import json
 import pandas as pd
 import subprocess
 import tempfile
@@ -321,111 +322,116 @@ class DataLoader:
 
         prompt_content = prompt_file_path.read_text(encoding="utf-8")
 
-        all_columns = [col for col in df.columns if col != "日期"]
+        date_column = "日期" if "日期" in df.columns else next(
+            (col for col in df.columns if str(df[col].dtype).startswith("datetime64")),
+            None,
+        )
+        if date_column is None:
+            raise KeyError(f"Excel 中缺少日期列: {excel_file_path}")
 
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
 
-        filtered_df = df[(df["日期"] >= start_date) & (df["日期"] <= end_date)]
-        filtered_df = filtered_df.sort_values(by="日期")
+        filtered_df = df[(df[date_column] >= start_date) & (df[date_column] <= end_date)]
+        filtered_df = filtered_df.sort_values(by=date_column)
 
-        data_summary = f"## 最近{days}天数据概览\n\n"
-        data_summary += (
-            f"查询时间段: {start_date.strftime('%Y-%m-%d')} 至 {end_date.strftime('%Y-%m-%d')}\n\n"
-        )
+        def clean_column_name(column_name):
+            return str(column_name).replace("\n", " ")
 
-        total_days = (end_date - start_date).days + 1
-        days_with_data = len(filtered_df)
-        data_summary += f"总天数: {total_days}, 有数据天数: {days_with_data}\n\n"
+        def normalize_prompt_value(column_name, raw_value):
+            if pd.isna(raw_value):
+                return None
 
-        if not filtered_df.empty:
-            data_summary += "### 详细数据记录\n\n"
+            value = raw_value
+            if hasattr(value, "item"):
+                try:
+                    value = value.item()
+                except Exception:
+                    pass
 
-            for col in all_columns:
-                has_data = filtered_df[col].notna().any()
-                if has_data:
-                    col_title = col.replace("\n", " ")
-                    data_summary += f"#### {col_title}记录\n\n"
+            if isinstance(value, pd.Timestamp):
+                return value.strftime("%Y-%m-%d")
 
-                    col_data = filtered_df[["日期", col]].dropna(subset=[col])
-                    for _, row in col_data.iterrows():
-                        value = row[col]
-                        # Special handling logic preserved from original script
-                        if col in ["体重", "体脂率"]:
-                            data_summary += (
-                                f"- {row['日期'].strftime('%Y-%m-%d')}: {value} "
-                                f"{'kg' if col == '体重' else '%'}\n"
-                            )
-                        elif col == "HHH":
-                            try:
-                                num_val = float(value)
-                                
-                                count = abs(num_val)
-                                formatted_count = int(count) if count.is_integer() else count
-                                
-                                if num_val < 0:
-                                    display_val = f"手淫 {formatted_count}次"
-                                elif num_val > 0:
-                                    display_val = f"性关系 {formatted_count}次"
-                                else:
-                                    display_val = str(value)
-                            except (ValueError, TypeError):
-                                display_val = str(value)
-                            
-                            data_summary += f"- {row['日期'].strftime('%Y-%m-%d')}: {display_val}\n"
-                        else:
-                            data_summary += f"- {row['日期'].strftime('%Y-%m-%d')}: {value}\n"
-                    data_summary += "\n"
-        else:
-            data_summary += "在指定时间段内没有找到任何数据。\n\n"
+            if clean_column_name(column_name) == "HHH":
+                try:
+                    num_val = float(value)
+                    count = abs(num_val)
+                    formatted_count = int(count) if count.is_integer() else count
+                    if num_val < 0:
+                        return f"手淫 {formatted_count}次"
+                    if num_val > 0:
+                        return f"性关系 {formatted_count}次"
+                    return str(value)
+                except (ValueError, TypeError):
+                    return str(value)
 
-        data_summary += "### 数据统计摘要\n\n"
+            return value
 
-        for col in all_columns:
-            clean_col_name = col.replace("\n", " ")
-            data_summary += f"- {clean_col_name}记录: {filtered_df[col].count()} 天\n"
+        data_columns = [col for col in filtered_df.columns if col != date_column]
+        payload_columns = ["date"] + [
+            clean_column_name(col)
+            for col in data_columns
+        ]
+        payload_rows = []
 
-        data_summary += "\n"
+        for _, row in filtered_df.iterrows():
+            current_row = [row[date_column].strftime("%Y-%m-%d")]
+            has_value = False
 
-        # Latest Values Logic
-        for col in all_columns:
-            latest_value = (
-                filtered_df[col].dropna().iloc[-1] if filtered_df[col].dropna().any() else None
-            )
-            latest_date = filtered_df["日期"].max() if not filtered_df.empty else None
+            for col in data_columns:
+                value = normalize_prompt_value(col, row[col])
+                if value is None:
+                    current_row.append(None)
+                    continue
 
-            if latest_value is not None:
-                clean_col_name = col.replace("\n", " ")
-                if col in ["体重", "体脂率"]:
-                    data_summary += (
-                        f"- 最新{clean_col_name}记录: {latest_date.strftime('%Y-%m-%d')}, "
-                        f"{latest_value} {'kg' if col == '体重' else '%'}\n"
-                    )
-                elif col == "HHH":
-                    try:
-                        num_val = float(latest_value)
-                        
-                        count = abs(num_val)
-                        formatted_count = int(count) if count.is_integer() else count
-                        
-                        if num_val < 0:
-                                display_val = f"手淫 {formatted_count}次"
-                        elif num_val > 0:
-                                display_val = f"性关系 {formatted_count}次"
-                        else:
-                                display_val = str(latest_value)
-                    except (ValueError, TypeError):
-                        display_val = str(latest_value)
+                current_row.append(value)
+                has_value = True
 
-                    data_summary += (
-                        f"- 最新{clean_col_name}记录: {latest_date.strftime('%Y-%m-%d')}, "
-                        f"{display_val}\n"
-                    )
-                else:
-                    data_summary += (
-                        f"- 最新{clean_col_name}记录: {latest_date.strftime('%Y-%m-%d')}, "
-                        f"{latest_value}\n"
-                    )
+            if has_value:
+                payload_rows.append(current_row)
+
+        unit_map = {
+            "体重": "kg",
+            "体脂率": "%",
+        }
+        column_meta = {}
+        non_null_counts = {}
+        latest_values = {}
+
+        for col in data_columns:
+            clean_name = clean_column_name(col)
+            non_null_counts[clean_name] = int(filtered_df[col].notna().sum())
+
+            if clean_name in unit_map:
+                column_meta[clean_name] = {"unit": unit_map[clean_name]}
+
+            latest_row = filtered_df[[date_column, col]].dropna(subset=[col])
+            if latest_row.empty:
+                continue
+
+            latest_entry = latest_row.iloc[-1]
+            latest_values[clean_name] = {
+                "date": latest_entry[date_column].strftime("%Y-%m-%d"),
+                "value": normalize_prompt_value(col, latest_entry[col]),
+            }
+
+        data_payload = {
+            "days_requested": int(days),
+            "date_range": {
+                "start": start_date.strftime("%Y-%m-%d"),
+                "end": end_date.strftime("%Y-%m-%d"),
+            },
+            "total_days": (end_date.date() - start_date.date()).days + 1,
+            "days_with_data": len(payload_rows),
+            "column_meta": column_meta,
+            "columns": payload_columns,
+            "rows": payload_rows,
+            "non_null_counts": non_null_counts,
+            "latest_values": latest_values,
+        }
+        data_summary = "## Time Series Data (JSON)\n\n```json\n"
+        data_summary += json.dumps(data_payload, ensure_ascii=False, separators=(",", ":"))
+        data_summary += "\n```"
 
         future_planned_rows = DataLoader.get_future_planned_rows(excel_file_path)
 

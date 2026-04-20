@@ -76,6 +76,30 @@ function summarizeSessionId(value) {
   return value.length > 14 ? `${value.slice(0, 8)}...${value.slice(-4)}` : value;
 }
 
+function toTimestamp(value) {
+  if (!value) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+}
+
+function sortRowsByTimestamp(rows, key) {
+  return [...(rows || [])].sort((left, right) => {
+    const timestampDifference = toTimestamp(right?.[key]) - toTimestamp(left?.[key]);
+
+    if (timestampDifference !== 0) {
+      return timestampDifference;
+    }
+
+    const rightIdentity = String(right?.call_id || right?.session_id || right?.source || right?.date || '');
+    const leftIdentity = String(left?.call_id || left?.session_id || left?.source || left?.date || '');
+
+    return rightIdentity.localeCompare(leftIdentity);
+  });
+}
+
 function SummaryCard({ label, value, subValue, accent = 'default' }) {
   return (
     <div className={`usage-summary-item usage-summary-item--${accent}`}>
@@ -149,16 +173,32 @@ export default function UsagePanel() {
 
   const usageDashboard = dashboard || EMPTY_DASHBOARD;
   const summary = usageDashboard.summary || EMPTY_DASHBOARD.summary;
+  const sourceRows = useMemo(
+    () => sortRowsByTimestamp(usageDashboard.by_source || [], 'latest_call_at'),
+    [usageDashboard.by_source],
+  );
+  const dayRows = useMemo(
+    () => sortRowsByTimestamp(usageDashboard.by_day || [], 'date'),
+    [usageDashboard.by_day],
+  );
+  const sessionRows = useMemo(
+    () => sortRowsByTimestamp(usageDashboard.sessions || [], 'last_call_at'),
+    [usageDashboard.sessions],
+  );
+  const recentCallRows = useMemo(
+    () => sortRowsByTimestamp(usageDashboard.recent_calls || [], 'created_at'),
+    [usageDashboard.recent_calls],
+  );
   const hasUsage = summary.session_count > 0 || summary.completed_call_count > 0 || summary.failed_call_count > 0;
   const totalTokens = Number(summary.total_tokens || 0);
   const promptShare = totalTokens > 0 ? (Number(summary.prompt_tokens || 0) / totalTokens) * 100 : 0;
   const completionShare = totalTokens > 0 ? (Number(summary.completion_tokens || 0) / totalTokens) * 100 : 0;
-  const activeSources = (usageDashboard.by_source || []).filter((row) => (row.completed_call_count || 0) > 0 || (row.failed_call_count || 0) > 0);
+  const activeSources = sourceRows.filter((row) => (row.completed_call_count || 0) > 0 || (row.failed_call_count || 0) > 0);
   const totalCallAttempts = Number(summary.completed_call_count || 0) + Number(summary.failed_call_count || 0);
   const failureRate = totalCallAttempts > 0 ? (Number(summary.failed_call_count || 0) / totalCallAttempts) * 100 : 0;
   const sessionHealth = totalCallAttempts > 0 ? ((Number(summary.completed_call_count || 0) / totalCallAttempts) * 100) : 0;
-  const peakDayTokens = Math.max(...(usageDashboard.by_day || []).map((row) => Number(row.total_tokens || 0)), 0);
-  const peakSourceTokens = Math.max(...(usageDashboard.by_source || []).map((row) => Number(row.total_tokens || 0)), 0);
+  const peakDayTokens = Math.max(...dayRows.map((row) => Number(row.total_tokens || 0)), 0);
+  const peakSourceTokens = Math.max(...sourceRows.map((row) => Number(row.total_tokens || 0)), 0);
 
   const summaryCards = useMemo(() => ([
     {
@@ -256,11 +296,11 @@ export default function UsagePanel() {
 
         <section className="usage-section">
           <h3>By Source</h3>
-          {!usageDashboard.by_source?.length ? (
+          {!sourceRows.length ? (
             <div className="usage-empty">No source usage yet.</div>
           ) : (
             <div className="usage-source-list">
-              {usageDashboard.by_source.map((row) => {
+              {sourceRows.map((row) => {
                 const share = totalTokens > 0 ? (Number(row.total_tokens || 0) / totalTokens) * 100 : 0;
                 const promptMix = Number(row.total_tokens || 0) > 0 ? (Number(row.prompt_tokens || 0) / Number(row.total_tokens || 0)) * 100 : 0;
                 const completionMix = Number(row.total_tokens || 0) > 0 ? (Number(row.completion_tokens || 0) / Number(row.total_tokens || 0)) * 100 : 0;
@@ -301,11 +341,11 @@ export default function UsagePanel() {
 
         <section className="usage-section">
           <h3>Daily Usage</h3>
-          {!usageDashboard.by_day?.length ? (
+          {!dayRows.length ? (
             <div className="usage-empty">No daily usage yet.</div>
           ) : (
             <div className="usage-day-list">
-              {usageDashboard.by_day.map((row) => (
+              {dayRows.map((row) => (
                 <div className="usage-day-row" key={row.date}>
                   <div className="usage-day-date">
                     <div className="usage-day-title">{row.date}</div>
@@ -342,7 +382,7 @@ export default function UsagePanel() {
           <h3>Recent Sessions</h3>
           <DataTable
             emptyMessage="No recent sessions yet."
-            rows={usageDashboard.sessions || []}
+            rows={sessionRows}
             columns={[
               { key: 'session_id', label: 'Session', render: (row) => summarizeSessionId(row.session_id) },
               { key: 'source', label: 'Source', render: (row) => <ToneChip tone="neutral">{row.source}</ToneChip> },
@@ -368,7 +408,7 @@ export default function UsagePanel() {
           <h3>Recent Calls</h3>
           <DataTable
             emptyMessage="No recent calls yet."
-            rows={usageDashboard.recent_calls || []}
+            rows={recentCallRows}
             columns={[
               { key: 'call_id', label: 'Call', render: (row) => summarizeSessionId(row.call_id) },
               { key: 'source', label: 'Source', render: (row) => <ToneChip tone="neutral">{row.source}</ToneChip> },
