@@ -195,6 +195,71 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
             },
         )
 
+    def test_construct_prompt_normalizes_sleep_and_screen_time_to_hour_floats(self):
+        today = datetime.now().date()
+        df = pd.DataFrame(
+            [
+                {
+                    "\u65e5\u671f": pd.Timestamp(today - timedelta(days=1)),
+                    "\u7761\u7720\u65f6\u95f4": "8\u5c0f\u65f633\u5206",
+                    "\u624b\u673a\u5c4f\u5e55\n\u4f7f\u7528\u65f6\u95f4": "4\u5c0f\u65f612\u5206",
+                },
+                {
+                    "\u65e5\u671f": pd.Timestamp(today),
+                    "\u7761\u7720\u65f6\u95f4": "7\u5c0f\u65f606\u5206",
+                    "\u624b\u673a\u5c4f\u5e55\n\u4f7f\u7528\u65f6\u95f4": "3\u5c0f\u65f648\u5206",
+                },
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            prompt_path = temp_path / "Prompt_Personal_Info.md"
+            excel_path = temp_path / "Time.xlsx"
+            prompt_path.write_text("personal info", encoding="utf-8")
+            excel_path.write_text("placeholder", encoding="utf-8")
+
+            def fake_resolve_data_path(filename, user_home=None, onedrive_env=None):
+                return temp_path / filename
+
+            with patch.object(DataLoader, "load_excel_data", return_value=df), patch.object(
+                DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                DataLoader,
+                "get_future_planned_rows",
+                return_value="## Future Planned Items\n\n- none\n",
+            ):
+                combined = DataLoader.construct_prompt(prompt_path, excel_path, days=90)
+
+        marker = "## Time Series Data (JSON)\n\n```json\n"
+        start = combined.index(marker) + len(marker)
+        end = combined.index("\n```", start)
+        payload = json.loads(combined[start:end])
+
+        self.assertEqual(
+            payload["column_meta"],
+            {
+                "\u7761\u7720\u65f6\u95f4": {"unit": "hour"},
+                "\u624b\u673a\u5c4f\u5e55 \u4f7f\u7528\u65f6\u95f4": {"unit": "hour"},
+            },
+        )
+        self.assertEqual(
+            payload["rows"],
+            [
+                [str(today - timedelta(days=1)), 8.55, 4.2],
+                [str(today), 7.1, 3.8],
+            ],
+        )
+        self.assertEqual(
+            payload["latest_values"],
+            {
+                "\u7761\u7720\u65f6\u95f4": {"date": str(today), "value": 7.1},
+                "\u624b\u673a\u5c4f\u5e55 \u4f7f\u7528\u65f6\u95f4": {"date": str(today), "value": 3.8},
+            },
+        )
+
 
 class DataLoaderPastSevenDaysTests(unittest.TestCase):
     def test_get_past_seven_days_rows_only_includes_previous_seven_days(self):

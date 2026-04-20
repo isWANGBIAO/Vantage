@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import pandas as pd
 import subprocess
 import tempfile
@@ -9,6 +10,19 @@ from pathlib import Path
 from src.core.config import Config
 
 class DataLoader:
+    @staticmethod
+    def _duration_text_to_hours(value):
+        if value is None or pd.isna(value):
+            return None
+
+        match = re.search(r"(?:(\d+)小时)?(?:(\d+)分)?", str(value).strip())
+        if not match or (match.group(1) is None and match.group(2) is None):
+            return value
+
+        hours = int(match.group(1) or 0)
+        minutes = int(match.group(2) or 0)
+        return round(hours + minutes / 60.0, 2)
+
     @staticmethod
     def resolve_data_root(user_home=None, onedrive_env=None):
         env_root = os.environ.get("AI_DATA_ROOT") or os.environ.get("DATA_ROOT")
@@ -338,6 +352,11 @@ class DataLoader:
         def clean_column_name(column_name):
             return str(column_name).replace("\n", " ")
 
+        hour_duration_columns = {
+            "睡眠时间",
+            "手机屏幕 使用时间",
+        }
+
         def normalize_prompt_value(column_name, raw_value):
             if pd.isna(raw_value):
                 return None
@@ -352,7 +371,12 @@ class DataLoader:
             if isinstance(value, pd.Timestamp):
                 return value.strftime("%Y-%m-%d")
 
-            if clean_column_name(column_name) == "HHH":
+            clean_name = clean_column_name(column_name)
+
+            if clean_name in hour_duration_columns:
+                return DataLoader._duration_text_to_hours(value)
+
+            if clean_name == "HHH":
                 try:
                     num_val = float(value)
                     count = abs(num_val)
@@ -393,6 +417,8 @@ class DataLoader:
         unit_map = {
             "体重": "kg",
             "体脂率": "%",
+            "睡眠时间": "hour",
+            "手机屏幕 使用时间": "hour",
         }
         column_meta = {}
         non_null_counts = {}
