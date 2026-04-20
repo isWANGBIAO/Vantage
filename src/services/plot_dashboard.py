@@ -1,7 +1,11 @@
 ﻿import numpy as np
 import pandas as pd
+import re
 
 from src.scripts import plot as plot_module
+
+SLEEP_SCHEDULE_WRAP_HOUR = 12
+SLEEP_TIME_PATTERN = re.compile(r'(\d{1,2})\s*[.:：]\s*(\d{1,2})')
 
 TIME_WARNING_CHART_IDS = [
     'time-allocation',
@@ -80,6 +84,55 @@ def _zoom_start(total_points, focus_points=30):
         return 0
     visible_ratio = focus_points / max(total_points, 1)
     return round((1 - visible_ratio) * 100, 2)
+
+
+def _format_clock_text(value):
+    if value is None:
+        return None
+    total_minutes = int(round(float(value) * 60)) % (24 * 60)
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+    return f'{hours:02d}:{minutes:02d}'
+
+
+def _normalize_clock_hour(value, wrap_hour=SLEEP_SCHEDULE_WRAP_HOUR):
+    if value is None:
+        return None
+    wrapped = float(value)
+    if wrapped < wrap_hour:
+        wrapped += 24
+    return wrapped
+
+
+def _parse_primary_sleep_session(value):
+    if value is None or pd.isna(value):
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    first_segment = re.split(r'[；;]', text, maxsplit=1)[0].strip()
+    matches = SLEEP_TIME_PATTERN.findall(first_segment)
+    if len(matches) < 2:
+        return None
+
+    parsed_hours = []
+    for hour_text, minute_text in matches[:2]:
+        hour = int(hour_text)
+        minute = int(minute_text)
+        if hour < 0 or hour >= 24 or minute < 0 or minute >= 60:
+            return None
+        parsed_hours.append(hour + minute / 60.0)
+
+    bedtime_hour, wake_hour = parsed_hours
+    return {
+        'bedtime_hour': bedtime_hour,
+        'wake_hour': wake_hour,
+        'bedtime_wrapped_hour': _normalize_clock_hour(bedtime_hour),
+        'wake_wrapped_hour': _normalize_clock_hour(wake_hour),
+        'segment': first_segment,
+    }
 
 
 def _build_chart(chart_id, title, description, option, *, formatter='default', height=420, summary=None):
@@ -370,6 +423,85 @@ def _build_weight_bodyfat_dashboard_chart(data_frame):
         formatter='weight-bodyfat',
         height=430,
         summary=summary,
+    )
+
+
+def _build_sleep_schedule_dashboard_chart(data_frame):
+    if '起床时间' not in data_frame.columns:
+        raise ValueError('缺少起床时间列')
+
+    source = data_frame[['日期', '起床时间']].dropna(subset=['日期', '起床时间']).copy().sort_values('日期')
+    parsed_rows = []
+    for _, row in source.iterrows():
+        parsed = _parse_primary_sleep_session(row.get('起床时间'))
+        if parsed is None:
+            continue
+        parsed_rows.append(
+            {
+                '日期': row['日期'],
+                **parsed,
+            }
+        )
+
+    if not parsed_rows:
+        raise ValueError('未找到可展示的主睡眠作息记录')
+
+    parsed_frame = pd.DataFrame(parsed_rows).sort_values('日期')
+    dates = parsed_frame['日期'].tolist()
+    bedtime_wrapped = parsed_frame['bedtime_wrapped_hour'].to_numpy(dtype=float)
+    wake_wrapped = parsed_frame['wake_wrapped_hour'].to_numpy(dtype=float)
+
+    option = {
+        'color': [
+            plot_module.COLORS['purple'],
+            plot_module.COLORS['green'],
+        ],
+        'tooltip': {'trigger': 'axis'},
+        'legend': {'top': 8},
+        'toolbox': {'right': 12, 'feature': {'saveAsImage': {}}},
+        'dataZoom': [
+            {'type': 'inside', 'start': _zoom_start(len(dates), 45), 'end': 100},
+            {'type': 'slider', 'start': _zoom_start(len(dates), 45), 'end': 100, 'bottom': 8},
+        ],
+        'grid': {'top': 72, 'left': 56, 'right': 36, 'bottom': 72, 'containLabel': True},
+        'xAxis': {'type': 'time'},
+        'yAxis': {
+            'type': 'value',
+            'name': '时间',
+            'min': 12,
+            'max': 36,
+            'interval': 2,
+        },
+        'series': [
+            {
+                'name': '入睡时间',
+                'type': 'line',
+                'showSymbol': False,
+                'data': _series_points(dates, bedtime_wrapped, 4),
+            },
+            {
+                'name': '起床时间',
+                'type': 'line',
+                'showSymbol': False,
+                'data': _series_points(dates, wake_wrapped, 4),
+            },
+        ],
+    }
+
+    return _build_chart(
+        'sleep-schedule',
+        '作息趋势',
+        '把主睡眠的入睡时间和起床时间放到同一条时间轴上，并按起床当天归属，直接看作息是提前还是后移。',
+        option,
+        formatter='sleep-schedule',
+        height=500,
+        summary=[
+            {'label': '最近入睡', 'value': _format_clock_text(parsed_frame['bedtime_hour'].iloc[-1])},
+            {'label': '最近起床', 'value': _format_clock_text(parsed_frame['wake_hour'].iloc[-1])},
+            {'label': '平均入睡', 'value': _format_clock_text(parsed_frame['bedtime_wrapped_hour'].mean())},
+            {'label': '平均起床', 'value': _format_clock_text(parsed_frame['wake_wrapped_hour'].mean())},
+            {'label': '样本天数', 'value': str(len(parsed_frame))},
+        ],
     )
 
 
@@ -1101,6 +1233,14 @@ def build_plot_dashboard_data():
         return running_metrics
 
     charts = [
+        _safe_chart(
+            'sleep-schedule',
+            '作息趋势',
+            '把主睡眠的入睡时间和起床时间放到同一条时间轴上，并按起床当天归属，直接看作息是提前还是后移。',
+            lambda: _build_sleep_schedule_dashboard_chart(data_frame),
+            formatter='sleep-schedule',
+            height=500,
+        ),
         _safe_chart(
             'weight-bodyfat',
             '体重 / 体脂率 / 脂肪质量趋势',

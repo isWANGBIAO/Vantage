@@ -51,7 +51,7 @@ function formatDurationHours(value) {
   const minutes = Math.abs(totalMinutes % 60);
 
   if (hours > 0 && minutes > 0) {
-    return `${hours}小时${minutes}分`;
+    return `${hours}小时${minutes}分钟`;
   }
 
   if (hours > 0) {
@@ -71,6 +71,18 @@ function formatPace(value) {
   const seconds = Math.abs(totalSeconds % 60);
 
   return `${minutes}:${String(seconds).padStart(2, '0')} /km`;
+}
+
+function formatWrappedClockLabel(value) {
+  if (!isFiniteNumber(value)) {
+    return '--';
+  }
+
+  const totalMinutes = ((Math.round(value * 60) % (24 * 60)) + 24 * 60) % (24 * 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
 function formatBySeriesName(seriesName, value) {
@@ -131,6 +143,10 @@ function formatBySeriesName(seriesName, value) {
     return formatDays(value);
   }
 
+  if (normalized.includes('入睡') || normalized.includes('起床') || normalized.includes('作息')) {
+    return formatWrappedClockLabel(value);
+  }
+
   if (
     normalized.includes('睡眠') ||
     normalized.includes('屏幕') ||
@@ -155,7 +171,7 @@ function buildTooltipRows(params, formatter) {
       const seriesName = param.seriesName || '';
       const rawValue = Array.isArray(param.value) ? param.value[param.value.length - 1] : param.value;
       const value = formatter(seriesName, rawValue);
-      return `${marker} ${seriesName}：${value}`;
+      return `${marker} ${seriesName}: ${value}`;
     })
     .join('<br/>');
 }
@@ -215,6 +231,17 @@ function runningFormatter(params) {
   return `${header}<br/>${rows}`;
 }
 
+function sleepScheduleFormatter(params) {
+  const points = Array.isArray(params) ? params : [params];
+  if (!points.length) {
+    return '';
+  }
+
+  const header = tooltipHeader(points[0]);
+  const rows = buildTooltipRows(points, (_seriesName, value) => formatWrappedClockLabel(value));
+  return `${header}<br/>${rows}`;
+}
+
 function radarFormatter(params) {
   const points = Array.isArray(params) ? params : [params];
   if (!points.length) {
@@ -224,7 +251,7 @@ function radarFormatter(params) {
   const point = points[0];
   const labels = Array.isArray(point?.dimensionNames) ? point.dimensionNames : [];
   const values = Array.isArray(point?.value) ? point.value : [];
-  const rows = labels.map((label, index) => `${label}：${formatNumber(values[index], 1)}`).join('<br/>');
+  const rows = labels.map((label, index) => `${label}: ${formatNumber(values[index], 1)}`).join('<br/>');
 
   return `${point.seriesName || '目标雷达'}<br/>${rows}`;
 }
@@ -233,6 +260,8 @@ function createTooltipFormatter(chartId) {
   switch (chartId) {
     case 'weight-bodyfat':
       return weightBodyfatFormatter;
+    case 'sleep-schedule':
+      return sleepScheduleFormatter;
     case 'running':
       return runningFormatter;
     case 'radar-goal':
@@ -492,6 +521,27 @@ function mergeSeries(series, chartId) {
   });
 }
 
+function applySleepScheduleAxisFormatting(axis) {
+  if (Array.isArray(axis)) {
+    return axis.map((item) => applySleepScheduleAxisFormatting(item));
+  }
+
+  if (!axis) {
+    return axis;
+  }
+
+  return {
+    ...axis,
+    min: axis.min ?? 12,
+    max: axis.max ?? 36,
+    interval: axis.interval ?? 2,
+    axisLabel: {
+      ...(axis.axisLabel || {}),
+      formatter: (value) => formatWrappedClockLabel(value),
+    },
+  };
+}
+
 export function formatSummaryValue(summary) {
   if (summary == null) {
     return '--';
@@ -534,6 +584,10 @@ export function formatSummaryValue(summary) {
     return formatPace(Number(value));
   }
 
+  if (type === 'clock') {
+    return formatWrappedClockLabel(Number(value));
+  }
+
   if (typeof value === 'number') {
     const formatted = formatNumber(value, precision);
     return unit ? `${formatted} ${unit}` : formatted;
@@ -545,6 +599,9 @@ export function formatSummaryValue(summary) {
 export function buildChartOption(chart) {
   const source = chart?.option || {};
   const tooltip = source.tooltip || {};
+  const mergedXAxis = mergeAxis(source.xAxis, 'category');
+  const mergedYAxisBase = mergeAxis(source.yAxis, 'value');
+  const mergedYAxis = chart?.id === 'sleep-schedule' ? applySleepScheduleAxisFormatting(mergedYAxisBase) : mergedYAxisBase;
 
   return {
     ...source,
@@ -574,8 +631,8 @@ export function buildChartOption(chart) {
       ...tooltip,
       formatter: createTooltipFormatter(chart?.id),
     },
-    xAxis: mergeAxis(source.xAxis, 'category'),
-    yAxis: mergeAxis(source.yAxis, 'value'),
+    xAxis: mergedXAxis,
+    yAxis: mergedYAxis,
     radar: source.radar
       ? {
           ...source.radar,

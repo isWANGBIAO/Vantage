@@ -11,7 +11,7 @@ const SECTION_DEFINITIONS = [
     title: '健康主视图',
     description: '先看体重、体脂和时间配置，快速判断健康行为有没有失衡。',
     accent: '#46a17d',
-    leadIds: ['weight-bodyfat', 'time-allocation'],
+    leadIds: ['sleep-schedule', 'weight-bodyfat', 'time-allocation'],
     supportIds: ['time-screen-remaining', 'time-averages', 'time-delta', 'radar-goal'],
   },
   {
