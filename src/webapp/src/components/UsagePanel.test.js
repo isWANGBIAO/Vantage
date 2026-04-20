@@ -68,3 +68,10 @@ test('UsagePanel sorts timestamped rows newest first without mutating input', ()
   assert.deepEqual(Array.from(sorted, (row) => row.call_id), ['new', 'old', 'missing']);
   assert.deepEqual(rows.map((row) => row.call_id), ['old', 'new', 'missing']);
 });
+
+test('UsagePanel uses call_id as the primary row key for recent calls tables', () => {
+  assert.ok(
+    usagePanelSource.includes("<tr key={row.id || row.call_id || row.session_id || row.date || `${index}`}>"),
+    'expected DataTable row keys to prefer call_id before session_id',
+  );
+});

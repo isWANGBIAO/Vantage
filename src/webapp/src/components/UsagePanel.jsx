@@ -131,7 +131,7 @@ function DataTable({ columns, rows, emptyMessage }) {
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={row.id || row.session_id || row.call_id || row.date || `${index}`}>
+            <tr key={row.id || row.call_id || row.session_id || row.date || `${index}`}>
               {columns.map((column) => (
                 <td key={column.key}>{column.render ? column.render(row) : row[column.key]}</td>
               ))}
