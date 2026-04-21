@@ -1,26 +1,30 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import './App.css';
-import Dashboard from './components/Dashboard';
-import Plots from './components/Plots';
-import SystemLogs from './components/SystemLogs';
 import ActionPlanContainer from './components/ActionPlanContainer';
-import FaceHistory from './components/FaceHistory';
-import ExpenseSheet from './components/ExpenseSheet';
-import ProjectProgress from './components/ProjectProgress';
 import { Sun, Moon } from 'lucide-react';
 
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const ProjectProgress = lazy(() => import('./components/ProjectProgress'));
+const ExpenseSheet = lazy(() => import('./components/ExpenseSheet'));
+const Plots = lazy(() => import('./components/Plots'));
+const SystemLogs = lazy(() => import('./components/SystemLogs'));
+const FaceHistory = lazy(() => import('./components/FaceHistory'));
+
+const DEFAULT_TAB = 'action plan';
+
 const NAV_ITEMS = [
-  'Dashboard',
-  'Action Plan',
-  'Project Progress',
-  'Expense Sheet',
-  'Plots',
-  'System Logs',
-  'Face History',
+  { label: 'Dashboard', key: 'dashboard', Component: Dashboard },
+  { label: 'Action Plan', key: 'action plan', Component: ActionPlanContainer, fullHeight: true },
+  { label: 'Project Progress', key: 'project progress', Component: ProjectProgress, fullHeight: true },
+  { label: 'Expense Sheet', key: 'expense sheet', Component: ExpenseSheet },
+  { label: 'Plots', key: 'plots', Component: Plots },
+  { label: 'System Logs', key: 'system logs', Component: SystemLogs },
+  { label: 'Face History', key: 'face history', Component: FaceHistory },
 ];
 
 function App() {
-  const [activeTab, setActiveTab] = useState('action plan');
+  const [activeTab, setActiveTab] = useState(DEFAULT_TAB);
+  const [visitedTabs, setVisitedTabs] = useState(() => new Set([DEFAULT_TAB]));
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
 
   useEffect(() => {
@@ -28,9 +32,52 @@ function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
+  useEffect(() => {
+    setVisitedTabs((prev) => {
+      if (prev.has(activeTab)) {
+        return prev;
+      }
+
+      const next = new Set(prev);
+      next.add(activeTab);
+      return next;
+    });
+  }, [activeTab]);
+
+  useEffect(() => {
+    const preloadTabs = () => {
+      void import('./components/Dashboard');
+      void import('./components/ProjectProgress');
+      void import('./components/ExpenseSheet');
+      void import('./components/Plots');
+      void import('./components/SystemLogs');
+      void import('./components/FaceHistory');
+    };
+
+    if (window.requestIdleCallback) {
+      const idleId = window.requestIdleCallback(preloadTabs);
+      return () => window.cancelIdleCallback?.(idleId);
+    }
+
+    const timeoutId = window.setTimeout(preloadTabs, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, []);
+
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
+
+  const renderTabFallback = (label) => (
+    <div
+      className="glass-panel"
+      style={{
+        padding: '1.5rem',
+        color: 'var(--text-secondary)',
+      }}
+    >
+      Loading {label}...
+    </div>
+  );
 
   return (
     <div className="app-layout">
@@ -58,12 +105,11 @@ function App() {
         <div className="app-header-actions">
           <nav className="app-nav">
             {NAV_ITEMS.map((item) => {
-              const key = item.toLowerCase();
-              const isActive = key === activeTab;
+              const isActive = item.key === activeTab;
 
               return (
                 <a
-                  key={item}
+                  key={item.key}
                   href="#"
                   className={`app-nav-link ${isActive ? 'active-nav' : ''}`}
                   style={{
@@ -72,10 +118,10 @@ function App() {
                   }}
                   onClick={(event) => {
                     event.preventDefault();
-                    setActiveTab(key);
+                    setActiveTab(item.key);
                   }}
                 >
-                  {item}
+                  {item.label}
                 </a>
               );
             })}
@@ -92,34 +138,30 @@ function App() {
       </header>
 
       <main className="app-container app-main">
-        <div style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}>
-          <Dashboard />
-        </div>
-        <div style={{ display: activeTab === 'action plan' ? 'block' : 'none', height: '100%' }}>
-          <ActionPlanContainer isVisible={activeTab === 'action plan'} />
-        </div>
-        <div style={{ display: activeTab === 'project progress' ? 'block' : 'none', height: '100%' }}>
-          <ProjectProgress />
-        </div>
-        <div style={{ display: activeTab === 'expense sheet' ? 'block' : 'none' }}>
-          <ExpenseSheet theme={theme} />
-        </div>
-        <div style={{ display: activeTab === 'plots' ? 'block' : 'none' }}>
-          <Plots theme={theme} />
-        </div>
-        <div style={{ display: activeTab === 'system logs' ? 'block' : 'none' }}>
-          <SystemLogs />
-        </div>
-        <div style={{ display: activeTab === 'face history' ? 'block' : 'none' }}>
-          <FaceHistory />
-        </div>
+        {NAV_ITEMS.map((tab) => {
+          if (!visitedTabs.has(tab.key)) {
+            return null;
+          }
+
+          const isVisible = tab.key === activeTab;
+
+          return (
+            <div
+              key={tab.key}
+              style={{
+                display: isVisible ? 'block' : 'none',
+                height: tab.fullHeight ? '100%' : undefined,
+              }}
+            >
+              <Suspense fallback={isVisible ? renderTabFallback(tab.label) : null}>
+                <tab.Component theme={theme} isVisible={isVisible} />
+              </Suspense>
+            </div>
+          );
+        })}
       </main>
 
-      {activeTab !== 'plots' &&
-        activeTab !== 'action plan' &&
-        activeTab !== 'face history' &&
-        activeTab !== 'expense sheet' &&
-        activeTab !== 'project progress' && (
+      {activeTab === 'dashboard' && (
           <footer
             style={{
               padding: '2rem',

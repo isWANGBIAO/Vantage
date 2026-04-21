@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getFaceReportState } from '../utils/faceReportState';
 import {
   buildBackendUrl,
@@ -318,13 +318,14 @@ function ExtremeCard({ title, date, score, imageUrl, accent }) {
   );
 }
 
-export default function FaceHistory() {
+export default function FaceHistory({ isVisible = true }) {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(initialProgress);
   const [data, setData] = useState(null);
   const [liveData, setLiveData] = useState(initialLiveData);
   const [error, setError] = useState(null);
   const [reportStatus, setReportStatus] = useState('loading');
+  const hasLoadedReportRef = useRef(false);
 
   const fetchReport = async ({ showLoading = false } = {}) => {
     const controller = new AbortController();
@@ -370,21 +371,35 @@ export default function FaceHistory() {
   };
 
   useEffect(() => {
-    fetchReport({ showLoading: true });
-    fetchLive();
-  }, []);
+    if (!isVisible) {
+      return undefined;
+    }
+
+    void fetchReport({ showLoading: !hasLoadedReportRef.current });
+    hasLoadedReportRef.current = true;
+    void fetchLive();
+    return undefined;
+  }, [isVisible]);
 
   useEffect(() => {
+    if (!isVisible) {
+      return undefined;
+    }
+
     const interval = setInterval(() => {
-      fetchLive();
+      void fetchLive();
     }, livePollIntervalMs);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [isVisible]);
 
   useEffect(() => {
     if (!loading) {
       setProgress(initialProgress);
+      return undefined;
+    }
+
+    if (!isVisible) {
       return undefined;
     }
 
@@ -410,7 +425,7 @@ export default function FaceHistory() {
 
         if (nextProgress.percent >= 100) {
           setLoading(false);
-          fetchReport();
+          void fetchReport();
         }
       } catch (err) {
         console.error('Poll error', err);
@@ -418,7 +433,7 @@ export default function FaceHistory() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [loading]);
+  }, [isVisible, loading]);
 
   const handleAnalyze = async () => {
     try {
