@@ -9,8 +9,3 @@ test('FaceHistory uses readable chart aria labels without mojibake', () => {
   assert.ok(faceHistorySource.includes('ariaLabel="实时黑眼圈分数图"'));
   assert.equal(faceHistorySource.includes('瀹炴椂榛戠溂鍦堝垎鏁板浘'), false);
 });
-
-test('FaceHistory gates live polling behind visibility', () => {
-  assert.ok(faceHistorySource.includes('export default function FaceHistory({ isVisible = true })'));
-  assert.ok(faceHistorySource.includes('if (!isVisible) {'));
-});

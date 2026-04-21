@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getFaceReportState } from '../utils/faceReportState';
 import {
   buildBackendUrl,
@@ -318,14 +318,13 @@ function ExtremeCard({ title, date, score, imageUrl, accent }) {
   );
 }
 
-export default function FaceHistory({ isVisible = true }) {
+export default function FaceHistory() {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(initialProgress);
   const [data, setData] = useState(null);
   const [liveData, setLiveData] = useState(initialLiveData);
   const [error, setError] = useState(null);
   const [reportStatus, setReportStatus] = useState('loading');
-  const hasLoadedReportRef = useRef(false);
 
   const fetchReport = async ({ showLoading = false } = {}) => {
     const controller = new AbortController();
@@ -371,35 +370,21 @@ export default function FaceHistory({ isVisible = true }) {
   };
 
   useEffect(() => {
-    if (!isVisible) {
-      return undefined;
-    }
-
-    void fetchReport({ showLoading: !hasLoadedReportRef.current });
-    hasLoadedReportRef.current = true;
-    void fetchLive();
-    return undefined;
-  }, [isVisible]);
+    fetchReport({ showLoading: true });
+    fetchLive();
+  }, []);
 
   useEffect(() => {
-    if (!isVisible) {
-      return undefined;
-    }
-
     const interval = setInterval(() => {
-      void fetchLive();
+      fetchLive();
     }, livePollIntervalMs);
 
     return () => clearInterval(interval);
-  }, [isVisible]);
+  }, []);
 
   useEffect(() => {
     if (!loading) {
       setProgress(initialProgress);
-      return undefined;
-    }
-
-    if (!isVisible) {
       return undefined;
     }
 
@@ -425,7 +410,7 @@ export default function FaceHistory({ isVisible = true }) {
 
         if (nextProgress.percent >= 100) {
           setLoading(false);
-          void fetchReport();
+          fetchReport();
         }
       } catch (err) {
         console.error('Poll error', err);
@@ -433,7 +418,7 @@ export default function FaceHistory({ isVisible = true }) {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isVisible, loading]);
+  }, [loading]);
 
   const handleAnalyze = async () => {
     try {

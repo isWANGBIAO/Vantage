@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 
 const dashboardSource = readFileSync(new URL('./Dashboard.jsx', import.meta.url), 'utf8');
 
-test('Dashboard only runs polling effects while visible', () => {
-  assert.ok(dashboardSource.includes('export default function Dashboard({ isVisible = true })'));
-  assert.ok(dashboardSource.includes('if (!isVisible) {'));
+test('Dashboard keeps startup prewarm polling active without visibility gating', () => {
+  assert.ok(dashboardSource.includes('export default function Dashboard()'));
+  assert.ok(dashboardSource.includes('const statsInterval = setInterval(() => void fetchStats(), 5000);'));
+  assert.equal(dashboardSource.includes('if (!isVisible)'), false);
 });

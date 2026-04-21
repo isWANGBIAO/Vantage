@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 
-export default function Dashboard({ isVisible = true }) {
+export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [latestImages, setLatestImages] = useState({ photo: null, screenshot: null });
   const [time, setTime] = useState(new Date());
@@ -152,10 +152,6 @@ export default function Dashboard({ isVisible = true }) {
   };
 
   useEffect(() => {
-    if (!isVisible) {
-      return undefined;
-    }
-
     const timer = setInterval(() => setTime(new Date()), 1000);
     const bootstrapTimer = setTimeout(() => {
       void fetchStats();
@@ -177,7 +173,7 @@ export default function Dashboard({ isVisible = true }) {
       clearInterval(aqiInterval);
       clearInterval(healthInterval);
     };
-  }, [fetchStats, fetchLatestImages, fetchAqi, fetchHealth, isVisible]);
+  }, [fetchStats, fetchLatestImages, fetchAqi, fetchHealth]);
 
   const daysLeft = stats && storageEstimate.groupSizeBytes > 0
     ? ((stats.disk_free_gb * 1024 * 1024 * 1024) / storageEstimate.groupSizeBytes) * 10 / 86400
