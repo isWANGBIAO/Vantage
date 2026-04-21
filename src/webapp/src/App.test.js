@@ -9,13 +9,14 @@ test('App passes the current theme into chart-heavy screens', () => {
   assert.ok(appSource.includes('<Plots theme={theme} />'));
 });
 
-test('App eagerly mounts prewarmed tabs on startup', () => {
-  assert.ok(appSource.includes('<Dashboard />'));
-  assert.ok(appSource.includes('<ProjectProgress />'));
-  assert.ok(appSource.includes('<ExpenseSheet theme={theme} />'));
-  assert.ok(appSource.includes('<Plots theme={theme} />'));
-  assert.ok(appSource.includes('<SystemLogs />'));
-  assert.ok(appSource.includes('<FaceHistory />'));
+test('App code-splits non-default tabs but still preloads them after startup', () => {
+  assert.ok(appSource.includes('function lazyWithPreload'));
+  assert.ok(appSource.includes('lazyWithPreload(() => import('));
+  assert.ok(appSource.includes('backgroundTabsReady'));
+  assert.ok(appSource.includes('Promise.all(BACKGROUND_TAB_COMPONENTS.map('));
+  assert.ok(appSource.includes('.preload()'));
+  assert.ok(appSource.includes('<Suspense fallback={null}>'));
+  assert.equal(appSource.includes("import Dashboard from './components/Dashboard'"), false);
 });
 
 test('App keeps the global footer off full-height tabs including system logs', () => {

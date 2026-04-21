@@ -9,6 +9,36 @@ export default defineConfig(({ mode }) => {
   return {
     base: './',
     plugins: [react()],
+    build: {
+      chunkSizeWarningLimit: 900,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            const pathId = id.replace(/\\/g, '/')
+
+            if (
+              pathId.includes('/node_modules/echarts/') ||
+              pathId.includes('/node_modules/echarts-for-react/')
+            ) {
+              return 'charts-vendor'
+            }
+
+            if (
+              pathId.includes('/node_modules/react-markdown/') ||
+              pathId.includes('/node_modules/remark-gfm/') ||
+              pathId.includes('/node_modules/mdast-util-') ||
+              pathId.includes('/node_modules/micromark') ||
+              pathId.includes('/node_modules/unified/') ||
+              pathId.includes('/node_modules/remark-')
+            ) {
+              return 'markdown-vendor'
+            }
+
+            return undefined
+          },
+        },
+      },
+    },
     server: {
       proxy: {
         '/api': {

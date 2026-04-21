@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../utils/echarts.js';
 import { AlertTriangle } from 'lucide-react';
 
 import { buildChartOption, formatSummaryValue } from '../utils/plotFormatters';

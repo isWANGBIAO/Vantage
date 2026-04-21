@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import ReactECharts from 'echarts-for-react';
+import ReactECharts from '../utils/echarts.js';
 import { AlertTriangle, LineChart, RefreshCw } from 'lucide-react';
 
 import { fetchBackendJson } from '../utils/backendRequest';

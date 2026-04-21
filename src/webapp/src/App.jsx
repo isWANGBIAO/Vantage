@@ -1,13 +1,29 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import './App.css';
-import Dashboard from './components/Dashboard';
-import Plots from './components/Plots';
-import SystemLogs from './components/SystemLogs';
 import ActionPlanContainer from './components/ActionPlanContainer';
-import FaceHistory from './components/FaceHistory';
-import ExpenseSheet from './components/ExpenseSheet';
-import ProjectProgress from './components/ProjectProgress';
 import { Sun, Moon } from 'lucide-react';
+
+function lazyWithPreload(factory) {
+  const Component = lazy(factory);
+  Component.preload = factory;
+  return Component;
+}
+
+const Dashboard = lazyWithPreload(() => import('./components/Dashboard'));
+const ProjectProgress = lazyWithPreload(() => import('./components/ProjectProgress'));
+const ExpenseSheet = lazyWithPreload(() => import('./components/ExpenseSheet'));
+const Plots = lazyWithPreload(() => import('./components/Plots'));
+const SystemLogs = lazyWithPreload(() => import('./components/SystemLogs'));
+const FaceHistory = lazyWithPreload(() => import('./components/FaceHistory'));
+
+const BACKGROUND_TAB_COMPONENTS = [
+  Dashboard,
+  ProjectProgress,
+  ExpenseSheet,
+  Plots,
+  SystemLogs,
+  FaceHistory,
+];
 
 const NAV_ITEMS = [
   'Dashboard',
@@ -22,11 +38,29 @@ const NAV_ITEMS = [
 function App() {
   const [activeTab, setActiveTab] = useState('action plan');
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  const [backgroundTabsReady, setBackgroundTabsReady] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const preloadTabs = async () => {
+      await Promise.all(BACKGROUND_TAB_COMPONENTS.map((Component) => Component.preload()));
+      if (!cancelled) {
+        setBackgroundTabsReady(true);
+      }
+    };
+
+    void preloadTabs();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
@@ -92,27 +126,51 @@ function App() {
       </header>
 
       <main className="app-container app-main">
-        <div style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}>
-          <Dashboard />
-        </div>
+        <Suspense fallback={null}>
+          {(activeTab === 'dashboard' || backgroundTabsReady) ? (
+            <div style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}>
+              <Dashboard />
+            </div>
+          ) : null}
+        </Suspense>
         <div style={{ display: activeTab === 'action plan' ? 'block' : 'none', height: '100%' }}>
           <ActionPlanContainer isVisible={activeTab === 'action plan'} />
         </div>
-        <div style={{ display: activeTab === 'project progress' ? 'block' : 'none', height: '100%' }}>
-          <ProjectProgress />
-        </div>
-        <div style={{ display: activeTab === 'expense sheet' ? 'block' : 'none' }}>
-          <ExpenseSheet theme={theme} />
-        </div>
-        <div style={{ display: activeTab === 'plots' ? 'block' : 'none' }}>
-          <Plots theme={theme} />
-        </div>
-        <div style={{ display: activeTab === 'system logs' ? 'block' : 'none' }}>
-          <SystemLogs />
-        </div>
-        <div style={{ display: activeTab === 'face history' ? 'block' : 'none' }}>
-          <FaceHistory />
-        </div>
+        <Suspense fallback={null}>
+          {(activeTab === 'project progress' || backgroundTabsReady) ? (
+            <div style={{ display: activeTab === 'project progress' ? 'block' : 'none', height: '100%' }}>
+              <ProjectProgress />
+            </div>
+          ) : null}
+        </Suspense>
+        <Suspense fallback={null}>
+          {(activeTab === 'expense sheet' || backgroundTabsReady) ? (
+            <div style={{ display: activeTab === 'expense sheet' ? 'block' : 'none' }}>
+              <ExpenseSheet theme={theme} />
+            </div>
+          ) : null}
+        </Suspense>
+        <Suspense fallback={null}>
+          {(activeTab === 'plots' || backgroundTabsReady) ? (
+            <div style={{ display: activeTab === 'plots' ? 'block' : 'none' }}>
+              <Plots theme={theme} />
+            </div>
+          ) : null}
+        </Suspense>
+        <Suspense fallback={null}>
+          {(activeTab === 'system logs' || backgroundTabsReady) ? (
+            <div style={{ display: activeTab === 'system logs' ? 'block' : 'none' }}>
+              <SystemLogs />
+            </div>
+          ) : null}
+        </Suspense>
+        <Suspense fallback={null}>
+          {(activeTab === 'face history' || backgroundTabsReady) ? (
+            <div style={{ display: activeTab === 'face history' ? 'block' : 'none' }}>
+              <FaceHistory />
+            </div>
+          ) : null}
+        </Suspense>
       </main>
 
       {activeTab !== 'plots' &&
