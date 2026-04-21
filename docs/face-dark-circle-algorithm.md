@@ -17,7 +17,7 @@
 - `src/services/face_analysis_pipeline.py`
 - `src/utils/face_analysis_db.py`
 
-当前数据库算法版本号是 `dark_circle_v2`。
+当前数据库算法版本号是 `dark_circle_v3`。
 
 ---
 
@@ -28,7 +28,7 @@
 1. 扫描照片目录，找到符合命名规则的历史自拍。
 2. 对每张照片做人脸检测，截取脸部区域。
 3. 对脸部区域做人脸解析，得到皮肤、左右眼区域的掩码。
-4. 根据眼睛下方与脸颊的颜色/亮度差异，分别计算左右眼分数。
+4. 根据归一化后的下眼区与脸颊参考区的亮度、阴影对比、综合色差，分别计算左右眼分数。
 5. 通过一组质量门过滤掉模糊、曝光极端、姿态不稳、左右眼不一致等无效样本。
 6. 把单张结果写入 SQLite 数据库。
 7. 用数据库中的有效结果生成报告：
@@ -156,8 +156,10 @@ photo_20260314_205227.jpg
 | `min_mask_pixels` | `12` | 眼区/脸颊掩码最小像素数 |
 | `under_band_ratio` | `0.45` | 下眼睑 ROI 相对眼高的带宽 |
 | `cheek_offset_ratio` | `0.75` | 脸颊 ROI 相对下眼区的偏移 |
-| `score_delta_e_weight` | `0.6` | 色差权重 |
-| `score_delta_l_weight` | `0.4` | 亮度差权重 |
+| `score_relative_l_weight` | `0.5` | 归一化亮度差权重 |
+| `score_shadow_contrast_weight` | `0.35` | 阴影对比权重 |
+| `score_normalized_delta_e_weight` | `0.15` | 归一化综合色差权重 |
+| `score_scale` | `60.0` | 原始分数缩放系数 |
 | `max_face_center_offset_ratio` | `0.32` | 脸框偏离画面中心的最大比例 |
 | `min_face_box_aspect_ratio` | `0.75` | 脸框最小长宽比 |
 | `max_face_box_aspect_ratio` | `1.35` | 脸框最大长宽比 |
@@ -171,8 +173,21 @@ photo_20260314_205227.jpg
 | `max_brightness_l_gap` | `18.0` | 左右眼亮度差上限 |
 | `max_eye_center_y_ratio` | `0.1` | 左右眼中心高度差上限 |
 | `max_eye_width_ratio` | `1.8` | 左右眼宽度比例上限 |
+| `illumination_blur_sigma` | `21.0` | 光照归一化背景模糊尺度 |
+| `skin_tone_target_a` | `128.0` | 皮肤 `a` 通道目标值 |
+| `skin_tone_target_b` | `128.0` | 皮肤 `b` 通道目标值 |
+| `max_skin_l_std_ratio` | `0.28` | 皮肤亮度波动比例阈值，用于 `lighting_confidence` |
 
-这些参数共同决定“哪些图可分析”“哪些分数可信”。
+此外，当前代码里还保留了 4 个配置字段，但 **不参与 `dark_circle_v3` 的实际打分或质量门**：
+
+- `score_delta_e_weight`
+- `score_delta_l_weight`
+- `illumination_clahe_clip_limit`
+- `illumination_clahe_grid_size`
+
+这些参数更像历史遗留/预留字段，当前实现没有使用它们。
+
+上述有效参数共同决定“哪些图可分析”“哪些分数可信”。
 
 ---
 
@@ -369,30 +384,45 @@ src/scripts/models/face_parsing.farl.lapa.int8.onnx
 
 ## 11. 第五步：黑眼圈分数计算公式
 
-### 11.1 颜色空间
+### 11.1 先做光照与肤色归一化
 
-算法把 `resized_img` 转到 Lab 色彩空间：
+`dark_circle_v3` 不是直接拿原始 Lab 像素做差，而是先跑 `_normalize_face_lab()`：
+
+1. 把 `resized_img` 转成 Lab
+2. 把灰度图转成 `float32`，并加 `1.0` 防止对数运算出问题
+3. 用 `illumination_blur_sigma=21.0` 做大尺度高斯模糊，得到慢变化背景
+4. 计算：
 
 ```text
-lab = cv2.cvtColor(resized_img, cv2.COLOR_BGR2LAB)
+retinex_l = log(gray) - log(background + 1e-6)
 ```
 
-Lab 的好处是：
+5. 把这个结果重新归一化到 `[0, 255]`，替换 Lab 的 `L` 通道
+6. 在 `skin_mask` 内统计皮肤 `a/b` 中位数，并把整张脸平移到：
+   - `skin_tone_target_a = 128`
+   - `skin_tone_target_b = 128`
 
-- `L` 通道表示亮度
-- `a/b` 通道表示颜色
-- 比直接在 RGB 上做差更适合比较“阴影 + 色偏”
+这一步的目的，是尽量减少暖光、冷光、局部照明不均带来的整体偏移。
 
-### 11.2 统计方式
+### 11.2 归一化阶段还会产出两个脸部统计量
 
-对下眼区和脸颊区分别提取所有 Lab 像素，取 **中位数**：
+当前代码会额外输出：
+
+- `face_l_reference = 255.0`
+  - 当前实现固定用 255 作为亮度归一化参考
+- `skin_l_std_ratio = std(skin_L) / 255.0`
+  - 用于后续计算 `lighting_confidence`
+
+### 11.3 ROI 统计方式
+
+对下眼区和脸颊区分别提取归一化后的 Lab 像素，取 **中位数**：
 
 - `under_med`
 - `cheek_med`
 
 不是取均值，而是取中位数。这样更能抗局部噪点和少量错误像素。
 
-### 11.3 两个核心量
+### 11.4 当前单眼分数的 3 个核心特征
 
 #### 1. 亮度差 `delta_l`
 
@@ -402,23 +432,74 @@ delta_l = max(0, cheek_L - under_L)
 
 如果下眼区比脸颊更暗，`delta_l` 变大。
 
-#### 2. Lab 色差 `delta_e`
+#### 2. 归一化亮度差 `relative_luminance`
+
+```text
+relative_luminance = delta_l / face_l_reference
+```
+
+当前代码里 `face_l_reference = 255`，所以它本质上是把亮度差缩放到相对量级。
+
+#### 3. 阴影对比 `shadow_contrast`
+
+代码先分别计算下眼区和脸颊区 `L` 通道的：
+
+```text
+percentile_90 - percentile_10
+```
+
+然后取两者差值中大于 0 的部分，再除以 `face_l_reference`：
+
+```text
+shadow_contrast =
+    max(0, contrast(under_L) - contrast(cheek_L)) / face_l_reference
+```
+
+这一步是想抓住“下眼区内部阴影层次明显多于脸颊”的情况。
+
+#### 4. 归一化综合色差 `normalized_delta_e`
 
 ```text
 delta_e = ||cheek_med - under_med||
+normalized_delta_e = delta_e / face_l_reference
 ```
 
-这是脸颊与下眼区整体颜色差异的欧氏距离。
+它仍然保留了综合色差，但已经被压到和其他特征可比较的尺度上。
 
-### 11.4 最终单眼分数
+### 11.5 最终单眼分数
+
+当前真实代码是：
 
 ```text
-score = 0.6 * delta_e + 0.4 * delta_l
+raw_score = score_scale * (
+    score_relative_l_weight * relative_luminance
+    + score_shadow_contrast_weight * shadow_contrast
+    + score_normalized_delta_e_weight * normalized_delta_e
+)
 ```
 
-也就是说当前算法更重视“综合色差”，亮度差次之。
+代入默认值后就是：
 
-### 11.5 双眼合并
+```text
+raw_score = 60 * (
+    0.50 * relative_luminance
+    + 0.35 * shadow_contrast
+    + 0.15 * normalized_delta_e
+)
+```
+
+然后再调用 `normalize_dark_circle_score()`：
+
+```text
+eye_score = clip(raw_score * 10, 0, 100)
+```
+
+也就是说：
+
+- `raw_score` 是内部原始分
+- 对外展示的 `score_left` / `score_right` 是乘 10 后再裁剪到 `0~100`
+
+### 11.6 双眼合并与附加输出
 
 左右眼分别算出：
 
@@ -428,6 +509,9 @@ score = 0.6 * delta_e + 0.4 * delta_l
 - `delta_e_right`
 - `delta_l_left`
 - `delta_l_right`
+- `features.relative_luminance_left/right`
+- `features.shadow_contrast_left/right`
+- `features.normalized_delta_e_left/right`
 
 最终单张总分：
 
@@ -435,7 +519,13 @@ score = 0.6 * delta_e + 0.4 * delta_l
 score = (score_left + score_right) / 2
 ```
 
-分数越高，代表下眼区相对脸颊越暗、越偏色，也就是算法认为黑眼圈越重。
+此外还会计算：
+
+- `quality.lighting_confidence`
+
+它是一个 `0~1` 的质量指标，但 **当前不会直接参与 `passed` 判定**，只作为附加质量输出。
+
+分数越高，代表算法认为下眼区相对脸颊越暗、阴影对比越强、综合色差越大，也就是黑眼圈越重。
 
 ---
 
@@ -463,12 +553,15 @@ abs(score_left - score_right) > max_left_right_score_gap
 
 ### 12.3 左右亮度不一致
 
-分别比较：
+优先比较左右眼的 `relative_luminance` 差值，并放大到百分制量级：
 
-- 左右下眼区亮度差
-- 左右脸颊亮度差
+```text
+brightness_gap = abs(left_relative_luminance - right_relative_luminance) * 100
+```
 
-如果最大差值超过 `max_brightness_l_gap=18`：
+只有在缺少 `relative_luminance` 时，才会退回到原始 `under_l` / `cheek_l` 比较。
+
+如果这个亮度差超过 `max_brightness_l_gap=18`：
 
 - `UnstableBrightness`
 
@@ -530,14 +623,16 @@ abs(score_left - score_right) > max_left_right_score_gap
 10. 右眼 ROI 分析
    - 失败 -> `RightEyeROIInvalid`
 11. 双眼稳定性检查
-   - `UnderEyePixelsTooSmall`
-   - `UnstableLeftRightGap`
-   - `UnstableBrightness`
-   - `UnstableEyeArea`
-   - `UnstablePose`
+    - `UnderEyePixelsTooSmall`
+    - `UnstableLeftRightGap`
+    - `UnstableBrightness`
+    - `UnstableEyeArea`
+    - `UnstablePose`
 12. 如果以上都通过：
-   - 写入左右眼分数和总分
-   - `passed=True`
+    - 写入左右眼分数和总分
+    - 写入 `features.*`
+    - 写入 `quality.lighting_confidence`
+    - `passed=True`
 
 一旦某一步失败，函数立刻返回，不会继续往后算。
 
@@ -627,7 +722,15 @@ history/face_analysis.db
 - `analysis_algorithm_version`
 - `storage_backend`
 
-如果 `analysis_algorithm_version` 变化，初始化时会清空旧结果和缓存。
+如果 `analysis_algorithm_version` 变化，初始化逻辑不是一刀切：
+
+- 从 `dark_circle_v2` 升到 `dark_circle_v3`
+  - 会把已有 `passed=1` 的 `score/score_left/score_right` 统一乘以 `10`
+  - 然后清空报告缓存和进度缓存
+- 其他未知旧版本
+  - 会清空结果表和两类缓存，再重新开始
+
+也就是说，当前代码对 `v2 -> v3` 做了专门迁移，而不是直接删库。
 
 ---
 
@@ -652,6 +755,14 @@ history/face_analysis.db
 - `fail_reason_counts`
 
 这些质量统计不受报告层离群过滤影响，仍然反映原始单帧判定结果。
+
+### 16.3 报告层正式过滤
+
+在挑选最轻/最重和生成趋势图之前，`build_face_report()` 会先对原始有效样本调用：
+
+- `filter_report_outlier_points(valid_rows)`
+
+后续报告展示默认基于这批过滤后的样本。
 
 ---
 
@@ -791,6 +902,15 @@ Dark Circle Severity Trend (Valid Samples=N)
 
 这就是为什么有些偏可疑但不够“孤立”的值仍然可能留在报告里。
 
+### 19.6 如果过滤后一个样本都不剩
+
+当前实现还多做了一层保护：
+
+- 如果过滤后结果为空
+- 函数会回退到原始有效样本
+
+这样可以避免报告直接变空。这也说明它的目标是“只删最有把握的异常点”，而不是追求激进清洗。
+
 ---
 
 ## 20. `filter_stable_trend_points()` 与 `filter_report_outlier_points()` 的区别
@@ -857,17 +977,19 @@ Dark Circle Severity Trend (Valid Samples=N)
 
 ## 22. 如何理解当前分数
 
-当前分数本质上是一个 **相对色差/亮度差指标**，不是医学诊断分值。
+当前分数本质上是一个 **归一化亮度差 + 阴影对比 + 综合色差** 的规则指标，不是医学诊断分值。
 
 它表示的是：
 
 - 下眼区相对脸颊有多暗
+- 下眼区内部阴影层次是否更明显
 - 下眼区相对脸颊有多偏色
 
 所以：
 
 - 分数高：算法认为黑眼圈更明显
 - 分数低：算法认为黑眼圈更轻
+- 分数范围会被裁剪在 `0~100`
 
 但它受到下列因素影响：
 
@@ -901,6 +1023,7 @@ Dark Circle Severity Trend (Valid Samples=N)
 虽然做了：
 
 - 极端曝光过滤
+- 光照归一化
 - 左右亮度一致性过滤
 - 报告层离群值过滤
 
@@ -910,8 +1033,9 @@ Dark Circle Severity Trend (Valid Samples=N)
 
 本质上是：
 
-- Lab 色差
-- 亮度差
+- 归一化亮度差
+- 阴影对比
+- 归一化综合色差
 - ROI 规则
 
 它不是端到端训练出来的黑眼圈回归模型。
@@ -959,7 +1083,7 @@ Dark Circle Severity Trend (Valid Samples=N)
 
 ## 25. 一句话总结
 
-当前黑眼圈算法是一个“**人脸检测 -> 脸部裁剪 -> 人脸解析 -> 下眼区/脸颊色差打分 -> 单帧质量门 -> 报告层保守离群过滤**”的多阶段规则系统。
+当前黑眼圈算法是一个“**人脸检测 -> 脸部裁剪 -> 人脸解析 -> 光照/肤色归一化 -> 下眼区/脸颊规则打分 -> 单帧质量门 -> 报告层保守离群过滤**”的多阶段规则系统。
 
 它的重点不是让每一张图都绝对准确，而是：
 
