@@ -37,6 +37,33 @@ def _get_creationflags() -> int:
     return flags
 
 
+def _prepare_frontend_runtime_logs(logs_dir: Path, mode: str, launched_at: datetime) -> dict[str, Path]:
+    runtime_dir = logs_dir / "frontend"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = launched_at.strftime("%Y%m%d_%H%M%S")
+
+    stdout_log = runtime_dir / f"frontend-{mode}-out-{timestamp}.log"
+    stderr_log = runtime_dir / f"frontend-{mode}-err-{timestamp}.log"
+    stdout_pointer = logs_dir / f"frontend_{mode}.out.latest.log"
+    stderr_pointer = logs_dir / f"frontend_{mode}.err.latest.log"
+
+    for pointer_path, log_path in (
+        (stdout_pointer, stdout_log),
+        (stderr_pointer, stderr_log),
+    ):
+        try:
+            pointer_path.write_text(str(log_path.resolve()), encoding="utf-8")
+        except OSError:
+            pass
+
+    return {
+        "stdout_log": stdout_log,
+        "stderr_log": stderr_log,
+        "stdout_pointer": stdout_pointer,
+        "stderr_pointer": stderr_pointer,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(argv or sys.argv[1:])
     mode = args[0] if args else "production"
@@ -46,9 +73,11 @@ def main(argv: list[str] | None = None) -> int:
     logs_dir = project_root / "logs"
     logs_dir.mkdir(exist_ok=True)
 
-    timestamp = datetime.now().isoformat()
-    stdout_log = logs_dir / f"frontend_{mode}.out.log"
-    stderr_log = logs_dir / f"frontend_{mode}.err.log"
+    launched_at = datetime.now()
+    runtime_logs = _prepare_frontend_runtime_logs(logs_dir, mode, launched_at)
+    stdout_log = runtime_logs["stdout_log"]
+    stderr_log = runtime_logs["stderr_log"]
+    timestamp = launched_at.isoformat()
 
     command = _build_frontend_command(mode)
     env = _build_frontend_env(mode)

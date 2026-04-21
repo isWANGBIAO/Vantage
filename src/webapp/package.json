@@ -8,6 +8,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test": "node --test vite.config.test.js package.test.js \"src/**/*.test.js\"",
+    "check": "npm run lint && npm run test && npm run build",
     "lint": "eslint .",
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",

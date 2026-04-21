@@ -129,7 +129,7 @@ function App() {
         <Suspense fallback={null}>
           {(activeTab === 'dashboard' || backgroundTabsReady) ? (
             <div style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}>
-              <Dashboard />
+              <Dashboard isVisible={activeTab === 'dashboard'} />
             </div>
           ) : null}
         </Suspense>

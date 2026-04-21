@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { fetchBackendJson } from '../utils/backendRequest';
+import { resolveSystemLogColor } from './systemLogSeverity.js';
 
 export default function SystemLogs() {
     const [logs, setLogs] = useState([]);
@@ -50,7 +51,7 @@ export default function SystemLogs() {
                 {logs.map((log, i) => (
                     <div key={i} style={{
                         padding: '4px 0',
-                        color: log.includes('Error') ? '#ff7675' : '#55efc4',
+                        color: resolveSystemLogColor(log),
                         borderBottom: '1px solid rgba(255,255,255,0.03)'
                     }}>
                         <span style={{ color: '#636e72', marginRight: '10px' }}>{i + 1}</span>

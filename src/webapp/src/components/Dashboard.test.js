@@ -4,8 +4,9 @@ import { readFileSync } from 'node:fs';
 
 const dashboardSource = readFileSync(new URL('./Dashboard.jsx', import.meta.url), 'utf8');
 
-test('Dashboard keeps startup prewarm polling active without visibility gating', () => {
-  assert.ok(dashboardSource.includes('export default function Dashboard()'));
+test('Dashboard keeps startup prewarm polling active while delegating geolocation prompting to a policy helper', () => {
+  assert.ok(dashboardSource.includes('export default function Dashboard({ isVisible = false })'));
   assert.ok(dashboardSource.includes('const statsInterval = setInterval(() => void fetchStats(), 5000);'));
-  assert.equal(dashboardSource.includes('if (!isVisible)'), false);
+  assert.ok(dashboardSource.includes('shouldUseDashboardGeolocation'));
+  assert.ok(dashboardSource.includes('isVisible = false'));
 });

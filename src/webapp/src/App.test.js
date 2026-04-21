@@ -22,3 +22,7 @@ test('App code-splits non-default tabs but still preloads them after startup', (
 test('App keeps the global footer off full-height tabs including system logs', () => {
   assert.ok(appSource.includes("activeTab !== 'system logs'"));
 });
+
+test('App keeps dashboard prewarm mounted but passes visibility into Dashboard', () => {
+  assert.ok(appSource.includes("<Dashboard isVisible={activeTab === 'dashboard'} />"));
+});

@@ -14,8 +14,22 @@ import {
   Heart,
 } from 'lucide-react';
 import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
+import { shouldUseDashboardGeolocation } from './dashboardAqiPolicy.js';
 
-export default function Dashboard() {
+async function getGeolocationPermissionState() {
+  if (!navigator.permissions?.query) {
+    return null;
+  }
+
+  try {
+    const permissionStatus = await navigator.permissions.query({ name: 'geolocation' });
+    return permissionStatus.state;
+  } catch {
+    return null;
+  }
+}
+
+export default function Dashboard({ isVisible = false }) {
   const [stats, setStats] = useState(null);
   const [latestImages, setLatestImages] = useState({ photo: null, screenshot: null });
   const [time, setTime] = useState(new Date());
@@ -93,8 +107,14 @@ export default function Dashboard() {
     }
   }, []);
 
-  const fetchAqi = useCallback(async () => {
+  const fetchAqi = useCallback(async ({ allowPrompt = false } = {}) => {
     if (!navigator.geolocation) {
+      void fetchAqiBackend(null, null);
+      return;
+    }
+
+    const permissionState = await getGeolocationPermissionState();
+    if (!shouldUseDashboardGeolocation({ isVisible: allowPrompt, permissionState })) {
       void fetchAqiBackend(null, null);
       return;
     }
@@ -156,13 +176,13 @@ export default function Dashboard() {
     const bootstrapTimer = setTimeout(() => {
       void fetchStats();
       void fetchLatestImages();
-      void fetchAqi();
+      void fetchAqi({ allowPrompt: isVisible });
       void fetchHealth();
     }, 0);
 
     const statsInterval = setInterval(() => void fetchStats(), 5000);
     const imagesInterval = setInterval(() => void fetchLatestImages(), 10000);
-    const aqiInterval = setInterval(() => void fetchAqi(), 600000);
+    const aqiInterval = setInterval(() => void fetchAqi({ allowPrompt: isVisible }), 600000);
     const healthInterval = setInterval(() => void fetchHealth(), 10000);
 
     return () => {
@@ -173,7 +193,7 @@ export default function Dashboard() {
       clearInterval(aqiInterval);
       clearInterval(healthInterval);
     };
-  }, [fetchStats, fetchLatestImages, fetchAqi, fetchHealth]);
+  }, [fetchStats, fetchLatestImages, fetchAqi, fetchHealth, isVisible]);
 
   const daysLeft = stats && storageEstimate.groupSizeBytes > 0
     ? ((stats.disk_free_gb * 1024 * 1024 * 1024) / storageEstimate.groupSizeBytes) * 10 / 86400

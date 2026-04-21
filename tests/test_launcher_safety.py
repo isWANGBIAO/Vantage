@@ -28,3 +28,11 @@ def test_run_bat_launches_frontend_via_background_runner():
     assert "call npm run electron:dev" not in run_bat
     assert "run_frontend_background.py production" in run_bat
     assert "run_frontend_background.py development" in run_bat
+
+
+def test_run_bat_does_not_block_launch_on_camera_readiness():
+    run_bat = Path("run.bat").read_text(encoding="utf-8")
+
+    assert "Backend ready (camera offline)" in run_bat
+    assert "Waiting for backend/camera..." not in run_bat
+    assert "Backend did not become camera-ready" not in run_bat
