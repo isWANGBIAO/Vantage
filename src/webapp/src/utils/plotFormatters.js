@@ -1,9 +1,4 @@
-const PALETTE = ['#46a17d', '#4f7cff', '#f59f54', '#de96f5', '#f26d6d', '#57c5d9', '#d7c46f'];
-const GRID_COLOR = 'rgba(15, 36, 29, 0.09)';
-const AXIS_COLOR = 'rgba(19, 45, 37, 0.62)';
-const TEXT_COLOR = '#10231c';
-const POINTER_BG = '#183a2f';
-const SURFACE_SHADOW = '0 24px 60px rgba(11, 27, 21, 0.12)';
+import { getChartTheme } from './chartTheme.js';
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
@@ -271,9 +266,9 @@ function createTooltipFormatter(chartId) {
   }
 }
 
-function mergeAxis(axis, fallbackType = 'value') {
+function mergeAxis(axis, themeTokens, fallbackType = 'value') {
   if (Array.isArray(axis)) {
-    return axis.map((item) => mergeAxis(item, fallbackType));
+    return axis.map((item) => mergeAxis(item, themeTokens, fallbackType));
   }
 
   const input = axis || {};
@@ -298,7 +293,7 @@ function mergeAxis(axis, fallbackType = 'value') {
       ...axisTick,
     },
     axisLabel: {
-      color: AXIS_COLOR,
+      color: themeTokens.axisColor,
       fontSize: 11,
       margin: 12,
       hideOverlap: true,
@@ -308,7 +303,7 @@ function mergeAxis(axis, fallbackType = 'value') {
       show: type === 'value',
       ...splitLine,
       lineStyle: {
-        color: GRID_COLOR,
+        color: themeTokens.gridColor,
         width: 1,
         type: 'dashed',
         ...(splitLine.lineStyle || {}),
@@ -322,28 +317,28 @@ function mergeAxis(axis, fallbackType = 'value') {
       ...axisPointer,
       label: {
         color: '#f3f7f5',
-        backgroundColor: POINTER_BG,
+        backgroundColor: themeTokens.pointerBg,
         padding: [6, 8],
         borderRadius: 8,
         ...(axisPointer.label || {}),
       },
       lineStyle: {
-        color: 'rgba(24, 58, 47, 0.18)',
+        color: themeTokens.pointerLine,
         width: 1,
         ...(axisPointer.lineStyle || {}),
       },
     },
     nameTextStyle: {
-      color: AXIS_COLOR,
+      color: themeTokens.axisColor,
       fontSize: 11,
       ...nameTextStyle,
     },
   };
 }
 
-function mergeLegend(legend) {
+function mergeLegend(legend, themeTokens) {
   if (Array.isArray(legend)) {
-    return legend.map((item) => mergeLegend(item));
+    return legend.map((item) => mergeLegend(item, themeTokens));
   }
 
   const input = legend || {};
@@ -357,7 +352,7 @@ function mergeLegend(legend) {
     top: 10,
     ...input,
     textStyle: {
-      color: AXIS_COLOR,
+      color: themeTokens.axisColor,
       fontSize: 11,
       ...textStyle,
     },
@@ -379,7 +374,7 @@ function mergeGrid(grid) {
   };
 }
 
-function mergeDataZoom(dataZoom) {
+function mergeDataZoom(dataZoom, themeTokens) {
   if (!dataZoom) {
     return undefined;
   }
@@ -393,31 +388,31 @@ function mergeDataZoom(dataZoom) {
 
     return {
       ...item,
-      borderColor: 'rgba(15, 36, 29, 0.1)',
-      backgroundColor: 'rgba(12, 29, 23, 0.03)',
+      borderColor: themeTokens.dataZoomBorder,
+      backgroundColor: themeTokens.dataZoomBackground,
       fillerColor,
       handleIcon:
         'path://M8.2,13.1V2.9h1.6v10.2H8.2z M14.2,13.1V2.9h1.6v10.2H14.2z',
       handleSize: '90%',
       handleStyle: {
-        color: '#edf3ef',
-        borderColor: 'rgba(15, 36, 29, 0.18)',
+        color: themeTokens.dataZoomHandle,
+        borderColor: themeTokens.dataZoomHandleBorder,
         shadowBlur: 10,
-        shadowColor: 'rgba(12, 27, 21, 0.12)',
+        shadowColor: themeTokens.dataZoomHandleShadow,
         ...handleStyle,
       },
       textStyle: {
-        color: AXIS_COLOR,
+        color: themeTokens.axisColor,
         ...textStyle,
       },
       dataBackground: {
         ...dataBackground,
         lineStyle: {
-          color: 'rgba(15, 36, 29, 0.18)',
+          color: themeTokens.dataBackgroundLine,
           ...(dataBackground.lineStyle || {}),
         },
         areaStyle: {
-          color: 'rgba(15, 36, 29, 0.06)',
+          color: themeTokens.dataBackgroundArea,
           ...(dataBackground.areaStyle || {}),
         },
       },
@@ -425,7 +420,7 @@ function mergeDataZoom(dataZoom) {
   });
 }
 
-function mergeSeries(series, chartId) {
+function mergeSeries(series, chartId, themeTokens) {
   if (!Array.isArray(series)) {
     return [];
   }
@@ -460,7 +455,7 @@ function mergeSeries(series, chartId) {
         itemStyle: {
           opacity: itemStyle.opacity ?? 0.9,
           borderWidth: itemStyle.borderWidth ?? 1,
-          borderColor: itemStyle.borderColor || 'rgba(255, 255, 255, 0.8)',
+          borderColor: itemStyle.borderColor || themeTokens.scatterBorderColor,
           ...itemStyle,
         },
         emphasis: {
@@ -498,12 +493,12 @@ function mergeSeries(series, chartId) {
         cap: 'round',
         join: 'round',
         shadowBlur: 10,
-        shadowColor: 'rgba(33, 71, 60, 0.1)',
+        shadowColor: themeTokens.lineShadow,
         ...lineStyle,
       },
       itemStyle: {
         borderWidth: itemStyle.borderWidth ?? 1,
-        borderColor: itemStyle.borderColor || 'rgba(255, 255, 255, 0.9)',
+        borderColor: itemStyle.borderColor || themeTokens.seriesBorderColor,
         ...itemStyle,
       },
       areaStyle:
@@ -596,35 +591,36 @@ export function formatSummaryValue(summary) {
   return unit ? `${value} ${unit}` : String(value);
 }
 
-export function buildChartOption(chart) {
+export function buildChartOption(chart, theme = 'dark') {
+  const themeTokens = getChartTheme(theme);
   const source = chart?.option || {};
   const tooltip = source.tooltip || {};
-  const mergedXAxis = mergeAxis(source.xAxis, 'category');
-  const mergedYAxisBase = mergeAxis(source.yAxis, 'value');
+  const mergedXAxis = mergeAxis(source.xAxis, themeTokens, 'category');
+  const mergedYAxisBase = mergeAxis(source.yAxis, themeTokens, 'value');
   const mergedYAxis = chart?.id === 'sleep-schedule' ? applySleepScheduleAxisFormatting(mergedYAxisBase) : mergedYAxisBase;
 
   return {
     ...source,
     backgroundColor: 'transparent',
-    color: source.color || PALETTE,
+    color: source.color || themeTokens.palette,
     animationDuration: source.animationDuration ?? 650,
     animationEasing: source.animationEasing || 'cubicOut',
     textStyle: {
-      color: TEXT_COLOR,
+      color: themeTokens.textColor,
       ...(source.textStyle || {}),
     },
     grid: mergeGrid(source.grid),
-    legend: mergeLegend(source.legend),
+    legend: mergeLegend(source.legend, themeTokens),
     tooltip: {
       trigger: 'axis',
-      backgroundColor: 'rgba(9, 22, 17, 0.92)',
+      backgroundColor: themeTokens.tooltipBackground,
       borderWidth: 0,
       padding: [12, 14],
       textStyle: {
-        color: '#f5faf7',
+        color: themeTokens.tooltipText,
         fontSize: 12,
       },
-      extraCssText: `box-shadow: ${SURFACE_SHADOW}; border-radius: 16px;`,
+      extraCssText: `box-shadow: ${themeTokens.surfaceShadow}; border-radius: 16px;`,
       axisPointer: {
         type: 'line',
       },
@@ -637,27 +633,27 @@ export function buildChartOption(chart) {
       ? {
           ...source.radar,
           axisName: {
-            color: TEXT_COLOR,
+            color: themeTokens.textColor,
             fontSize: 11,
             ...(source.radar.axisName || {}),
           },
           splitLine: {
             lineStyle: {
-              color: 'rgba(15, 36, 29, 0.08)',
+              color: themeTokens.radarSplitLine,
               ...(source.radar.splitLine?.lineStyle || {}),
             },
             ...(source.radar.splitLine || {}),
           },
           splitArea: {
             areaStyle: {
-              color: ['rgba(70, 161, 125, 0.02)', 'rgba(70, 161, 125, 0.05)'],
+              color: themeTokens.radarSplitArea,
               ...(source.radar.splitArea?.areaStyle || {}),
             },
             ...(source.radar.splitArea || {}),
           },
         }
       : source.radar,
-    dataZoom: mergeDataZoom(source.dataZoom),
-    series: mergeSeries(source.series, chart?.id),
+    dataZoom: mergeDataZoom(source.dataZoom, themeTokens),
+    series: mergeSeries(source.series, chart?.id, themeTokens),
   };
 }

@@ -102,10 +102,10 @@ function App() {
           <ProjectProgress />
         </div>
         <div style={{ display: activeTab === 'expense sheet' ? 'block' : 'none' }}>
-          <ExpenseSheet />
+          <ExpenseSheet theme={theme} />
         </div>
         <div style={{ display: activeTab === 'plots' ? 'block' : 'none' }}>
-          <Plots />
+          <Plots theme={theme} />
         </div>
         <div style={{ display: activeTab === 'system logs' ? 'block' : 'none' }}>
           <SystemLogs />

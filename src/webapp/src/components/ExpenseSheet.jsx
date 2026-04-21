@@ -109,7 +109,7 @@ function SheetTable({ sheet }) {
   );
 }
 
-export default function ExpenseSheet() {
+export default function ExpenseSheet({ theme = 'dark' }) {
   const [data, setData] = useState(null);
   const [balanceChart, setBalanceChart] = useState(null);
   const [balanceChartError, setBalanceChartError] = useState('');
@@ -262,6 +262,7 @@ export default function ExpenseSheet() {
             featured
             eyebrow="expense sheet"
             chartHeight={430}
+            theme={theme}
           />
 
           <div className="expense-workspace">
@@ -428,4 +429,3 @@ export default function ExpenseSheet() {
     </div>
   );
 }
-

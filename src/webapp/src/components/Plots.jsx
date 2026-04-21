@@ -4,6 +4,7 @@ import { AlertTriangle, LineChart, RefreshCw } from 'lucide-react';
 
 import { fetchBackendJson } from '../utils/backendRequest';
 import { buildChartOption, formatSummaryValue } from '../utils/plotFormatters';
+import { getChartTheme } from '../utils/chartTheme.js';
 
 const SECTION_DEFINITIONS = [
   {
@@ -186,17 +187,17 @@ function useChartMountReady() {
   };
 }
 
-function SummaryPill({ label, value, tone = 'default' }) {
+function SummaryPill({ label, value, tone = 'default', themeTokens }) {
   const tones = {
     default: {
-      background: 'rgba(255, 255, 255, 0.8)',
-      border: '1px solid rgba(16, 35, 28, 0.08)',
-      color: '#173328',
+      background: themeTokens.summaryBackground,
+      border: `1px solid ${themeTokens.summaryBorder}`,
+      color: themeTokens.summaryText,
     },
     warning: {
-      background: 'rgba(255, 241, 213, 0.92)',
-      border: '1px solid rgba(210, 138, 32, 0.18)',
-      color: '#7a4d02',
+      background: themeTokens.summaryWarningBackground,
+      border: `1px solid ${themeTokens.summaryWarningBorder}`,
+      color: themeTokens.summaryWarningText,
     },
   };
 
@@ -214,13 +215,13 @@ function SummaryPill({ label, value, tone = 'default' }) {
         ...palette,
       }}
     >
-      <span style={{ fontSize: 11, color: 'rgba(23, 51, 40, 0.68)' }}>{label}</span>
+      <span style={{ fontSize: 11, color: themeTokens.summaryLabel }}>{label}</span>
       <strong style={{ fontSize: 17, fontWeight: 700 }}>{value}</strong>
     </div>
   );
 }
 
-function WarningPanel({ warnings, onSelectChart, availableChartIds }) {
+function WarningPanel({ warnings, onSelectChart, availableChartIds, themeTokens }) {
   if (!warnings.length) {
     return null;
   }
@@ -233,10 +234,9 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds }) {
         marginBottom: 28,
         padding: 20,
         borderRadius: 28,
-        background:
-          'linear-gradient(135deg, rgba(255, 248, 232, 0.96) 0%, rgba(255, 241, 213, 0.92) 100%)',
-        border: '1px solid rgba(214, 154, 54, 0.24)',
-        boxShadow: '0 18px 40px rgba(124, 78, 8, 0.08)',
+        background: themeTokens.warningPanelBackground,
+        border: `1px solid ${themeTokens.warningPanelBorder}`,
+        boxShadow: themeTokens.warningPanelShadow,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -248,15 +248,15 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds }) {
             width: 38,
             height: 38,
             borderRadius: 12,
-            background: 'rgba(214, 154, 54, 0.14)',
-            color: '#9a5d00',
+            background: themeTokens.warningPanelIconBackground,
+            color: themeTokens.warningPanelIconText,
           }}
         >
           <AlertTriangle size={18} />
         </div>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: '#6f4301' }}>发现异常数据，相关图表已标注警告</div>
-          <div style={{ marginTop: 4, fontSize: 13, color: 'rgba(111, 67, 1, 0.78)' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: themeTokens.warningPanelTitle }}>发现异常数据，相关图表已标注警告</div>
+          <div style={{ marginTop: 4, fontSize: 13, color: themeTokens.warningPanelText }}>
             请先修正原始表格，再执行 refresh charts。未修正前，这些图表会继续提示异常。
           </div>
         </div>
@@ -275,16 +275,16 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds }) {
                 gap: 10,
                 padding: 16,
                 borderRadius: 22,
-                background: 'rgba(255, 255, 255, 0.58)',
-                border: '1px solid rgba(214, 154, 54, 0.14)',
+                background: themeTokens.warningPanelCardBackground,
+                border: `1px solid ${themeTokens.warningPanelCardBorder}`,
               }}
             >
               <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#6f4301' }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: themeTokens.warningPanelTitle }}>
                   {warning?.title || '异常数据'}
                 </div>
                 {warning?.message ? (
-                  <div style={{ marginTop: 4, fontSize: 13, color: 'rgba(111, 67, 1, 0.76)' }}>{warning.message}</div>
+                  <div style={{ marginTop: 4, fontSize: 13, color: themeTokens.warningPanelText }}>{warning.message}</div>
                 ) : null}
               </div>
 
@@ -296,8 +296,8 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds }) {
                       style={{
                         padding: '10px 12px',
                         borderRadius: 14,
-                        background: 'rgba(255, 247, 230, 0.92)',
-                        color: '#7a4d02',
+                        background: themeTokens.warningPanelDetailBackground,
+                        color: themeTokens.warningPanelDetailText,
                         fontSize: 13,
                         fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
                       }}
@@ -319,8 +319,8 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds }) {
                         cursor: 'pointer',
                         padding: '8px 12px',
                         borderRadius: 999,
-                        background: 'rgba(176, 116, 18, 0.1)',
-                        color: '#6f4301',
+                        background: themeTokens.warningPanelActionBackground,
+                        color: themeTokens.warningPanelActionText,
                         fontSize: 12,
                         fontWeight: 600,
                       }}
@@ -338,7 +338,7 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds }) {
   );
 }
 
-function ChartInlineWarnings({ warnings }) {
+function ChartInlineWarnings({ warnings, themeTokens }) {
   if (!warnings.length) {
     return null;
   }
@@ -369,11 +369,11 @@ function ChartInlineWarnings({ warnings }) {
         gap: 10,
         padding: 14,
         borderRadius: 20,
-        background: 'linear-gradient(135deg, rgba(255, 248, 232, 0.96) 0%, rgba(255, 241, 213, 0.92) 100%)',
-        border: '1px solid rgba(214, 154, 54, 0.18)',
+        background: themeTokens.inlineWarningBackground,
+        border: `1px solid ${themeTokens.inlineWarningBorder}`,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#7a4d02' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: themeTokens.warningPanelDetailText }}>
         <AlertTriangle size={16} />
         <strong style={{ fontSize: 13 }}>以下记录提取不完整，会造成这张图出现断点</strong>
       </div>
@@ -384,8 +384,8 @@ function ChartInlineWarnings({ warnings }) {
             style={{
               padding: '10px 12px',
               borderRadius: 14,
-              background: 'rgba(255, 255, 255, 0.66)',
-              color: '#7a4d02',
+              background: themeTokens.inlineWarningItemBackground,
+              color: themeTokens.warningPanelDetailText,
               fontSize: 12,
               lineHeight: 1.6,
               fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
@@ -396,14 +396,23 @@ function ChartInlineWarnings({ warnings }) {
           </div>
         ))}
         {remainingCount > 0 ? (
-          <div style={{ fontSize: 12, color: 'rgba(122, 77, 2, 0.76)' }}>其余 {remainingCount} 条明细已省略，请看顶部异常面板。</div>
+          <div style={{ fontSize: 12, color: themeTokens.inlineWarningMuted }}>其余 {remainingCount} 条明细已省略，请看顶部异常面板。</div>
         ) : null}
       </div>
     </div>
   );
 }
 
-function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasWarning = false, chartWarnings = [] }) {
+function ChartCard({
+  chart,
+  chartRef,
+  featured = false,
+  accent = '#46a17d',
+  hasWarning = false,
+  chartWarnings = [],
+  theme = 'dark',
+  themeTokens,
+}) {
   const chartHeight = featured ? Math.max(chart?.height || 420, 500) : Math.max(chart?.height || 360, 390);
   const summaries = Array.isArray(chart?.summary) ? chart.summary : [];
   const { containerRef, isReady } = useChartMountReady();
@@ -417,11 +426,11 @@ function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasW
         gap: 18,
         padding: featured ? 24 : 20,
         borderRadius: featured ? 30 : 26,
-        background: 'rgba(255, 255, 255, 0.82)',
-        border: `1px solid ${featured ? 'rgba(16, 35, 28, 0.08)' : 'rgba(16, 35, 28, 0.06)'}`,
+        background: themeTokens.cardBackground,
+        border: `1px solid ${featured ? themeTokens.cardStrongBorder : themeTokens.cardBorder}`,
         boxShadow: featured
-          ? '0 26px 60px rgba(11, 27, 21, 0.12)'
-          : '0 18px 40px rgba(11, 27, 21, 0.08)',
+          ? themeTokens.cardStrongShadow
+          : themeTokens.cardShadow,
         backdropFilter: 'blur(14px)',
       }}
     >
@@ -453,8 +462,8 @@ function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasW
                     gap: 6,
                     padding: '6px 10px',
                     borderRadius: 999,
-                    background: 'rgba(255, 243, 214, 0.86)',
-                    color: '#8f5600',
+                    background: themeTokens.warningBadgeBackground,
+                    color: themeTokens.warningBadgeText,
                     fontSize: 11,
                     fontWeight: 700,
                   }}
@@ -472,7 +481,7 @@ function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasW
                   fontSize: featured ? 28 : 22,
                   fontWeight: 800,
                   letterSpacing: '-0.03em',
-                  color: '#10231c',
+                  color: themeTokens.cardTitle,
                 }}
               >
                 {chart?.title}
@@ -484,7 +493,7 @@ function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasW
                     maxWidth: 760,
                     lineHeight: 1.65,
                     fontSize: 14,
-                    color: 'rgba(16, 35, 28, 0.72)',
+                    color: themeTokens.cardText,
                   }}
                 >
                   {chart.description}
@@ -509,11 +518,16 @@ function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasW
         {summaries.length ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
             {summaries.map((item) => (
-              <SummaryPill key={`${chart.id}-${item.label}`} label={item.label} value={formatSummaryValue(item)} />
+              <SummaryPill
+                key={`${chart.id}-${item.label}`}
+                label={item.label}
+                value={formatSummaryValue(item)}
+                themeTokens={themeTokens}
+              />
             ))}
           </div>
         ) : null}
-        {chartWarnings.length ? <ChartInlineWarnings warnings={chartWarnings} /> : null}
+        {chartWarnings.length ? <ChartInlineWarnings warnings={chartWarnings} themeTokens={themeTokens} /> : null}
       </div>
 
       {chart?.empty ? (
@@ -523,9 +537,9 @@ function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasW
             placeItems: 'center',
             minHeight: 220,
             borderRadius: 24,
-            background: 'rgba(250, 238, 238, 0.82)',
-            border: '1px dashed rgba(162, 56, 56, 0.24)',
-            color: '#7c2d2d',
+            background: themeTokens.emptyBackground,
+            border: `1px dashed ${themeTokens.emptyBorder}`,
+            color: themeTokens.emptyText,
             textAlign: 'center',
             padding: 24,
           }}
@@ -542,20 +556,18 @@ function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasW
             borderRadius: 28,
             padding: featured ? 18 : 14,
             minHeight: chartHeight + (featured ? 36 : 28),
-            background:
-              'radial-gradient(circle at top left, rgba(255, 255, 255, 0.88), rgba(243, 248, 245, 0.76) 42%, rgba(236, 244, 239, 0.96) 100%)',
-            border: '1px solid rgba(16, 35, 28, 0.06)',
+            background: themeTokens.chartSurfaceBackground,
+            border: `1px solid ${themeTokens.chartSurfaceBorder}`,
           }}
         >
           {isReady ? (
-            <ReactECharts option={buildChartOption(chart)} notMerge lazyUpdate style={{ width: '100%', height: chartHeight }} />
+            <ReactECharts option={buildChartOption(chart, theme)} notMerge lazyUpdate style={{ width: '100%', height: chartHeight }} />
           ) : (
             <div
               style={{
                 height: chartHeight,
                 borderRadius: 20,
-                background:
-                  'linear-gradient(135deg, rgba(255, 255, 255, 0.44) 0%, rgba(235, 242, 237, 0.72) 100%)',
+                background: themeTokens.chartSkeletonBackground,
               }}
             />
           )}
@@ -565,7 +577,7 @@ function ChartCard({ chart, chartRef, featured = false, accent = '#46a17d', hasW
   );
 }
 
-function SectionBlock({ section, chartRefs, warningCharts, warningMap }) {
+function SectionBlock({ section, chartRefs, warningCharts, warningMap, theme, themeTokens }) {
   return (
     <section style={{ display: 'grid', gap: 20 }}>
       <div
@@ -573,7 +585,7 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap }) {
           display: 'grid',
           gap: 10,
           paddingBottom: 14,
-          borderBottom: '1px solid rgba(16, 35, 28, 0.08)',
+          borderBottom: `1px solid ${themeTokens.sectionDivider}`,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -586,9 +598,9 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap }) {
               boxShadow: `0 0 0 8px ${section.accent}16`,
             }}
           />
-          <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.03em', color: '#10231c' }}>{section.title}</div>
+          <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.03em', color: themeTokens.sectionTitle }}>{section.title}</div>
         </div>
-        <div style={{ fontSize: 14, lineHeight: 1.65, color: 'rgba(16, 35, 28, 0.68)', maxWidth: 840 }}>
+        <div style={{ fontSize: 14, lineHeight: 1.65, color: themeTokens.sectionText, maxWidth: 840 }}>
           {section.description}
         </div>
       </div>
@@ -616,6 +628,8 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap }) {
               accent={section.accent}
               hasWarning={warningCharts.has(chart.id)}
               chartWarnings={warningMap.get(chart.id) || []}
+              theme={theme}
+              themeTokens={themeTokens}
             />
           ))}
         </div>
@@ -643,6 +657,8 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap }) {
               accent={section.accent}
               hasWarning={warningCharts.has(chart.id)}
               chartWarnings={warningMap.get(chart.id) || []}
+              theme={theme}
+              themeTokens={themeTokens}
             />
           ))}
         </div>
@@ -651,7 +667,7 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap }) {
   );
 }
 
-export default function Plots() {
+export default function Plots({ theme = 'dark' }) {
   const [charts, setCharts] = useState([]);
   const [warnings, setWarnings] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -659,6 +675,7 @@ export default function Plots() {
   const [error, setError] = useState(null);
   const [generatedAt, setGeneratedAt] = useState(null);
   const chartRefs = useRef(new Map());
+  const themeTokens = useMemo(() => getChartTheme(theme), [theme]);
 
   const fetchPlots = useCallback(async (refresh = false) => {
     if (refresh) {
@@ -742,7 +759,7 @@ export default function Plots() {
     <div
       style={{
         minHeight: '100%',
-        background: 'linear-gradient(180deg, #faf8f1 0%, #eef5f1 46%, #edf2ef 100%)',
+        background: themeTokens.pageBackground,
       }}
     >
       <div
@@ -760,10 +777,9 @@ export default function Plots() {
             gap: 22,
             padding: 28,
             borderRadius: 34,
-            background:
-              'linear-gradient(145deg, rgba(255, 255, 255, 0.88) 0%, rgba(246, 250, 247, 0.82) 44%, rgba(239, 246, 242, 0.92) 100%)',
-            border: '1px solid rgba(16, 35, 28, 0.08)',
-            boxShadow: '0 28px 70px rgba(11, 27, 21, 0.1)',
+            background: themeTokens.pageHeaderBackground,
+            border: `1px solid ${themeTokens.pageHeaderBorder}`,
+            boxShadow: themeTokens.pageHeaderShadow,
             backdropFilter: 'blur(18px)',
           }}
         >
@@ -776,8 +792,8 @@ export default function Plots() {
                   gap: 8,
                   padding: '8px 12px',
                   borderRadius: 999,
-                  background: 'rgba(70, 161, 125, 0.1)',
-                  color: '#2e7258',
+                  background: themeTokens.heroChipBackground,
+                  color: themeTokens.heroChipText,
                   fontSize: 12,
                   fontWeight: 700,
                   width: 'fit-content',
@@ -794,7 +810,7 @@ export default function Plots() {
                     fontSize: 'clamp(34px, 4vw, 52px)',
                     lineHeight: 1,
                     letterSpacing: '-0.05em',
-                    color: '#10231c',
+                    color: themeTokens.pageTitle,
                   }}
                 >
                   先看最影响健康的图，再看辅助分析图
@@ -804,7 +820,7 @@ export default function Plots() {
                     margin: 0,
                     fontSize: 15,
                     lineHeight: 1.75,
-                    color: 'rgba(16, 35, 28, 0.7)',
+                    color: themeTokens.pageText,
                     maxWidth: 760,
                   }}
                 >
@@ -825,12 +841,12 @@ export default function Plots() {
                 padding: '14px 18px',
                 borderRadius: 18,
                 background: isRefreshing
-                  ? 'rgba(19, 45, 37, 0.2)'
-                  : 'linear-gradient(135deg, #173328 0%, #285845 100%)',
-                color: '#f8fcfa',
+                  ? themeTokens.refreshButtonDisabledBackground
+                  : themeTokens.refreshButtonBackground,
+                color: themeTokens.refreshButtonText,
                 fontSize: 13,
                 fontWeight: 700,
-                boxShadow: isRefreshing ? 'none' : '0 18px 36px rgba(18, 43, 34, 0.18)',
+                boxShadow: isRefreshing ? 'none' : themeTokens.cardShadow,
               }}
             >
               <RefreshCw size={15} />
@@ -839,10 +855,15 @@ export default function Plots() {
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-            <SummaryPill label="图表数量" value={`${visibleCharts.length}`} />
-            <SummaryPill label="分组数量" value={`${sectionCount}`} />
-            <SummaryPill label="警告数量" value={`${warningCount}`} tone={warningCount ? 'warning' : 'default'} />
-            <SummaryPill label="最近生成" value={generatedText} />
+            <SummaryPill label="图表数量" value={`${visibleCharts.length}`} themeTokens={themeTokens} />
+            <SummaryPill label="分组数量" value={`${sectionCount}`} themeTokens={themeTokens} />
+            <SummaryPill
+              label="警告数量"
+              value={`${warningCount}`}
+              tone={warningCount ? 'warning' : 'default'}
+              themeTokens={themeTokens}
+            />
+            <SummaryPill label="最近生成" value={generatedText} themeTokens={themeTokens} />
           </div>
 
           {navigationCharts.length ? (
@@ -856,11 +877,13 @@ export default function Plots() {
                     cursor: 'pointer',
                     padding: '10px 14px',
                     borderRadius: 999,
-                    background: warningCharts.has(chart.id) ? 'rgba(255, 241, 213, 0.92)' : 'rgba(255, 255, 255, 0.74)',
-                    color: warningCharts.has(chart.id) ? '#8f5600' : '#244739',
+                    background: warningCharts.has(chart.id)
+                      ? themeTokens.navChipWarningBackground
+                      : themeTokens.navChipBackground,
+                    color: warningCharts.has(chart.id) ? themeTokens.navChipWarningText : themeTokens.navChipText,
                     fontSize: 12,
                     fontWeight: 700,
-                    boxShadow: 'inset 0 0 0 1px rgba(16, 35, 28, 0.08)',
+                    boxShadow: `inset 0 0 0 1px ${themeTokens.navChipBorder}`,
                   }}
                 >
                   {chart.title}
@@ -875,9 +898,9 @@ export default function Plots() {
             style={{
               padding: 18,
               borderRadius: 24,
-              background: 'rgba(255, 236, 236, 0.86)',
-              border: '1px solid rgba(164, 63, 63, 0.16)',
-              color: '#7b2c2c',
+              background: themeTokens.errorBackground,
+              border: `1px solid ${themeTokens.errorBorder}`,
+              color: themeTokens.errorText,
             }}
           >
             <div style={{ fontWeight: 700 }}>图表加载失败</div>
@@ -885,7 +908,12 @@ export default function Plots() {
           </section>
         ) : null}
 
-        <WarningPanel warnings={warnings} onSelectChart={scrollToChart} availableChartIds={visibleChartIds} />
+        <WarningPanel
+          warnings={warnings}
+          onSelectChart={scrollToChart}
+          availableChartIds={visibleChartIds}
+          themeTokens={themeTokens}
+        />
 
         {isLoading ? (
           <section
@@ -901,9 +929,8 @@ export default function Plots() {
                 style={{
                   minHeight: index < 2 ? 420 : 320,
                   borderRadius: 28,
-                  background:
-                    'linear-gradient(135deg, rgba(255, 255, 255, 0.76) 0%, rgba(240, 246, 242, 0.9) 100%)',
-                  border: '1px solid rgba(16, 35, 28, 0.06)',
+                  background: themeTokens.loadingBackground,
+                  border: `1px solid ${themeTokens.cardBorder}`,
                 }}
               />
             ))}
@@ -915,9 +942,9 @@ export default function Plots() {
             style={{
               padding: 32,
               borderRadius: 28,
-              background: 'rgba(255, 255, 255, 0.78)',
-              border: '1px solid rgba(16, 35, 28, 0.08)',
-              color: '#173328',
+              background: themeTokens.emptySectionBackground,
+              border: `1px solid ${themeTokens.emptySectionBorder}`,
+              color: themeTokens.emptySectionText,
             }}
           >
             暂无可显示的图表数据。
@@ -933,6 +960,8 @@ export default function Plots() {
                 chartRefs={chartRefs}
                 warningCharts={warningCharts}
                 warningMap={warningMap}
+                theme={theme}
+                themeTokens={themeTokens}
               />
             ))}
           </main>

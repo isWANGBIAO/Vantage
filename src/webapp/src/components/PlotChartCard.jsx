@@ -3,6 +3,7 @@ import ReactECharts from 'echarts-for-react';
 import { AlertTriangle } from 'lucide-react';
 
 import { buildChartOption, formatSummaryValue } from '../utils/plotFormatters';
+import { getChartTheme } from '../utils/chartTheme.js';
 
 function useChartMountReady() {
   const containerRef = useRef(null);
@@ -60,7 +61,7 @@ function useChartMountReady() {
   };
 }
 
-function SummaryPill({ label, value }) {
+function SummaryPill({ label, value, themeTokens }) {
   return (
     <div
       style={{
@@ -70,12 +71,12 @@ function SummaryPill({ label, value }) {
         minWidth: 112,
         padding: '12px 14px',
         borderRadius: 18,
-        background: 'rgba(255, 255, 255, 0.8)',
-        border: '1px solid rgba(16, 35, 28, 0.08)',
-        color: '#173328',
+        background: themeTokens.summaryBackground,
+        border: `1px solid ${themeTokens.summaryBorder}`,
+        color: themeTokens.summaryText,
       }}
     >
-      <span style={{ fontSize: 11, color: 'rgba(23, 51, 40, 0.68)' }}>{label}</span>
+      <span style={{ fontSize: 11, color: themeTokens.summaryLabel }}>{label}</span>
       <strong style={{ fontSize: 17, fontWeight: 700 }}>{value}</strong>
     </div>
   );
@@ -89,7 +90,9 @@ export default function PlotChartCard({
   hasWarning = false,
   eyebrow,
   chartHeight,
+  theme = 'dark',
 }) {
+  const themeTokens = getChartTheme(theme);
   const resolvedHeight =
     chartHeight ?? (featured ? Math.max(chart?.height || 420, 500) : Math.max(chart?.height || 360, 390));
   const summaries = Array.isArray(chart?.summary) ? chart.summary : [];
@@ -105,11 +108,11 @@ export default function PlotChartCard({
         gap: 18,
         padding: featured ? 24 : 20,
         borderRadius: featured ? 30 : 26,
-        background: 'rgba(255, 255, 255, 0.82)',
-        border: `1px solid ${featured ? 'rgba(16, 35, 28, 0.08)' : 'rgba(16, 35, 28, 0.06)'}`,
+        background: themeTokens.cardBackground,
+        border: `1px solid ${featured ? themeTokens.cardStrongBorder : themeTokens.cardBorder}`,
         boxShadow: featured
-          ? '0 26px 60px rgba(11, 27, 21, 0.12)'
-          : '0 18px 40px rgba(11, 27, 21, 0.08)',
+          ? themeTokens.cardStrongShadow
+          : themeTokens.cardShadow,
         backdropFilter: 'blur(14px)',
       }}
     >
@@ -143,8 +146,8 @@ export default function PlotChartCard({
                     gap: 6,
                     padding: '6px 10px',
                     borderRadius: 999,
-                    background: 'rgba(255, 243, 214, 0.86)',
-                    color: '#8f5600',
+                    background: themeTokens.warningBadgeBackground,
+                    color: themeTokens.warningBadgeText,
                     fontSize: 11,
                     fontWeight: 700,
                   }}
@@ -162,7 +165,7 @@ export default function PlotChartCard({
                   fontSize: featured ? 28 : 22,
                   fontWeight: 800,
                   letterSpacing: '-0.03em',
-                  color: '#10231c',
+                  color: themeTokens.cardTitle,
                 }}
               >
                 {chart?.title}
@@ -174,7 +177,7 @@ export default function PlotChartCard({
                     maxWidth: 760,
                     lineHeight: 1.65,
                     fontSize: 14,
-                    color: 'rgba(16, 35, 28, 0.72)',
+                    color: themeTokens.cardText,
                   }}
                 >
                   {chart.description}
@@ -199,7 +202,12 @@ export default function PlotChartCard({
         {summaries.length ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
             {summaries.map((item) => (
-              <SummaryPill key={`${chart?.id || 'chart'}-${item.label}`} label={item.label} value={formatSummaryValue(item)} />
+              <SummaryPill
+                key={`${chart?.id || 'chart'}-${item.label}`}
+                label={item.label}
+                value={formatSummaryValue(item)}
+                themeTokens={themeTokens}
+              />
             ))}
           </div>
         ) : null}
@@ -212,9 +220,9 @@ export default function PlotChartCard({
             placeItems: 'center',
             minHeight: 220,
             borderRadius: 24,
-            background: 'rgba(250, 238, 238, 0.82)',
-            border: '1px dashed rgba(162, 56, 56, 0.24)',
-            color: '#7c2d2d',
+            background: themeTokens.emptyBackground,
+            border: `1px dashed ${themeTokens.emptyBorder}`,
+            color: themeTokens.emptyText,
             textAlign: 'center',
             padding: 24,
           }}
@@ -231,20 +239,23 @@ export default function PlotChartCard({
             borderRadius: 28,
             padding: featured ? 18 : 14,
             minHeight: resolvedHeight + (featured ? 36 : 28),
-            background:
-              'radial-gradient(circle at top left, rgba(255, 255, 255, 0.88), rgba(243, 248, 245, 0.76) 42%, rgba(236, 244, 239, 0.96) 100%)',
-            border: '1px solid rgba(16, 35, 28, 0.06)',
+            background: themeTokens.chartSurfaceBackground,
+            border: `1px solid ${themeTokens.chartSurfaceBorder}`,
           }}
         >
           {isReady ? (
-            <ReactECharts option={buildChartOption(chart)} notMerge lazyUpdate style={{ width: '100%', height: resolvedHeight }} />
+            <ReactECharts
+              option={buildChartOption(chart, theme)}
+              notMerge
+              lazyUpdate
+              style={{ width: '100%', height: resolvedHeight }}
+            />
           ) : (
             <div
               style={{
                 height: resolvedHeight,
                 borderRadius: 20,
-                background:
-                  'linear-gradient(135deg, rgba(255, 255, 255, 0.44) 0%, rgba(235, 242, 237, 0.72) 100%)',
+                background: themeTokens.chartSkeletonBackground,
               }}
             />
           )}
