@@ -2,14 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  CHAT_CONTEXT_BASE_MESSAGE_COUNT_STORAGE_KEY,
   CHAT_CONTEXT_BASE_UPDATED_EVENT,
   CHAT_CONTEXT_VERSION_STORAGE_KEY,
   CHAT_HISTORY_STORAGE_KEY,
+  loadStoredChatContextBaseMessageCount,
   reconcileChatHistoryWithBaseVersion,
 } from './chatContextState.js';
 
 function createStorage(initialState = {}) {
-  const state = new Map(Object.entries(initialState));
+  const state = new Map(
+    Object.entries(initialState).map(([key, value]) => [key, String(value)]),
+  );
+
   return {
     getItem(key) {
       return state.has(key) ? state.get(key) : null;
@@ -40,6 +45,7 @@ test('reconcileChatHistoryWithBaseVersion clears stale local chat when base vers
   assert.equal(result.didReset, true);
   assert.equal(storage.getItem(CHAT_HISTORY_STORAGE_KEY), JSON.stringify(baseMessages));
   assert.equal(storage.getItem(CHAT_CONTEXT_VERSION_STORAGE_KEY), 'base-v2');
+  assert.equal(storage.getItem(CHAT_CONTEXT_BASE_MESSAGE_COUNT_STORAGE_KEY), '1');
 });
 
 test('reconcileChatHistoryWithBaseVersion preserves local chat when base version is unchanged', () => {
@@ -59,6 +65,7 @@ test('reconcileChatHistoryWithBaseVersion preserves local chat when base version
   assert.deepEqual(result.messages, storedMessages);
   assert.equal(result.didReset, false);
   assert.equal(storage.getItem(CHAT_HISTORY_STORAGE_KEY), JSON.stringify(storedMessages));
+  assert.equal(storage.getItem(CHAT_CONTEXT_BASE_MESSAGE_COUNT_STORAGE_KEY), '1');
 });
 
 test('reconcileChatHistoryWithBaseVersion hydrates base assistant messages when local history is empty', () => {
@@ -79,6 +86,7 @@ test('reconcileChatHistoryWithBaseVersion hydrates base assistant messages when 
   assert.deepEqual(result.messages, baseMessages);
   assert.equal(result.didReset, true);
   assert.equal(storage.getItem(CHAT_HISTORY_STORAGE_KEY), JSON.stringify(baseMessages));
+  assert.equal(storage.getItem(CHAT_CONTEXT_BASE_MESSAGE_COUNT_STORAGE_KEY), '2');
 });
 
 test('reconcileChatHistoryWithBaseVersion resets stale local chat when it no longer starts with the base messages', () => {
@@ -97,6 +105,7 @@ test('reconcileChatHistoryWithBaseVersion resets stale local chat when it no lon
   assert.deepEqual(result.messages, baseMessages);
   assert.equal(result.didReset, true);
   assert.equal(storage.getItem(CHAT_HISTORY_STORAGE_KEY), JSON.stringify(baseMessages));
+  assert.equal(storage.getItem(CHAT_CONTEXT_BASE_MESSAGE_COUNT_STORAGE_KEY), '1');
 });
 
 test('reconcileChatHistoryWithBaseVersion unwraps fenced markdown in assistant base messages', () => {
@@ -118,6 +127,43 @@ test('reconcileChatHistoryWithBaseVersion unwraps fenced markdown in assistant b
     storage.getItem(CHAT_HISTORY_STORAGE_KEY),
     JSON.stringify([{ role: 'assistant', content: '# Plan\n\n- Item' }]),
   );
+  assert.equal(storage.getItem(CHAT_CONTEXT_BASE_MESSAGE_COUNT_STORAGE_KEY), '1');
+});
+
+test('loadStoredChatContextBaseMessageCount infers legacy base messages from leading assistant replies', () => {
+  const storage = createStorage({
+    [CHAT_HISTORY_STORAGE_KEY]: JSON.stringify([
+      { role: 'assistant', content: 'Analysis reply' },
+      { role: 'assistant', content: 'Plan reply' },
+      { role: 'user', content: 'Refine item 1.' },
+    ]),
+  });
+
+  assert.equal(loadStoredChatContextBaseMessageCount(storage), 2);
+});
+
+test('reconcileChatHistoryWithBaseVersion persists base-message count even when it keeps existing chat history', () => {
+  const baseMessages = [
+    { role: 'assistant', content: 'Analysis reply' },
+    { role: 'assistant', content: 'Plan reply' },
+  ];
+  const storage = createStorage({
+    [CHAT_HISTORY_STORAGE_KEY]: JSON.stringify([
+      ...baseMessages,
+      { role: 'user', content: 'Refine item 1.' },
+    ]),
+    [CHAT_CONTEXT_VERSION_STORAGE_KEY]: 'v1',
+  });
+
+  const reconciled = reconcileChatHistoryWithBaseVersion({
+    storage,
+    nextBaseVersion: 'v1',
+    baseMessages,
+  });
+
+  assert.equal(reconciled.didReset, false);
+  assert.equal(reconciled.baseMessageCount, 2);
+  assert.equal(storage.getItem(CHAT_CONTEXT_BASE_MESSAGE_COUNT_STORAGE_KEY), '2');
 });
 
 test('chat context sync exports a stable event name for action plan resets', () => {

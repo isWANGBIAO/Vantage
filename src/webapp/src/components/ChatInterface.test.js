@@ -2,10 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import {
+  CHAT_CONTEXT_BASE_MESSAGE_COUNT_STORAGE_KEY,
+  CHAT_HISTORY_STORAGE_KEY,
+  buildInitialEmbeddedChatState,
+} from '../utils/chatContextState.js';
 
 const chatSource = readFileSync(new URL('./ChatInterface.jsx', import.meta.url), 'utf8');
 
-function loadConsumeChatStreamChunk() {
+function loadChatHelpers() {
   const start = chatSource.indexOf('function consumeChatStreamChunk');
   const end = chatSource.indexOf('export default function ChatInterface');
 
@@ -16,11 +21,34 @@ function loadConsumeChatStreamChunk() {
   const sandbox = { JSON, globalThis: {} };
 
   vm.runInNewContext(
-    `${helperSource.replace(/^export /, '')}\nglobalThis.consumeChatStreamChunk = consumeChatStreamChunk;`,
+    `${helperSource.replace(/^export /, '')}
+globalThis.consumeChatStreamChunk = consumeChatStreamChunk;
+globalThis.getVisibleMessages = getVisibleMessages;`,
     sandbox,
   );
 
-  return sandbox.globalThis.consumeChatStreamChunk;
+  return {
+    consumeChatStreamChunk: sandbox.globalThis.consumeChatStreamChunk,
+    getVisibleMessages: sandbox.globalThis.getVisibleMessages,
+  };
+}
+
+function createMemoryStorage(initialEntries = {}) {
+  const store = new Map(
+    Object.entries(initialEntries).map(([key, value]) => [key, String(value)]),
+  );
+
+  return {
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(key, String(value));
+    },
+    removeItem(key) {
+      store.delete(key);
+    },
+  };
 }
 
 test('ChatInterface copy uses readable labels for model and voice flow', () => {
@@ -51,7 +79,7 @@ test('ChatInterface copy uses readable labels for model and voice flow', () => {
 });
 
 test('consumeChatStreamChunk reassembles split NDJSON lines without losing content', () => {
-  const consumeChatStreamChunk = loadConsumeChatStreamChunk();
+  const { consumeChatStreamChunk } = loadChatHelpers();
   let state = {
     buffer: '',
     assistantContent: '',
@@ -75,7 +103,7 @@ test('consumeChatStreamChunk reassembles split NDJSON lines without losing conte
 });
 
 test('consumeChatStreamChunk surfaces backend errors', () => {
-  const consumeChatStreamChunk = loadConsumeChatStreamChunk();
+  const { consumeChatStreamChunk } = loadChatHelpers();
   const state = {
     buffer: '',
     assistantContent: '',
@@ -91,7 +119,7 @@ test('consumeChatStreamChunk surfaces backend errors', () => {
 });
 
 test('consumeChatStreamChunk ignores plain Thinking logs', () => {
-  const consumeChatStreamChunk = loadConsumeChatStreamChunk();
+  const { consumeChatStreamChunk } = loadChatHelpers();
   const state = {
     buffer: '',
     assistantContent: '',
@@ -111,7 +139,7 @@ test('consumeChatStreamChunk ignores plain Thinking logs', () => {
 });
 
 test('consumeChatStreamChunk parses stats payloads without affecting content', () => {
-  const consumeChatStreamChunk = loadConsumeChatStreamChunk();
+  const { consumeChatStreamChunk } = loadChatHelpers();
   const state = {
     buffer: '',
     assistantContent: '',
@@ -192,8 +220,57 @@ test('ChatInterface supports embedded workspace mode with a separate sticky comp
   assert.equal(chatSource.includes("position: embedded ? 'sticky' : 'static'"), false);
 });
 
-test('ChatInterface hides inherited action-plan base messages in embedded mode', () => {
-  assert.ok(chatSource.includes('const [baseMessages, setBaseMessages] = useState([])'));
-  assert.ok(chatSource.includes('visibleMessages = embedded'));
-  assert.ok(chatSource.includes('messages.slice(baseMessages.length)'));
+test('embedded chat bootstrap hides inherited action-plan messages before context sync finishes', () => {
+  const { getVisibleMessages } = loadChatHelpers();
+  const baseMessages = [
+    { role: 'assistant', content: 'Analysis reply' },
+    { role: 'assistant', content: 'Plan reply' },
+  ];
+  const followUpMessages = [
+    ...baseMessages,
+    { role: 'user', content: 'Refine item 1.' },
+    { role: 'assistant', content: 'Updated item 1.' },
+  ];
+  const storage = createMemoryStorage({
+    [CHAT_HISTORY_STORAGE_KEY]: JSON.stringify(followUpMessages),
+  });
+
+  const initialState = buildInitialEmbeddedChatState(storage);
+  const visibleMessages = getVisibleMessages({
+    embedded: true,
+    messages: initialState.messages,
+    baseMessages: initialState.baseMessages,
+  });
+
+  assert.equal(initialState.baseMessages.length, 2);
+  assert.deepEqual(
+    visibleMessages,
+    followUpMessages.slice(2),
+  );
+});
+
+test('embedded chat bootstrap respects persisted base-message counts after warm reloads', () => {
+  const { getVisibleMessages } = loadChatHelpers();
+  const baseMessages = [
+    { role: 'assistant', content: 'Analysis reply' },
+    { role: 'assistant', content: 'Plan reply' },
+  ];
+  const followUpMessages = [
+    ...baseMessages,
+    { role: 'user', content: 'Refine item 1.' },
+  ];
+  const storage = createMemoryStorage({
+    [CHAT_HISTORY_STORAGE_KEY]: JSON.stringify(followUpMessages),
+    [CHAT_CONTEXT_BASE_MESSAGE_COUNT_STORAGE_KEY]: '2',
+  });
+
+  const initialState = buildInitialEmbeddedChatState(storage);
+  const visibleMessages = getVisibleMessages({
+    embedded: true,
+    messages: initialState.messages,
+    baseMessages: initialState.baseMessages,
+  });
+
+  assert.equal(initialState.baseMessages.length, 2);
+  assert.deepEqual(visibleMessages, [{ role: 'user', content: 'Refine item 1.' }]);
 });

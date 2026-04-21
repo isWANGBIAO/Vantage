@@ -9,6 +9,7 @@ import { Bot, Trash2 } from 'lucide-react';
 import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import {
   CHAT_CONTEXT_BASE_UPDATED_EVENT,
+  buildInitialEmbeddedChatState,
   loadStoredChatMessages,
   reconcileChatHistoryWithBaseVersion,
   saveStoredChatMessages,
@@ -170,11 +171,26 @@ function consumeChatStreamChunk(previousState, chunkText) {
     return nextState;
 }
 
+function getVisibleMessages({ embedded, messages, baseMessages }) {
+    return embedded
+        ? messages.slice(baseMessages.length)
+        : messages;
+}
+
 
 export default function ChatInterface({ embedded = false } = {}) {
 
-    const [messages, setMessages] = useState(() => loadStoredChatMessages());
-    const [baseMessages, setBaseMessages] = useState([]);
+    const [initialEmbeddedChatState] = useState(() => buildInitialEmbeddedChatState());
+    const [messages, setMessages] = useState(() => (
+        embedded
+            ? initialEmbeddedChatState.messages
+            : loadStoredChatMessages()
+    ));
+    const [baseMessages, setBaseMessages] = useState(() => (
+        embedded
+            ? initialEmbeddedChatState.baseMessages
+            : []
+    ));
 
     const [chatBaseVersion, setChatBaseVersion] = useState('empty');
 
@@ -781,9 +797,11 @@ export default function ChatInterface({ embedded = false } = {}) {
         isActive: isLoading,
         nowMs: liveDurationNowMs,
     });
-    const visibleMessages = embedded
-        ? messages.slice(baseMessages.length)
-        : messages;
+    const visibleMessages = getVisibleMessages({
+        embedded,
+        messages,
+        baseMessages,
+    });
     const chatShellStyle = {
         height: embedded ? 'auto' : '100%',
         display: 'flex',
