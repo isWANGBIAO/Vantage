@@ -2,7 +2,7 @@ import { useState } from 'react';
 import ActionPlan from './ActionPlan';
 import ChatInterface from './ChatInterface';
 import UsagePanel from './UsagePanel';
-import { BarChart3, FileText, MessageSquare } from 'lucide-react';
+import { BarChart3, FileText } from 'lucide-react';
 
 export default function ActionPlanContainer({ isVisible = true }) {
   const [subTab, setSubTab] = useState('plan');
@@ -12,9 +12,9 @@ export default function ActionPlanContainer({ isVisible = true }) {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        height: 'calc(100vh - 220px)',
+        height: subTab === 'usage' ? 'calc(100vh - 220px)' : 'auto',
         gap: '1rem',
-        overflow: 'hidden',
+        overflow: subTab === 'usage' ? 'hidden' : 'visible',
         boxSizing: 'border-box',
       }}
     >
@@ -45,22 +45,6 @@ export default function ActionPlanContainer({ isVisible = true }) {
           Plan
         </button>
         <button
-          onClick={() => setSubTab('chat')}
-          style={{
-            background: subTab === 'chat' ? 'var(--bg-surface-hover)' : 'transparent',
-            color: subTab === 'chat' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            boxShadow: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.5rem 1rem',
-            fontSize: '0.9rem',
-          }}
-        >
-          <MessageSquare size={16} />
-          Chat
-        </button>
-        <button
           onClick={() => setSubTab('usage')}
           style={{
             background: subTab === 'usage' ? 'var(--bg-surface-hover)' : 'transparent',
@@ -78,12 +62,12 @@ export default function ActionPlanContainer({ isVisible = true }) {
         </button>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        <div style={{ height: '100%', display: subTab === 'plan' ? 'block' : 'none' }}>
-          <ActionPlan isVisible={isVisible && subTab === 'plan'} />
-        </div>
-        <div style={{ height: '100%', display: subTab === 'chat' ? 'block' : 'none' }}>
-          <ChatInterface />
+      <div style={{ flex: subTab === 'usage' ? 1 : '0 0 auto', minHeight: 0, position: 'relative' }}>
+        <div style={{ display: subTab === 'plan' ? 'block' : 'none' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <ActionPlan isVisible={isVisible && subTab === 'plan'} layoutMode="stacked" />
+            <ChatInterface embedded />
+          </div>
         </div>
         <div style={{ height: '100%', display: subTab === 'usage' ? 'block' : 'none' }}>
           <UsagePanel />

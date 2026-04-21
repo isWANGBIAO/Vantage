@@ -53,3 +53,9 @@ test('ActionPlan shows live elapsed time while generation is active', () => {
   assert.ok(actionPlanSource.includes('const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now())'));
   assert.equal(actionPlanSource.includes('Time {(stats.total_duration || 0).toFixed(1)}s'), false);
 });
+
+test('ActionPlan supports stacked reading mode without card-level scrolling', () => {
+  assert.ok(actionPlanSource.includes("layoutMode = 'split'"));
+  assert.ok(actionPlanSource.includes("'action-plan-stack'"));
+  assert.ok(actionPlanSource.includes("overflowY: layoutMode === 'stacked' ? 'visible' : 'auto'"));
+});

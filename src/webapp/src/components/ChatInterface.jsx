@@ -171,9 +171,10 @@ function consumeChatStreamChunk(previousState, chunkText) {
 }
 
 
-export default function ChatInterface() {
+export default function ChatInterface({ embedded = false } = {}) {
 
     const [messages, setMessages] = useState(() => loadStoredChatMessages());
+    const [baseMessages, setBaseMessages] = useState([]);
 
     const [chatBaseVersion, setChatBaseVersion] = useState('empty');
 
@@ -230,6 +231,7 @@ export default function ChatInterface() {
                 });
 
                 setMessages(syncedState.messages);
+                setBaseMessages(Array.isArray(baseMessagesOverride) ? baseMessagesOverride : []);
                 setChatBaseVersion(syncedState.baseVersion);
                 return;
 
@@ -247,6 +249,7 @@ export default function ChatInterface() {
                 });
 
                 setMessages(syncedState.messages);
+                setBaseMessages(Array.isArray(data?.display_messages) ? data.display_messages : []);
                 setChatBaseVersion(syncedState.baseVersion);
                 setStats(data?.stats || null);
 
@@ -319,9 +322,11 @@ export default function ChatInterface() {
 
         saveStoredChatMessages(messages);
 
-        scrollToBottom();
+        if (!embedded || isLoading) {
+            scrollToBottom();
+        }
 
-    }, [messages]);
+    }, [embedded, isLoading, messages]);
 
     useEffect(() => {
 
@@ -363,6 +368,7 @@ export default function ChatInterface() {
             });
             setChatBaseVersion(syncedState.baseVersion);
             setMessages(syncedState.messages);
+            setBaseMessages(Array.isArray(data?.display_messages) ? data.display_messages : []);
             setStats(data?.stats || null);
 
         } catch (error) {
@@ -775,12 +781,533 @@ export default function ChatInterface() {
         isActive: isLoading,
         nowMs: liveDurationNowMs,
     });
+    const visibleMessages = embedded
+        ? messages.slice(baseMessages.length)
+        : messages;
+    const chatShellStyle = {
+        height: embedded ? 'auto' : '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: embedded ? 'visible' : 'hidden',
+    };
+    const composerControls = (
+        <div style={{
+
+            display: 'flex',
+
+            gap: '0.8rem',
+
+            background: 'var(--bg-surface)',
+
+            padding: '0.5rem',
+
+            borderRadius: '12px',
+
+            border: '1px solid var(--border-color)',
+
+            alignItems: 'flex-end'
+
+        }}>
+
+            <button
+
+                onClick={isRecording ? stopRecording : startRecording}
+
+                className={isRecording ? 'pulse-animation' : ''}
+
+                disabled={isLoading && !isRecording} // Disable start if loading, but allow stop if recording
+
+                style={{
+
+                    background: isRecording ? '#ff4d4d' : 'transparent',
+
+                    color: isRecording ? '#fff' : 'var(--text-secondary)',
+
+                    border: 'none',
+
+                    borderRadius: '8px',
+
+                    width: '48px', height: '40px',
+
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+
+                    cursor: 'pointer',
+
+                    transition: 'all 0.2s ease',
+
+                    fontSize: '0.62rem',
+
+                    fontWeight: 700,
+
+                    letterSpacing: '0.04em'
+
+                }}
+
+                title={isRecording ? "Stop Recording" : "Start Recording"}
+
+            >
+
+                {recordButtonLabel}
+
+            </button>
 
 
 
-    return (
+            {isRecording && (
 
-        <div className="glass-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                <div style={{
+
+                    flex: 1, display: 'flex', alignItems: 'center',
+
+                    color: '#ff4d4d', fontWeight: 'bold', fontSize: '0.9rem'
+
+                }}>
+
+                    Recording... {formatTime(recordingTime)}
+
+                </div>
+
+            )}
+
+
+
+            {!isRecording && (
+
+                <textarea
+
+                    value={input}
+
+                    onChange={(e) => setInput(e.target.value)}
+
+                    onKeyDown={handleKeyDown}
+
+                    placeholder="Type a message..."
+
+                    disabled={isLoading}
+
+                    rows={1}
+
+                    style={{
+
+                        flex: 1,
+
+                        background: 'transparent',
+
+                        border: 'none',
+
+                        color: 'var(--text-primary)',
+
+                        padding: '0.6rem 0.5rem',
+
+                        outline: 'none',
+
+                        fontSize: '0.95rem',
+
+                        resize: 'none',
+
+                        minHeight: '24px',
+
+                        maxHeight: '100px'
+
+                    }}
+
+                    onInput={(e) => {
+
+                        e.target.style.height = 'auto'; // Reset height
+
+                        e.target.style.height = e.target.scrollHeight + 'px'; // Set new height
+
+                    }}
+
+                />
+
+            )}
+
+
+
+            <button
+
+                onClick={sendMessage}
+
+                disabled={!input.trim() || isLoading}
+
+                style={{
+
+                    background: (!input.trim() || isLoading) ? 'var(--bg-surface-hover)' : 'var(--primary-color)',
+
+                    color: (!input.trim() || isLoading) ? 'var(--text-muted)' : '#fff',
+
+                    border: 'none',
+
+                    borderRadius: '8px',
+
+                    width: '56px', height: '40px',
+
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+
+                    cursor: 'pointer',
+
+                    transition: 'all 0.2s ease',
+
+                    fontSize: '0.62rem',
+
+                    fontWeight: 700,
+
+                    letterSpacing: '0.04em'
+
+                }}
+
+            >
+
+                {sendButtonLabel}
+
+            </button>
+
+        </div>
+    );
+    const composerPanel = (
+        embedded ? (
+            <div
+                style={{
+                    position: 'sticky',
+                    bottom: '1rem',
+                    zIndex: 3,
+                }}
+            >
+                <div
+                    className="glass-panel"
+                    style={{
+                        padding: '1rem 1.2rem',
+                        backdropFilter: 'blur(12px)',
+                    }}
+                >
+                    {composerControls}
+                </div>
+            </div>
+        ) : (
+            <div
+                style={{
+                    padding: '1.2rem',
+                    borderTop: '1px solid var(--border-color)',
+                    background: 'rgba(0,0,0,0.2)',
+                }}
+            >
+                {composerControls}
+            </div>
+        )
+    );
+
+
+
+    return embedded ? (
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div
+                className="glass-panel"
+                style={chatShellStyle}
+            >
+
+                <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+
+                    <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+
+                        <Bot size={20} color="var(--primary-color)" />
+
+                        AI Assistant
+
+                    </h3>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        {stats && (
+                            <div className="action-plan-stats">
+                                <span>Speed {stats.speed}</span>
+                                <span>Time {displayedDurationSeconds.toFixed(1)}s</span>
+                                <span>Tokens {((stats.total_tokens || 0) / 1000).toFixed(1)}k</span>
+                                {stats.historical_total_tokens !== undefined && (
+                                    <span>
+                                        History {stats.historical_total_tokens >= 1000000
+                                            ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
+                                            : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`}
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                        <label
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                                color: 'var(--text-secondary)',
+                                fontSize: '0.8rem',
+                            }}
+                        >
+                            <span>Model</span>
+                            <select
+                                value={selectedModel}
+                                onChange={handleModelChange}
+                                disabled={isLoading || availableModels.length === 0}
+                                style={{
+                                    padding: '0.3rem 0.6rem',
+                                    borderRadius: '6px',
+                                    border: '1px solid var(--border-color)',
+                                    background: 'var(--bg-surface)',
+                                    color: 'var(--text-primary)',
+                                    cursor: isLoading || availableModels.length === 0 ? 'not-allowed' : 'pointer',
+                                }}
+                            >
+                                {availableModels.length === 0 && <option value="">Default model</option>}
+                                {availableModels.map((model) => (
+                                    <option key={model} value={model}>
+                                        {`${model}${formatModelReasoningSupportLabel(model, modelReasoningSupport)}`}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                            {providerLabel ? `Powered by ${providerLabel}` : 'Provider unavailable'}
+                        </span>
+
+                        {messages.length > 0 && (
+
+                            <button
+
+                                onClick={clearChat}
+
+                                title="Clear chat history"
+
+                                style={{
+
+                                    background: 'transparent',
+
+                                    border: '1px solid var(--border-color)',
+
+                                    borderRadius: '6px',
+
+                                    padding: '0.4rem 0.6rem',
+
+                                    cursor: 'pointer',
+
+                                    display: 'flex',
+
+                                    alignItems: 'center',
+
+                                    gap: '0.3rem',
+
+                                    color: 'var(--text-secondary)',
+
+                                    fontSize: '0.75rem',
+
+                                    transition: 'all 0.2s'
+
+                                }}
+
+                            >
+
+                                <Trash2 size={14} />
+
+                                Clear
+
+                            </button>
+
+                        )}
+
+                    </div>
+
+                </div>
+
+
+
+                <div style={{
+
+                    flex: embedded ? '0 0 auto' : 1,
+
+                    overflowY: embedded ? 'visible' : 'auto',
+
+                    padding: '1.5rem',
+
+                    display: 'flex',
+
+                    flexDirection: 'column',
+
+                    gap: '1.5rem'
+
+                }}>
+
+                    {visibleMessages.length === 0 && (
+
+                        <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '2rem' }}>
+
+                            <p>{embedded ? 'Action Plan above is already loaded as chat context.' : 'Start a conversation with your AI Assistant.'}</p>
+
+                            <p style={{ fontSize: '0.9rem' }}>
+                                {embedded ? 'Continue with follow-up questions below.' : 'Try sending a message or recording voice input.'}
+                            </p>
+
+                        </div>
+
+                    )}
+
+
+
+                    {visibleMessages.map((msg, i) => (
+
+                        <div key={i} style={{
+
+                            alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+
+                            maxWidth: '85%',
+
+                            display: 'flex',
+
+                            gap: '0.8rem',
+
+                            flexDirection: msg.role === 'user' ? 'row-reverse' : 'row'
+
+                        }}>
+
+                            <div style={{
+
+                                width: '32px', height: '32px',
+
+                                background: msg.role === 'user' ? 'var(--primary-color)' : 'var(--bg-surface-hover)',
+
+                                color: msg.role === 'user' ? '#fff' : 'var(--primary-color)',
+
+                                borderRadius: '10px',
+
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+
+                                flexShrink: 0,
+
+                                fontSize: '0.68rem',
+
+                                fontWeight: 700,
+
+                                letterSpacing: '0.04em',
+
+                                border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)'
+
+                            }}>
+
+                                {roleBadgeLabel(msg.role)}
+
+                            </div>
+
+
+
+                            <div style={{
+
+                                background: msg.role === 'user' ? 'linear-gradient(135deg, var(--primary-color), var(--primary-hover))' : 'var(--bg-surface)',
+
+                                color: msg.role === 'user' ? '#fff' : 'var(--text-primary)',
+
+                                padding: '1rem 1.2rem',
+
+                                borderRadius: '16px',
+
+                                borderTopRightRadius: msg.role === 'user' ? '4px' : '16px',
+
+                                borderTopLeftRadius: msg.role === 'user' ? '16px' : '4px',
+
+                                lineHeight: '1.6',
+
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+
+                                border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)',
+
+                                minWidth: '200px'
+
+                            }}>
+
+                                {/* Thinking Process Display */}
+
+                                {msg.thinking && (
+
+                                    <div style={{
+
+                                        fontSize: '0.85rem',
+
+                                        color: 'var(--text-muted)',
+
+                                        background: 'rgba(0,0,0,0.1)',
+
+                                        padding: '0.8rem',
+
+                                        borderRadius: '8px',
+
+                                        marginBottom: '1rem',
+
+                                        borderLeft: '3px solid var(--border-color)',
+
+                                        whiteSpace: 'pre-wrap'
+
+                                    }}>
+
+                                        <div style={{ fontWeight: 600, marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+
+                                            <div className="thinking-dot" style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--text-muted)' }}></div>
+
+                                            Reasoning Process
+
+                                        </div>
+
+                                        {msg.thinking}
+
+                                    </div>
+
+                                )}
+
+
+
+                                <div className="markdown-body" style={{ fontSize: '0.95rem' }}>
+
+                                    <ReactMarkdown
+                                        remarkPlugins={[remarkGfm]}
+                                        components={renderChatMarkdownComponents(msg.role)}
+                                    >
+
+                                        {msg.content}
+
+                                    </ReactMarkdown>
+
+                                </div>
+
+                            </div>
+
+                        </div>
+
+                    ))}
+
+
+
+                    {isLoading && (
+
+                        <div style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '0.5rem', paddingLeft: '3.5rem' }}>
+
+                            <div className="typing-indicator">
+
+                                <span></span><span></span><span></span>
+
+                            </div>
+
+                            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Thinking...</span>
+
+                        </div>
+
+                    )}
+
+                    <div ref={endRef} />
+
+                </div>
+            </div>
+            {composerPanel}
+        </div>
+    ) : (
+
+        <div
+            className="glass-panel"
+            style={chatShellStyle}
+        >
 
             <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
 
@@ -894,9 +1421,9 @@ export default function ChatInterface() {
 
             <div style={{
 
-                flex: 1,
+                flex: embedded ? '0 0 auto' : 1,
 
-                overflowY: 'auto',
+                overflowY: embedded ? 'visible' : 'auto',
 
                 padding: '1.5rem',
 
@@ -908,13 +1435,15 @@ export default function ChatInterface() {
 
             }}>
 
-                {messages.length === 0 && (
+                {visibleMessages.length === 0 && (
 
                     <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '2rem' }}>
 
-                        <p>Start a conversation with your AI Assistant.</p>
+                        <p>{embedded ? 'Action Plan above is already loaded as chat context.' : 'Start a conversation with your AI Assistant.'}</p>
 
-                        <p style={{ fontSize: '0.9rem' }}>Try sending a message or recording voice input.</p>
+                        <p style={{ fontSize: '0.9rem' }}>
+                            {embedded ? 'Continue with follow-up questions below.' : 'Try sending a message or recording voice input.'}
+                        </p>
 
                     </div>
 
@@ -922,7 +1451,7 @@ export default function ChatInterface() {
 
 
 
-                {messages.map((msg, i) => (
+                {visibleMessages.map((msg, i) => (
 
                     <div key={i} style={{
 
@@ -1073,188 +1602,9 @@ export default function ChatInterface() {
 
             </div>
 
-
-
-            <div style={{ padding: '1.2rem', borderTop: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.2)' }}>
-
-                <div style={{
-
-                    display: 'flex',
-
-                    gap: '0.8rem',
-
-                    background: 'var(--bg-surface)',
-
-                    padding: '0.5rem',
-
-                    borderRadius: '12px',
-
-                    border: '1px solid var(--border-color)',
-
-                    alignItems: 'flex-end'
-
-                }}>
-
-                    <button
-
-                        onClick={isRecording ? stopRecording : startRecording}
-
-                        className={isRecording ? 'pulse-animation' : ''}
-
-                        disabled={isLoading && !isRecording} // Disable start if loading, but allow stop if recording
-
-                        style={{
-
-                            background: isRecording ? '#ff4d4d' : 'transparent',
-
-                            color: isRecording ? '#fff' : 'var(--text-secondary)',
-
-                            border: 'none',
-
-                            borderRadius: '8px',
-
-                            width: '48px', height: '40px',
-
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-
-                            cursor: 'pointer',
-
-                            transition: 'all 0.2s ease',
-
-                            fontSize: '0.62rem',
-
-                            fontWeight: 700,
-
-                            letterSpacing: '0.04em'
-
-                        }}
-
-                        title={isRecording ? "Stop Recording" : "Start Recording"}
-
-                    >
-
-                        {recordButtonLabel}
-
-                    </button>
-
-
-
-                    {isRecording && (
-
-                        <div style={{
-
-                            flex: 1, display: 'flex', alignItems: 'center',
-
-                            color: '#ff4d4d', fontWeight: 'bold', fontSize: '0.9rem'
-
-                        }}>
-
-                            Recording... {formatTime(recordingTime)}
-
-                        </div>
-
-                    )}
-
-
-
-                    {!isRecording && (
-
-                        <textarea
-
-                            value={input}
-
-                            onChange={(e) => setInput(e.target.value)}
-
-                            onKeyDown={handleKeyDown}
-
-                            placeholder="Type a message..."
-
-                            disabled={isLoading}
-
-                            rows={1}
-
-                            style={{
-
-                                flex: 1,
-
-                                background: 'transparent',
-
-                                border: 'none',
-
-                                color: 'var(--text-primary)',
-
-                                padding: '0.6rem 0.5rem',
-
-                                outline: 'none',
-
-                                fontSize: '0.95rem',
-
-                                resize: 'none',
-
-                                minHeight: '24px',
-
-                                maxHeight: '100px'
-
-                            }}
-
-                            onInput={(e) => {
-
-                                e.target.style.height = 'auto'; // Reset height
-
-                                e.target.style.height = e.target.scrollHeight + 'px'; // Set new height
-
-                            }}
-
-                        />
-
-                    )}
-
-
-
-                    <button
-
-                        onClick={sendMessage}
-
-                        disabled={!input.trim() || isLoading}
-
-                        style={{
-
-                            background: (!input.trim() || isLoading) ? 'var(--bg-surface-hover)' : 'var(--primary-color)',
-
-                            color: (!input.trim() || isLoading) ? 'var(--text-muted)' : '#fff',
-
-                            border: 'none',
-
-                            borderRadius: '8px',
-
-                            width: '56px', height: '40px',
-
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-
-                            cursor: 'pointer',
-
-                            transition: 'all 0.2s ease',
-
-                            fontSize: '0.62rem',
-
-                            fontWeight: 700,
-
-                            letterSpacing: '0.04em'
-
-                        }}
-
-                    >
-
-                        {sendButtonLabel}
-
-                    </button>
-
-                </div>
-
-            </div>
+            {composerPanel}
 
         </div>
-
     );
 
 }

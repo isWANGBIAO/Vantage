@@ -132,7 +132,7 @@ function isFallbackExecution(stats, selectedModel) {
   );
 }
 
-export default function ActionPlan({ isVisible = true }) {
+export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const [analysisContent, setAnalysisContent] = useState('');
   const [analysisThinking, setAnalysisThinking] = useState('');
   const [planContent, setPlanContent] = useState('');
@@ -707,8 +707,8 @@ export default function ActionPlan({ isVisible = true }) {
         display: 'flex',
         flexDirection: 'column',
         gap: '1rem',
-        height: '100%',
-        overflow: 'hidden',
+        height: layoutMode === 'stacked' ? 'auto' : '100%',
+        overflow: layoutMode === 'stacked' ? 'visible' : 'hidden',
         boxSizing: 'border-box',
       }}
     >
@@ -869,8 +869,15 @@ export default function ActionPlan({ isVisible = true }) {
         </div>
       </div>
 
-      <div className="action-plan-grid">
-        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div className={layoutMode === 'stacked' ? 'action-plan-stack' : 'action-plan-grid'}>
+        <div
+          className="glass-panel"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: layoutMode === 'stacked' ? 'visible' : 'hidden',
+          }}
+        >
           <div
             style={{
               padding: '0.8rem 1rem',
@@ -901,7 +908,11 @@ export default function ActionPlan({ isVisible = true }) {
           </div>
           <div
             className="markdown-body compact-markdown custom-scrollbar"
-            style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}
+            style={{
+              flex: layoutMode === 'stacked' ? '0 0 auto' : 1,
+              overflowY: layoutMode === 'stacked' ? 'visible' : 'auto',
+              padding: '1rem',
+            }}
           >
             {analysisThinking && <ThinkingBlock text={analysisThinking} />}
             {renderMarkdownOrText(analysisRender)}
@@ -909,7 +920,14 @@ export default function ActionPlan({ isVisible = true }) {
           </div>
         </div>
 
-        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div
+          className="glass-panel"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: layoutMode === 'stacked' ? 'visible' : 'hidden',
+          }}
+        >
           <div
             style={{
               padding: '0.8rem 1rem',
@@ -940,7 +958,11 @@ export default function ActionPlan({ isVisible = true }) {
           </div>
           <div
             className="markdown-body compact-markdown custom-scrollbar"
-            style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}
+            style={{
+              flex: layoutMode === 'stacked' ? '0 0 auto' : 1,
+              overflowY: layoutMode === 'stacked' ? 'visible' : 'auto',
+              padding: '1rem',
+            }}
           >
             {planThinking && <ThinkingBlock text={planThinking} />}
             {renderMarkdownOrText(planRender)}

@@ -182,3 +182,18 @@ test('ChatInterface replaces unreliable chat icons with text badges and text act
   assert.equal(chatSource.includes('<StopCircle size={20}'), false);
   assert.equal(chatSource.includes('<Send size={18}'), false);
 });
+
+test('ChatInterface supports embedded workspace mode with a separate sticky composer panel', () => {
+  assert.ok(chatSource.includes('export default function ChatInterface({ embedded = false } = {})'));
+  assert.ok(chatSource.includes("height: embedded ? 'auto' : '100%'"));
+  assert.ok(chatSource.includes("overflowY: embedded ? 'visible' : 'auto'"));
+  assert.ok(chatSource.includes('const composerPanel = ('));
+  assert.ok(chatSource.includes('return embedded ? ('));
+  assert.equal(chatSource.includes("position: embedded ? 'sticky' : 'static'"), false);
+});
+
+test('ChatInterface hides inherited action-plan base messages in embedded mode', () => {
+  assert.ok(chatSource.includes('const [baseMessages, setBaseMessages] = useState([])'));
+  assert.ok(chatSource.includes('visibleMessages = embedded'));
+  assert.ok(chatSource.includes('messages.slice(baseMessages.length)'));
+});
