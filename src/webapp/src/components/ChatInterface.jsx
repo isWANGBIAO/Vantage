@@ -70,7 +70,7 @@ function renderChatMarkdownComponents(role) {
     const isUser = role === 'user';
 
     return {
-        p: ({ node, ...props }) => (
+        p: (props) => (
             <p
                 {...props}
                 style={{
@@ -79,7 +79,7 @@ function renderChatMarkdownComponents(role) {
                 }}
             />
         ),
-        li: ({ node, ...props }) => (
+        li: (props) => (
             <li
                 {...props}
                 style={{
@@ -88,7 +88,7 @@ function renderChatMarkdownComponents(role) {
                 }}
             />
         ),
-        strong: ({ node, ...props }) => (
+        strong: (props) => (
             <strong
                 {...props}
                 style={{

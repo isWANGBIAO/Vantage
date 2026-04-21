@@ -165,6 +165,12 @@ test('ChatInterface does not hardcode Gemini provider copy and keeps user markdo
   assert.ok(chatSource.includes("isUser ? 'inherit'"));
 });
 
+test('ChatInterface markdown renderers avoid unused node params', () => {
+  assert.equal(chatSource.includes('p: ({ node, ...props }) => ('), false);
+  assert.equal(chatSource.includes('li: ({ node, ...props }) => ('), false);
+  assert.equal(chatSource.includes('strong: ({ node, ...props }) => ('), false);
+});
+
 test('ChatInterface replaces unreliable chat icons with text badges and text action buttons', () => {
   assert.ok(chatSource.includes("'AI'"));
   assert.ok(chatSource.includes("'ME'"));

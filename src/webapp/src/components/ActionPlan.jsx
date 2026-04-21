@@ -343,7 +343,7 @@ export default function ActionPlan({ isVisible = true }) {
 
     setIsGenerating(false);
     setPlanContentWithRef((prev) => `${prev}\n\n> Generation stopped by user.`);
-  }, []);
+  }, [setPlanContentWithRef]);
 
   const handleReasoningEffortChange = (event) => {
     const nextValue = saveActionPlanReasoningEffort(event.target.value);
