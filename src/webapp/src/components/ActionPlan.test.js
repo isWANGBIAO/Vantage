@@ -40,6 +40,12 @@ test('ActionPlan no longer depends on delimiter parsing or thinking-as-reply fal
   assert.equal(actionPlanSource.includes('coalesceActionPlanReplyContent'), false);
 });
 
+test('ActionPlan keeps thinking blocks collapsed until the user expands them', () => {
+  assert.ok(actionPlanSource.includes('<details className="thinking-block">'));
+  assert.ok(actionPlanSource.includes('<summary className="thinking-header">'));
+  assert.equal(actionPlanSource.includes('<details className="thinking-block" open>'), false);
+});
+
 test('ActionPlan shows actual execution metadata and flags fallback runs', () => {
   assert.ok(actionPlanSource.includes('formatPoweredByLabel(stats)'));
   assert.ok(actionPlanSource.includes("stats.provider_route !== 'cliproxyapi_primary'"));

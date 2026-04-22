@@ -365,11 +365,6 @@ button:disabled {
   border-radius: 8px;
   margin-bottom: 1rem;
   border-left: 3px solid var(--border-color);
-  white-space: pre-wrap;
-  /* Preserve newlines */
-  overflow-wrap: break-word;
-  word-break: break-all;
-  /* Better for CJK mixed with code */
   max-width: 100%;
   /* Ensure it doesn't overflow or get crushed */
   width: 100%;
@@ -379,8 +374,34 @@ button:disabled {
 
 .thinking-header {
   font-weight: 600;
-  margin-bottom: 0.4rem;
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.thinking-header::-webkit-details-marker {
+  display: none;
+}
+
+.thinking-header::before {
+  content: '▸';
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.thinking-block[open] .thinking-header {
+  margin-bottom: 0.4rem;
+}
+
+.thinking-block[open] .thinking-header::before {
+  transform: rotate(90deg);
+}
+
+.thinking-content {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-all;
 }

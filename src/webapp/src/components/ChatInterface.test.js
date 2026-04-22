@@ -182,6 +182,12 @@ test('ChatInterface renders chat token stats and hydrates them from backend cont
   assert.ok(chatSource.includes('History {stats.historical_total_tokens >= 1000000'));
 });
 
+test('ChatInterface keeps reasoning blocks collapsed until the user expands them', () => {
+  assert.ok(chatSource.includes('<details className="thinking-block">'));
+  assert.ok(chatSource.includes('<summary className="thinking-header">'));
+  assert.equal(chatSource.includes('<details className="thinking-block" open>'), false);
+});
+
 test('ChatInterface seeds live timing stats as soon as a request starts', () => {
   assert.ok(chatSource.includes('startTime: Date.now()'));
   assert.ok(chatSource.includes('const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now())'));

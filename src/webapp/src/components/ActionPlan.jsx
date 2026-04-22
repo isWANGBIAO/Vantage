@@ -976,9 +976,9 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
 
 function ThinkingBlock({ text }) {
   return (
-    <div className="thinking-block">
-      <div className="thinking-header">
-        <div
+    <details className="thinking-block">
+      <summary className="thinking-header">
+        <span
           className="thinking-dot"
           style={{
             width: '6px',
@@ -988,9 +988,9 @@ function ThinkingBlock({ text }) {
           }}
         />
         Analysis Process
-      </div>
-      {text}
-    </div>
+      </summary>
+      <div className="thinking-content">{text}</div>
+    </details>
   );
 }
 

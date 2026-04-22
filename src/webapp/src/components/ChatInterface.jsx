@@ -100,6 +100,30 @@ function renderChatMarkdownComponents(role) {
     };
 }
 
+function ThinkingDisclosure({ title, text }) {
+    if (!text) {
+        return null;
+    }
+
+    return (
+        <details className="thinking-block">
+            <summary className="thinking-header">
+                <span
+                    className="thinking-dot"
+                    style={{
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        background: 'var(--text-muted)',
+                    }}
+                />
+                {title}
+            </summary>
+            <div className="thinking-content">{text}</div>
+        </details>
+    );
+}
+
 
 function consumeChatStreamChunk(previousState, chunkText) {
     const nextState = {
@@ -1239,41 +1263,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                                 {/* Thinking Process Display */}
 
-                                {msg.thinking && (
-
-                                    <div style={{
-
-                                        fontSize: '0.85rem',
-
-                                        color: 'var(--text-muted)',
-
-                                        background: 'rgba(0,0,0,0.1)',
-
-                                        padding: '0.8rem',
-
-                                        borderRadius: '8px',
-
-                                        marginBottom: '1rem',
-
-                                        borderLeft: '3px solid var(--border-color)',
-
-                                        whiteSpace: 'pre-wrap'
-
-                                    }}>
-
-                                        <div style={{ fontWeight: 600, marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-
-                                            <div className="thinking-dot" style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--text-muted)' }}></div>
-
-                                            Reasoning Process
-
-                                        </div>
-
-                                        {msg.thinking}
-
-                                    </div>
-
-                                )}
+                                <ThinkingDisclosure title="Reasoning Process" text={msg.thinking} />
 
 
 
@@ -1541,41 +1531,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                             {/* Thinking Process Display */}
 
-                            {msg.thinking && (
-
-                                <div style={{
-
-                                    fontSize: '0.85rem',
-
-                                    color: 'var(--text-muted)',
-
-                                    background: 'rgba(0,0,0,0.1)',
-
-                                    padding: '0.8rem',
-
-                                    borderRadius: '8px',
-
-                                    marginBottom: '1rem',
-
-                                    borderLeft: '3px solid var(--border-color)',
-
-                                    whiteSpace: 'pre-wrap'
-
-                                }}>
-
-                                    <div style={{ fontWeight: 600, marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-
-                                        <div className="thinking-dot" style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--text-muted)' }}></div>
-
-                                        Reasoning Process
-
-                                    </div>
-
-                                    {msg.thinking}
-
-                                </div>
-
-                            )}
+                            <ThinkingDisclosure title="Reasoning Process" text={msg.thinking} />
 
 
 
