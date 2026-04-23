@@ -16,6 +16,7 @@ DEFAULT_SETTINGS = {
     "version": SETTINGS_VERSION,
     "onboarding_completed": False,
     "launch_at_login": False,
+    "display_language": "system",
 }
 
 DEFAULT_PROVIDER_CONFIG = {
@@ -101,11 +102,19 @@ def _coerce_dict(payload: dict | None, key: str) -> dict:
     return deepcopy(value) if isinstance(value, dict) else {}
 
 
+def _coerce_display_language(payload: dict | None, key: str = "display_language") -> str:
+    value = payload.get(key) if isinstance(payload, dict) else None
+    if value in {"system", "zh-CN", "en-US"}:
+        return value
+    return "system"
+
+
 def _sanitize_settings(payload: dict | None) -> dict:
     return {
         "version": SETTINGS_VERSION,
         "onboarding_completed": _coerce_bool(payload, "onboarding_completed", False),
         "launch_at_login": _coerce_bool(payload, "launch_at_login", False),
+        "display_language": _coerce_display_language(payload),
     }
 
 

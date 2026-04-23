@@ -24,6 +24,7 @@ def test_load_settings_creates_default_settings_file(tmp_path):
         "version": 1,
         "onboarding_completed": False,
         "launch_at_login": False,
+        "display_language": "system",
     }
     assert payload == expected
     assert json.loads((config_dir / "settings.json").read_text(encoding="utf-8")) == expected
@@ -93,7 +94,36 @@ def test_save_settings_normalizes_partial_payload(tmp_path):
         "version": 1,
         "onboarding_completed": False,
         "launch_at_login": True,
+        "display_language": "system",
     }
     assert payload == expected
     assert json.loads(settings_file.read_text(encoding="utf-8")) == expected
 
+
+def test_load_settings_repairs_invalid_display_language(tmp_path):
+    user_config = _load_user_config_module()
+    settings_file = tmp_path / "config" / "settings.json"
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+    settings_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "onboarding_completed": True,
+                "launch_at_login": False,
+                "display_language": "fr-FR",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = user_config.load_settings(settings_file=settings_file)
+
+    expected = {
+        "version": 1,
+        "onboarding_completed": True,
+        "launch_at_login": False,
+        "display_language": "system",
+    }
+    assert payload == expected
+    assert json.loads(settings_file.read_text(encoding="utf-8")) == expected

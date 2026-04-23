@@ -4,8 +4,10 @@ import remarkGfm from 'remark-gfm';
 import { Target, CheckCircle2, Circle, GitCommit, TrendingUp, RefreshCw, AlertCircle } from 'lucide-react';
 import './ProjectProgress.css';
 import { fetchBackendJson } from '../utils/backendRequest';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 const ProjectProgress = () => {
+    const { t } = useDisplayLanguage();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -17,7 +19,7 @@ const ProjectProgress = () => {
             const result = await fetchBackendJson('/api/project_progress', { retryPolicy: 'load' });
             setData(result);
         } catch (error) {
-            setError('Failed to load project progress. Make sure the backend is running.');
+            setError(t('project_progress.error.body'));
             console.error(error);
         } finally {
             setLoading(false);
@@ -32,7 +34,7 @@ const ProjectProgress = () => {
         return (
             <div className="progress-loading">
                 <RefreshCw className="animate-spin" size={32} />
-                <p>Loading project momentum...</p>
+                <p>{t('project_progress.loading')}</p>
             </div>
         );
     }
@@ -41,9 +43,9 @@ const ProjectProgress = () => {
         return (
             <div className="progress-error">
                 <AlertCircle size={48} />
-                <h3>Error Loading Data</h3>
+                <h3>{t('project_progress.error.title')}</h3>
                 <p>{error}</p>
-                <button className="retry-btn" onClick={fetchProgress}>Retry</button>
+                <button className="retry-btn" onClick={fetchProgress}>{t('project_progress.retry')}</button>
             </div>
         );
     }
@@ -64,9 +66,9 @@ const ProjectProgress = () => {
             <header className="progress-header">
                 <div className="header-title">
                     <Target className="icon-target" size={28} />
-                    <h2>Project Momentum</h2>
+                    <h2>{t('project_progress.title')}</h2>
                 </div>
-                <button className="refresh-btn" onClick={fetchProgress} title="Refresh Data">
+                <button className="refresh-btn" onClick={fetchProgress} title={t('project_progress.refresh')}>
                     <RefreshCw size={18} />
                 </button>
             </header>
@@ -74,7 +76,7 @@ const ProjectProgress = () => {
             <div className="progress-dashboard">
                 {/* Left Column: Active Focus (Pending Tasks) */}
                 <section className="progress-section focus-board">
-                    <h3><Circle size={18} className="text-warning" /> Active Focus (TODOs)</h3>
+                    <h3><Circle size={18} className="text-warning" /> {t('project_progress.active_focus')}</h3>
                     <div className="focus-scroll-area">
                         {Object.entries(pendingByProject).map(([project, projectTasks]) => (
                             <div key={project} className="project-group">
@@ -92,14 +94,14 @@ const ProjectProgress = () => {
                             </div>
                         ))}
                         {tasks.pending.length === 0 && (
-                            <div className="empty-state">No pending tasks found. You're all caught up!</div>
+                            <div className="empty-state">{t('project_progress.no_pending')}</div>
                         )}
                     </div>
                 </section>
 
                 {/* Center Column: Momentum Stats */}
                 <section className="progress-section momentum-board">
-                    <h3><TrendingUp size={18} className="text-primary" /> Overall Momentum</h3>
+                    <h3><TrendingUp size={18} className="text-primary" /> {t('project_progress.overall_momentum')}</h3>
 
                     <div className="stats-card">
                         <div className="stat-circle-container">
@@ -108,29 +110,29 @@ const ProjectProgress = () => {
                             }}>
                                 <div className="stat-circle-inner">
                                     <span className="rate-value">{(stats.completion_rate * 100).toFixed(0)}%</span>
-                                    <span className="rate-label">Completed</span>
+                                    <span className="rate-label">{t('project_progress.completed')}</span>
                                 </div>
                             </div>
                         </div>
 
                         <div className="stat-details">
                             <div className="stat-row">
-                                <span className="stat-label">Total Tracked Tasks:</span>
+                                <span className="stat-label">{t('project_progress.total_tasks')}</span>
                                 <span className="stat-num">{stats.total_tasks}</span>
                             </div>
                             <div className="stat-row">
-                                <span className="stat-label">Completed Tasks:</span>
+                                <span className="stat-label">{t('project_progress.completed_tasks')}</span>
                                 <span className="stat-num text-success">{stats.completed_tasks}</span>
                             </div>
                             <div className="stat-row">
-                                <span className="stat-label">Pending Tasks:</span>
+                                <span className="stat-label">{t('project_progress.pending_tasks')}</span>
                                 <span className="stat-num text-warning">{tasks.pending.length}</span>
                             </div>
                         </div>
                     </div>
 
                     <div className="recent-completed">
-                        <h4>Recently Completed Milestone</h4>
+                        <h4>{t('project_progress.recent_milestone')}</h4>
                         {tasks.completed.length > 0 ? (
                             <div className="completed-highlight">
                                 <CheckCircle2 size={16} className="text-success" />
@@ -139,7 +141,7 @@ const ProjectProgress = () => {
                                 </div>
                             </div>
                         ) : (
-                            <span className="text-muted">No completed tasks yet.</span>
+                            <span className="text-muted">{t('project_progress.no_completed')}</span>
                         )}
                     </div>
 
@@ -147,7 +149,7 @@ const ProjectProgress = () => {
 
                 {/* Right Column: Activity Feed (Git) */}
                 <section className="progress-section activity-board">
-                    <h3><GitCommit size={18} className="text-accent" /> Recent Activity (14 Days)</h3>
+                    <h3><GitCommit size={18} className="text-accent" /> {t('project_progress.recent_activity')}</h3>
                     <div className="activity-scroll-area">
                         {commits.length > 0 ? (
                             <div className="timeline">
@@ -165,7 +167,7 @@ const ProjectProgress = () => {
                                 ))}
                             </div>
                         ) : (
-                            <div className="empty-state">No recent commits found in the last 14 days.</div>
+                            <div className="empty-state">{t('project_progress.no_commits')}</div>
                         )}
                     </div>
                 </section>

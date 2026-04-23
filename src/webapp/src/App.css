@@ -46,6 +46,29 @@
   justify-content: flex-end;
 }
 
+.app-language-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.app-language-label {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.app-language-select {
+  min-width: 140px;
+  padding: 0.45rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+}
+
 .app-nav {
   display: flex;
   align-items: center;
@@ -349,7 +372,8 @@
   color: var(--text-muted);
 }
 
-.onboarding-inline-row {
+.onboarding-inline-row,
+.onboarding-inline-actions {
   display: flex;
   gap: 0.75rem;
   align-items: center;
@@ -357,6 +381,12 @@
 
 .onboarding-inline-row .onboarding-input {
   flex: 1;
+}
+
+.onboarding-inline-note {
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  word-break: break-word;
 }
 
 .onboarding-checkbox {
@@ -385,7 +415,8 @@
   justify-content: flex-end;
 }
 
-.onboarding-secondary-button {
+.onboarding-secondary-button,
+.secondary-button {
   background: transparent;
   background-image: none;
   color: var(--text-secondary);
@@ -393,13 +424,32 @@
   box-shadow: none;
 }
 
-.onboarding-secondary-button:hover:not(:disabled) {
+.onboarding-secondary-button:hover:not(:disabled),
+.secondary-button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
   border-color: var(--border-hover);
   box-shadow: none;
   transform: none;
   filter: none;
+}
+
+.onboarding-complete-summary {
+  display: grid;
+  gap: 0.55rem;
+  padding: 1rem 1.1rem;
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.onboarding-error {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 87, 87, 0.28);
+  background: rgba(255, 87, 87, 0.08);
+  color: var(--text-primary);
 }
 
 @media (max-width: 960px) {
@@ -412,6 +462,7 @@
   .app-header-actions {
     width: 100%;
     justify-content: space-between;
+    flex-wrap: wrap;
   }
 
   .app-nav {
@@ -444,6 +495,15 @@
     gap: 0.75rem;
   }
 
+  .app-language-control {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .app-language-select {
+    flex: 1;
+  }
+
   .app-nav {
     gap: 0.75rem;
   }
@@ -472,6 +532,11 @@
   }
 
   .onboarding-inline-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .onboarding-inline-actions {
     flex-direction: column;
     align-items: stretch;
   }

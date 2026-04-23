@@ -1,6 +1,7 @@
 const DEFAULT_ONBOARDING_STATE = {
   completed: true,
   launchAtLogin: false,
+  displayLanguage: 'system',
   providerConfigured: false,
   migrationCompleted: false,
   legacyRoot: null,
@@ -26,6 +27,10 @@ function sanitizeOnboardingState(payload, mode) {
       typeof safePayload.launchAtLogin === 'boolean'
         ? safePayload.launchAtLogin
         : DEFAULT_ONBOARDING_STATE.launchAtLogin,
+    displayLanguage:
+      typeof safePayload.displayLanguage === 'string'
+        ? safePayload.displayLanguage
+        : DEFAULT_ONBOARDING_STATE.displayLanguage,
     providerConfigured:
       typeof safePayload.providerConfigured === 'boolean'
         ? safePayload.providerConfigured

@@ -25,6 +25,7 @@ import {
   parseModelReasoningSupport,
 
 } from '../utils/modelReasoningSupport';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 const PROVIDER_LABELS = {
     cliproxyapi_primary: 'CLIProxyAPI',
@@ -203,6 +204,7 @@ function getVisibleMessages({ embedded, messages, baseMessages }) {
 
 
 export default function ChatInterface({ embedded = false } = {}) {
+    const { t } = useDisplayLanguage();
 
     const [initialEmbeddedChatState] = useState(() => buildInitialEmbeddedChatState());
     const [messages, setMessages] = useState(() => (
@@ -414,7 +416,10 @@ export default function ChatInterface({ embedded = false } = {}) {
         } catch (error) {
 
             console.error('Failed to clear chat context:', error);
-            setMessages(prev => [...prev, { role: 'assistant', content: `Failed to clear chat: ${error.message}` }]);
+            setMessages(prev => [...prev, {
+                role: 'assistant',
+                content: t('chat.clear_failed', { error: error.message }),
+            }]);
 
         }
 
@@ -485,7 +490,7 @@ export default function ChatInterface({ embedded = false } = {}) {
             streamState = consumeChatStreamChunk(streamState, chunk);
 
             if (streamState.error) {
-                syncAssistantMessage(`Error: ${streamState.error}`, streamState.assistantThinking);
+                syncAssistantMessage(t('common.error_prefix', { error: streamState.error }), streamState.assistantThinking);
                 return false;
             }
 
@@ -507,7 +512,7 @@ export default function ChatInterface({ embedded = false } = {}) {
         }
 
         if (streamState.error) {
-            syncAssistantMessage(`Error: ${streamState.error}`, streamState.assistantThinking);
+            syncAssistantMessage(t('common.error_prefix', { error: streamState.error }), streamState.assistantThinking);
             return false;
         }
 
@@ -582,7 +587,10 @@ export default function ChatInterface({ embedded = false } = {}) {
 
         } catch (err) {
 
-            setMessages(prev => [...prev, { role: 'assistant', content: `Network Error: ${err.message}` }]);
+            setMessages(prev => [...prev, {
+                role: 'assistant',
+                content: t('common.network_error', { error: err.message }),
+            }]);
 
         } finally {
 
@@ -687,7 +695,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
 
                 setIsLoading(true);
-                setInput("Transcribing speech...");
+                setInput(t('chat.transcribing'));
 
 
 
@@ -742,17 +750,20 @@ export default function ChatInterface({ embedded = false } = {}) {
                             await processStreamResponse(chatRes, nextStats);
                         } catch (chatErr) {
                             console.error("[Voice] Chat error:", chatErr);
-                            setMessages(prev => [...prev, { role: "assistant", content: `Network Error: ${chatErr.message}` }]);
+                            setMessages(prev => [...prev, {
+                                role: 'assistant',
+                                content: t('common.network_error', { error: chatErr.message }),
+                            }]);
                         }
                     } else {
                         console.warn("[Voice] Transcription empty or failed");
-                        setInput("Speech transcription failed, please retry or type manually.");
+                        setInput(t('chat.transcription_failed'));
                     }
                 } catch (err) {
 
                     console.error("[Voice] Transcription error:", err);
 
-                    setInput("Speech transcription error: " + err.message);
+                    setInput(t('chat.transcription_error', { error: err.message }));
 
                 } finally {
 
@@ -774,7 +785,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
         } catch (err) {
             console.error("[Voice] Error accessing microphone:", err);
-            alert("Cannot access microphone, please check permissions.\nError: " + err.message);
+            alert(t('chat.microphone_error', { error: err.message }));
         }
 
     };
@@ -885,7 +896,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                 }}
 
-                title={isRecording ? "Stop Recording" : "Start Recording"}
+                title={isRecording ? t('chat.record.stop') : t('chat.record.start')}
 
             >
 
@@ -905,7 +916,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                 }}>
 
-                    Recording... {formatTime(recordingTime)}
+                    {t('chat.record.active', { value: formatTime(recordingTime) })}
 
                 </div>
 
@@ -923,7 +934,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                     onKeyDown={handleKeyDown}
 
-                    placeholder="Type a message..."
+                    placeholder={t('chat.input_placeholder')}
 
                     disabled={isLoading}
 
@@ -1055,21 +1066,23 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                         <Bot size={20} color="var(--primary-color)" />
 
-                        AI Assistant
+                        {t('chat.header.title')}
 
                     </h3>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         {stats && (
                             <div className="action-plan-stats">
-                                <span>Speed {stats.speed}</span>
-                                <span>Time {displayedDurationSeconds.toFixed(1)}s</span>
-                                <span>Tokens {((stats.total_tokens || 0) / 1000).toFixed(1)}k</span>
+                                <span>{t('common.speed', { value: stats.speed })}</span>
+                                <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
+                                <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
                                 {stats.historical_total_tokens !== undefined && (
                                     <span>
-                                        History {stats.historical_total_tokens >= 1000000
-                                            ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
-                                            : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`}
+                                        {t('common.history', {
+                                            value: stats.historical_total_tokens >= 1000000
+                                                ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
+                                                : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`,
+                                        })}
                                     </span>
                                 )}
                             </div>
@@ -1083,7 +1096,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                                 fontSize: '0.8rem',
                             }}
                         >
-                            <span>Model</span>
+                            <span>{t('common.model')}</span>
                             <select
                                 value={selectedModel}
                                 onChange={handleModelChange}
@@ -1097,7 +1110,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                                     cursor: isLoading || availableModels.length === 0 ? 'not-allowed' : 'pointer',
                                 }}
                             >
-                                {availableModels.length === 0 && <option value="">Default model</option>}
+                                {availableModels.length === 0 && <option value="">{t('chat.default_model')}</option>}
                                 {availableModels.map((model) => (
                                     <option key={model} value={model}>
                                         {`${model}${formatModelReasoningSupportLabel(model, modelReasoningSupport)}`}
@@ -1106,7 +1119,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                             </select>
                         </label>
                         <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                            {providerLabel ? `Powered by ${providerLabel}` : 'Provider unavailable'}
+                            {providerLabel ? t('chat.powered_by', { provider: providerLabel }) : t('chat.provider_unavailable')}
                         </span>
 
                         {messages.length > 0 && (
@@ -1115,7 +1128,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                                 onClick={clearChat}
 
-                                title="Clear chat history"
+                                title={t('chat.clear_title')}
 
                                 style={{
 
@@ -1147,7 +1160,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                                 <Trash2 size={14} />
 
-                                Clear
+                                {t('chat.clear')}
 
                             </button>
 
@@ -1179,10 +1192,10 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                         <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '2rem' }}>
 
-                            <p>{embedded ? 'Action Plan above is already loaded as chat context.' : 'Start a conversation with your AI Assistant.'}</p>
+                            <p>{embedded ? t('chat.empty.with_context') : t('chat.empty.without_context')}</p>
 
                             <p style={{ fontSize: '0.9rem' }}>
-                                {embedded ? 'Continue with follow-up questions below.' : 'Try sending a message or recording voice input.'}
+                                {embedded ? t('chat.empty.followup') : t('chat.empty.try_input')}
                             </p>
 
                         </div>
@@ -1263,7 +1276,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                                 {/* Thinking Process Display */}
 
-                                <ThinkingDisclosure title="Reasoning Process" text={msg.thinking} />
+                                <ThinkingDisclosure title={t('chat.reasoning_title')} text={msg.thinking} />
 
 
 
@@ -1298,7 +1311,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                             </div>
 
-                            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Thinking...</span>
+                            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{t('chat.thinking')}</span>
 
                         </div>
 
@@ -1323,21 +1336,23 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                     <Bot size={20} color="var(--primary-color)" />
 
-                    AI Assistant
+                    {t('chat.header.title')}
 
                 </h3>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     {stats && (
                         <div className="action-plan-stats">
-                            <span>Speed {stats.speed}</span>
-                            <span>Time {displayedDurationSeconds.toFixed(1)}s</span>
-                            <span>Tokens {((stats.total_tokens || 0) / 1000).toFixed(1)}k</span>
+                            <span>{t('common.speed', { value: stats.speed })}</span>
+                            <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
+                            <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
                             {stats.historical_total_tokens !== undefined && (
                                 <span>
-                                    History {stats.historical_total_tokens >= 1000000
-                                        ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
-                                        : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`}
+                                    {t('common.history', {
+                                        value: stats.historical_total_tokens >= 1000000
+                                            ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
+                                            : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`,
+                                    })}
                                 </span>
                             )}
                         </div>
@@ -1351,7 +1366,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                             fontSize: '0.8rem',
                         }}
                     >
-                        <span>Model</span>
+                        <span>{t('common.model')}</span>
                         <select
                             value={selectedModel}
                             onChange={handleModelChange}
@@ -1365,7 +1380,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                                 cursor: isLoading || availableModels.length === 0 ? 'not-allowed' : 'pointer',
                             }}
                         >
-                            {availableModels.length === 0 && <option value="">Default model</option>}
+                            {availableModels.length === 0 && <option value="">{t('chat.default_model')}</option>}
                             {availableModels.map((model) => (
                                 <option key={model} value={model}>
                                     {`${model}${formatModelReasoningSupportLabel(model, modelReasoningSupport)}`}
@@ -1374,7 +1389,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                         </select>
                     </label>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                        {providerLabel ? `Powered by ${providerLabel}` : 'Provider unavailable'}
+                        {providerLabel ? t('chat.powered_by', { provider: providerLabel }) : t('chat.provider_unavailable')}
                     </span>
 
                     {messages.length > 0 && (
@@ -1383,7 +1398,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                             onClick={clearChat}
 
-                            title="Clear chat history"
+                            title={t('chat.clear_title')}
 
                             style={{
 
@@ -1415,7 +1430,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                             <Trash2 size={14} />
 
-                            Clear
+                            {t('chat.clear')}
 
                         </button>
 
@@ -1447,10 +1462,10 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                     <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: '2rem' }}>
 
-                        <p>{embedded ? 'Action Plan above is already loaded as chat context.' : 'Start a conversation with your AI Assistant.'}</p>
+                        <p>{embedded ? t('chat.empty.with_context') : t('chat.empty.without_context')}</p>
 
                         <p style={{ fontSize: '0.9rem' }}>
-                            {embedded ? 'Continue with follow-up questions below.' : 'Try sending a message or recording voice input.'}
+                            {embedded ? t('chat.empty.followup') : t('chat.empty.try_input')}
                         </p>
 
                     </div>
@@ -1531,7 +1546,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                             {/* Thinking Process Display */}
 
-                            <ThinkingDisclosure title="Reasoning Process" text={msg.thinking} />
+                            <ThinkingDisclosure title={t('chat.reasoning_title')} text={msg.thinking} />
 
 
 
@@ -1566,7 +1581,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                         </div>
 
-                        <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Thinking...</span>
+                        <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{t('chat.thinking')}</span>
 
                     </div>
 

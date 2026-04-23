@@ -5,6 +5,7 @@ const DEFAULT_SETTINGS = {
   version: 1,
   onboarding_completed: false,
   launch_at_login: false,
+  display_language: 'system',
 };
 
 const DEFAULT_PROVIDER_CONFIG = {
@@ -65,6 +66,12 @@ function normalizeOptionalString(value) {
   return normalized || null;
 }
 
+function sanitizeDisplayLanguage(value) {
+  return value === 'zh-CN' || value === 'en-US' || value === 'system'
+    ? value
+    : DEFAULT_SETTINGS.display_language;
+}
+
 function sanitizeSettings(payload) {
   const safePayload = payload && typeof payload === 'object' ? payload : {};
   return {
@@ -77,6 +84,7 @@ function sanitizeSettings(payload) {
       typeof safePayload.launch_at_login === 'boolean'
         ? safePayload.launch_at_login
         : DEFAULT_SETTINGS.launch_at_login,
+    display_language: sanitizeDisplayLanguage(safePayload.display_language),
   };
 }
 
@@ -166,6 +174,7 @@ function getOnboardingState({ runtimePaths, projectRoot }) {
   return {
     completed: settings.onboarding_completed,
     launchAtLogin: settings.launch_at_login,
+    displayLanguage: settings.display_language,
     providerConfigured: hasProviderConfig(providerConfig),
     migrationCompleted: migrationState.completed,
     legacyRoot: migrationState.source_path || detectLegacyRoot({ runtimePaths, projectRoot }),
@@ -259,10 +268,14 @@ function migrateLegacyHistory({ runtimePaths, legacyRoot, importLegacyData, now 
 }
 
 function saveOnboardingCompletion({ runtimePaths, submission, projectRoot, now = () => new Date().toISOString() }) {
+  const currentSettings = loadSettings(runtimePaths);
   const settings = {
     version: 1,
     onboarding_completed: true,
     launch_at_login: Boolean(submission.launchAtLogin),
+    display_language: sanitizeDisplayLanguage(
+      submission.displayLanguage ?? currentSettings.display_language,
+    ),
   };
   writeJsonFile(getSettingsFile(runtimePaths), settings);
 
@@ -296,6 +309,7 @@ module.exports = {
   loadMigrationState,
   loadProviderConfig,
   loadSettings,
+  sanitizeDisplayLanguage,
   sanitizeMigrationState,
   sanitizeProviderConfig,
   sanitizeSettings,

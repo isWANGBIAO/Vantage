@@ -8,6 +8,7 @@ test('loadOnboardingState falls back to completed browser mode when no electron 
   assert.deepEqual(state, {
     completed: true,
     launchAtLogin: false,
+    displayLanguage: 'system',
     providerConfigured: false,
     migrationCompleted: false,
     legacyRoot: null,
@@ -20,6 +21,7 @@ test('loadOnboardingState reflects incomplete onboarding from Electron', async (
     getOnboardingState: async () => ({
       completed: false,
       launchAtLogin: true,
+      displayLanguage: 'zh-CN',
       providerConfigured: true,
       migrationCompleted: true,
       legacyRoot: 'C:\\legacy-root',
@@ -29,6 +31,7 @@ test('loadOnboardingState reflects incomplete onboarding from Electron', async (
   assert.deepEqual(state, {
     completed: false,
     launchAtLogin: true,
+    displayLanguage: 'zh-CN',
     providerConfigured: true,
     migrationCompleted: true,
     legacyRoot: 'C:\\legacy-root',
@@ -43,6 +46,7 @@ test('completeOnboardingSetup forwards the submission payload to Electron', asyn
     apiKey: 'sk-demo',
     baseUrl: 'https://example.invalid/v1',
     model: 'gpt-5',
+    displayLanguage: 'en-US',
     importLegacyData: true,
     legacyRoot: 'C:\\legacy-root',
     skipChatSetup: false,

@@ -10,9 +10,9 @@ test('ActionPlan refreshes chat context base after a new plan is generated', () 
 });
 
 test('ActionPlan exposes copy controls for both round prompts and replies', () => {
-  assert.ok(actionPlanSource.includes('Copy Prompt'));
-  assert.ok(actionPlanSource.includes('Copy Reply'));
-  assert.ok(actionPlanSource.includes('Copy Full Input'));
+  assert.ok(actionPlanSource.includes("t('action_plan.copy.prompt')"));
+  assert.ok(actionPlanSource.includes("t('action_plan.copy.reply')"));
+  assert.ok(actionPlanSource.includes("t('action_plan.copy.full_input')"));
   assert.ok(actionPlanSource.includes('navigator.clipboard.writeText'));
   assert.ok(actionPlanSource.includes('systemPrompt'));
   assert.ok(actionPlanSource.includes('analysisReplyReady'));
@@ -51,7 +51,7 @@ test('ActionPlan shows actual execution metadata and flags fallback runs', () =>
   assert.ok(actionPlanSource.includes("stats.provider_route !== 'cliproxyapi_primary'"));
   assert.ok(actionPlanSource.includes('stats.model !== selectedModel'));
   assert.ok(actionPlanSource.includes('action-plan-fallback-warning'));
-  assert.ok(actionPlanSource.includes('Fallback'));
+  assert.ok(actionPlanSource.includes("t('action_plan.execution.fallback_label'"));
 });
 
 test('ActionPlan shows live elapsed time while generation is active', () => {

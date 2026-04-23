@@ -1,52 +1,12 @@
 import { useMemo, useState } from 'react';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 const STEP_ORDER = ['welcome', 'provider', 'migration', 'complete'];
 
-const STEP_CONTENT = {
-  welcome: {
-    eyebrow: 'First Run',
-    title: 'Welcome to Vantage',
-    description:
-      'This setup flow prepares the packaged app experience: user settings, provider configuration, and history import all move out of the source tree.',
-    bullets: [
-      'Review what the packaged runtime will keep under the user data directory.',
-      'Configure the chat provider or explicitly skip it for now.',
-      'Import old history from the current repo only once, then keep using the packaged copy.',
-    ],
-  },
-  provider: {
-    eyebrow: 'Chat Setup',
-    title: 'Connect the chat provider',
-    description:
-      'These fields are now saved into providers.json and settings.json. Real backend consumption comes later, but the onboarding flow already persists the values.',
-    bullets: [
-      'Provider Route, API Base URL, API Key, and Model are all stored in user config.',
-      'Launch-at-login preference is stored here and applied in the installer step later.',
-      'You can still skip chat setup and finish onboarding without blocking the rest of the app.',
-    ],
-  },
-  migration: {
-    eyebrow: 'Data Import',
-    title: 'Import legacy history into packaged data',
-    description:
-      'Choose whether to pull the old history folder into the packaged app data directory. The migration is recorded once and the same source will not be imported twice.',
-    bullets: [
-      'Only history and state files are copied here.',
-      'Large photo and screenshot libraries stay where they already live.',
-      'If the same legacy source was already imported, this step will reuse the previous migration record.',
-    ],
-  },
-  complete: {
-    eyebrow: 'Finish',
-    title: 'Write onboarding state and open the app',
-    description:
-      'The final step saves onboarding_completed, provider settings, and optional migration state. After that the main workspace opens directly on next launch.',
-    bullets: [
-      'settings.json records onboarding and launch-at-login preference.',
-      'providers.json records the provider selection and credentials you entered.',
-      'migration-state.json records where old history came from and when it was imported.',
-    ],
-  },
+const DISPLAY_LANGUAGE_FALLBACKS = {
+  system: 'Follow System',
+  'zh-CN': 'Simplified Chinese',
+  'en-US': 'English',
 };
 
 function StepCard({ label, title, isActive, isDone }) {
@@ -72,13 +32,16 @@ function Field({ label, children, hint }) {
 }
 
 export default function OnboardingShell({
+  displayLanguage = 'system',
   initialLaunchAtLogin = false,
   initialLegacyRoot = null,
   initialProviderConfigured = false,
   initialMigrationCompleted = false,
   onComplete,
+  onDisplayLanguageChange,
   onPickLegacyRoot,
 }) {
+  const { languageOptions, t } = useDisplayLanguage();
   const [stepIndex, setStepIndex] = useState(0);
   const [chatSetupSkipped, setChatSetupSkipped] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState(initialProviderConfigured ? 'openai' : 'openai');
@@ -92,16 +55,60 @@ export default function OnboardingShell({
   const [saveError, setSaveError] = useState('');
 
   const currentStep = STEP_ORDER[stepIndex];
-  const stepContent = STEP_CONTENT[currentStep];
+
+  const stepContent = useMemo(() => ({
+    welcome: {
+      eyebrow: t('onboarding.welcome.eyebrow'),
+      title: t('onboarding.welcome.title'),
+      description: t('onboarding.welcome.description'),
+      bullets: [
+        t('onboarding.welcome.bullet_1'),
+        t('onboarding.welcome.bullet_2'),
+        t('onboarding.welcome.bullet_3'),
+      ],
+    },
+    provider: {
+      eyebrow: t('onboarding.provider.eyebrow'),
+      title: t('onboarding.provider.title'),
+      description: t('onboarding.provider.description'),
+      bullets: [
+        t('onboarding.provider.bullet_1'),
+        t('onboarding.provider.bullet_2'),
+        t('onboarding.provider.bullet_3'),
+      ],
+    },
+    migration: {
+      eyebrow: t('onboarding.migration.eyebrow'),
+      title: t('onboarding.migration.title'),
+      description: t('onboarding.migration.description'),
+      bullets: [
+        t('onboarding.migration.bullet_1'),
+        t('onboarding.migration.bullet_2'),
+        t('onboarding.migration.bullet_3'),
+      ],
+    },
+    complete: {
+      eyebrow: t('onboarding.complete.eyebrow'),
+      title: t('onboarding.complete.title'),
+      description: t('onboarding.complete.description'),
+      bullets: [
+        t('onboarding.complete.bullet_1'),
+        t('onboarding.complete.bullet_2'),
+        t('onboarding.complete.bullet_3'),
+      ],
+    },
+  }), [t]);
+
+  const currentStepContent = stepContent[currentStep];
 
   const stepCards = useMemo(
     () =>
       STEP_ORDER.map((step, index) => ({
         id: step,
         label: `${index + 1}`,
-        title: STEP_CONTENT[step].title,
+        title: stepContent[step].title,
       })),
-    [],
+    [stepContent],
   );
 
   const handleBack = () => {
@@ -121,12 +128,13 @@ export default function OnboardingShell({
           baseUrl,
           apiKey,
           model,
+          displayLanguage,
           importLegacyData,
           legacyRoot,
           skipChatSetup: chatSetupSkipped,
         });
       } catch (error) {
-        setSaveError(error?.message || 'Failed to finish onboarding.');
+        setSaveError(error?.message || t('onboarding.error.finish_failed'));
       } finally {
         setIsSaving(false);
       }
@@ -156,12 +164,12 @@ export default function OnboardingShell({
         <section className="glass-panel onboarding-shell">
           <div className="onboarding-shell-header">
             <div>
-              <div className="onboarding-eyebrow">{stepContent.eyebrow}</div>
-              <h1 className="onboarding-title">{stepContent.title}</h1>
-              <p className="onboarding-description">{stepContent.description}</p>
+              <div className="onboarding-eyebrow">{currentStepContent.eyebrow}</div>
+              <h1 className="onboarding-title">{currentStepContent.title}</h1>
+              <p className="onboarding-description">{currentStepContent.description}</p>
             </div>
             <div className="onboarding-progress-chip">
-              Step {stepIndex + 1} / {STEP_ORDER.length}
+              {t('onboarding.progress', { current: stepIndex + 1, total: STEP_ORDER.length })}
             </div>
           </div>
 
@@ -181,29 +189,49 @@ export default function OnboardingShell({
             <div className="onboarding-stage">
               <div className="onboarding-panel glass-panel">
                 <ul className="onboarding-bullet-list">
-                  {stepContent.bullets.map((bullet) => (
+                  {currentStepContent.bullets.map((bullet) => (
                     <li key={bullet}>{bullet}</li>
                   ))}
                 </ul>
 
+                {currentStep === 'welcome' ? (
+                  <div className="onboarding-form-grid">
+                    <Field label={t('onboarding.field.display_language')}>
+                      <select
+                        className="onboarding-input"
+                        value={displayLanguage}
+                        onChange={(event) => {
+                          void onDisplayLanguageChange(event.target.value);
+                        }}
+                      >
+                        {languageOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label || DISPLAY_LANGUAGE_FALLBACKS[option.value]}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  </div>
+                ) : null}
+
                 {currentStep === 'provider' ? (
                   <div className="onboarding-form-grid">
-                    <Field label="Provider Route">
+                    <Field label={t('onboarding.field.provider_route')}>
                       <select
                         className="onboarding-input"
                         value={selectedProvider}
                         onChange={(event) => setSelectedProvider(event.target.value)}
                         disabled={chatSetupSkipped}
                       >
-                        <option value="openai">OpenAI-compatible</option>
-                        <option value="gemini">Gemini-compatible</option>
-                        <option value="custom">Custom provider</option>
+                        <option value="openai">{t('onboarding.provider.openai')}</option>
+                        <option value="gemini">{t('onboarding.provider.gemini')}</option>
+                        <option value="custom">{t('onboarding.provider.custom')}</option>
                       </select>
                     </Field>
 
                     <Field
-                      label="API Base URL"
-                      hint="Saved now for onboarding. Real runtime routing will start using it in later steps."
+                      label={t('onboarding.field.api_base_url')}
+                      hint={t('onboarding.field.api_base_url_hint')}
                     >
                       <input
                         className="onboarding-input"
@@ -215,7 +243,7 @@ export default function OnboardingShell({
                       />
                     </Field>
 
-                    <Field label="API Key">
+                    <Field label={t('onboarding.field.api_key')}>
                       <input
                         className="onboarding-input"
                         type="password"
@@ -226,7 +254,7 @@ export default function OnboardingShell({
                       />
                     </Field>
 
-                    <Field label="Model">
+                    <Field label={t('onboarding.field.model')}>
                       <input
                         className="onboarding-input"
                         type="text"
@@ -243,7 +271,7 @@ export default function OnboardingShell({
                         checked={launchAtLogin}
                         onChange={(event) => setLaunchAtLogin(event.target.checked)}
                       />
-                      <span>Start Vantage automatically after Windows login</span>
+                      <span>{t('onboarding.field.launch_at_login')}</span>
                     </label>
                   </div>
                 ) : null}
@@ -256,78 +284,68 @@ export default function OnboardingShell({
                         checked={importLegacyData}
                         onChange={(event) => setImportLegacyData(event.target.checked)}
                       />
-                      <span>Import existing history into the packaged app data directory</span>
+                      <span>{t('onboarding.field.import_legacy')}</span>
                     </label>
 
-                    <Field
-                      label="Legacy Source Folder"
-                      hint="Pick the old source-tree root that contains the history folder."
-                    >
-                      <div className="onboarding-inline-row">
-                        <input
-                          className="onboarding-input"
-                          type="text"
-                          value={legacyRoot}
-                          onChange={(event) => setLegacyRoot(event.target.value)}
-                          placeholder="C:\\Users\\97012\\gitee\\ai"
-                        />
-                        <button
-                          type="button"
-                          className="onboarding-secondary-button"
-                          onClick={handlePickLegacyRoot}
-                        >
-                          Choose Folder
-                        </button>
-                      </div>
-                    </Field>
-
-                    {initialMigrationCompleted ? (
-                      <div className="onboarding-placeholder-item">
-                        A legacy import has already been recorded. Reusing the same source will not copy again.
-                      </div>
-                    ) : null}
+                    <div className="onboarding-inline-actions">
+                      <button type="button" className="secondary-button" onClick={handlePickLegacyRoot}>
+                        {t('onboarding.button.choose_folder')}
+                      </button>
+                      <span className="onboarding-inline-note">
+                        {legacyRoot
+                          ? `${t('onboarding.field.selected_folder')}: ${legacyRoot}`
+                          : t('onboarding.field.no_folder_selected')}
+                      </span>
+                    </div>
                   </div>
                 ) : null}
 
                 {currentStep === 'complete' ? (
                   <div className="onboarding-form-grid">
-                    <div className="onboarding-placeholder-item">
-                      Chat setup: {chatSetupSkipped ? 'Skipped for now' : `Will save ${selectedProvider}`}
-                    </div>
-                    <div className="onboarding-placeholder-item">
-                      Launch at login: {launchAtLogin ? 'Enabled in settings.json' : 'Disabled in settings.json'}
-                    </div>
-                    <div className="onboarding-placeholder-item">
-                      Legacy import: {importLegacyData ? (legacyRoot || 'Source pending') : 'Skipped'}
+                    <div className="onboarding-complete-summary">
+                      <strong>{t('onboarding.complete.summary_title')}</strong>
+                      <span>
+                        {t('onboarding.complete.summary_language')}: {languageOptions.find((option) => option.value === displayLanguage)?.label || DISPLAY_LANGUAGE_FALLBACKS[displayLanguage]}
+                      </span>
+                      <span>
+                        {t('onboarding.complete.summary_chat')}: {chatSetupSkipped ? t('onboarding.complete.summary_chat_skipped') : selectedProvider}
+                      </span>
+                      <span>
+                        {t('onboarding.complete.summary_legacy_import')}: {importLegacyData ? t('onboarding.complete.summary_legacy_yes') : t('onboarding.complete.summary_legacy_no')}
+                      </span>
                     </div>
                   </div>
                 ) : null}
 
-                {saveError ? <div className="action-plan-warning">{saveError}</div> : null}
-              </div>
+                {saveError ? <div className="onboarding-error">{saveError}</div> : null}
 
-              <div className="onboarding-actions">
-                <button
-                  className="onboarding-secondary-button"
-                  onClick={handleBack}
-                  disabled={stepIndex === 0 || isSaving}
-                >
-                  Back
-                </button>
-
-                {currentStep === 'provider' ? (
+                <div className="onboarding-actions">
                   <button
-                    className="onboarding-secondary-button"
-                    onClick={handleSkipChatSetup}
-                    disabled={isSaving}
+                    type="button"
+                    className="secondary-button"
+                    onClick={handleBack}
+                    disabled={stepIndex === 0 || isSaving}
                   >
-                    Skip Chat Setup
+                    {t('onboarding.button.back')}
                   </button>
-                ) : null}
 
-                <button onClick={() => void handleContinue()} disabled={isSaving}>
-                  {currentStep === 'complete' ? (isSaving ? 'Saving...' : 'Finish Setup') : 'Continue'}
-                </button>
+                  {currentStep === 'provider' ? (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleSkipChatSetup}
+                      disabled={isSaving}
+                    >
+                      {t('onboarding.button.skip_chat')}
+                    </button>
+                  ) : null}
+
+                  <button type="button" onClick={() => void handleContinue()} disabled={isSaving}>
+                    {currentStep === 'complete'
+                      ? t('onboarding.button.finish')
+                      : t('onboarding.button.continue')}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -336,5 +354,3 @@ export default function OnboardingShell({
     </div>
   );
 }
-
-export { STEP_ORDER };

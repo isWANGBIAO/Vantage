@@ -59,12 +59,12 @@ test('saveActionPlanReasoningEffort stores normalized value', () => {
 
 test('ACTION_PLAN_REASONING_OPTIONS exposes UI labels in display order', () => {
   assert.deepEqual(
-    ACTION_PLAN_REASONING_OPTIONS.map((option) => `${option.value}:${option.label}`),
+    ACTION_PLAN_REASONING_OPTIONS.map((option) => `${option.value}:${option.labelKey}:${option.fallbackLabel}`),
     [
-      'low:Low',
-      'medium:Medium',
-      'high:High',
-      'xhigh:Extra High',
+      'low:common.reasoning.low:Low',
+      'medium:common.reasoning.medium:Medium',
+      'high:common.reasoning.high:High',
+      'xhigh:common.reasoning.xhigh:Extra High',
     ],
   );
 });

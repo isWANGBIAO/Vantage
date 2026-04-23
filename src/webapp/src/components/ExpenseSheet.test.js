@@ -13,3 +13,10 @@ test('Expense Sheet uses a compact snapshot structure for the top KPI strip', ()
   assert.ok(cssSource.includes('.expense-kpi-strip-grid'));
   assert.ok(cssSource.includes('.expense-kpi-hint'));
 });
+
+test('Expense Sheet pulls static UI copy from the display language layer', () => {
+  assert.ok(jsxSource.includes("useDisplayLanguage()"));
+  assert.ok(jsxSource.includes("t('expense.title')"));
+  assert.ok(jsxSource.includes("t('expense.balance_chart_title')"));
+  assert.ok(jsxSource.includes("t('expense.raw_sheets_aria')"));
+});

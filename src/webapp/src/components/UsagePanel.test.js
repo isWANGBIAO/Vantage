@@ -23,20 +23,20 @@ function loadUsagePanelSortHelper() {
 
 test('ActionPlanContainer exposes a dedicated usage sub-tab', () => {
   assert.ok(actionPlanContainerSource.includes("setSubTab('usage')"));
-  assert.ok(actionPlanContainerSource.includes('Usage'));
+  assert.ok(actionPlanContainerSource.includes("t('action_plan.tab.usage')"));
   assert.ok(actionPlanContainerSource.includes('<UsagePanel />'));
 });
 
 test('UsagePanel fetches backend usage aggregates and renders primary sections', () => {
   assert.ok(usagePanelSource.includes("fetchBackendJson('/api/usage'"));
-  assert.ok(usagePanelSource.includes('Total Tokens'));
-  assert.ok(usagePanelSource.includes('Prompt Tokens'));
-  assert.ok(usagePanelSource.includes('Completion Tokens'));
-  assert.ok(usagePanelSource.includes('Completion tok/s'));
-  assert.ok(usagePanelSource.includes('Total tok/s'));
-  assert.ok(usagePanelSource.includes('Active Sources'));
-  assert.ok(usagePanelSource.includes('Latest Activity'));
-  assert.ok(usagePanelSource.includes('By Source'));
+  assert.ok(usagePanelSource.includes("t('usage.summary.total_tokens')"));
+  assert.ok(usagePanelSource.includes("t('usage.summary.prompt_tokens')"));
+  assert.ok(usagePanelSource.includes("t('usage.summary.completion_tokens')"));
+  assert.ok(usagePanelSource.includes("t('usage.summary.completion_rate')"));
+  assert.ok(usagePanelSource.includes("t('usage.summary.total_rate')"));
+  assert.ok(usagePanelSource.includes("t('usage.summary.active_sources')"));
+  assert.ok(usagePanelSource.includes("t('usage.latest_activity')"));
+  assert.ok(usagePanelSource.includes("t('usage.by_source')"));
   assert.ok(usagePanelSource.includes('Daily Usage'));
   assert.ok(usagePanelSource.includes('Recent Sessions'));
   assert.ok(usagePanelSource.includes('Recent Calls'));
@@ -58,9 +58,9 @@ test('UsagePanel aligns token counts with completion and total throughput labels
 });
 
 test('UsagePanel keeps explicit empty and error copy for missing history', () => {
-  assert.ok(usagePanelSource.includes('No model usage recorded yet.'));
-  assert.ok(usagePanelSource.includes('Failed to load usage dashboard.'));
-  assert.ok(usagePanelSource.includes('Refresh'));
+  assert.ok(usagePanelSource.includes("t('usage.empty')"));
+  assert.ok(usagePanelSource.includes("t('usage.error.load')"));
+  assert.ok(usagePanelSource.includes("t('usage.refresh')"));
 });
 
 test('UsagePanel sorts timestamped rows newest first without mutating input', () => {

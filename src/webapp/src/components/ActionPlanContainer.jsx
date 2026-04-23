@@ -3,8 +3,10 @@ import ActionPlan from './ActionPlan';
 import ChatInterface from './ChatInterface';
 import UsagePanel from './UsagePanel';
 import { BarChart3, FileText } from 'lucide-react';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 export default function ActionPlanContainer({ isVisible = true }) {
+  const { t } = useDisplayLanguage();
   const [subTab, setSubTab] = useState('plan');
 
   return (
@@ -42,7 +44,7 @@ export default function ActionPlanContainer({ isVisible = true }) {
           }}
         >
           <FileText size={16} />
-          Plan
+          {t('action_plan.tab.plan')}
         </button>
         <button
           onClick={() => setSubTab('usage')}
@@ -58,7 +60,7 @@ export default function ActionPlanContainer({ isVisible = true }) {
           }}
         >
           <BarChart3 size={16} />
-          Usage
+          {t('action_plan.tab.usage')}
         </button>
       </div>
 

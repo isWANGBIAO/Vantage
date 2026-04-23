@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { fetchBackendJson } from '../utils/backendRequest';
 import { resolveSystemLogColor } from './systemLogSeverity.js';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 export default function SystemLogs() {
+    const { t } = useDisplayLanguage();
     const [logs, setLogs] = useState([]);
     const logEndRef = useRef(null);
 
@@ -36,8 +38,8 @@ export default function SystemLogs() {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: 'calc(100vh - 160px)' }}>
             <div className="glass-panel" style={{ padding: '1.5rem' }}>
-                <h2 style={{ margin: 0 }}>System Monitor Logs</h2>
-                <p style={{ margin: 0, color: 'var(--text-secondary)' }}>Real-time backend event stream</p>
+                <h2 style={{ margin: 0 }}>{t('system_logs.title')}</h2>
+                <p style={{ margin: 0, color: 'var(--text-secondary)' }}>{t('system_logs.subtitle')}</p>
             </div>
 
             <div className="glass-panel" style={{

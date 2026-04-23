@@ -1,9 +1,13 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import { Moon, Sun } from 'lucide-react';
 import './App.css';
 import ActionPlanContainer from './components/ActionPlanContainer';
 import OnboardingShell from './components/OnboardingShell';
-import { Sun, Moon } from 'lucide-react';
 import { completeOnboardingSetup, loadOnboardingState, pickLegacyRoot } from './utils/onboardingState';
+import {
+  DisplayLanguageProvider,
+  useDisplayLanguage,
+} from './context/DisplayLanguageContext.jsx';
 
 function lazyWithPreload(factory) {
   const Component = lazy(factory);
@@ -28,23 +32,50 @@ const BACKGROUND_TAB_COMPONENTS = [
 ];
 
 const NAV_ITEMS = [
-  'Dashboard',
-  'Action Plan',
-  'Project Progress',
-  'Expense Sheet',
-  'Plots',
-  'System Logs',
-  'Face History',
+  { key: 'dashboard', labelKey: 'app.nav.dashboard' },
+  { key: 'action plan', labelKey: 'app.nav.action_plan' },
+  { key: 'project progress', labelKey: 'app.nav.project_progress' },
+  { key: 'expense sheet', labelKey: 'app.nav.expense_sheet' },
+  { key: 'plots', labelKey: 'app.nav.plots' },
+  { key: 'system logs', labelKey: 'app.nav.system_logs' },
+  { key: 'face history', labelKey: 'app.nav.face_history' },
 ];
 
-function App() {
+function DisplayLanguageSelect() {
+  const { displayLanguage, languageOptions, setDisplayLanguage, t } = useDisplayLanguage();
+
+  return (
+    <label className="app-language-control">
+      <span className="app-language-label">{t('app.language.label')}</span>
+      <select
+        className="app-language-select"
+        value={displayLanguage}
+        aria-label={t('app.language.label')}
+        onChange={(event) => {
+          void setDisplayLanguage(event.target.value);
+        }}
+      >
+        {languageOptions.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function AppShell() {
+  const { t, displayLanguage, setDisplayLanguage } = useDisplayLanguage();
   const [activeTab, setActiveTab] = useState('action plan');
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [backgroundTabsReady, setBackgroundTabsReady] = useState(false);
+  const lastAppliedOnboardingLanguageRef = useRef(null);
   const [onboardingState, setOnboardingState] = useState(() => ({
     loading: true,
     completed: true,
     launchAtLogin: false,
+    displayLanguage: 'system',
     providerConfigured: false,
     migrationCompleted: false,
     legacyRoot: null,
@@ -65,6 +96,7 @@ function App() {
           loading: false,
           completed: nextState.completed,
           launchAtLogin: nextState.launchAtLogin,
+          displayLanguage: nextState.displayLanguage,
           providerConfigured: nextState.providerConfigured,
           migrationCompleted: nextState.migrationCompleted,
           legacyRoot: nextState.legacyRoot,
@@ -96,6 +128,22 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (onboardingState.loading || !onboardingState.displayLanguage) {
+      return;
+    }
+
+    if (lastAppliedOnboardingLanguageRef.current === onboardingState.displayLanguage) {
+      return;
+    }
+
+    lastAppliedOnboardingLanguageRef.current = onboardingState.displayLanguage;
+
+    if (onboardingState.displayLanguage !== displayLanguage) {
+      void setDisplayLanguage(onboardingState.displayLanguage);
+    }
+  }, [displayLanguage, onboardingState.displayLanguage, onboardingState.loading, setDisplayLanguage]);
+
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
@@ -107,6 +155,7 @@ function App() {
       loading: false,
       completed: nextState.completed,
       launchAtLogin: nextState.launchAtLogin,
+      displayLanguage: nextState.displayLanguage,
       providerConfigured: nextState.providerConfigured,
       migrationCompleted: nextState.migrationCompleted,
       legacyRoot: nextState.legacyRoot,
@@ -123,11 +172,9 @@ function App() {
       <div className="app-layout">
         <main className="app-container onboarding-loading-shell">
           <div className="glass-panel onboarding-loading-card">
-            <div className="onboarding-eyebrow">Preparing Vantage</div>
-            <h1 className="onboarding-title">Checking first-run state</h1>
-            <p className="onboarding-description">
-              Loading the desktop setup contract before opening the workspace.
-            </p>
+            <div className="onboarding-eyebrow">{t('app.loading.eyebrow')}</div>
+            <h1 className="onboarding-title">{t('app.loading.title')}</h1>
+            <p className="onboarding-description">{t('app.loading.description')}</p>
           </div>
         </main>
       </div>
@@ -137,11 +184,13 @@ function App() {
   if (showOnboardingShell) {
     return (
       <OnboardingShell
+        displayLanguage={displayLanguage}
         initialLaunchAtLogin={onboardingState.launchAtLogin}
         initialLegacyRoot={onboardingState.legacyRoot}
         initialProviderConfigured={onboardingState.providerConfigured}
         initialMigrationCompleted={onboardingState.migrationCompleted}
         onComplete={handleCompleteOnboarding}
+        onDisplayLanguageChange={setDisplayLanguage}
         onPickLegacyRoot={handlePickLegacyRoot}
       />
     );
@@ -173,12 +222,11 @@ function App() {
         <div className="app-header-actions">
           <nav className="app-nav">
             {NAV_ITEMS.map((item) => {
-              const key = item.toLowerCase();
-              const isActive = key === activeTab;
+              const isActive = item.key === activeTab;
 
               return (
                 <a
-                  key={item}
+                  key={item.key}
                   href="#"
                   className={`app-nav-link ${isActive ? 'active-nav' : ''}`}
                   style={{
@@ -187,19 +235,21 @@ function App() {
                   }}
                   onClick={(event) => {
                     event.preventDefault();
-                    setActiveTab(key);
+                    setActiveTab(item.key);
                   }}
                 >
-                  {item}
+                  {t(item.labelKey)}
                 </a>
               );
             })}
           </nav>
 
+          <DisplayLanguageSelect />
+
           <button
             className="theme-toggle"
             onClick={toggleTheme}
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            title={t(theme === 'dark' ? 'app.theme.switch_to_light' : 'app.theme.switch_to_dark')}
           >
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
           </button>
@@ -270,11 +320,17 @@ function App() {
               marginTop: 'auto',
             }}
           >
-            2026 Vantage | Powered by Gemini
+            {t('app.footer.powered_by', { provider: 'Gemini' })}
           </footer>
         )}
     </div>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <DisplayLanguageProvider>
+      <AppShell />
+    </DisplayLanguageProvider>
+  );
+}

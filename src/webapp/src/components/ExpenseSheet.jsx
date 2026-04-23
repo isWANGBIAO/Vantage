@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
   ClipboardList,
@@ -13,35 +13,48 @@ import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import './ExpenseSheet.css';
 import { buildExpenseSheetViewModel } from './expenseSheetModel.js';
 import PlotChartCard from './PlotChartCard.jsx';
-const kpiHints = {
-  cashAndStock: '以当前可见时间窗的最新资产为准',
-  dailyBurn: '按程序运行时刻倒推到最近有效记录',
-  requiredBudget: '从预算表汇总，不受未来开销行影响',
-  coverageDays: '按最新资产和最近日均支出估算',
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
+
+const KPI_HINT_KEYS = {
+  cashAndStock: 'expense.kpi_hint.cash_and_stock',
+  dailyBurn: 'expense.kpi_hint.daily_burn',
+  requiredBudget: 'expense.kpi_hint.required_budget',
+  coverageDays: 'expense.kpi_hint.coverage_days',
 };
 
-const formatNumber = (value, digits = 2) => {
+const KPI_LABEL_KEYS = {
+  cashAndStock: 'expense.kpi.cash_and_stock',
+  dailyBurn: 'expense.kpi.daily_burn',
+  requiredBudget: 'expense.kpi.required_budget',
+  coverageDays: 'expense.kpi.coverage_days',
+};
+
+function formatNumber(value, locale, digits = 2) {
   if (value === null || value === undefined || Number.isNaN(value)) return '--';
   if (typeof value === 'number') {
-    return value.toLocaleString('zh-CN', { maximumFractionDigits: digits });
+    return value.toLocaleString(locale, { maximumFractionDigits: digits });
   }
   return value;
-};
+}
 
-const formatCurrency = (value) => {
+function formatCurrency(value, locale) {
   if (value === null || value === undefined || Number.isNaN(value)) return '--';
-  return `¥${formatNumber(value, 2)}`;
-};
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: 'CNY',
+    maximumFractionDigits: 2,
+  }).format(value);
+}
 
-const formatDays = (value) => {
+function formatDays(value, locale, t) {
   if (value === null || value === undefined || Number.isNaN(value)) return '--';
-  return `${formatNumber(value, 1)} 天`;
-};
+  return t('expense.days_value', { value: formatNumber(value, locale, 1) });
+}
 
-function formatMetricValue(item) {
-  if (item.unit === 'currency') return formatCurrency(item.value);
-  if (item.unit === 'days') return formatDays(item.value);
-  return formatNumber(item.value);
+function formatMetricValue(item, locale, t) {
+  if (item.unit === 'currency') return formatCurrency(item.value, locale);
+  if (item.unit === 'days') return formatDays(item.value, locale, t);
+  return formatNumber(item.value, locale);
 }
 
 function SectionHeader({ icon, title, description }) {
@@ -72,15 +85,16 @@ function MetricRow({ label, value, hint }) {
   );
 }
 
-function SheetTable({ sheet }) {
+function SheetTable({ sheet, t }) {
   return (
     <div className="expense-raw-sheet">
       <div className="expense-raw-sheet-header">
         <div>
           <h3>{sheet.name}</h3>
-          <p>
-            共 {sheet.row_count} 行{sheet.truncated ? '（已截断）' : ''}
-          </p>
+          <p>{t('expense.raw_sheet_rows', {
+            count: sheet.row_count,
+            suffix: sheet.truncated ? t('expense.raw_sheet_truncated') : '',
+          })}</p>
         </div>
       </div>
       <div className="expense-table-scroll">
@@ -110,6 +124,7 @@ function SheetTable({ sheet }) {
 }
 
 export default function ExpenseSheet({ theme = 'dark' }) {
+  const { effectiveLanguage, t } = useDisplayLanguage();
   const [data, setData] = useState(null);
   const [balanceChart, setBalanceChart] = useState(null);
   const [balanceChartError, setBalanceChartError] = useState('');
@@ -118,15 +133,15 @@ export default function ExpenseSheet({ theme = 'dark' }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeRawSheet, setActiveRawSheet] = useState('');
 
-  const fetchData = async (refresh = false) => {
+  const fetchData = useCallback(async (refresh = false) => {
     setIsLoading(true);
     setError('');
     setBalanceChartError('');
 
     try {
-      const plotsPromise = fetchBackendJson('/api/plots/data' + (refresh ? '?refresh=1' : ''))
+      const plotsPromise = fetchBackendJson(`/api/plots/data${refresh ? '?refresh=1' : ''}`)
         .then((payload) => ({ ok: true, payload }))
-        .catch((err) => ({ ok: false, error: err.message || '加载资产图表失败' }));
+        .catch((err) => ({ ok: false, error: err.message || t('expense.error.load_chart') }));
 
       const [res, plotResult] = await Promise.all([
         fetchBackend('/api/balance_sheet', {
@@ -137,8 +152,8 @@ export default function ExpenseSheet({ theme = 'dark' }) {
       ]);
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || '加载开销表失败');
+        const payload = await res.json();
+        throw new Error(payload.error || t('expense.error.load_sheet'));
       }
 
       const payload = await res.json();
@@ -148,24 +163,25 @@ export default function ExpenseSheet({ theme = 'dark' }) {
         const nextChart = Array.isArray(plotResult.payload?.charts)
           ? plotResult.payload.charts.find((item) => item.id === 'balance') || null
           : null;
+
         setBalanceChart(nextChart);
-        setBalanceChartError(nextChart ? '' : '未找到资产与支出图表');
+        setBalanceChartError(nextChart ? '' : t('expense.error.chart_not_found'));
       } else {
         setBalanceChart(null);
         setBalanceChartError(plotResult.error);
       }
     } catch (err) {
       setBalanceChart(null);
-      setError(err.message || '加载失败');
+      setError(err.message || t('expense.error.generic'));
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  };
+  }, [t]);
 
   useEffect(() => {
     void fetchData();
-  }, []);
+  }, [fetchData]);
 
   const viewModel = useMemo(() => buildExpenseSheetViewModel(data), [data]);
 
@@ -182,12 +198,13 @@ export default function ExpenseSheet({ theme = 'dark' }) {
 
   const selectedRawSheet =
     viewModel.rawSheets.find((sheet) => sheet.name === activeRawSheet) || viewModel.rawSheets[0] || null;
+
   const balanceChartCard = balanceChart || {
     id: 'balance',
-    title: '资产与支出趋势',
-    description: '把总资产、分账户资产和日均支出放回 Expense Sheet 主视图，直接看波动和支出压力。',
+    title: t('expense.balance_chart_title'),
+    description: t('expense.balance_chart_description'),
     empty: true,
-    message: balanceChartError || '当前暂时无法加载资产与支出图表。',
+    message: balanceChartError || t('expense.balance_chart_unavailable'),
     height: 430,
     summary: [],
   };
@@ -198,23 +215,23 @@ export default function ExpenseSheet({ theme = 'dark' }) {
         <div className="expense-toolbar-copy">
           <div className="expense-toolbar-title">
             <Wallet size={20} />
-            <h2>开销表</h2>
+            <h2>{t('expense.title')}</h2>
           </div>
           <div className="expense-toolbar-meta">
             <span>
-              <strong>文件</strong>
+              <strong>{t('expense.file')}</strong>
               {viewModel.meta.fileName}
             </span>
             <span title={viewModel.meta.fullPath}>
-              <strong>来源</strong>
-              {viewModel.meta.fullPath || 'Balance Sheet.xlsx'}
+              <strong>{t('expense.source')}</strong>
+              {viewModel.meta.fullPath || t('expense.file_fallback')}
             </span>
             <span>
-              <strong>更新</strong>
+              <strong>{t('expense.updated')}</strong>
               {viewModel.meta.updatedAt}
             </span>
             <span>
-              <strong>Sheet</strong>
+              <strong>{t('expense.sheets')}</strong>
               {viewModel.meta.sheetCount}
             </span>
           </div>
@@ -222,12 +239,12 @@ export default function ExpenseSheet({ theme = 'dark' }) {
 
         <button className="expense-refresh-button" onClick={handleRefresh} disabled={isRefreshing}>
           <RefreshCw size={16} className={isRefreshing ? 'spin-animation' : ''} />
-          {isRefreshing ? '刷新中…' : '刷新'}
+          {isRefreshing ? t('expense.refreshing') : t('expense.refresh')}
         </button>
       </section>
 
       {isLoading ? (
-        <div className="glass-panel expense-state-panel">正在加载开销数据…</div>
+        <div className="glass-panel expense-state-panel">{t('expense.loading')}</div>
       ) : null}
 
       {!isLoading && error ? (
@@ -239,18 +256,18 @@ export default function ExpenseSheet({ theme = 'dark' }) {
           <section className="glass-panel expense-kpi-strip">
             <div className="expense-kpi-strip-head">
               <div>
-                <span className="expense-kpi-strip-eyebrow">Snapshot</span>
-                <h3>当前财务快照</h3>
+                <span className="expense-kpi-strip-eyebrow">{t('expense.snapshot_kicker')}</span>
+                <h3>{t('expense.snapshot_title')}</h3>
               </div>
-              <p>上面的数字只取程序运行时之前的最近有效记录，给下面趋势卡做摘要入口。</p>
+              <p>{t('expense.snapshot_description')}</p>
             </div>
 
             <div className="expense-kpi-strip-grid">
               {viewModel.kpis.map((item) => (
                 <div key={item.id} className={`expense-kpi expense-kpi--${item.id}`}>
-                  <span className="expense-kpi-label">{item.label}</span>
-                  <strong className="expense-kpi-value">{formatMetricValue(item)}</strong>
-                  <span className="expense-kpi-hint">{kpiHints[item.id]}</span>
+                  <span className="expense-kpi-label">{t(KPI_LABEL_KEYS[item.id])}</span>
+                  <strong className="expense-kpi-value">{formatMetricValue(item, effectiveLanguage, t)}</strong>
+                  <span className="expense-kpi-hint">{t(KPI_HINT_KEYS[item.id])}</span>
                 </div>
               ))}
             </div>
@@ -260,7 +277,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
             chart={balanceChartCard}
             accent="#f59f54"
             featured
-            eyebrow="expense sheet"
+            eyebrow={t('expense.chart_eyebrow')}
             chartHeight={430}
             theme={theme}
           />
@@ -270,8 +287,8 @@ export default function ExpenseSheet({ theme = 'dark' }) {
               <section className="glass-panel expense-section">
                 <SectionHeader
                   icon={Clock}
-                  title="近期开销"
-                  description="优先显示最近有支出、备注或报销说明的记录。"
+                  title={t('expense.recent_spending')}
+                  description={t('expense.recent_spending_desc')}
                 />
                 {viewModel.recentSpending.length ? (
                   <div className="expense-ledger-list">
@@ -280,29 +297,29 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                         <div className="expense-ledger-topline">
                           <strong>{item.date}</strong>
                           <div className="expense-ledger-values">
-                            <span>期间支出 {formatCurrency(item.periodSpend)}</span>
-                            <span>日均 {formatCurrency(item.dailyAverage)}</span>
+                            <span>{t('expense.period_spend', { value: formatCurrency(item.periodSpend, effectiveLanguage) })}</span>
+                            <span>{t('expense.daily_average', { value: formatCurrency(item.dailyAverage, effectiveLanguage) })}</span>
                           </div>
                         </div>
-                        {item.note ? <p>大支出：{item.note}</p> : null}
-                        {item.incomeNote ? <p>收入说明：{item.incomeNote}</p> : null}
+                        {item.note ? <p>{t('expense.large_spend', { value: item.note })}</p> : null}
+                        {item.incomeNote ? <p>{t('expense.income_note', { value: item.incomeNote })}</p> : null}
                       </article>
                     ))}
                   </div>
                 ) : (
-                  <p className="expense-empty-copy">最近没有可展示的开销记录。</p>
+                  <p className="expense-empty-copy">{t('expense.no_recent_spending')}</p>
                 )}
               </section>
 
               <section className="glass-panel expense-section">
                 <SectionHeader
                   icon={ClipboardList}
-                  title="预算结构"
-                  description="把固定预算和弹性预算拆开看，再按类别汇总。"
+                  title={t('expense.budget_structure')}
+                  description={t('expense.budget_structure_desc')}
                 />
                 <div className="expense-budget-summary">
-                  <MetricRow label="每月必须" value={formatCurrency(viewModel.budget.monthlyRequired)} />
-                  <MetricRow label="每月弹性" value={formatCurrency(viewModel.budget.monthlyOptional)} />
+                  <MetricRow label={t('expense.monthly_required')} value={formatCurrency(viewModel.budget.monthlyRequired, effectiveLanguage)} />
+                  <MetricRow label={t('expense.monthly_optional')} value={formatCurrency(viewModel.budget.monthlyOptional, effectiveLanguage)} />
                 </div>
                 {viewModel.budget.groups.length ? (
                   <div className="expense-budget-groups">
@@ -310,13 +327,13 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                       <section key={group.name} className="expense-budget-group">
                         <div className="expense-budget-group-head">
                           <strong>{group.name}</strong>
-                          <span>{formatCurrency(group.total)} / 月</span>
+                          <span>{formatCurrency(group.total, effectiveLanguage)} {t('expense.per_month')}</span>
                         </div>
                         <div className="expense-budget-items">
                           {group.items.slice(0, 4).map((item) => (
                             <div key={`${group.name}-${item.name}`} className="expense-budget-item">
                               <span>{item.name}</span>
-                              <span>{formatCurrency(item.monthlyValue)}</span>
+                              <span>{formatCurrency(item.monthlyValue, effectiveLanguage)}</span>
                             </div>
                           ))}
                         </div>
@@ -324,7 +341,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                     ))}
                   </div>
                 ) : (
-                  <p className="expense-empty-copy">预算表里还没有可用的预算项目。</p>
+                  <p className="expense-empty-copy">{t('expense.no_budget')}</p>
                 )}
               </section>
             </div>
@@ -333,8 +350,8 @@ export default function ExpenseSheet({ theme = 'dark' }) {
               <section className="glass-panel expense-section">
                 <SectionHeader
                   icon={Coins}
-                  title="高值资产"
-                  description="保留大于 1000 元的资产条目，更适合看清单而不是财务分类。"
+                  title={t('expense.high_value_assets')}
+                  description={t('expense.high_value_assets_desc')}
                 />
                 {viewModel.assets.items.length ? (
                   <div className="expense-asset-list">
@@ -342,28 +359,29 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                       <div key={item.name} className="expense-asset-item">
                         <div>
                           <strong>{item.name}</strong>
-                          <p>
-                            数量 {formatNumber(item.quantity, 0)} · 单价 {formatCurrency(item.unitPrice)}
-                          </p>
+                          <p>{t('expense.quantity_price', {
+                            quantity: formatNumber(item.quantity, effectiveLanguage, 0),
+                            price: formatCurrency(item.unitPrice, effectiveLanguage),
+                          })}</p>
                         </div>
-                        <span>{formatCurrency(item.totalPrice)}</span>
+                        <span>{formatCurrency(item.totalPrice, effectiveLanguage)}</span>
                       </div>
                     ))}
                     <div className="expense-asset-total">
-                      <span>合计</span>
-                      <strong>{formatCurrency(viewModel.assets.totalValue)}</strong>
+                      <span>{t('expense.total')}</span>
+                      <strong>{formatCurrency(viewModel.assets.totalValue, effectiveLanguage)}</strong>
                     </div>
                   </div>
                 ) : (
-                  <p className="expense-empty-copy">资产表里还没有高值资产记录。</p>
+                  <p className="expense-empty-copy">{t('expense.no_assets')}</p>
                 )}
               </section>
 
               <section className="glass-panel expense-section">
                 <SectionHeader
                   icon={HandCoins}
-                  title="人情支出"
-                  description="这部分是事件型支出，用紧凑列表比完整表格更合适。"
+                  title={t('expense.social')}
+                  description={t('expense.social_desc')}
                 />
                 {viewModel.socialEvents.items.length ? (
                   <div className="expense-social-list">
@@ -371,22 +389,22 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                       <div key={`${item.date}-${item.title}`} className="expense-social-item">
                         <div>
                           <strong>{item.title}</strong>
-                          <p>{item.date || '未记录日期'}</p>
+                          <p>{item.date || t('expense.no_date')}</p>
                         </div>
-                        <span>{formatCurrency(item.amount)}</span>
+                        <span>{formatCurrency(item.amount, effectiveLanguage)}</span>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="expense-empty-copy">暂无人情记录。</p>
+                  <p className="expense-empty-copy">{t('expense.no_social')}</p>
                 )}
               </section>
 
               <section className="glass-panel expense-section">
                 <SectionHeader
                   icon={BarChart3}
-                  title="支出提示"
-                  description="保留建议，但把它降级成辅助信息，不和核心指标抢位置。"
+                  title={t('expense.tips')}
+                  description={t('expense.tips_desc')}
                 />
                 {(data?.suggestions || []).length ? (
                   <ul className="expense-suggestion-list">
@@ -395,7 +413,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                     ))}
                   </ul>
                 ) : (
-                  <p className="expense-empty-copy">当前没有额外提示。</p>
+                  <p className="expense-empty-copy">{t('expense.no_tips')}</p>
                 )}
               </section>
             </aside>
@@ -404,10 +422,10 @@ export default function ExpenseSheet({ theme = 'dark' }) {
           <section className="glass-panel expense-section">
             <SectionHeader
               icon={TableProperties}
-              title="原始工作表"
-              description="原始表格保留为详情视图，一次只看一个 sheet。"
+              title={t('expense.raw_sheets')}
+              description={t('expense.raw_sheets_desc')}
             />
-            <div className="expense-tab-list" role="tablist" aria-label="Raw workbook sheets">
+            <div className="expense-tab-list" role="tablist" aria-label={t('expense.raw_sheets_aria')}>
               {viewModel.rawSheets.map((sheet) => {
                 const isActive = sheet.name === selectedRawSheet?.name;
                 return (
@@ -422,7 +440,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                 );
               })}
             </div>
-            {selectedRawSheet ? <SheetTable sheet={selectedRawSheet} /> : null}
+            {selectedRawSheet ? <SheetTable sheet={selectedRawSheet} t={t} /> : null}
           </section>
         </>
       ) : null}

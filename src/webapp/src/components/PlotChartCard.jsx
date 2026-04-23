@@ -4,6 +4,7 @@ import { AlertTriangle } from 'lucide-react';
 
 import { buildChartOption, formatSummaryValue } from '../utils/plotFormatters';
 import { getChartTheme } from '../utils/chartTheme.js';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 function useChartMountReady() {
   const containerRef = useRef(null);
@@ -92,11 +93,14 @@ export default function PlotChartCard({
   chartHeight,
   theme = 'dark',
 }) {
+  const { t } = useDisplayLanguage();
   const themeTokens = getChartTheme(theme);
   const resolvedHeight =
     chartHeight ?? (featured ? Math.max(chart?.height || 420, 500) : Math.max(chart?.height || 360, 390));
   const summaries = Array.isArray(chart?.summary) ? chart.summary : [];
-  const roleLabel = eyebrow === undefined ? (featured ? 'primary chart' : 'support chart') : eyebrow;
+  const roleLabel = eyebrow === undefined
+    ? t(featured ? 'plots.chart.primary' : 'plots.chart.support')
+    : eyebrow;
   const { containerRef, isReady } = useChartMountReady();
 
   return (
@@ -153,7 +157,7 @@ export default function PlotChartCard({
                   }}
                 >
                   <AlertTriangle size={12} />
-                  warning
+                  {t('plots.chart.warning')}
                 </span>
               ) : null}
             </div>
@@ -229,7 +233,7 @@ export default function PlotChartCard({
         >
           <div style={{ display: 'grid', gap: 10 }}>
             <AlertTriangle size={24} style={{ justifySelf: 'center' }} />
-            <strong>{chart?.message || '暂无可用数据'}</strong>
+            <strong>{chart?.message || t('plots.empty_chart')}</strong>
           </div>
         </div>
       ) : (

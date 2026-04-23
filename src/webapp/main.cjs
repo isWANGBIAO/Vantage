@@ -1,12 +1,25 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog } = require('electron');
+const {
+    app,
+    BrowserWindow,
+    Tray,
+    Menu,
+    nativeImage,
+    ipcMain,
+    dialog,
+    shell,
+} = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimePaths.cjs');
 const { applyLaunchAtLoginSetting } = require('./src/utils/autoLaunch.cjs');
 const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
-const { getOnboardingState, saveOnboardingCompletion } = require('./src/utils/onboardingConfig.cjs');
+const {
+    getOnboardingState,
+    loadSettings,
+    saveOnboardingCompletion,
+    sanitizeDisplayLanguage,
+} = require('./src/utils/onboardingConfig.cjs');
 
-// ============ 日志系统 ============
 const projectRoot = path.join(__dirname, '..', '..');
 const runtimePaths = resolveRuntimePaths({
     app,
@@ -14,23 +27,46 @@ const runtimePaths = resolveRuntimePaths({
     projectRoot,
     platform: process.platform,
 });
-ensureRuntimeDirs(runtimePaths);
-const logsDir = runtimePaths.logDir;
 
+ensureRuntimeDirs(runtimePaths);
+
+const logsDir = runtimePaths.logDir;
 const logFile = path.join(logsDir, `electron_${new Date().toISOString().split('T')[0]}.log`);
+const isDev = runtimePaths.appMode !== 'packaged' && !app.isPackaged && process.env.NODE_ENV !== 'production';
+const shouldManageLoginItem = runtimePaths.appMode === 'packaged' || app.isPackaged;
+
+const MAIN_PROCESS_COPY = {
+    'en-US': {
+        trayShowWindow: 'Show Window',
+        trayOpenLogs: 'Open Logs Folder',
+        trayQuit: 'Quit',
+        legacyRootTitle: 'Select Legacy Vantage Source Folder',
+        startupErrorTitle: 'Vantage failed to start',
+    },
+    'zh-CN': {
+        trayShowWindow: '显示窗口',
+        trayOpenLogs: '打开日志目录',
+        trayQuit: '退出',
+        legacyRootTitle: '选择旧版 Vantage 源目录',
+        startupErrorTitle: 'Vantage 启动失败',
+    },
+};
+
+let mainWindow = null;
+let tray = null;
+let bundledBackendProcess = null;
 
 function writeLog(level, message, error = null) {
     const timestamp = new Date().toISOString();
     let logEntry = `[${timestamp}] [${level}] ${message}`;
+
     if (error) {
         logEntry += `\n  Stack: ${error.stack || error}`;
     }
-    logEntry += '\n';
 
-    // 写入文件
+    logEntry += '\n';
     fs.appendFileSync(logFile, logEntry);
 
-    // 同时输出到控制台
     if (level === 'ERROR') {
         console.error(logEntry);
     } else {
@@ -39,35 +75,76 @@ function writeLog(level, message, error = null) {
 }
 
 const log = {
-    info: (msg) => writeLog('INFO', msg),
-    warn: (msg) => writeLog('WARN', msg),
-    error: (msg, err = null) => writeLog('ERROR', msg, err)
+    info: (message) => writeLog('INFO', message),
+    warn: (message) => writeLog('WARN', message),
+    error: (message, error = null) => writeLog('ERROR', message, error),
 };
 
-// ============ 全局异常捕获 ============
-process.on('uncaughtException', (error) => {
-    log.error('Uncaught Exception', error);
-});
+function mapLocaleToSupportedLanguage(locale) {
+    return typeof locale === 'string' && locale.trim().toLowerCase().startsWith('zh')
+        ? 'zh-CN'
+        : 'en-US';
+}
 
-process.on('unhandledRejection', (reason, promise) => {
-    log.error(`Unhandled Rejection at: ${promise}, reason: ${reason}`);
-});
+function getEffectiveDisplayLanguageForMain() {
+    const settings = loadSettings(runtimePaths);
+    const displayLanguage = sanitizeDisplayLanguage(settings.display_language);
+    return displayLanguage === 'system'
+        ? mapLocaleToSupportedLanguage(app.getLocale())
+        : displayLanguage;
+}
 
-// ============ Electron 应用 ============
-const isDev = runtimePaths.appMode !== 'packaged' && !app.isPackaged && process.env.NODE_ENV !== 'production';
-const shouldManageLoginItem = runtimePaths.appMode === 'packaged' || app.isPackaged;
+function getMainProcessCopy() {
+    const language = getEffectiveDisplayLanguageForMain();
+    return MAIN_PROCESS_COPY[language] || MAIN_PROCESS_COPY['en-US'];
+}
 
-let mainWindow = null;
-let tray = null;
-let bundledBackendProcess = null;
+function persistSettings(nextSettings) {
+    const settingsFile = path.join(runtimePaths.configDir, 'settings.json');
+    fs.mkdirSync(runtimePaths.configDir, { recursive: true });
+    fs.writeFileSync(settingsFile, JSON.stringify(nextSettings, null, 2), 'utf8');
+}
 
-log.info('Vantage Electron starting...');
-log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
-log.info(`Log file: ${logFile}`);
-log.info(`Runtime data dir: ${runtimePaths.dataDir}`);
+function syncTrayMenu() {
+    if (!tray) {
+        return;
+    }
+
+    const copy = getMainProcessCopy();
+    const contextMenu = Menu.buildFromTemplate([
+        {
+            label: copy.trayShowWindow,
+            click: () => {
+                mainWindow?.show();
+                mainWindow?.focus();
+                log.info('Window restored from tray');
+            },
+        },
+        { type: 'separator' },
+        {
+            label: copy.trayOpenLogs,
+            click: () => {
+                void shell.openPath(logsDir);
+            },
+        },
+        { type: 'separator' },
+        {
+            label: copy.trayQuit,
+            click: () => {
+                log.info('User requested quit from tray');
+                app.isQuitting = true;
+                app.quit();
+            },
+        },
+    ]);
+
+    tray.setToolTip('Vantage');
+    tray.setContextMenu(contextMenu);
+}
 
 function syncLaunchAtLoginSetting() {
     const onboardingState = getOnboardingState({ runtimePaths, projectRoot });
+
     if (!shouldManageLoginItem) {
         log.info('Launch-at-login management skipped outside packaged installs');
         return onboardingState;
@@ -81,17 +158,52 @@ function syncLaunchAtLoginSetting() {
     return onboardingState;
 }
 
+process.on('uncaughtException', (error) => {
+    log.error('Uncaught Exception', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    log.error(`Unhandled Rejection at: ${promise}, reason: ${reason}`);
+});
+
 ipcMain.handle('onboarding:get-state', async () => getOnboardingState({ runtimePaths, projectRoot }));
+
 ipcMain.handle('onboarding:pick-legacy-root', async () => {
+    const copy = getMainProcessCopy();
     const result = await dialog.showOpenDialog({
         properties: ['openDirectory'],
-        title: 'Select Legacy Vantage Source Folder',
+        title: copy.legacyRootTitle,
     });
 
     return {
         path: result.canceled ? null : (result.filePaths[0] || null),
     };
 });
+
+ipcMain.handle('settings:get-display-language-state', async () => {
+    const settings = loadSettings(runtimePaths);
+    return {
+        displayLanguage: sanitizeDisplayLanguage(settings.display_language),
+        systemLocale: app.getLocale(),
+    };
+});
+
+ipcMain.handle('settings:set-display-language', async (event, displayLanguage) => {
+    const settings = loadSettings(runtimePaths);
+    const nextDisplayLanguage = sanitizeDisplayLanguage(displayLanguage);
+    persistSettings({
+        ...settings,
+        display_language: nextDisplayLanguage,
+    });
+    syncTrayMenu();
+
+    return {
+        displayLanguage: nextDisplayLanguage,
+        systemLocale: app.getLocale(),
+    };
+});
+
+ipcMain.handle('settings:get-system-locale', async () => app.getLocale());
 
 ipcMain.handle('onboarding:complete', async (event, submission) => {
     const result = saveOnboardingCompletion({
@@ -108,6 +220,7 @@ ipcMain.handle('onboarding:complete', async (event, submission) => {
         log.info(`Launch at login ${result.launchAtLogin ? 'enabled' : 'disabled'} from onboarding`);
     }
 
+    syncTrayMenu();
     return result;
 });
 
@@ -122,33 +235,30 @@ function createWindow() {
         webPreferences: {
             preload: path.join(__dirname, 'preload.cjs'),
             contextIsolation: true,
-            nodeIntegration: false
+            nodeIntegration: false,
         },
         icon: path.join(__dirname, '..', '..', 'icon.png'),
         title: 'Vantage',
         backgroundColor: '#050508',
-        show: false
+        show: false,
     });
 
-    // 加载应用
     if (isDev) {
         log.info('Loading Vite dev server: http://localhost:5173');
-        mainWindow.loadURL('http://localhost:5173');
+        void mainWindow.loadURL('http://localhost:5173');
         mainWindow.webContents.openDevTools();
     } else {
         const indexPath = path.join(__dirname, 'dist', 'index.html');
         log.info(`Loading production build: ${indexPath}`);
-        mainWindow.loadFile(indexPath);
+        void mainWindow.loadFile(indexPath);
     }
 
-    // 窗口准备好后显示
     mainWindow.once('ready-to-show', () => {
         log.info('Window ready, showing...');
         mainWindow.maximize();
         mainWindow.show();
     });
 
-    // 渲染进程错误捕获
     mainWindow.webContents.on('crashed', (event, killed) => {
         log.error(`Renderer process crashed (killed: ${killed})`);
     });
@@ -161,7 +271,6 @@ function createWindow() {
         log.error(`Failed to load URL: ${validatedURL}, Error: ${errorCode} - ${errorDesc}`);
     });
 
-    // 最小化到托盘而非关闭
     mainWindow.on('close', (event) => {
         if (!app.isQuitting) {
             event.preventDefault();
@@ -177,46 +286,21 @@ function createTray() {
     const icon = nativeImage.createFromPath(iconPath);
 
     tray = new Tray(icon.resize({ width: 16, height: 16 }));
-
-    const contextMenu = Menu.buildFromTemplate([
-        {
-            label: '显示窗口',
-            click: () => {
-                mainWindow.show();
-                mainWindow.focus();
-                log.info('Window restored from tray');
-            }
-        },
-        { type: 'separator' },
-        {
-            label: '打开日志目录',
-            click: () => {
-                require('electron').shell.openPath(logsDir);
-            }
-        },
-        { type: 'separator' },
-        {
-            label: '退出',
-            click: () => {
-                log.info('User requested quit from tray');
-                app.isQuitting = true;
-                app.quit();
-            }
-        }
-    ]);
-
-    tray.setToolTip('Vantage');
-    tray.setContextMenu(contextMenu);
+    syncTrayMenu();
 
     tray.on('double-click', () => {
-        mainWindow.show();
-        mainWindow.focus();
+        mainWindow?.show();
+        mainWindow?.focus();
         log.info('Window restored via tray double-click');
     });
 }
 
-// 单例模式
 const gotTheLock = app.requestSingleInstanceLock();
+
+log.info('Vantage Electron starting...');
+log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
+log.info(`Log file: ${logFile}`);
+log.info(`Runtime data dir: ${runtimePaths.dataDir}`);
 
 if (!gotTheLock) {
     log.warn('Another instance is already running. Quitting this instance.');
@@ -225,7 +309,9 @@ if (!gotTheLock) {
     app.on('second-instance', () => {
         log.info('Second instance detected, focusing existing window');
         if (mainWindow) {
-            if (mainWindow.isMinimized()) mainWindow.restore();
+            if (mainWindow.isMinimized()) {
+                mainWindow.restore();
+            }
             mainWindow.show();
             mainWindow.focus();
         }
@@ -254,7 +340,10 @@ if (!gotTheLock) {
                 );
             } catch (error) {
                 log.error('Bundled backend startup failed', error);
-                dialog.showErrorBox('Vantage failed to start', `Bundled backend startup failed.\n\n${error.message}`);
+                dialog.showErrorBox(
+                    getMainProcessCopy().startupErrorTitle,
+                    `Bundled backend startup failed.\n\n${error.message}`,
+                );
                 app.exit(1);
                 return;
             }

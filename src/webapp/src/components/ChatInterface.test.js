@@ -52,13 +52,13 @@ function createMemoryStorage(initialEntries = {}) {
 }
 
 test('ChatInterface copy uses readable labels for model and voice flow', () => {
-  assert.ok(chatSource.includes('<span>Model</span>'));
-  assert.ok(chatSource.includes('Default model'));
-  assert.ok(chatSource.includes('Transcribing speech...'));
-  assert.ok(chatSource.includes('Speech transcription failed, please retry or type manually.'));
-  assert.ok(chatSource.includes('Speech transcription error: '));
-  assert.ok(chatSource.includes('Cannot access microphone, please check permissions.'));
-  assert.ok(chatSource.includes('Type a message...'));
+  assert.ok(chatSource.includes("t('common.model')"));
+  assert.ok(chatSource.includes("t('chat.default_model')"));
+  assert.ok(chatSource.includes("t('chat.transcribing')"));
+  assert.ok(chatSource.includes("t('chat.transcription_failed')"));
+  assert.ok(chatSource.includes("t('chat.transcription_error'"));
+  assert.ok(chatSource.includes("t('chat.microphone_error'"));
+  assert.ok(chatSource.includes("t('chat.input_placeholder')"));
 
   const visibleCopyLines = chatSource
     .split('\n')
@@ -176,10 +176,10 @@ test('ChatInterface sends chat timestamps and action-plan reasoning effort to ba
 test('ChatInterface renders chat token stats and hydrates them from backend context', () => {
   assert.ok(chatSource.includes('setStats('));
   assert.ok(chatSource.includes('data?.stats'));
-  assert.ok(chatSource.includes('Speed {stats.speed}'));
+  assert.ok(chatSource.includes("t('common.speed'"));
   assert.ok(chatSource.includes('computeDisplayedDurationSeconds'));
-  assert.ok(chatSource.includes('Tokens {((stats.total_tokens || 0) / 1000).toFixed(1)}k'));
-  assert.ok(chatSource.includes('History {stats.historical_total_tokens >= 1000000'));
+  assert.ok(chatSource.includes("t('common.tokens'"));
+  assert.ok(chatSource.includes("t('common.history'"));
 });
 
 test('ChatInterface keeps reasoning blocks collapsed until the user expands them', () => {

@@ -5,44 +5,32 @@ import { AlertTriangle, LineChart, RefreshCw } from 'lucide-react';
 import { fetchBackendJson } from '../utils/backendRequest';
 import { buildChartOption, formatSummaryValue } from '../utils/plotFormatters';
 import { getChartTheme } from '../utils/chartTheme.js';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 const SECTION_DEFINITIONS = [
   {
     key: 'health',
-    title: '健康主视图',
-    description: '先看体重、体脂和时间配置，快速判断健康行为有没有失衡。',
     accent: '#46a17d',
     leadIds: ['sleep-schedule', 'weight-bodyfat', 'time-allocation'],
     supportIds: ['time-screen-remaining', 'time-averages', 'time-delta', 'radar-goal'],
   },
   {
     key: 'performance',
-    title: '行为与训练',
-    description: '把跑步趋势和 HHH 节律放在一起看，更容易发现执行强度与恢复节奏。',
     accent: '#4f7cff',
     leadIds: ['running'],
     supportIds: ['running-form', 'running-hrc', 'hhh-frequency', 'hhh-interval'],
   },
   {
     key: 'finance',
-    title: '财务波动',
-    description: '保留财务图，但下沉到最后一层，不再和健康主图争抢注意力。',
     accent: '#f59f54',
     leadIds: ['balance'],
     supportIds: [],
   },
 ];
 
-const CHART_SECTION_MAP = SECTION_DEFINITIONS.reduce((accumulator, section) => {
-  [...section.leadIds, ...section.supportIds].forEach((chartId) => {
-    accumulator[chartId] = section.key;
-  });
-  return accumulator;
-}, {});
-
-function formatGeneratedAt(value) {
+function formatGeneratedAt(value, locale, t) {
   if (!value) {
-    return '未生成';
+    return t('plots.generated_none');
   }
 
   const date = new Date(value);
@@ -50,7 +38,7 @@ function formatGeneratedAt(value) {
     return String(value);
   }
 
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(locale, {
     hour12: false,
     month: '2-digit',
     day: '2-digit',
@@ -95,7 +83,7 @@ function getWarningCharts(warning) {
   return [];
 }
 
-function buildSections(charts) {
+function buildSections(charts, t) {
   const chartMap = new Map(charts.map((chart) => [chart.id, chart]));
   const used = new Set();
   const sections = [];
@@ -109,6 +97,8 @@ function buildSections(charts) {
     if (leadCharts.length || supportCharts.length) {
       sections.push({
         ...section,
+        title: t(`plots.section.${section.key}.title`),
+        description: t(`plots.section.${section.key}.desc`),
         leadCharts,
         supportCharts,
       });
@@ -120,8 +110,8 @@ function buildSections(charts) {
   if (remainingCharts.length) {
     sections.push({
       key: 'other',
-      title: '其他图表',
-      description: '保留未分组图表，避免数据缺失。',
+      title: t('plots.section.other.title'),
+      description: t('plots.section.other.desc'),
       accent: '#8e7f6a',
       leadCharts: remainingCharts,
       supportCharts: [],
@@ -221,7 +211,7 @@ function SummaryPill({ label, value, tone = 'default', themeTokens }) {
   );
 }
 
-function WarningPanel({ warnings, onSelectChart, availableChartIds, themeTokens }) {
+function WarningPanel({ warnings, onSelectChart, availableChartIds, themeTokens, t }) {
   if (!warnings.length) {
     return null;
   }
@@ -255,9 +245,9 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds, themeTokens 
           <AlertTriangle size={18} />
         </div>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: themeTokens.warningPanelTitle }}>发现异常数据，相关图表已标注警告</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: themeTokens.warningPanelTitle }}>{t('plots.warning.title')}</div>
           <div style={{ marginTop: 4, fontSize: 13, color: themeTokens.warningPanelText }}>
-            请先修正原始表格，再执行 refresh charts。未修正前，这些图表会继续提示异常。
+            {t('plots.warning.body')}
           </div>
         </div>
       </div>
@@ -281,7 +271,7 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds, themeTokens 
             >
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: themeTokens.warningPanelTitle }}>
-                  {warning?.title || '异常数据'}
+                  {warning?.title || t('plots.warning.fallback_title')}
                 </div>
                 {warning?.message ? (
                   <div style={{ marginTop: 4, fontSize: 13, color: themeTokens.warningPanelText }}>{warning.message}</div>
@@ -325,7 +315,7 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds, themeTokens 
                         fontWeight: 600,
                       }}
                     >
-                      跳转到 {chartId}
+                      {t('plots.warning.jump', { chartId })}
                     </button>
                   ))}
                 </div>
@@ -338,7 +328,7 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds, themeTokens 
   );
 }
 
-function ChartInlineWarnings({ warnings, themeTokens }) {
+function ChartInlineWarnings({ warnings, themeTokens, t }) {
   if (!warnings.length) {
     return null;
   }
@@ -347,14 +337,14 @@ function ChartInlineWarnings({ warnings, themeTokens }) {
     const details = getWarningDetails(warning);
     if (details.length) {
       return details.map((detail) => ({
-        title: warning?.title || '异常数据',
+        title: warning?.title || t('plots.warning.fallback_title'),
         detail,
       }));
     }
     return [
       {
-        title: warning?.title || '异常数据',
-        detail: warning?.message || '请检查源数据',
+        title: warning?.title || t('plots.warning.fallback_title'),
+        detail: warning?.message || t('plots.inline_warning.detail_fallback'),
       },
     ];
   });
@@ -375,7 +365,7 @@ function ChartInlineWarnings({ warnings, themeTokens }) {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: themeTokens.warningPanelDetailText }}>
         <AlertTriangle size={16} />
-        <strong style={{ fontSize: 13 }}>以下记录提取不完整，会造成这张图出现断点</strong>
+        <strong style={{ fontSize: 13 }}>{t('plots.inline_warning.title')}</strong>
       </div>
       <div style={{ display: 'grid', gap: 8 }}>
         {visibleLines.map((item, index) => (
@@ -396,7 +386,9 @@ function ChartInlineWarnings({ warnings, themeTokens }) {
           </div>
         ))}
         {remainingCount > 0 ? (
-          <div style={{ fontSize: 12, color: themeTokens.inlineWarningMuted }}>其余 {remainingCount} 条明细已省略，请看顶部异常面板。</div>
+          <div style={{ fontSize: 12, color: themeTokens.inlineWarningMuted }}>
+            {t('plots.inline_warning.remaining', { count: remainingCount })}
+          </div>
         ) : null}
       </div>
     </div>
@@ -412,6 +404,7 @@ function ChartCard({
   chartWarnings = [],
   theme = 'dark',
   themeTokens,
+  t,
 }) {
   const chartHeight = featured ? Math.max(chart?.height || 420, 500) : Math.max(chart?.height || 360, 390);
   const summaries = Array.isArray(chart?.summary) ? chart.summary : [];
@@ -452,7 +445,7 @@ function ChartCard({
                   textTransform: 'uppercase',
                 }}
               >
-                {featured ? 'primary chart' : 'support chart'}
+                {t(featured ? 'plots.chart.primary' : 'plots.chart.support')}
               </span>
               {hasWarning ? (
                 <span
@@ -469,7 +462,7 @@ function ChartCard({
                   }}
                 >
                   <AlertTriangle size={12} />
-                  warning
+                  {t('plots.chart.warning')}
                 </span>
               ) : null}
             </div>
@@ -527,7 +520,7 @@ function ChartCard({
             ))}
           </div>
         ) : null}
-        {chartWarnings.length ? <ChartInlineWarnings warnings={chartWarnings} themeTokens={themeTokens} /> : null}
+        {chartWarnings.length ? <ChartInlineWarnings warnings={chartWarnings} themeTokens={themeTokens} t={t} /> : null}
       </div>
 
       {chart?.empty ? (
@@ -546,7 +539,7 @@ function ChartCard({
         >
           <div style={{ display: 'grid', gap: 10 }}>
             <AlertTriangle size={24} style={{ justifySelf: 'center' }} />
-            <strong>{chart?.message || '暂无可用数据'}</strong>
+            <strong>{chart?.message || t('plots.empty_chart')}</strong>
           </div>
         </div>
       ) : (
@@ -577,7 +570,7 @@ function ChartCard({
   );
 }
 
-function SectionBlock({ section, chartRefs, warningCharts, warningMap, theme, themeTokens }) {
+function SectionBlock({ section, chartRefs, warningCharts, warningMap, theme, themeTokens, t }) {
   return (
     <section style={{ display: 'grid', gap: 20 }}>
       <div
@@ -630,6 +623,7 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap, theme, th
               chartWarnings={warningMap.get(chart.id) || []}
               theme={theme}
               themeTokens={themeTokens}
+              t={t}
             />
           ))}
         </div>
@@ -659,6 +653,7 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap, theme, th
               chartWarnings={warningMap.get(chart.id) || []}
               theme={theme}
               themeTokens={themeTokens}
+              t={t}
             />
           ))}
         </div>
@@ -668,6 +663,7 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap, theme, th
 }
 
 export default function Plots({ theme = 'dark' }) {
+  const { effectiveLanguage, t } = useDisplayLanguage();
   const [charts, setCharts] = useState([]);
   const [warnings, setWarnings] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -692,12 +688,12 @@ export default function Plots({ theme = 'dark' }) {
       setWarnings(Array.isArray(data?.warnings) ? data.warnings : []);
       setGeneratedAt(data?.generated_at || null);
     } catch (fetchError) {
-      setError(fetchError.message || '加载图表失败');
+      setError(fetchError.message || t('plots.error_load'));
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     fetchPlots();
@@ -705,7 +701,7 @@ export default function Plots({ theme = 'dark' }) {
 
   const visibleCharts = useMemo(() => charts.filter((chart) => chart.id !== 'balance'), [charts]);
   const visibleChartIds = useMemo(() => new Set(visibleCharts.map((chart) => chart.id)), [visibleCharts]);
-  const sections = useMemo(() => buildSections(visibleCharts), [visibleCharts]);
+  const sections = useMemo(() => buildSections(visibleCharts, t), [t, visibleCharts]);
 
   const warningCharts = useMemo(() => {
     const ids = new Set();
@@ -741,7 +737,7 @@ export default function Plots({ theme = 'dark' }) {
 
   const sectionCount = sections.length;
   const warningCount = warnings.length;
-  const generatedText = formatGeneratedAt(generatedAt);
+  const generatedText = formatGeneratedAt(generatedAt, effectiveLanguage, t);
 
   const scrollToChart = useCallback((chartId) => {
     const node = chartRefs.current.get(chartId);
@@ -801,7 +797,7 @@ export default function Plots({ theme = 'dark' }) {
                 }}
               >
                 <LineChart size={14} />
-                plots dashboard
+                {t('plots.hero.chip')}
               </div>
               <div style={{ display: 'grid', gap: 8 }}>
                 <h1
@@ -813,7 +809,7 @@ export default function Plots({ theme = 'dark' }) {
                     color: themeTokens.pageTitle,
                   }}
                 >
-                  先看最影响健康的图，再看辅助分析图
+                  {t('plots.hero.title')}
                 </h1>
                 <p
                   style={{
@@ -824,7 +820,7 @@ export default function Plots({ theme = 'dark' }) {
                     maxWidth: 760,
                   }}
                 >
-                  这个页面现在按信息优先级重排：顶部先给总览与异常提示，中段放体重和时间配置主图，下段再放训练、HHH 和财务。
+                  {t('plots.hero.desc')}
                 </p>
               </div>
             </div>
@@ -850,20 +846,20 @@ export default function Plots({ theme = 'dark' }) {
               }}
             >
               <RefreshCw size={15} />
-              {isRefreshing ? '刷新中...' : 'Refresh charts'}
+              {isRefreshing ? t('plots.refreshing') : t('plots.refresh')}
             </button>
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-            <SummaryPill label="图表数量" value={`${visibleCharts.length}`} themeTokens={themeTokens} />
-            <SummaryPill label="分组数量" value={`${sectionCount}`} themeTokens={themeTokens} />
+            <SummaryPill label={t('plots.summary.chart_count')} value={`${visibleCharts.length}`} themeTokens={themeTokens} />
+            <SummaryPill label={t('plots.summary.section_count')} value={`${sectionCount}`} themeTokens={themeTokens} />
             <SummaryPill
-              label="警告数量"
+              label={t('plots.summary.warning_count')}
               value={`${warningCount}`}
               tone={warningCount ? 'warning' : 'default'}
               themeTokens={themeTokens}
             />
-            <SummaryPill label="最近生成" value={generatedText} themeTokens={themeTokens} />
+            <SummaryPill label={t('plots.summary.generated_at')} value={generatedText} themeTokens={themeTokens} />
           </div>
 
           {navigationCharts.length ? (
@@ -903,7 +899,7 @@ export default function Plots({ theme = 'dark' }) {
               color: themeTokens.errorText,
             }}
           >
-            <div style={{ fontWeight: 700 }}>图表加载失败</div>
+            <div style={{ fontWeight: 700 }}>{t('plots.error_title')}</div>
             <div style={{ marginTop: 6, fontSize: 14 }}>{error}</div>
           </section>
         ) : null}
@@ -913,6 +909,7 @@ export default function Plots({ theme = 'dark' }) {
           onSelectChart={scrollToChart}
           availableChartIds={visibleChartIds}
           themeTokens={themeTokens}
+          t={t}
         />
 
         {isLoading ? (
@@ -947,7 +944,7 @@ export default function Plots({ theme = 'dark' }) {
               color: themeTokens.emptySectionText,
             }}
           >
-            暂无可显示的图表数据。
+            {t('plots.empty')}
           </section>
         ) : null}
 
@@ -962,6 +959,7 @@ export default function Plots({ theme = 'dark' }) {
                 warningMap={warningMap}
                 theme={theme}
                 themeTokens={themeTokens}
+                t={t}
               />
             ))}
           </main>

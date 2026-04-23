@@ -8,6 +8,7 @@ import {
 import {
   buildChartModel,
 } from './faceTrendChart';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 const initialProgress = { percent: 0, status: 'idle', current_file: '' };
 const initialLiveData = {
@@ -109,6 +110,7 @@ function LineChartSvg({
 }
 
 function PulseCard({ liveData }) {
+  const { t } = useDisplayLanguage();
   const liveWindowSeconds = Number(liveData?.window_seconds) || 60;
   const points = liveData?.points || [];
   const latestPoint = points[points.length - 1];
@@ -123,10 +125,10 @@ function PulseCard({ liveData }) {
     maxTimestamp: liveWindowEndTimestamp,
   });
   const latestLabel = liveData?.latest_datetime?.slice(0, 19) || '--';
-  const cameraStatus = liveData?.camera_online ? 'Online' : 'Offline';
+  const cameraStatus = liveData?.camera_online ? t('face_history.camera_online') : t('face_history.camera_offline');
   const emptyMessage = liveData?.camera_online
-    ? 'Waiting for passing live dark-circle samples'
-    : 'Camera offline';
+    ? t('face_history.waiting_samples')
+    : t('face_history.camera_offline_message');
 
   return (
     <div
@@ -149,15 +151,15 @@ function PulseCard({ liveData }) {
       >
         <div>
           <div style={{ color: 'var(--text-muted)', fontSize: '0.82rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-            Live camera score
+            {t('face_history.live_camera_score')}
           </div>
-          <h3 style={{ margin: '0.35rem 0 0', fontSize: '1.45rem' }}>Real-time Dark Circle Pulse</h3>
+          <h3 style={{ margin: '0.35rem 0 0', fontSize: '1.45rem' }}>{t('face_history.live_pulse')}</h3>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <StatPill label="Latest Score" value={formatScore(liveData?.latest_score)} accent="#00d2d3" />
-          <StatPill label="Latest Time" value={latestLabel} accent="#74b9ff" />
-          <StatPill label="Camera" value={cameraStatus} accent="#fdcb6e" />
-          <StatPill label="Samples" value={String(model.summary.sampleCount)} accent="#7cf3ff" />
+          <StatPill label={t('face_history.latest_score')} value={formatScore(liveData?.latest_score)} accent="#00d2d3" />
+          <StatPill label={t('face_history.latest_time')} value={latestLabel} accent="#74b9ff" />
+          <StatPill label={t('face_history.camera')} value={cameraStatus} accent="#fdcb6e" />
+          <StatPill label={t('face_history.samples')} value={String(model.summary.sampleCount)} accent="#7cf3ff" />
         </div>
       </div>
 
@@ -207,6 +209,7 @@ function PulseCard({ liveData }) {
 }
 
 function TrendCard({ title, accent, points }) {
+  const { t } = useDisplayLanguage();
   const model = buildChartModel({
     points,
     width: trendDimensions.width,
@@ -227,13 +230,13 @@ function TrendCard({ title, accent, points }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <div style={{ color: accent, fontSize: '0.8rem', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-            Trend window
+            {t('face_history.trend_window')}
           </div>
           <h3 style={{ margin: '0.3rem 0 0', fontSize: '1.15rem' }}>{title}</h3>
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{model.summary.latestScore}</div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Latest Score</div>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{t('face_history.latest_score')}</div>
         </div>
       </div>
 
@@ -244,9 +247,9 @@ function TrendCard({ title, accent, points }) {
           gap: '0.75rem',
         }}
       >
-        <StatPill label="Average" value={model.summary.averageScore} accent={accent} />
-        <StatPill label="Samples" value={String(model.summary.sampleCount)} accent={accent} />
-        <StatPill label="Latest Time" value={model.summary.latestLabel} accent={accent} />
+        <StatPill label={t('face_history.average')} value={model.summary.averageScore} accent={accent} />
+        <StatPill label={t('face_history.samples')} value={String(model.summary.sampleCount)} accent={accent} />
+        <StatPill label={t('face_history.latest_time')} value={model.summary.latestLabel} accent={accent} />
       </div>
 
       <div
@@ -269,7 +272,7 @@ function TrendCard({ title, accent, points }) {
               fontSize: '0.95rem',
             }}
           >
-            No trend data
+            {t('face_history.no_trend')}
           </div>
         ) : (
           <LineChartSvg
@@ -289,6 +292,7 @@ function TrendCard({ title, accent, points }) {
 }
 
 function ExtremeCard({ title, date, score, imageUrl, accent }) {
+  const { t } = useDisplayLanguage();
   return (
     <div
       style={{
@@ -309,16 +313,17 @@ function ExtremeCard({ title, date, score, imageUrl, accent }) {
           />
         ) : (
           <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', color: 'var(--text-muted)' }}>
-            No image
+            {t('face_history.no_image')}
           </div>
         )}
       </div>
-      <p style={{ marginTop: '0.5rem', fontWeight: 'bold' }}>Score: {formatScore(score)}</p>
+      <p style={{ marginTop: '0.5rem', fontWeight: 'bold' }}>{t('face_history.score', { value: formatScore(score) })}</p>
     </div>
   );
 }
 
 export default function FaceHistory() {
+  const { t } = useDisplayLanguage();
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(initialProgress);
   const [data, setData] = useState(null);
@@ -345,7 +350,7 @@ export default function FaceHistory() {
       setReportStatus(nextState.status);
     } catch (err) {
       setData(null);
-      setError(err.name === 'AbortError' ? 'Request timed out while loading the latest report.' : err.message);
+      setError(err.name === 'AbortError' ? t('face_history.load_timeout') : err.message);
       setReportStatus('error');
     } finally {
       clearTimeout(timeoutId);
@@ -403,7 +408,7 @@ export default function FaceHistory() {
 
         if (nextProgress.status === 'error') {
           setLoading(false);
-          setError(nextProgress.error || 'Face analysis failed.');
+          setError(nextProgress.error || t('face_history.analysis_failed'));
           setReportStatus('error');
           return;
         }
@@ -444,7 +449,7 @@ export default function FaceHistory() {
       });
       if (!res.ok) {
         const json = await res.json();
-        alert(`Export failed: ${json.error || 'Unknown error'}`);
+        alert(t('face_history.export_failed', { error: json.error || 'Unknown error' }));
         return;
       }
 
@@ -458,7 +463,7 @@ export default function FaceHistory() {
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      alert(`Export failed: ${err.message}`);
+      alert(t('face_history.export_failed', { error: err.message }));
     }
   };
 
@@ -466,7 +471,7 @@ export default function FaceHistory() {
     if (reportStatus === 'loading' && !data) {
       return (
         <div className="glass-panel" style={{ padding: '1.5rem' }}>
-          Loading face analysis report...
+          {t('face_history.loading_report')}
         </div>
       );
     }
@@ -474,9 +479,9 @@ export default function FaceHistory() {
     if (reportStatus === 'empty') {
       return (
         <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-          <strong>No analysis report yet.</strong>
+          <strong>{t('face_history.empty_title')}</strong>
           <span style={{ color: 'var(--text-secondary)' }}>
-            Click <strong>Analyze Now</strong> to generate the first cached face report.
+            {t('face_history.empty_body')}
           </span>
         </div>
       );
@@ -516,7 +521,7 @@ export default function FaceHistory() {
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '2rem' }}>
           <ExtremeCard
-            title="Lightest (Best Condition)"
+            title={t('face_history.lightest')}
             date={data.lightest.date}
             score={data.lightest.score}
             imageUrl={data.lightest.url}
@@ -524,7 +529,7 @@ export default function FaceHistory() {
           />
 
           <ExtremeCard
-            title="Heaviest (Worst Condition)"
+            title={t('face_history.heaviest')}
             date={data.heaviest.date}
             score={data.heaviest.score}
             imageUrl={data.heaviest.url}
@@ -548,9 +553,9 @@ export default function FaceHistory() {
         }}
       >
         <div>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0 }}>Face Dark Circles History</h2>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0 }}>{t('face_history.title')}</h2>
           <div style={{ color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
-            Live pulse uses camera scores. Historical charts use saved-photo samples.
+            {t('face_history.subtitle')}
           </div>
         </div>
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -610,7 +615,7 @@ export default function FaceHistory() {
               gap: '0.5rem',
             }}
           >
-            {loading ? 'Analyzing...' : 'Analyze Now'}
+            {loading ? t('face_history.analyzing') : t('face_history.analyze_now')}
           </button>
 
           <button
@@ -627,7 +632,7 @@ export default function FaceHistory() {
               gap: '0.5rem',
             }}
           >
-            Export Excel
+            {t('face_history.export_excel')}
           </button>
         </div>
       </div>

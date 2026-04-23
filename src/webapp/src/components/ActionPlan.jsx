@@ -27,54 +27,23 @@ import {
 } from '../utils/actionPlanStream';
 import { CHAT_CONTEXT_BASE_UPDATED_EVENT } from '../utils/chatContextState';
 import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 const COPY_FEEDBACK_DURATION_MS = 1500;
 
-const WELCOME_ANALYSIS = [
-  '### Welcome to Action Plan',
-  '',
-  'Today\'s analysis starts automatically on app launch. Click **Regenerate** to run it again.',
-].join('\n');
+function buildMarkdownPlaceholder(title, body) {
+  return [title, '', body].join('\n');
+}
 
-const WELCOME_PLAN = [
-  '### Waiting for generation',
-  '',
-  'Today\'s action items will appear here after the run completes.',
-].join('\n');
-
-const LOAD_ERROR_ANALYSIS = [
-  '### Load failed',
-  '',
-  'The page could not reach the backend service. Refresh and try again.',
-].join('\n');
-
-const INCOMPLETE_ANALYSIS = [
-  '### Analysis unavailable',
-  '',
-  'The saved record does not contain a standalone analysis reply.',
-].join('\n');
-
-const INCOMPLETE_PLAN = [
-  '### Action plan unavailable',
-  '',
-  'The saved record does not contain a standalone action plan reply.',
-].join('\n');
-
-const CONNECTING_ANALYSIS = [
-  '### Connecting to backend',
-  '',
-  'Waiting for the backend service to start...',
-].join('\n');
-
-function renderMarkdownOrText(contentState) {
+function renderMarkdownOrText(contentState, t) {
   if (contentState.plainText) {
     return (
       <>
         <div className="action-plan-warning">
-          Corrupted historical formatting was detected. Showing a safe plain-text view.
+          {t('action_plan.render.corrupted')}
         </div>
         <div className="action-plan-plain-text">
-          {contentState.plainTextContent || 'No content available.'}
+          {contentState.plainTextContent || t('action_plan.render.empty')}
         </div>
       </>
     );
@@ -133,6 +102,7 @@ function isFallbackExecution(stats, selectedModel) {
 }
 
 export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
+  const { t } = useDisplayLanguage();
   const [analysisContent, setAnalysisContent] = useState('');
   const [analysisThinking, setAnalysisThinking] = useState('');
   const [planContent, setPlanContent] = useState('');
@@ -235,9 +205,19 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     const planBody = data.plan?.body || '';
     const savedStats = data.meta?.stats;
 
-    setAnalysisContentWithRef(analysisBody || INCOMPLETE_ANALYSIS);
+    setAnalysisContentWithRef(
+      analysisBody || buildMarkdownPlaceholder(
+        t('action_plan.placeholder.analysis_unavailable.title'),
+        t('action_plan.placeholder.analysis_unavailable.body'),
+      ),
+    );
     setAnalysisThinking('');
-    setPlanContentWithRef(planBody || INCOMPLETE_PLAN);
+    setPlanContentWithRef(
+      planBody || buildMarkdownPlaceholder(
+        t('action_plan.placeholder.plan_unavailable.title'),
+        t('action_plan.placeholder.plan_unavailable.body'),
+      ),
+    );
     setPlanThinking('');
     setSystemPrompt('');
     setAnalysisPrompt('');
@@ -255,7 +235,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             historical_total_tokens: undefined,
           },
     );
-  }, [setAnalysisContentWithRef, setPlanContentWithRef]);
+  }, [setAnalysisContentWithRef, setPlanContentWithRef, t]);
 
   const copyActionPlanText = useCallback(async (content, key) => {
     if (
@@ -296,9 +276,15 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
         return;
       }
 
-      setAnalysisContentWithRef(WELCOME_ANALYSIS);
+      setAnalysisContentWithRef(buildMarkdownPlaceholder(
+        t('action_plan.placeholder.welcome.title'),
+        t('action_plan.placeholder.welcome.body'),
+      ));
       setAnalysisThinking('');
-      setPlanContentWithRef(WELCOME_PLAN);
+      setPlanContentWithRef(buildMarkdownPlaceholder(
+        t('action_plan.placeholder.waiting.title'),
+        t('action_plan.placeholder.waiting.body'),
+      ));
       setPlanThinking('');
       setSystemPrompt('');
       setAnalysisPrompt('');
@@ -313,9 +299,15 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       }
 
       console.error('Failed to load today plan:', err);
-      setAnalysisContentWithRef(LOAD_ERROR_ANALYSIS);
+      setAnalysisContentWithRef(buildMarkdownPlaceholder(
+        t('action_plan.placeholder.load_failed.title'),
+        t('action_plan.placeholder.load_failed.body'),
+      ));
       setAnalysisThinking('');
-      setPlanContentWithRef(WELCOME_PLAN);
+      setPlanContentWithRef(buildMarkdownPlaceholder(
+        t('action_plan.placeholder.waiting.title'),
+        t('action_plan.placeholder.waiting.body'),
+      ));
       setPlanThinking('');
       setSystemPrompt('');
       setAnalysisPrompt('');
@@ -329,11 +321,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
         loadAbortControllerRef.current = null;
       }
     }
-  }, [
-    applyLoadedActionPlan,
-    setAnalysisContentWithRef,
-    setPlanContentWithRef,
-  ]);
+  }, [applyLoadedActionPlan, setAnalysisContentWithRef, setPlanContentWithRef, t]);
 
   const stopGeneration = useCallback(() => {
     if (abortControllerRef.current) {
@@ -342,8 +330,8 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     }
 
     setIsGenerating(false);
-    setPlanContentWithRef((prev) => `${prev}\n\n> Generation stopped by user.`);
-  }, [setPlanContentWithRef]);
+    setPlanContentWithRef((prev) => `${prev}\n\n> ${t('action_plan.placeholder.stopped')}`);
+  }, [setPlanContentWithRef, t]);
 
   const handleReasoningEffortChange = (event) => {
     const nextValue = saveActionPlanReasoningEffort(event.target.value);
@@ -392,8 +380,14 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     setAnalysisReplyReady(false);
     setPlanReplyReady(false);
     setCopiedKey('');
-    setAnalysisContentWithRef('### Analyzing data\n\nStreaming analysis output...');
-    setPlanContentWithRef('### Waiting for analysis\n\nThe action plan will start once the first pass completes.');
+    setAnalysisContentWithRef(buildMarkdownPlaceholder(
+      t('action_plan.placeholder.analyzing.title'),
+      t('action_plan.placeholder.analyzing.body'),
+    ));
+    setPlanContentWithRef(buildMarkdownPlaceholder(
+      t('action_plan.placeholder.waiting_analysis.title'),
+      t('action_plan.placeholder.waiting_analysis.body'),
+    ));
     const effectiveReasoningEffort = selectedReasoningEffortRef.current;
 
     setStats({
@@ -539,9 +533,9 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
               shouldYieldRender = true;
             } else if (sectionedLog.kind === 'error') {
               if (sectionedLog.section === 'analysis') {
-                setAnalysisContentWithRef((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
+                setAnalysisContentWithRef((prev) => `${prev}\n\n${t('common.error_prefix', { error: sectionedLog.content })}`);
               } else {
-                setPlanContentWithRef((prev) => `${prev}\n\nError: ${sectionedLog.content}`);
+                setPlanContentWithRef((prev) => `${prev}\n\n${t('common.error_prefix', { error: sectionedLog.content })}`);
               }
               shouldYieldRender = true;
             }
@@ -610,7 +604,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       if (err.name === 'AbortError') {
         console.log('Generation aborted');
       } else {
-        setPlanContentWithRef((prev) => `${prev}\n\nError: ${err.message}`);
+        setPlanContentWithRef((prev) => `${prev}\n\n${t('common.error_prefix', { error: err.message })}`);
       }
     } finally {
       if (abortControllerRef.current?.signal === signal) {
@@ -623,6 +617,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     setAnalysisContentWithRef,
     setPlanContentWithRef,
     stopGeneration,
+    t,
   ]);
 
   useEffect(() => {
@@ -648,9 +643,15 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
 
     const controller = new AbortController();
     loadAbortControllerRef.current = controller;
-    setAnalysisContentWithRef(CONNECTING_ANALYSIS);
+    setAnalysisContentWithRef(buildMarkdownPlaceholder(
+      t('action_plan.placeholder.connecting.title'),
+      t('action_plan.placeholder.connecting.body'),
+    ));
     setAnalysisThinking('');
-    setPlanContentWithRef(WELCOME_PLAN);
+    setPlanContentWithRef(buildMarkdownPlaceholder(
+      t('action_plan.placeholder.waiting.title'),
+      t('action_plan.placeholder.waiting.body'),
+    ));
     setPlanThinking('');
 
     const initializeActionPlan = async () => {
@@ -677,12 +678,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
         loadAbortControllerRef.current = null;
       }
     };
-  }, [
-    loadTodaysPlan,
-    setAnalysisContentWithRef,
-    setPlanContentWithRef,
-    startGeneration,
-  ]);
+  }, [loadTodaysPlan, setAnalysisContentWithRef, setPlanContentWithRef, startGeneration, t]);
 
   const analysisRender = getActionPlanRenderState(analysisContent);
   const planRender = getActionPlanRenderState(planContent);
@@ -735,24 +731,26 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             }}
           >
             <CheckSquare size={20} color="var(--primary-color)" />
-            Action Plan
+            {t('action_plan.title')}
           </h2>
           <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-            Daily analysis and task generation
+            {t('action_plan.subtitle')}
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           {stats && (
             <div className="action-plan-stats">
-              <span>Speed {stats.speed}</span>
-              <span>Time {displayedDurationSeconds.toFixed(1)}s</span>
-              <span>Tokens {((stats.total_tokens || 0) / 1000).toFixed(1)}k</span>
+              <span>{t('common.speed', { value: stats.speed })}</span>
+              <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
+              <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
               {stats.historical_total_tokens !== undefined && (
                 <span>
-                  History {stats.historical_total_tokens >= 1000000
-                    ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
-                    : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`}
+                  {t('common.history', {
+                    value: stats.historical_total_tokens >= 1000000
+                      ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
+                      : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`,
+                  })}
                 </span>
               )}
             </div>
@@ -767,7 +765,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
               fontSize: '0.9rem',
             }}
           >
-            <span>Model</span>
+            <span>{t('common.model')}</span>
             <select
               value={selectedModel}
               onChange={handleModelChange}
@@ -802,10 +800,12 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
                   fontWeight: fallbackExecutionActive ? 700 : 500,
                 }}
                 title={fallbackExecutionActive
-                  ? 'This run used a fallback model or provider route.'
-                  : 'This run used the selected model on the primary route.'}
+                  ? t('action_plan.execution.fallback_tooltip')
+                  : t('action_plan.execution.actual_tooltip')}
               >
-                {fallbackExecutionActive ? `Fallback ${actualExecutionLabel}` : `Actual ${actualExecutionLabel}`}
+                {fallbackExecutionActive
+                  ? t('action_plan.execution.fallback_label', { value: actualExecutionLabel })
+                  : t('action_plan.execution.actual_label', { value: actualExecutionLabel })}
               </span>
             )}
           </label>
@@ -819,7 +819,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
               fontSize: '0.9rem',
             }}
           >
-            <span>Reasoning</span>
+            <span>{t('common.reasoning')}</span>
             <select
               value={selectedReasoningEffort}
               onChange={handleReasoningEffortChange}
@@ -837,7 +837,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             >
               {ACTION_PLAN_REASONING_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
-                  {option.label}
+                  {t(option.labelKey) || option.fallbackLabel}
                 </option>
               ))}
             </select>
@@ -864,7 +864,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             ) : (
               <RotateCcw size={18} />
             )}
-            {isGenerating ? 'Stop' : 'Regenerate'}
+            {isGenerating ? t('action_plan.button.stop') : t('action_plan.button.regenerate')}
           </button>
         </div>
       </div>
@@ -891,9 +891,10 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
               <Activity size={16} color="var(--secondary-color)" />
-              <h4 style={{ margin: 0, fontSize: '0.95rem' }}>General Analysis</h4>
+              <h4 style={{ margin: 0, fontSize: '0.95rem' }}>{t('action_plan.panel.analysis')}</h4>
             </div>
             <ActionPlanCopyControls
+              t={t}
               copiedKey={copiedKey}
               onCopy={copyActionPlanText}
               fullInputContent={analysisFullInputContent}
@@ -914,8 +915,8 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
               padding: '1rem',
             }}
           >
-            {analysisThinking && <ThinkingBlock text={analysisThinking} />}
-            {renderMarkdownOrText(analysisRender)}
+            {analysisThinking && <ThinkingBlock text={analysisThinking} title={t('action_plan.thinking_title')} />}
+            {renderMarkdownOrText(analysisRender, t)}
             <div ref={analysisEndRef} />
           </div>
         </div>
@@ -941,9 +942,10 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
               <FileText size={16} color="var(--primary-color)" />
-              <h4 style={{ margin: 0, fontSize: '0.95rem' }}>Today&apos;s Action Plan</h4>
+              <h4 style={{ margin: 0, fontSize: '0.95rem' }}>{t('action_plan.panel.today_plan')}</h4>
             </div>
             <ActionPlanCopyControls
+              t={t}
               copiedKey={copiedKey}
               onCopy={copyActionPlanText}
               fullInputContent={planFullInputContent}
@@ -964,8 +966,8 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
               padding: '1rem',
             }}
           >
-            {planThinking && <ThinkingBlock text={planThinking} />}
-            {renderMarkdownOrText(planRender)}
+            {planThinking && <ThinkingBlock text={planThinking} title={t('action_plan.thinking_title')} />}
+            {renderMarkdownOrText(planRender, t)}
             <div ref={planEndRef} />
           </div>
         </div>
@@ -974,7 +976,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   );
 }
 
-function ThinkingBlock({ text }) {
+function ThinkingBlock({ text, title }) {
   return (
     <details className="thinking-block">
       <summary className="thinking-header">
@@ -987,7 +989,7 @@ function ThinkingBlock({ text }) {
             background: 'var(--text-muted)',
           }}
         />
-        Analysis Process
+        {title}
       </summary>
       <div className="thinking-content">{text}</div>
     </details>
@@ -995,6 +997,7 @@ function ThinkingBlock({ text }) {
 }
 
 function ActionPlanCopyControls({
+  t,
   fullInputContent,
   fullInputReady,
   fullInputKey,
@@ -1014,7 +1017,7 @@ function ActionPlanCopyControls({
         onClick={() => onCopy(fullInputContent, fullInputKey)}
         disabled={!fullInputReady}
       >
-        {copiedKey === fullInputKey ? 'Copied' : 'Copy Full Input'}
+        {copiedKey === fullInputKey ? t('action_plan.copy.copied') : t('action_plan.copy.full_input')}
       </button>
       <button
         type="button"
@@ -1022,7 +1025,7 @@ function ActionPlanCopyControls({
         onClick={() => onCopy(promptContent, promptKey)}
         disabled={!promptContent}
       >
-        {copiedKey === promptKey ? 'Copied' : 'Copy Prompt'}
+        {copiedKey === promptKey ? t('action_plan.copy.copied') : t('action_plan.copy.prompt')}
       </button>
       <button
         type="button"
@@ -1030,7 +1033,7 @@ function ActionPlanCopyControls({
         onClick={() => onCopy(replyContent, replyKey)}
         disabled={!replyReady || !replyContent}
       >
-        {copiedKey === replyKey ? 'Copied' : 'Copy Reply'}
+        {copiedKey === replyKey ? t('action_plan.copy.copied') : t('action_plan.copy.reply')}
       </button>
     </div>
   );

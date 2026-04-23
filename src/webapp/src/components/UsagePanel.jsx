@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { fetchBackendJson } from '../utils/backendRequest';
 import './UsagePanel.css';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 const EMPTY_DASHBOARD = {
   summary: {
@@ -144,6 +145,7 @@ function DataTable({ columns, rows, emptyMessage }) {
 }
 
 export default function UsagePanel() {
+  const { t } = useDisplayLanguage();
   const [dashboard, setDashboard] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -155,11 +157,11 @@ export default function UsagePanel() {
       setDashboard(data);
     } catch (loadError) {
       console.error('Failed to load usage dashboard.', loadError);
-      setError('Failed to load usage dashboard.');
+      setError(t('usage.error.load'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void loadUsageDashboard();
@@ -199,83 +201,86 @@ export default function UsagePanel() {
 
   const summaryCards = useMemo(() => ([
     {
-      label: 'Total Tokens',
+      label: t('usage.summary.total_tokens'),
       value: formatCompactNumber(summary.total_tokens),
-      subValue: `${formatCompactNumber(summary.prompt_tokens)} prompt / ${formatCompactNumber(summary.completion_tokens)} completion`,
+      subValue: t('usage.summary.prompt_split', {
+        prompt: formatCompactNumber(summary.prompt_tokens),
+        completion: formatCompactNumber(summary.completion_tokens),
+      }),
       accent: 'strong',
     },
     {
-      label: 'Prompt Tokens',
+      label: t('usage.summary.prompt_tokens'),
       value: formatCompactNumber(summary.prompt_tokens),
-      subValue: `${formatPercent(promptShare)} of total tokens`,
+      subValue: t('usage.summary.percent_of_total', { value: formatPercent(promptShare) }),
       accent: 'info',
     },
     {
-      label: 'Completion Tokens',
+      label: t('usage.summary.completion_tokens'),
       value: formatCompactNumber(summary.completion_tokens),
-      subValue: `${formatPercent(completionShare)} of total tokens`,
+      subValue: t('usage.summary.percent_of_total', { value: formatPercent(completionShare) }),
       accent: 'success',
     },
     {
-      label: 'Completion tok/s',
+      label: t('usage.summary.completion_rate'),
       value: formatRatio(summary.output_tokens_per_second),
-      subValue: 'Completion tokens / duration',
+      subValue: t('usage.summary.completion_duration'),
       accent: 'calm',
     },
     {
-      label: 'Total tok/s',
+      label: t('usage.summary.total_rate'),
       value: formatRatio(summary.average_tokens_per_second),
-      subValue: 'Prompt + completion / duration',
+      subValue: t('usage.summary.total_duration'),
       accent: 'success',
     },
     {
-      label: 'Active Sources',
+      label: t('usage.summary.active_sources'),
       value: formatCompactNumber(activeSources.length),
-      subValue: `${formatCompactNumber(summary.session_count)} recorded sessions`,
+      subValue: t('usage.summary.recorded_sessions', { value: formatCompactNumber(summary.session_count) }),
       accent: 'warning',
     },
-  ]), [summary, activeSources.length, promptShare, completionShare]);
+  ]), [summary, activeSources.length, promptShare, completionShare, t]);
 
   return (
     <div className="glass-panel usage-panel">
       <div className="usage-panel-header">
         <div>
-          <h2 className="usage-panel-title">Usage Dashboard</h2>
-          <div className="usage-secondary-text">Historical model consumption from recorded sessions</div>
+          <h2 className="usage-panel-title">{t('usage.title')}</h2>
+          <div className="usage-secondary-text">{t('usage.subtitle')}</div>
         </div>
         <div className="usage-panel-actions">
           {error ? <span className="usage-panel-error">{error}</span> : null}
           <button className="usage-panel-refresh" onClick={() => void loadUsageDashboard()}>
-            Refresh
+            {t('usage.refresh')}
           </button>
         </div>
       </div>
 
       <div className="usage-panel-content">
-        {loading && !dashboard ? <div className="usage-empty">Loading usage dashboard...</div> : null}
-        {!loading && !hasUsage ? <div className="usage-empty">No model usage recorded yet.</div> : null}
+        {loading && !dashboard ? <div className="usage-empty">{t('usage.loading')}</div> : null}
+        {!loading && !hasUsage ? <div className="usage-empty">{t('usage.empty')}</div> : null}
 
         <section className="usage-overview">
           <div className="usage-overview-hero">
-            <div className="usage-overview-kicker">Usage Overview</div>
+            <div className="usage-overview-kicker">{t('usage.overview')}</div>
             <div className="usage-overview-total">{formatCompactNumber(summary.total_tokens)}</div>
-            <div className="usage-overview-caption">Total model tokens recorded across tracked sessions</div>
+            <div className="usage-overview-caption">{t('usage.total_caption')}</div>
 
             <div className="usage-overview-meta">
-              <ToneChip tone="neutral">Latest Activity</ToneChip>
+              <ToneChip tone="neutral">{t('usage.latest_activity')}</ToneChip>
               <span className="usage-secondary-text">{formatTimestamp(summary.latest_call_at)}</span>
             </div>
 
             <div className="usage-meter-group">
               <div className="usage-meter-labels">
-                <span>Prompt Share</span>
+                <span>{t('usage.prompt_share')}</span>
                 <span>{formatPercent(promptShare)}</span>
               </div>
               <div className="usage-meter">
                 <div className="usage-meter-fill usage-meter-fill--prompt" style={{ width: `${clampPercent(promptShare)}%` }} />
               </div>
               <div className="usage-meter-labels">
-                <span>Completion Share</span>
+                <span>{t('usage.completion_share')}</span>
                 <span>{formatPercent(completionShare)}</span>
               </div>
               <div className="usage-meter">
@@ -298,9 +303,9 @@ export default function UsagePanel() {
         </section>
 
         <section className="usage-section">
-          <h3>By Source</h3>
+          <h3>{t('usage.by_source')}</h3>
           {!sourceRows.length ? (
-            <div className="usage-empty">No source usage yet.</div>
+            <div className="usage-empty">{t('usage.by_source.empty')}</div>
           ) : (
             <div className="usage-source-list">
               {sourceRows.map((row) => {

@@ -1,10 +1,10 @@
 export const ACTION_PLAN_REASONING_STORAGE_KEY = 'action_plan_reasoning_effort';
 
 export const ACTION_PLAN_REASONING_OPTIONS = [
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-  { value: 'xhigh', label: 'Extra High' },
+  { value: 'low', labelKey: 'common.reasoning.low', fallbackLabel: 'Low' },
+  { value: 'medium', labelKey: 'common.reasoning.medium', fallbackLabel: 'Medium' },
+  { value: 'high', labelKey: 'common.reasoning.high', fallbackLabel: 'High' },
+  { value: 'xhigh', labelKey: 'common.reasoning.xhigh', fallbackLabel: 'Extra High' },
 ];
 
 const VALID_REASONING_EFFORTS = new Set(

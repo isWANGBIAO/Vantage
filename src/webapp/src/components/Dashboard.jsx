@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import { shouldUseDashboardGeolocation } from './dashboardAqiPolicy.js';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 async function getGeolocationPermissionState() {
   if (!navigator.permissions?.query) {
@@ -30,6 +31,7 @@ async function getGeolocationPermissionState() {
 }
 
 export default function Dashboard({ isVisible = false }) {
+  const { effectiveLanguage, t } = useDisplayLanguage();
   const [stats, setStats] = useState(null);
   const [latestImages, setLatestImages] = useState({ photo: null, screenshot: null });
   const [time, setTime] = useState(new Date());
@@ -163,11 +165,11 @@ export default function Dashboard({ isVisible = false }) {
       const data = await res.json();
 
       if (!res.ok) {
-        alert(`Failed to open folder: ${data.error || 'Unknown error'}`);
+        alert(t('dashboard.alert.open_folder_failed', { error: data.error || 'Unknown error' }));
       }
     } catch (err) {
       console.error('Failed to open folder', err);
-      alert('Network error or server unreachable');
+      alert(t('dashboard.alert.network_error'));
     }
   };
 
@@ -213,7 +215,7 @@ export default function Dashboard({ isVisible = false }) {
             }}
           >
             <Activity color="var(--primary-color)" size={24} />
-            System Dashboard
+            {t('dashboard.title')}
           </h2>
           <div className="dashboard-actions">
             <button
@@ -233,7 +235,7 @@ export default function Dashboard({ isVisible = false }) {
               }}
             >
               <ImageIcon size={14} />
-              Open Photos
+              {t('dashboard.open_photos')}
             </button>
             <button
               className="dashboard-quick-button"
@@ -252,7 +254,7 @@ export default function Dashboard({ isVisible = false }) {
               }}
             >
               <Monitor size={14} />
-              Open Screenshots
+              {t('dashboard.open_screenshots')}
             </button>
           </div>
         </div>
@@ -269,11 +271,11 @@ export default function Dashboard({ isVisible = false }) {
             }}
           >
             <Clock size={24} color="var(--text-muted)" />
-            {time.toLocaleTimeString()}
+            {time.toLocaleTimeString(effectiveLanguage)}
           </div>
           <div style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Calendar size={18} />
-            {time.toLocaleDateString()}
+            {time.toLocaleDateString(effectiveLanguage)}
           </div>
         </div>
       </div>
@@ -309,7 +311,7 @@ export default function Dashboard({ isVisible = false }) {
             }}
           >
             <ImageIcon size={16} />
-            Latest Photo
+            {t('dashboard.latest_photo')}
           </div>
           <div style={{ flex: 1, background: '#000', position: 'relative' }}>
             {latestImages.photo ? (
@@ -325,7 +327,7 @@ export default function Dashboard({ isVisible = false }) {
                   color: '#666',
                 }}
               >
-                No Data
+                {t('dashboard.no_data')}
               </div>
             )}
           </div>
@@ -381,7 +383,7 @@ export default function Dashboard({ isVisible = false }) {
             }}
           >
             <Activity size={16} />
-            Camera Feed
+            {t('dashboard.camera_feed')}
           </div>
           <div style={{ flex: 1, position: 'relative' }}>
             <CameraFeed />
@@ -418,7 +420,7 @@ export default function Dashboard({ isVisible = false }) {
             }}
           >
             <Monitor size={16} />
-            Latest Screenshot
+            {t('dashboard.latest_screenshot')}
           </div>
           <div style={{ flex: 1, background: '#000', position: 'relative' }}>
             {latestImages.screenshot ? (
@@ -434,7 +436,7 @@ export default function Dashboard({ isVisible = false }) {
                   color: '#666',
                 }}
               >
-                No Data
+                {t('dashboard.no_data')}
               </div>
             )}
           </div>
@@ -462,39 +464,39 @@ export default function Dashboard({ isVisible = false }) {
       <div className="dashboard-stats-grid">
         <StatCard
           icon={<Cpu size={24} color="#a29bfe" />}
-          title="CPU Usage"
+          title={t('dashboard.stat.cpu_usage')}
           value={`${stats?.cpu_usage || 0}%`}
           color="#a29bfe"
         />
         <StatCard
           icon={<Activity size={24} color="#00d2d3" />}
-          title="Memory"
+          title={t('dashboard.stat.memory')}
           value={`${stats?.memory_used_gb || 0} GB`}
-          subValue={`${stats?.memory_percent || 0}% Used`}
+          subValue={t('dashboard.stat.memory_used', { percent: stats?.memory_percent || 0 })}
           color="#00d2d3"
         />
         <StatCard
           icon={<HardDrive size={24} color="#ff7675" />}
-          title="Disk Free"
+          title={t('dashboard.stat.disk_free')}
           value={`${stats?.disk_free_gb || 0} GB`}
-          subValue={`~${daysLeft.toFixed(1)} Days left`}
+          subValue={t('dashboard.stat.days_left', { value: daysLeft.toFixed(1) })}
           color="#ff7675"
         />
         <StatCard
           icon={<Database size={24} color="#55efc4" />}
-          title="Storage Used"
+          title={t('dashboard.stat.storage_used')}
           value={(() => {
             const mb = stats?.storage_used_mb || 0;
             return mb > 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb} MB`;
           })()}
-          subValue={`~${storageEstimate.groupSizeMB.toFixed(2)} MB/group`}
+          subValue={t('dashboard.stat.group_size', { value: storageEstimate.groupSizeMB.toFixed(2) })}
           color="#55efc4"
         />
         <StatCard
           icon={<Wind size={24} color={aqi?.color || '#b2bec3'} />}
-          title="Air Quality (US)"
+          title={t('dashboard.stat.air_quality')}
           value={aqi?.aqi ?? '--'}
-          subValue={aqi ? `${aqi.city} - ${aqi.level}` : 'Loading...'}
+          subValue={aqi ? `${aqi.city} - ${aqi.level}` : t('dashboard.stat.loading')}
           color={aqi?.color || '#b2bec3'}
           titleColor={aqi?.color}
         />
@@ -509,9 +511,11 @@ export default function Dashboard({ isVisible = false }) {
               }
             />
           )}
-          title="Focus Time"
-          value={healthStats && healthStats.is_sitting ? `${healthStats.duration_minutes} min` : 'Away'}
-          subValue={healthStats?.is_sitting ? `Limit: ${healthStats.threshold_minutes} min` : 'Timer paused'}
+          title={t('dashboard.stat.focus_time')}
+          value={healthStats && healthStats.is_sitting ? `${healthStats.duration_minutes} min` : t('dashboard.stat.away')}
+          subValue={healthStats?.is_sitting
+            ? t('dashboard.stat.limit', { value: healthStats.threshold_minutes })
+            : t('dashboard.stat.timer_paused')}
           color={
             healthStats?.is_sitting && healthStats.duration_minutes >= (healthStats.threshold_minutes * 0.8)
               ? '#e74c3c'

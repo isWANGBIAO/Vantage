@@ -39,3 +39,16 @@ test('App submits onboarding completion through the Electron bridge helpers', ()
   assert.ok(appSource.includes('pickLegacyRoot'));
   assert.ok(appSource.includes('handleCompleteOnboarding'));
 });
+
+test('App wires the display language provider and header switcher into the shell', () => {
+  assert.ok(appSource.includes('DisplayLanguageProvider'));
+  assert.ok(appSource.includes('useDisplayLanguage'));
+  assert.ok(appSource.includes('app-language-select'));
+  assert.ok(appSource.includes('displayLanguage'));
+});
+
+test('App only reapplies onboarding language when the saved onboarding value changes', () => {
+  assert.ok(appSource.includes('lastAppliedOnboardingLanguageRef'));
+  assert.ok(appSource.includes('lastAppliedOnboardingLanguageRef.current === onboardingState.displayLanguage'));
+  assert.ok(appSource.includes('lastAppliedOnboardingLanguageRef.current = onboardingState.displayLanguage'));
+});

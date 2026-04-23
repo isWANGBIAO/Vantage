@@ -24,6 +24,7 @@ test('getOnboardingState defaults to incomplete when settings file is missing', 
   assert.deepEqual(state, {
     completed: false,
     launchAtLogin: false,
+    displayLanguage: 'system',
     providerConfigured: false,
     migrationCompleted: false,
     legacyRoot: null,
@@ -42,6 +43,7 @@ test('getOnboardingState reads onboarding flags from settings.json', () => {
       version: 1,
       onboarding_completed: true,
       launch_at_login: true,
+      display_language: 'zh-CN',
     }),
     'utf8',
   );
@@ -80,6 +82,7 @@ test('getOnboardingState reads onboarding flags from settings.json', () => {
   assert.deepEqual(state, {
     completed: true,
     launchAtLogin: true,
+    displayLanguage: 'zh-CN',
     providerConfigured: true,
     migrationCompleted: true,
     legacyRoot: 'C:\\legacy-root',
@@ -103,6 +106,7 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
       apiKey: 'sk-demo',
       baseUrl: 'https://example.invalid/v1',
       model: 'gpt-5',
+      displayLanguage: 'en-US',
       skipChatSetup: false,
       importLegacyData: false,
       legacyRoot: null,
@@ -122,6 +126,7 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
     version: 1,
     onboarding_completed: true,
     launch_at_login: true,
+    display_language: 'en-US',
   });
   assert.deepEqual(providers, {
     version: 1,
@@ -160,6 +165,7 @@ test('saveOnboardingCompletion imports legacy history once and records migration
       apiKey: '',
       baseUrl: '',
       model: '',
+      displayLanguage: 'zh-CN',
       skipChatSetup: true,
       importLegacyData: true,
       legacyRoot,
@@ -175,6 +181,7 @@ test('saveOnboardingCompletion imports legacy history once and records migration
       apiKey: '',
       baseUrl: '',
       model: '',
+      displayLanguage: 'zh-CN',
       skipChatSetup: true,
       importLegacyData: true,
       legacyRoot,
@@ -184,6 +191,9 @@ test('saveOnboardingCompletion imports legacy history once and records migration
 
   const migrationState = JSON.parse(
     readFileSync(path.join(runtimePaths.migrationDir, 'migration-state.json'), 'utf8'),
+  );
+  const settings = JSON.parse(
+    readFileSync(path.join(runtimePaths.configDir, 'settings.json'), 'utf8'),
   );
 
   assert.equal(first.migration.imported, true);
@@ -202,4 +212,5 @@ test('saveOnboardingCompletion imports legacy history once and records migration
     source_path: legacyRoot,
     imported_at: '2026-04-23T18:00:00.000Z',
   });
+  assert.equal(settings.display_language, 'zh-CN');
 });
