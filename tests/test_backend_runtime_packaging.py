@@ -5,11 +5,13 @@ import pytest
 
 from src.core.backend_runtime_packaging import (
     APP_EXE_NAME,
+    CONFLICTING_RUNTIME_DLL_NAMES,
     REQUIRED_ROOT_RESOURCE_NAMES,
     RUNTIME_NAME,
     build_backend_runtime_manifest,
     build_pyinstaller_arguments,
     collect_backend_runtime_resources,
+    remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
 )
 
@@ -40,6 +42,7 @@ def test_collect_backend_runtime_resources_requires_models_and_prompts(tmp_path)
     resources = collect_backend_runtime_resources(tmp_path)
 
     packaged_paths = {resource.relative_destination / resource.source.name for resource in resources}
+    assert Path("opencv-data") / "haarcascade_frontalface_default.xml" in packaged_paths
     assert Path("yolo26m.pt") in packaged_paths
     assert Path("src") / "scripts" / "models" / "face_parsing.farl.lapa.int8.onnx" in packaged_paths
     for resource_name in REQUIRED_ROOT_RESOURCE_NAMES:
@@ -77,12 +80,48 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
     assert str(layout["spec_dir"]) in args
     assert "--name" in args
     assert RUNTIME_NAME in args
+    assert "--runtime-hook" in args
+    runtime_hook_index = args.index("--runtime-hook") + 1
+    assert args[runtime_hook_index] == str(layout["runtime_hook"])
+    assert "--exclude-module" in args
+    exclude_targets = {
+        args[index + 1]
+        for index, value in enumerate(args)
+        if value == "--exclude-module"
+    }
+    assert "mediapipe" in exclude_targets
     assert str(layout["entry_script"]) == args[-1]
     assert f"{tmp_path / 'yolo26m.pt'};." in args
     assert (
         f"{tmp_path / 'src' / 'scripts' / 'models' / 'face_parsing.farl.lapa.int8.onnx'};"
         "src/scripts/models"
     ) in args
+
+
+def test_remove_conflicting_runtime_libraries_deletes_known_vc_runtime_copies(tmp_path):
+    runtime_dir = tmp_path / RUNTIME_NAME
+    keep_file = runtime_dir / "_internal" / "torch" / "lib" / "torch_cpu.dll"
+    keep_file.parent.mkdir(parents=True, exist_ok=True)
+    keep_file.write_bytes(b"torch")
+
+    removed_targets = []
+    for relative_path in (
+        Path("_internal") / "MSVCP140.dll",
+        Path("_internal") / "VCRUNTIME140.dll",
+        Path("_internal") / "VCRUNTIME140_1.dll",
+        Path("_internal") / "pyzmq.libs" / "MSVCP140.dll",
+    ):
+        target = runtime_dir / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"runtime")
+        removed_targets.append(target)
+
+    removed = remove_conflicting_runtime_libraries(runtime_dir)
+
+    assert {path.name.lower() for path in removed} <= set(CONFLICTING_RUNTIME_DLL_NAMES)
+    assert {path.resolve() for path in removed} == {path.resolve() for path in removed_targets}
+    assert all(not path.exists() for path in removed_targets)
+    assert keep_file.exists()
 
 
 def test_build_backend_runtime_manifest_records_relative_outputs(tmp_path):

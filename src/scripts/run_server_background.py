@@ -1,7 +1,6 @@
 import os
 import runpy
 import sys
-import ctypes
 from datetime import datetime
 from pathlib import Path
 
@@ -22,8 +21,7 @@ def _ensure_project_root_on_sys_path(
 _ensure_project_root_on_sys_path()
 
 from src.core.config import Config
-
-_RUNTIME_DLL_HANDLES = []
+from src.core.runtime_library_bootstrap import apply_runtime_library_dirs, preload_torch_libraries
 
 
 def _redirect_standard_streams(log_path: Path):
@@ -62,51 +60,11 @@ def _configure_frozen_runtime_search_paths(
     env: dict[str, str] | None = None,
     add_dll_directory=None,
 ):
-    resolved_env = env if env is not None else os.environ
-    resolved_add_dll_directory = add_dll_directory
-    if resolved_add_dll_directory is None:
-        resolved_add_dll_directory = getattr(os, "add_dll_directory", None)
-
-    base_roots = []
-    internal_root = resource_root / "_internal"
-    if internal_root.exists():
-        base_roots.append(internal_root)
-    base_roots.append(resource_root)
-
-    candidate_dirs = []
-    for base_root in base_roots:
-        candidate_dirs.extend(
-            [
-                base_root,
-                base_root / "torch" / "lib",
-                base_root / "onnxruntime" / "capi",
-            ]
-        )
-
-    seen_dirs = set()
-    existing_dirs = []
-    for directory in candidate_dirs:
-        if not directory.exists():
-            continue
-        directory_str = str(directory.resolve())
-        if directory_str in seen_dirs:
-            continue
-        seen_dirs.add(directory_str)
-        existing_dirs.append(directory.resolve())
-    if not existing_dirs:
-        return []
-
-    existing_path_entries = [entry for entry in resolved_env.get("PATH", "").split(os.pathsep) if entry]
-    new_entries = [str(directory) for directory in existing_dirs]
-    resolved_env["PATH"] = os.pathsep.join(new_entries + existing_path_entries)
-
-    if resolved_add_dll_directory is not None:
-        for directory in existing_dirs:
-            handle = resolved_add_dll_directory(str(directory))
-            if handle is not None:
-                _RUNTIME_DLL_HANDLES.append(handle)
-
-    return new_entries
+    return apply_runtime_library_dirs(
+        resource_root,
+        env=env,
+        add_dll_directory=add_dll_directory,
+    )
 
 
 def _preload_frozen_torch_libraries(
@@ -114,43 +72,10 @@ def _preload_frozen_torch_libraries(
     *,
     load_library=None,
 ):
-    resolved_loader = load_library or ctypes.CDLL
-    candidate_roots = []
-    internal_root = resource_root / "_internal"
-    if internal_root.exists():
-        candidate_roots.append(internal_root)
-    candidate_roots.append(resource_root)
-
-    torch_lib_dir = None
-    for candidate_root in candidate_roots:
-        candidate_torch_lib = candidate_root / "torch" / "lib"
-        if candidate_torch_lib.exists():
-            torch_lib_dir = candidate_torch_lib
-            break
-
-    if torch_lib_dir is None:
-        return []
-
-    preload_order = [
-        "torch_global_deps.dll",
-        "c10.dll",
-        "c10_cuda.dll",
-        "torch_cpu.dll",
-        "torch_cuda.dll",
-        "torch_python.dll",
-    ]
-    loaded_dlls = []
-    for dll_name in preload_order:
-        dll_path = torch_lib_dir / dll_name
-        if not dll_path.exists():
-            continue
-        try:
-            resolved_loader(str(dll_path))
-            loaded_dlls.append(str(dll_path))
-        except Exception:  # noqa: BLE001
-            continue
-
-    return loaded_dlls
+    return preload_torch_libraries(
+        resource_root,
+        load_library=load_library,
+    )
 
 
 def _run_server_entrypoint(

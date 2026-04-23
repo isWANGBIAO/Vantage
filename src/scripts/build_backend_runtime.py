@@ -24,6 +24,7 @@ PROJECT_ROOT = _ensure_project_root_on_sys_path()
 from src.core.backend_runtime_packaging import (
     build_pyinstaller_arguments,
     collect_backend_runtime_resources,
+    remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
     validate_backend_runtime_bundle,
     write_backend_runtime_manifest,
@@ -82,6 +83,7 @@ def main() -> int:
         )
         _run_pyinstaller(pyinstaller_args)
 
+    removed_runtime_dlls = remove_conflicting_runtime_libraries(layout["runtime_dir"])
     manifest = write_backend_runtime_manifest(layout=layout, resources=resources)
     errors = validate_backend_runtime_bundle(layout, resources)
     if errors:
@@ -92,6 +94,7 @@ def main() -> int:
     print(f"Built backend runtime: {layout['executable_path']}")
     print(f"Runtime manifest: {layout['manifest_path']}")
     print(f"Bundled resources: {len(manifest['resource_outputs'])}")
+    print(f"Removed conflicting runtime DLLs: {len(removed_runtime_dlls)}")
     return 0
 
 

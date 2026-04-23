@@ -141,3 +141,8 @@ results.csv
 logs/
 output/
 tmp/
+cache/
+migration/
+runtime/
+config/
+src/webapp/electron-dist/

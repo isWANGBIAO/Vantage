@@ -269,6 +269,20 @@ def get_face_analysis_runtime():
     return _face_analysis_runtime
 
 
+def prewarm_runtime_models():
+    try:
+        get_face_analysis_runtime()
+        print("Face analysis runtime warmed up successfully.")
+    except Exception as exc:
+        print(f"Failed to warm face analysis runtime: {exc}")
+
+    try:
+        get_yolo_model()
+        print("YOLO model warmed up successfully.")
+    except Exception as exc:
+        print(f"Failed to warm YOLO model: {exc}")
+
+
 def _camera_online():
     camera = state.camera
     return bool(camera and camera.isOpened())
@@ -995,6 +1009,7 @@ async def startup_event():
         print(f"----------------------------------------------------------------")
         
         state.monitor = Monitor(state.camera, state.paths, state.photos_path, state.screenshots_path)
+        prewarm_runtime_models()
 
         thread_specs = (
             ("camera_loop", camera_loop),

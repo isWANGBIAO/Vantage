@@ -33,8 +33,17 @@ from src.core.backend_runtime_packaging import (
     resolve_backend_runtime_layout,
     validate_backend_runtime_bundle,
 )
+from src.core.runtime_library_bootstrap import collect_runtime_library_dirs
 from src.core.media_storage import save_media_paths_settings
 from src.scripts.cleanup_vantage_python_processes import iter_vantage_server_processes, terminate_processes
+
+
+BLOCKING_RUNTIME_PATTERNS = (
+    "Failed to load YOLO model",
+    "c10.dll",
+    "DLL load failed",
+    "Live face analysis error",
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -73,11 +82,7 @@ def _build_smoke_environment(layout: dict[str, Path]) -> dict[str, str]:
     smoke_data_dir = layout["build_root"] / "smoke-data"
     config_dir = _seed_smoke_media_paths(smoke_data_dir)
     env = os.environ.copy()
-    runtime_path_entries = [
-        str(layout["resource_dir"]),
-        str(layout["resource_dir"] / "torch" / "lib"),
-        str(layout["resource_dir"] / "onnxruntime" / "capi"),
-    ]
+    runtime_path_entries = [str(path) for path in collect_runtime_library_dirs(layout["runtime_dir"])]
     existing_path_entries = [entry for entry in env.get("PATH", "").split(os.pathsep) if entry]
     env["PATH"] = os.pathsep.join(runtime_path_entries + existing_path_entries)
     env["VANTAGE_APP_MODE"] = "packaged"
@@ -123,6 +128,45 @@ def _tail_text_file(path: Path, max_lines: int = 40) -> str:
     return "\n".join(lines[-max_lines:])
 
 
+def _status_matches_runtime_layout(status_payload: dict[str, object], layout: dict[str, Path]) -> bool:
+    cwd = status_payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd.strip():
+        return False
+
+    try:
+        return Path(cwd).resolve() == layout["resource_dir"].resolve()
+    except OSError:
+        return False
+
+
+def _find_runtime_blockers(log_text: str) -> list[str]:
+    return [pattern for pattern in BLOCKING_RUNTIME_PATTERNS if pattern in log_text]
+
+
+def _resolve_runtime_server_log(smoke_data_dir: Path) -> Path | None:
+    pointer_path = smoke_data_dir / "logs" / "server.latest.log"
+    if not pointer_path.exists():
+        return None
+
+    try:
+        target = Path(pointer_path.read_text(encoding="utf-8").strip())
+    except OSError:
+        return None
+
+    return target if target.exists() else None
+
+
+def _iter_packaged_backend_processes(executable_name: str = "VantageBackend.exe"):
+    for process in psutil.process_iter(["pid", "name", "exe"]):
+        name = process.info.get("name")
+        exe_path = process.info.get("exe")
+        if name == executable_name:
+            yield process
+            continue
+        if exe_path and Path(exe_path).name == executable_name:
+            yield process
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
@@ -155,10 +199,12 @@ def main() -> int:
 
     existing_server_processes = list(iter_vantage_server_processes(PROJECT_ROOT))
     terminate_processes(existing_server_processes)
+    terminate_processes(list(_iter_packaged_backend_processes()))
 
     verify_dir = layout["build_root"] / "verification"
     verify_dir.mkdir(parents=True, exist_ok=True)
     smoke_log_path = verify_dir / "backend-runtime-smoke.log"
+    smoke_data_dir = layout["build_root"] / "smoke-data"
 
     env = _build_smoke_environment(layout)
     executable_path = layout["executable_path"]
@@ -183,13 +229,38 @@ def main() -> int:
             print(log_tail)
         return 1
 
+    runtime_log_path = _resolve_runtime_server_log(smoke_data_dir)
+    runtime_log_text = (
+        runtime_log_path.read_text(encoding="utf-8", errors="replace") if runtime_log_path else ""
+    )
+    runtime_blockers = _find_runtime_blockers(runtime_log_text)
+    status_matches_runtime = _status_matches_runtime_layout(status_payload, layout)
+
     _terminate_process_tree(process.pid)
+    if not status_matches_runtime:
+        print(
+            "Packaged backend status returned an unexpected cwd: "
+            f"{status_payload.get('cwd')} (expected {layout['resource_dir']})"
+        )
+        if runtime_log_path:
+            print("--- runtime log tail ---")
+            print(_tail_text_file(runtime_log_path))
+        return 1
+
+    if runtime_blockers:
+        print("Packaged backend runtime log contains blocking errors: " + ", ".join(runtime_blockers))
+        if runtime_log_path:
+            print("--- runtime log tail ---")
+            print(_tail_text_file(runtime_log_path))
+        return 1
+
     print(
         json.dumps(
             {
                 "validated": True,
                 "executable": str(executable_path),
                 "smoke_log": str(smoke_log_path),
+                "runtime_log": str(runtime_log_path) if runtime_log_path else None,
                 "status": status_payload,
             },
             indent=2,

@@ -94,6 +94,55 @@ def test_startup_event_is_idempotent_for_static_mounts_and_threads():
         server.state.background_thread_status = original_background_thread_status
 
 
+def test_startup_event_prewarms_runtime_models_before_background_threads():
+    original_routes = list(server.app.router.routes)
+    original_photos = server.state.photos_path
+    original_screenshots = server.state.screenshots_path
+    original_monitor = server.state.monitor
+    original_paths = dict(server.state.paths)
+    original_background_thread_status = dict(server.state.background_thread_status)
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            photos_path = tmp_path / "photos"
+            screenshots_path = tmp_path / "screenshots"
+            photos_path.mkdir()
+            screenshots_path.mkdir()
+
+            events = []
+
+            def record_prewarm():
+                events.append("prewarm")
+
+            class _RecordingThread:
+                def __init__(self, *args, **kwargs):
+                    self.target = kwargs.get("target")
+
+                def start(self):
+                    events.append(f"thread:{getattr(self.target, '__name__', 'unknown')}")
+
+            with (
+                patch.object(server, "identify_logs_folder", return_value=(str(photos_path), str(screenshots_path))),
+                patch.object(server, "find_latest_file_recursive", return_value=None),
+                patch.object(server, "Monitor", side_effect=lambda *args, **kwargs: object()),
+                patch.object(server, "prewarm_runtime_models", side_effect=record_prewarm),
+                patch.object(server.threading, "Thread", _RecordingThread),
+                patch.object(server.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
+            ):
+                asyncio.run(server.startup_event())
+
+            assert events[0] == "prewarm"
+            assert any(event.startswith("thread:") for event in events[1:])
+    finally:
+        server.app.router.routes[:] = original_routes
+        server.state.photos_path = original_photos
+        server.state.screenshots_path = original_screenshots
+        server.state.monitor = original_monitor
+        server.state.paths = original_paths
+        server.state.background_thread_status = original_background_thread_status
+
+
 def test_startup_event_retries_partial_failure_without_duplicate_threads():
     original_routes = list(server.app.router.routes)
     original_photos = server.state.photos_path

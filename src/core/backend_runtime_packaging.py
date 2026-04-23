@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import cv2
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +27,14 @@ REQUIRED_RESOURCE_SPECS = (
     ("src/scripts/models/face_parsing.farl.lapa.int8.onnx", "src/scripts/models"),
 )
 
-PYINSTALLER_EXCLUDES = ("PyQt5", "PyQt6", "PySide2", "PySide6")
+OPENCV_FACE_CASCADE_NAME = "haarcascade_frontalface_default.xml"
+CONFLICTING_RUNTIME_DLL_NAMES = (
+    "msvcp140.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+)
+
+PYINSTALLER_EXCLUDES = ("PyQt5", "PyQt6", "PySide2", "PySide6", "mediapipe")
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,7 @@ def resolve_backend_runtime_layout(project_root: str | Path) -> dict[str, Path]:
         "resource_dir": resource_dir,
         "manifest_path": runtime_dir / "runtime-manifest.json",
         "entry_script": resolved_root / "src" / "scripts" / "run_server_background.py",
+        "runtime_hook": resolved_root / "src" / "scripts" / "pyinstaller_runtime_hook.py",
         "executable_path": runtime_dir / APP_EXE_NAME,
     }
 
@@ -66,6 +75,13 @@ def _normalize_destination(relative_destination: str | Path) -> Path:
     if str(destination) in ("", "."):
         return Path(".")
     return destination
+
+
+def resolve_opencv_face_cascade_source() -> Path:
+    cascade_path = Path(cv2.data.haarcascades) / OPENCV_FACE_CASCADE_NAME
+    if not cascade_path.exists():
+        raise FileNotFoundError(f"Missing OpenCV face cascade: {cascade_path}")
+    return cascade_path.resolve()
 
 
 def collect_backend_runtime_resources(project_root: str | Path) -> list[BundledResource]:
@@ -86,6 +102,16 @@ def collect_backend_runtime_resources(project_root: str | Path) -> list[BundledR
             missing.append(relative_source)
             continue
         resources.append(BundledResource(resource_path, _normalize_destination(relative_destination)))
+
+    try:
+        resources.append(
+            BundledResource(
+                resolve_opencv_face_cascade_source(),
+                Path("opencv-data"),
+            )
+        )
+    except FileNotFoundError as exc:
+        missing.append(str(exc))
 
     if missing:
         raise FileNotFoundError(
@@ -117,6 +143,8 @@ def build_pyinstaller_arguments(
         str(layout["work_dir"]),
         "--specpath",
         str(layout["spec_dir"]),
+        "--runtime-hook",
+        str(layout["runtime_hook"]),
         "--collect-submodules",
         "src",
     ]
@@ -144,6 +172,14 @@ def build_backend_runtime_manifest(
 ) -> dict[str, object]:
     built_at = built_at or datetime.now()
     project_root = layout["project_root"]
+
+    def manifest_source_path(source: Path) -> str:
+        resolved_source = source.resolve()
+        try:
+            return resolved_source.relative_to(project_root).as_posix()
+        except ValueError:
+            return resolved_source.as_posix()
+
     return {
         "runtime_name": RUNTIME_NAME,
         "app_mode": "packaged",
@@ -154,7 +190,7 @@ def build_backend_runtime_manifest(
         "resource_outputs": [resource.output_relative_path.as_posix() for resource in resources],
         "resources": [
             {
-                "source": resource.source.resolve().relative_to(project_root).as_posix(),
+                "source": manifest_source_path(resource.source),
                 "output": resource.output_relative_path.as_posix(),
             }
             for resource in resources
@@ -178,6 +214,21 @@ def write_backend_runtime_manifest(
 def load_backend_runtime_manifest(layout: dict[str, Path]) -> dict[str, object]:
     manifest_path = layout["manifest_path"]
     return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+def remove_conflicting_runtime_libraries(runtime_dir: str | Path) -> list[Path]:
+    resolved_runtime_dir = Path(runtime_dir).resolve()
+    if not resolved_runtime_dir.exists():
+        return []
+
+    removed_files: list[Path] = []
+    conflicting_names = set(CONFLICTING_RUNTIME_DLL_NAMES)
+    for dll_path in resolved_runtime_dir.rglob("*.dll"):
+        if dll_path.name.lower() not in conflicting_names:
+            continue
+        dll_path.unlink()
+        removed_files.append(dll_path.resolve())
+    return sorted(removed_files)
 
 
 def validate_backend_runtime_bundle(

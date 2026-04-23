@@ -1,4 +1,5 @@
 import os
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -83,41 +84,62 @@ class AnalysisConfig:
 
 class MediaPipeFaceDetector:
     def __init__(self, min_detection_confidence: float = 0.5):
-        import mediapipe as mp
+        self.min_detection_confidence = float(min_detection_confidence)
+        cascade_path = self._resolve_cascade_path()
+        self._cascade = cv2.CascadeClassifier(str(cascade_path))
+        if self._cascade.empty():
+            raise RuntimeError(f"Failed to load OpenCV face cascade: {cascade_path}")
 
-        self._mp = mp
-        self._detector = mp.solutions.face_detection.FaceDetection(
-            model_selection=1,
-            min_detection_confidence=min_detection_confidence,
+    @staticmethod
+    def _resolve_cascade_path():
+        cascade_name = "haarcascade_frontalface_default.xml"
+        candidate_paths = []
+
+        configured_path = os.environ.get("VANTAGE_FACE_CASCADE_PATH")
+        if configured_path:
+            candidate_paths.append(Path(configured_path))
+
+        meipass_root = getattr(sys, "_MEIPASS", None)
+        if meipass_root:
+            candidate_paths.append(Path(meipass_root) / "opencv-data" / cascade_name)
+
+        executable_parent = Path(sys.executable).resolve().parent
+        candidate_paths.extend(
+            [
+                executable_parent / "_internal" / "opencv-data" / cascade_name,
+                executable_parent / "opencv-data" / cascade_name,
+                Path(cv2.data.haarcascades) / cascade_name,
+            ]
+        )
+
+        for candidate_path in candidate_paths:
+            if candidate_path.exists():
+                return candidate_path.resolve()
+
+        raise FileNotFoundError(
+            "OpenCV face cascade not found in packaged runtime or local OpenCV data paths."
         )
 
     def detect(self, image_bgr):
         if image_bgr is None or image_bgr.size == 0:
             return None
 
-        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        results = self._detector.process(rgb)
-        if not results.detections:
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        gray = cv2.equalizeHist(gray)
+        h, w = image_bgr.shape[:2]
+        min_side = max(32, int(min(h, w) * 0.2))
+        min_neighbors = max(3, int(round(3 + (self.min_detection_confidence * 4))))
+        detections = self._cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=min_neighbors,
+            minSize=(min_side, min_side),
+        )
+        if len(detections) == 0:
             return None
 
-        h, w = image_bgr.shape[:2]
-        best_bbox = None
-        best_score = -1.0
-
-        for detection in results.detections:
-            score = float(detection.score[0]) if detection.score else 0.0
-            bbox = detection.location_data.relative_bounding_box
-            x = max(0, int(bbox.xmin * w))
-            y = max(0, int(bbox.ymin * h))
-            bw = min(w - x, int(bbox.width * w))
-            bh = min(h - y, int(bbox.height * h))
-            if bw <= 0 or bh <= 0:
-                continue
-            if score > best_score:
-                best_score = score
-                best_bbox = (x, y, bw, bh)
-
-        return best_bbox
+        best_bbox = max(detections, key=lambda bbox: int(bbox[2]) * int(bbox[3]))
+        return tuple(int(value) for value in best_bbox)
 
 
 class FaceParser:
@@ -145,14 +167,7 @@ class FaceParser:
             self._init_fallback()
 
     def _init_fallback(self):
-        import mediapipe as mp
-
-        self.mp_face_mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=True,
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-        )
+        self._fallback_ready = True
 
     def preprocess(self, img_bgr):
         resized = cv2.resize(img_bgr, (512, 512), interpolation=cv2.INTER_LINEAR)
@@ -174,7 +189,7 @@ class FaceParser:
         return parsing_map, resized
 
     def infer_fallback(self, img_bgr):
-        if not hasattr(self, "mp_face_mesh"):
+        if not getattr(self, "_fallback_ready", False):
             self._init_fallback()
         if img_bgr.shape[:2] != (512, 512):
             _, resized = self.preprocess(img_bgr)
@@ -185,30 +200,15 @@ class FaceParser:
     def _infer_fallback(self, resized):
         h, w = resized.shape[:2]
         parsing_map = np.zeros((h, w), dtype=np.uint8)
-        results = self.mp_face_mesh.process(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB))
-        if not results.multi_face_landmarks:
-            return parsing_map
+        face_center = (int(w * 0.5), int(h * 0.52))
+        face_axes = (max(1, int(w * 0.34)), max(1, int(h * 0.44)))
+        cv2.ellipse(parsing_map, face_center, face_axes, 0, 0, 360, CLASS_IDX["skin"], -1)
 
-        landmarks = results.multi_face_landmarks[0].landmark
-
-        def to_pts(indices):
-            pts = []
-            for idx in indices:
-                pt = landmarks[idx]
-                pts.append((int(pt.x * w), int(pt.y * h)))
-            return np.array(pts, dtype=np.int32)
-
-        face_oval = [
-            10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365,
-            379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93,
-            234, 127, 162, 21, 54, 103, 67, 109,
-        ]
-        left_eye = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
-        right_eye = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
-
-        cv2.fillPoly(parsing_map, [to_pts(face_oval)], CLASS_IDX["skin"])
-        cv2.fillPoly(parsing_map, [to_pts(left_eye)], CLASS_IDX["l_eye"])
-        cv2.fillPoly(parsing_map, [to_pts(right_eye)], CLASS_IDX["r_eye"])
+        eye_axes = (max(1, int(w * 0.085)), max(1, int(h * 0.04)))
+        left_eye_center = (int(w * 0.37), int(h * 0.41))
+        right_eye_center = (int(w * 0.63), int(h * 0.41))
+        cv2.ellipse(parsing_map, left_eye_center, eye_axes, 0, 0, 360, CLASS_IDX["l_eye"], -1)
+        cv2.ellipse(parsing_map, right_eye_center, eye_axes, 0, 0, 360, CLASS_IDX["r_eye"], -1)
         return parsing_map
 
 

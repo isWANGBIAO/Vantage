@@ -12,8 +12,11 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
             tmp_path = Path(tmpdir)
             layout = {
                 "build_root": tmp_path / "build",
+                "runtime_dir": tmp_path / "stage" / "VantageBackend",
                 "resource_dir": tmp_path / "stage" / "VantageBackend" / "_internal",
             }
+
+            layout["resource_dir"].mkdir(parents=True, exist_ok=True)
 
             env = verify_backend_runtime._build_smoke_environment(layout)
 
@@ -28,6 +31,46 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
                 layout["build_root"] / "smoke-data" / "screenshots",
             )
             self.assertEqual(env["VANTAGE_DATA_DIR"], str(layout["build_root"] / "smoke-data"))
+
+    def test_status_payload_must_match_current_runtime_layout(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            layout = {
+                "resource_dir": tmp_path / "stage" / "VantageBackend" / "_internal",
+            }
+
+            self.assertTrue(
+                verify_backend_runtime._status_matches_runtime_layout(
+                    {"cwd": str(layout["resource_dir"])},
+                    layout,
+                )
+            )
+            self.assertFalse(
+                verify_backend_runtime._status_matches_runtime_layout(
+                    {"cwd": str(tmp_path / "other-runtime")},
+                    layout,
+                )
+            )
+
+    def test_find_runtime_blockers_flags_packaged_dll_errors(self):
+        log_text = "\n".join(
+            [
+                "Failed to load YOLO model in thread: [WinError 1114] Error loading c10.dll",
+                "Live face analysis error: DLL load failed while importing _framework_bindings",
+            ]
+        )
+
+        blockers = verify_backend_runtime._find_runtime_blockers(log_text)
+
+        self.assertEqual(
+            blockers,
+            [
+                "Failed to load YOLO model",
+                "c10.dll",
+                "DLL load failed",
+                "Live face analysis error",
+            ],
+        )
 
 
 if __name__ == "__main__":

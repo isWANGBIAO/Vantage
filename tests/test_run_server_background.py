@@ -113,6 +113,7 @@ def test_run_server_entrypoint_calls_server_main_in_frozen_mode(tmp_path):
 def test_configure_frozen_runtime_search_paths_adds_internal_runtime_dirs(tmp_path):
     launcher = _load_launcher_module()
     resource_root = tmp_path / "runtime" / "_internal"
+    runtime_root = resource_root.parent
     torch_lib = resource_root / "torch" / "lib"
     onnx_capi = resource_root / "onnxruntime" / "capi"
     torch_lib.mkdir(parents=True)
@@ -127,13 +128,15 @@ def test_configure_frozen_runtime_search_paths_adds_internal_runtime_dirs(tmp_pa
         add_dll_directory=lambda value: added_paths.append(value),
     )
 
-    assert env["PATH"].split(os.pathsep)[:3] == [
+    assert env["PATH"].split(os.pathsep)[:4] == [
         str(resource_root),
+        str(runtime_root),
         str(torch_lib),
         str(onnx_capi),
     ]
     assert added_paths == [
         str(resource_root),
+        str(runtime_root),
         str(torch_lib),
         str(onnx_capi),
     ]

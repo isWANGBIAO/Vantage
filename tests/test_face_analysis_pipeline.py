@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from builtins import __import__ as builtin_import
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -8,7 +9,9 @@ import numpy as np
 
 from src.services.face_analysis_pipeline import (
     AnalysisConfig,
+    CLASS_IDX,
     FaceParser,
+    MediaPipeFaceDetector,
     analyze_image_data,
     build_face_report,
     compute_trend_series,
@@ -64,6 +67,33 @@ class FakeParserWithSparsePrimarySkin(FakeParserWithoutEyes):
 
 
 class FaceAnalysisPipelineTests(unittest.TestCase):
+    def test_face_detector_uses_opencv_cascade_without_mediapipe(self):
+        class FakeCascadeClassifier:
+            def __init__(self, cascade_path):
+                self.cascade_path = cascade_path
+
+            def empty(self):
+                return False
+
+            def detectMultiScale(self, _gray, scaleFactor, minNeighbors, minSize):
+                return np.array([[12, 24, 90, 110], [4, 6, 40, 50]])
+
+        detector_image = np.full((200, 180, 3), 120, dtype=np.uint8)
+
+        def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "mediapipe":
+                raise AssertionError("mediapipe should not be imported by MediaPipeFaceDetector")
+            return builtin_import(name, globals, locals, fromlist, level)
+
+        with patch("cv2.CascadeClassifier", FakeCascadeClassifier), patch(
+            "builtins.__import__",
+            side_effect=guarded_import,
+        ):
+            detector = MediaPipeFaceDetector(min_detection_confidence=0.6)
+            bbox = detector.detect(detector_image)
+
+        self.assertEqual(bbox, (12, 24, 90, 110))
+
     def test_normalize_dark_circle_score_maps_raw_values_to_0_100(self):
         self.assertIsNone(normalize_dark_circle_score(None))
         self.assertEqual(normalize_dark_circle_score(0.0), 0.0)
@@ -801,18 +831,22 @@ class FaceAnalysisPipelineTests(unittest.TestCase):
 
 
 class FaceParserFallbackTests(unittest.TestCase):
-    def test_infer_fallback_initializes_mesh_when_missing(self):
+    def test_infer_fallback_generates_geometry_masks_without_mediapipe(self):
         parser = FaceParser.__new__(FaceParser)
+        image = np.zeros((512, 512, 3), dtype=np.uint8)
 
-        with patch.object(FaceParser, "_init_fallback") as init_fallback, patch.object(
-            FaceParser,
-            "_infer_fallback",
-            return_value=np.zeros((512, 512), dtype=np.uint8),
-        ):
-            result = FaceParser.infer_fallback(parser, np.zeros((512, 512, 3), dtype=np.uint8))
+        def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "mediapipe":
+                raise AssertionError("mediapipe should not be imported by FaceParser fallback")
+            return builtin_import(name, globals, locals, fromlist, level)
 
-        init_fallback.assert_called_once_with()
+        with patch("builtins.__import__", side_effect=guarded_import):
+            result = FaceParser.infer_fallback(parser, image)
+
         self.assertEqual(result.shape, (512, 512))
+        self.assertGreater(int(np.count_nonzero(result == CLASS_IDX["skin"])), 0)
+        self.assertGreater(int(np.count_nonzero(result == CLASS_IDX["l_eye"])), 0)
+        self.assertGreater(int(np.count_nonzero(result == CLASS_IDX["r_eye"])), 0)
 
 
 if __name__ == "__main__":
