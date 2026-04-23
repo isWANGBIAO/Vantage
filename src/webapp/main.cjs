@@ -1,12 +1,17 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimePaths.cjs');
 
 // ============ 日志系统 ============
-const logsDir = path.join(__dirname, '..', '..', 'logs');
-if (!fs.existsSync(logsDir)) {
-    fs.mkdirSync(logsDir, { recursive: true });
-}
+const runtimePaths = resolveRuntimePaths({
+    app,
+    env: process.env,
+    projectRoot: path.join(__dirname, '..', '..'),
+    platform: process.platform,
+});
+ensureRuntimeDirs(runtimePaths);
+const logsDir = runtimePaths.logDir;
 
 const logFile = path.join(logsDir, `electron_${new Date().toISOString().split('T')[0]}.log`);
 
@@ -45,7 +50,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // ============ Electron 应用 ============
-const isDev = !app.isPackaged && process.env.NODE_ENV !== 'production';
+const isDev = runtimePaths.appMode !== 'packaged' && !app.isPackaged && process.env.NODE_ENV !== 'production';
 
 let mainWindow = null;
 let tray = null;
@@ -53,6 +58,7 @@ let tray = null;
 log.info('Vantage Electron starting...');
 log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
 log.info(`Log file: ${logFile}`);
+log.info(`Runtime data dir: ${runtimePaths.dataDir}`);
 
 function createWindow() {
     log.info('Creating main window...');

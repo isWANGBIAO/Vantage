@@ -1,5 +1,7 @@
 import importlib.util
 from datetime import datetime
+from pathlib import Path
+from unittest.mock import patch
 
 
 def _load_launcher_module():
@@ -33,6 +35,35 @@ def test_build_frontend_env_sets_only_needed_mode_flags():
     assert production["FOO"] == "bar"
     assert "NODE_ENV" not in development
     assert development["FOO"] == "bar"
+
+
+def test_build_frontend_env_includes_runtime_path_contract():
+    launcher = _load_launcher_module()
+    runtime_env = {
+        "VANTAGE_APP_MODE": "development",
+        "VANTAGE_DATA_DIR": r"C:\Users\97012\AppData\Local\Vantage",
+        "VANTAGE_LOG_DIR": r"C:\Users\97012\AppData\Local\Vantage\logs",
+    }
+
+    with patch.object(launcher.Config, "build_runtime_environment", return_value=runtime_env):
+        production = launcher._build_frontend_env("production", {"FOO": "bar"})
+
+    assert production["FOO"] == "bar"
+    assert production["NODE_ENV"] == "production"
+    assert production["VANTAGE_APP_MODE"] == "development"
+    assert production["VANTAGE_DATA_DIR"] == runtime_env["VANTAGE_DATA_DIR"]
+    assert production["VANTAGE_LOG_DIR"] == runtime_env["VANTAGE_LOG_DIR"]
+
+
+def test_ensure_project_root_on_sys_path_returns_repo_root():
+    launcher = _load_launcher_module()
+
+    repo_root = launcher._ensure_project_root_on_sys_path(
+        script_path=Path("src/scripts/run_frontend_background.py").resolve(),
+        path_list=[],
+    )
+
+    assert repo_root == Path("src/scripts/run_frontend_background.py").resolve().parents[2]
 
 
 def test_prepare_frontend_runtime_logs_creates_timestamped_logs_and_latest_pointers(tmp_path):

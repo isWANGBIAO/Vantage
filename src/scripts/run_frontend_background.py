@@ -5,6 +5,24 @@ from datetime import datetime
 from pathlib import Path
 
 
+def _ensure_project_root_on_sys_path(
+    script_path: str | Path | None = None,
+    path_list: list[str] | None = None,
+) -> Path:
+    current_script = Path(script_path or __file__).resolve()
+    project_root = current_script.parents[2]
+    resolved_path_list = path_list if path_list is not None else sys.path
+    project_root_str = str(project_root)
+    if project_root_str not in resolved_path_list:
+        resolved_path_list.insert(0, project_root_str)
+    return project_root
+
+
+_ensure_project_root_on_sys_path()
+
+from src.core.config import Config
+
+
 def _resolve_npm_executable() -> str:
     return "npm.cmd" if os.name == "nt" else "npm"
 
@@ -20,6 +38,7 @@ def _build_frontend_command(mode: str, npm_executable: str | None = None) -> lis
 
 def _build_frontend_env(mode: str, base_env: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(base_env or os.environ)
+    env.update(Config.build_runtime_environment())
     if mode == "production":
         env["NODE_ENV"] = "production"
     else:
@@ -68,10 +87,10 @@ def main(argv: list[str] | None = None) -> int:
     args = list(argv or sys.argv[1:])
     mode = args[0] if args else "production"
 
-    project_root = Path(__file__).resolve().parents[2]
+    project_root = Config.get_project_root()
     webapp_dir = project_root / "src" / "webapp"
-    logs_dir = project_root / "logs"
-    logs_dir.mkdir(exist_ok=True)
+    logs_dir = Config.get_logs_dir()
+    logs_dir.mkdir(parents=True, exist_ok=True)
 
     launched_at = datetime.now()
     runtime_logs = _prepare_frontend_runtime_logs(logs_dir, mode, launched_at)
