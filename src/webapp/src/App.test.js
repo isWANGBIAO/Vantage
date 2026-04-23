@@ -26,3 +26,10 @@ test('App keeps the global footer off full-height tabs including system logs', (
 test('App keeps dashboard prewarm mounted but passes visibility into Dashboard', () => {
   assert.ok(appSource.includes("<Dashboard isVisible={activeTab === 'dashboard'} />"));
 });
+
+test('App gates the workspace behind onboarding when setup is incomplete', () => {
+  assert.ok(appSource.includes('loadOnboardingState'));
+  assert.ok(appSource.includes('<OnboardingShell'));
+  assert.ok(appSource.includes('onboardingPreviewComplete'));
+  assert.ok(appSource.includes('showOnboardingShell'));
+});

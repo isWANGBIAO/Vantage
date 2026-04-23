@@ -1,7 +1,8 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimePaths.cjs');
+const { getOnboardingState } = require('./src/utils/onboardingConfig.cjs');
 
 // ============ 日志系统 ============
 const runtimePaths = resolveRuntimePaths({
@@ -59,6 +60,8 @@ log.info('Vantage Electron starting...');
 log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
 log.info(`Log file: ${logFile}`);
 log.info(`Runtime data dir: ${runtimePaths.dataDir}`);
+
+ipcMain.handle('onboarding:get-state', async () => getOnboardingState({ runtimePaths }));
 
 function createWindow() {
     log.info('Creating main window...');

@@ -1,7 +1,9 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import './App.css';
 import ActionPlanContainer from './components/ActionPlanContainer';
+import OnboardingShell from './components/OnboardingShell';
 import { Sun, Moon } from 'lucide-react';
+import { loadOnboardingState } from './utils/onboardingState';
 
 function lazyWithPreload(factory) {
   const Component = lazy(factory);
@@ -39,11 +41,38 @@ function App() {
   const [activeTab, setActiveTab] = useState('action plan');
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [backgroundTabsReady, setBackgroundTabsReady] = useState(false);
+  const [onboardingState, setOnboardingState] = useState(() => ({
+    loading: true,
+    completed: true,
+    launchAtLogin: false,
+  }));
+  const [onboardingPreviewComplete, setOnboardingPreviewComplete] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const initializeOnboardingState = async () => {
+      const nextState = await loadOnboardingState();
+      if (!cancelled) {
+        setOnboardingState({
+          loading: false,
+          completed: nextState.completed,
+          launchAtLogin: nextState.launchAtLogin,
+        });
+      }
+    };
+
+    void initializeOnboardingState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,6 +94,34 @@ function App() {
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
+
+  const showOnboardingShell =
+    !onboardingState.loading && !onboardingState.completed && !onboardingPreviewComplete;
+
+  if (onboardingState.loading) {
+    return (
+      <div className="app-layout">
+        <main className="app-container onboarding-loading-shell">
+          <div className="glass-panel onboarding-loading-card">
+            <div className="onboarding-eyebrow">Preparing Vantage</div>
+            <h1 className="onboarding-title">Checking first-run state</h1>
+            <p className="onboarding-description">
+              Loading the desktop setup contract before opening the workspace.
+            </p>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (showOnboardingShell) {
+    return (
+      <OnboardingShell
+        initialLaunchAtLogin={onboardingState.launchAtLogin}
+        onOpenAppPreview={() => setOnboardingPreviewComplete(true)}
+      />
+    );
+  }
 
   return (
     <div className="app-layout">
