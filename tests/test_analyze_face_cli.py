@@ -6,6 +6,20 @@ from src.scripts import analyze_face
 
 
 class AnalyzeFaceCliProgressTests(unittest.TestCase):
+    def test_runtime_default_paths_follow_config_contract(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = analyze_face.Path(tmpdir)
+            history_dir = tmp_path / "history"
+            plot_dir = tmp_path / "plot_outputs"
+
+            with patch.object(analyze_face.Config, "get_history_dir", return_value=history_dir), patch.object(
+                analyze_face.Config,
+                "get_plot_dir",
+                return_value=plot_dir,
+            ):
+                self.assertEqual(analyze_face.get_default_db_file(), history_dir / "face_analysis.db")
+                self.assertEqual(analyze_face.get_default_plot_output_dir(), plot_dir)
+
     def test_run_analysis_wraps_pending_photos_with_tqdm(self):
         photos = [
             {"path": "photo_a.jpg", "date": None, "timestamp": 1},

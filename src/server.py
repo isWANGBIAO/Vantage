@@ -11,7 +11,6 @@ if project_root not in sys.path:
 
 import cv2
 from src.utils.face_analysis_db import (
-    FACE_ANALYSIS_DB_FILE,
     clear_face_report_cache,
     initialize_face_analysis_storage,
     load_face_analysis_records,
@@ -75,7 +74,8 @@ from ultralytics import YOLO
 app = FastAPI()
 
 FACE_ANALYSIS_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsing.farl.lapa.int8.onnx")
-FACE_REPORT_PLOT_OUTPUT_DIR = Path("plot_outputs")
+FACE_ANALYSIS_DB_FILE = None
+FACE_REPORT_PLOT_OUTPUT_DIR = None
 FACE_LIVE_WINDOW_SECONDS = 60
 FACE_LIVE_SAMPLE_INTERVAL_SECONDS = 0.1
 FACE_OVERLAY_BASE_SCORE_FONT_SCALE = 1.9
@@ -89,12 +89,24 @@ _face_analysis_runtime_lock = threading.Lock()
 _face_report_refresh_lock = threading.Lock()
 
 
-def _project_root_from_server_file():
-    return Path(os.path.abspath(__file__)).resolve().parent.parent
+def _get_runtime_workdir():
+    return Path(Config.get_project_root())
+
+
+def _get_face_analysis_db_file():
+    if FACE_ANALYSIS_DB_FILE:
+        return Path(FACE_ANALYSIS_DB_FILE)
+    return Path(Config.get_history_dir()) / "face_analysis.db"
+
+
+def _get_plot_dir():
+    if FACE_REPORT_PLOT_OUTPUT_DIR:
+        return Path(FACE_REPORT_PLOT_OUTPUT_DIR)
+    return Path(Config.get_plot_dir())
 
 
 def _runtime_logs_root():
-    logs_root = _project_root_from_server_file() / "logs"
+    logs_root = Path(Config.get_logs_dir())
     logs_root.mkdir(parents=True, exist_ok=True)
     return logs_root
 
@@ -310,15 +322,17 @@ def format_live_face_score_label(score):
     return f"Dark Circle Score: {float(score):.2f}"
 
 
-def refresh_face_report_cache(db_file=FACE_ANALYSIS_DB_FILE, output_dir=FACE_REPORT_PLOT_OUTPUT_DIR):
-    initialize_face_analysis_storage(db_file)
+def refresh_face_report_cache(db_file=None, output_dir=None):
+    resolved_db_file = Path(db_file) if db_file else _get_face_analysis_db_file()
+    resolved_output_dir = Path(output_dir) if output_dir else _get_plot_dir()
+    initialize_face_analysis_storage(resolved_db_file)
     with _face_report_refresh_lock:
-        records = load_face_analysis_records(db_file)
-        report = build_face_report(records, Path(output_dir))
+        records = load_face_analysis_records(resolved_db_file)
+        report = build_face_report(records, resolved_output_dir)
         if report.get("count", 0) > 0:
-            save_face_report_cache(report, db_file)
+            save_face_report_cache(report, resolved_db_file)
         else:
-            clear_face_report_cache(db_file)
+            clear_face_report_cache(resolved_db_file)
         return report
 
 
@@ -326,13 +340,15 @@ def process_captured_face_photo(photo_path):
     if not photo_path or not os.path.exists(photo_path):
         return False
 
-    initialize_face_analysis_storage(FACE_ANALYSIS_DB_FILE)
+    db_file = _get_face_analysis_db_file()
+    plot_dir = _get_plot_dir()
+    initialize_face_analysis_storage(db_file)
     detector, parser, config = get_face_analysis_runtime()
     record = analyze_photo_file(photo_path, detector=detector, parser=parser, config=config)
-    upsert_face_analysis_record(record, FACE_ANALYSIS_DB_FILE)
+    upsert_face_analysis_record(record, db_file)
 
     try:
-        refresh_face_report_cache(FACE_ANALYSIS_DB_FILE, FACE_REPORT_PLOT_OUTPUT_DIR)
+        refresh_face_report_cache(db_file, plot_dir)
     except Exception as exc:
         print(f"Face report refresh failed for {photo_path}: {exc}")
 
@@ -1000,9 +1016,8 @@ async def startup_event():
         # Mount static directories for photos and plots
         _mount_static_once("/static/photos", state.photos_path, "photos")
         
-        plot_dir = os.path.join(os.getcwd(), "plot_outputs")
-        if not os.path.exists(plot_dir):
-            os.makedirs(plot_dir)
+        plot_dir = _get_plot_dir()
+        plot_dir.mkdir(parents=True, exist_ok=True)
         _mount_static_once("/static/plots", plot_dir, "plots")
         
         _mount_static_once("/static/screenshots", state.screenshots_path, "screenshots")
@@ -1503,8 +1518,8 @@ async def image_proxy(path: str):
     allowed_dirs = [
         state.photos_path,
         state.screenshots_path,
-        os.path.join(os.getcwd(), "plot_outputs"),
-        os.path.join(os.getcwd(), "history"),
+        str(_get_plot_dir()),
+        _get_history_dir(),
     ]
     def _is_within_allowed_dir(candidate_path, allowed_dir):
         if not allowed_dir:
@@ -1536,7 +1551,12 @@ async def refresh_plots(background_tasks: BackgroundTasks):
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         try:
-            subprocess.run([sys.executable, script_path, "--dark"], check=True, env=env, cwd=os.getcwd())
+            subprocess.run(
+                [sys.executable, script_path, "--dark"],
+                check=True,
+                env=env,
+                cwd=str(_get_runtime_workdir()),
+            )
             print("Plots refreshed successfully")
         except Exception as e:
             print(f"Error refreshing plots: {e}")
@@ -1561,7 +1581,7 @@ def ensure_thumbnail(file_path, thumb_path):
 @app.get("/api/plots/list")
 async def list_plots():
     """Return list of all plot images for carousel display"""
-    plot_dir = os.path.join(os.getcwd(), "plot_outputs")
+    plot_dir = str(_get_plot_dir())
     if not os.path.exists(plot_dir):
         return {"plots": [], "error": "plot_outputs directory not found"}
     
@@ -1686,7 +1706,7 @@ def _normalize_reasoning_effort(reasoning_effort: Optional[str]) -> str:
 
 
 def _get_history_dir() -> str:
-    return os.path.join(os.getcwd(), "history")
+    return str(Config.get_history_dir())
 
 
 def _get_latest_context_file() -> str:
@@ -2241,7 +2261,7 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
                 subprocess.run(
                     [sys.executable, script_path],
                     check=True,
-                    cwd=os.getcwd(),
+                    cwd=str(_get_runtime_workdir()),
                     stdout=log_file,
                     stderr=log_file,
                 )
@@ -2279,8 +2299,9 @@ async def get_face_live():
 async def get_face_report():
     """Get the latest analysis report including extremes and plot URL"""
     try:
-        initialize_face_analysis_storage(FACE_ANALYSIS_DB_FILE)
-        report_json = load_face_report_cache(FACE_ANALYSIS_DB_FILE)
+        db_file = _get_face_analysis_db_file()
+        initialize_face_analysis_storage(db_file)
+        report_json = load_face_report_cache(db_file)
         if not report_json:
             return {"error": "No report generated"}
 
@@ -2301,7 +2322,11 @@ async def export_face_excel():
              script_path = os.path.abspath("src/scripts/analyze_face.py")
              
         # Run script with --export flag
-        proc = subprocess.run([sys.executable, script_path, "--export"], capture_output=True, cwd=os.getcwd())
+        proc = subprocess.run(
+            [sys.executable, script_path, "--export"],
+            capture_output=True,
+            cwd=str(_get_runtime_workdir()),
+        )
         
         if proc.returncode != 0:
             return JSONResponse(status_code=500, content={"error": proc.stderr.decode('utf-8', errors='replace')})
@@ -2331,8 +2356,9 @@ async def export_face_excel():
 async def get_face_progress():
     """Get the current progress of face analysis"""
     try:
-        initialize_face_analysis_storage(FACE_ANALYSIS_DB_FILE)
-        data = load_face_progress_cache(FACE_ANALYSIS_DB_FILE)
+        db_file = _get_face_analysis_db_file()
+        initialize_face_analysis_storage(db_file)
+        data = load_face_progress_cache(db_file)
 
         if not data:
             return {"status": "idle", "percent": 0}

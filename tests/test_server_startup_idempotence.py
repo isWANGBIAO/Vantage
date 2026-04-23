@@ -71,7 +71,7 @@ def test_startup_event_is_idempotent_for_static_mounts_and_threads():
                 patch.object(server, "find_latest_file_recursive", return_value=None),
                 patch.object(server, "Monitor", side_effect=lambda *args, **kwargs: object()),
                 patch.object(server.threading, "Thread", _DummyThread),
-                patch.object(server.os, "getcwd", return_value=tmp_dir),
+                patch.object(server.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
             ):
                 asyncio.run(server.startup_event())
                 after_first_startup = _static_route_directories()
@@ -126,7 +126,7 @@ def test_startup_event_retries_partial_failure_without_duplicate_threads():
                 patch.object(server, "find_latest_file_recursive", side_effect=flaky_find_latest_file_recursive),
                 patch.object(server, "Monitor", side_effect=lambda *args, **kwargs: object()),
                 patch.object(server.threading, "Thread", _DummyThread),
-                patch.object(server.os, "getcwd", return_value=tmp_dir),
+                patch.object(server.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
             ):
                 asyncio.run(server.startup_event())
                 asyncio.run(server.startup_event())
@@ -181,7 +181,7 @@ def test_startup_event_updates_static_mounts_after_shutdown():
                 patch.object(server, "find_latest_file_recursive", return_value=None),
                 patch.object(server, "Monitor", side_effect=lambda *args, **kwargs: object()),
                 patch.object(server.threading, "Thread", _DummyThread),
-                patch.object(server.os, "getcwd", return_value=tmp_dir),
+                patch.object(server.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
             ):
                 asyncio.run(server.startup_event())
                 first_mounts = _static_route_directories()
@@ -235,7 +235,7 @@ def test_startup_event_resumes_only_missing_threads_after_partial_start_failure(
                 patch.object(server, "find_latest_file_recursive", return_value=None),
                 patch.object(server, "Monitor", side_effect=lambda *args, **kwargs: object()),
                 patch.object(server.threading, "Thread", _PartiallyFailingThread),
-                patch.object(server.os, "getcwd", return_value=tmp_dir),
+                patch.object(server.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
             ):
                 asyncio.run(server.startup_event())
                 after_first_startup = dict(_PartiallyFailingThread.start_counts)

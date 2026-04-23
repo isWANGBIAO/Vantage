@@ -5,20 +5,24 @@ import urllib.parse
 from pathlib import Path
 
 from src.utils.face_analysis_db import (
-    FACE_ANALYSIS_DB_FILE,
+    get_face_analysis_db_file,
     load_face_report_cache as load_face_report_cache_from_db,
     save_face_report_cache as save_face_report_cache_to_db,
 )
 from src.services.face_analysis_pipeline import empty_trend_views
 
-FACE_REPORT_CACHE_FILE = FACE_ANALYSIS_DB_FILE
+FACE_REPORT_CACHE_FILE = None
 
 
 def save_face_report_cache(report: dict, report_file: str | Path = FACE_REPORT_CACHE_FILE) -> Path:
+    if report_file is None:
+        report_file = get_face_analysis_db_file()
     return save_face_report_cache_to_db(report, report_file)
 
 
 def load_face_report_cache(report_file: str | Path = FACE_REPORT_CACHE_FILE) -> dict | None:
+    if report_file is None:
+        report_file = get_face_analysis_db_file()
     return load_face_report_cache_from_db(report_file)
 
 

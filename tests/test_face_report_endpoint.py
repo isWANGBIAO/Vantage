@@ -25,13 +25,13 @@ class FaceReportEndpointTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            fake_server_py = tmp / "src" / "server.py"
-            fake_server_py.parent.mkdir(parents=True)
-            fake_server_py.write_text("# stub", encoding="utf-8")
             background_tasks = BackgroundTasks()
+            logs_dir = tmp / "logs"
 
-            with patch.object(server, "__file__", str(fake_server_py)), patch.object(
-                server, "datetime", FrozenDateTime
+            with patch.object(server.Config, "get_logs_dir", return_value=logs_dir), patch.object(
+                server,
+                "datetime",
+                FrozenDateTime,
             ), patch.object(server.subprocess, "run") as mock_run:
                 payload = asyncio.run(server.analyze_face_history(background_tasks))
                 self.assertEqual(payload["message"], "Analysis started in background")

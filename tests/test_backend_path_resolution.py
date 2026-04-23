@@ -1,4 +1,5 @@
 import asyncio
+import importlib.util
 import os
 import tempfile
 import unittest
@@ -19,6 +20,46 @@ from src.AI_Prediction import analyzer
 
 
 class BackendPathResolutionTests(unittest.TestCase):
+    def test_plot_script_ensures_project_root_on_sys_path_when_run_directly(self):
+        module_path = Path("src/scripts/plot.py")
+        spec = importlib.util.spec_from_file_location("plot_script_under_test", module_path)
+        plot_script = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(plot_script)
+
+        repo_root = plot_script._ensure_project_root_on_sys_path(
+            script_path=module_path.resolve(),
+            path_list=[],
+        )
+
+        self.assertEqual(repo_root, module_path.resolve().parents[2])
+
+    def test_server_runtime_helpers_use_config_runtime_contract(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            runtime_logs = tmp_path / "appdata" / "logs"
+            runtime_plots = tmp_path / "appdata" / "plot_outputs"
+            runtime_history = tmp_path / "appdata" / "history"
+            project_root = tmp_path / "repo"
+
+            with patch.object(server.Config, "get_logs_dir", return_value=runtime_logs), patch.object(
+                server.Config,
+                "get_plot_dir",
+                return_value=runtime_plots,
+            ), patch.object(
+                server.Config,
+                "get_history_dir",
+                return_value=runtime_history,
+            ), patch.object(
+                server.Config,
+                "get_project_root",
+                return_value=project_root,
+            ):
+                self.assertEqual(server._runtime_logs_root(), runtime_logs)
+                self.assertEqual(server._get_plot_dir(), runtime_plots)
+                self.assertEqual(server._get_history_dir(), str(runtime_history))
+                self.assertEqual(server._get_runtime_workdir(), project_root)
+
     def test_aqi_endpoint_degrades_when_upstream_times_out(self):
         with patch.object(
             server.asyncio,

@@ -17,10 +17,6 @@ class SystemLogsEndpointTests(unittest.TestCase):
     def test_get_system_logs_reads_latest_runtime_log_pointer(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            fake_server_py = tmp / "src" / "server.py"
-            fake_server_py.parent.mkdir(parents=True)
-            fake_server_py.write_text("# stub", encoding="utf-8")
-
             logs_dir = tmp / "logs"
             runtime_dir = logs_dir / "server"
             runtime_dir.mkdir(parents=True)
@@ -28,8 +24,7 @@ class SystemLogsEndpointTests(unittest.TestCase):
             runtime_log.write_text("line1\nline2\n", encoding="utf-8")
             (logs_dir / "server.latest.log").write_text(str(runtime_log.resolve()), encoding="utf-8")
 
-            with patch.object(server, "__file__", str(fake_server_py)):
+            with patch.object(server.Config, "get_logs_dir", return_value=logs_dir):
                 payload = asyncio.run(server.get_system_logs())
 
         self.assertEqual(payload["logs"], ["line1\n", "line2\n"])
-

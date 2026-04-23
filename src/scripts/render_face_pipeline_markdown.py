@@ -13,6 +13,7 @@ project_root = current_dir.parent.parent
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
+from src.core.config import Config
 from src.services.face_analysis_pipeline import (
     AnalysisConfig,
     CLASS_IDX,
@@ -25,13 +26,20 @@ from src.services.face_analysis_pipeline import (
 from src.services.face_pipeline_markdown import write_pipeline_markdown
 
 
-RESULTS_FILE = Path("history") / "face_analysis_results_v2.csv"
+RESULTS_FILE = None
 DEFAULT_MODEL_PATH = Path("src") / "scripts" / "models" / "face_parsing.farl.lapa.int8.onnx"
 
 
+def get_results_file():
+    if RESULTS_FILE:
+        return Path(RESULTS_FILE)
+    return Path(Config.get_history_dir()) / "face_analysis_results_v2.csv"
+
+
 def load_latest_passed_path():
-    if RESULTS_FILE.exists():
-        df = pd.read_csv(RESULTS_FILE)
+    results_file = get_results_file()
+    if results_file.exists():
+        df = pd.read_csv(results_file)
         df = df[df["passed"] == True]
         if not df.empty:
             return str(df.iloc[-1]["path"])

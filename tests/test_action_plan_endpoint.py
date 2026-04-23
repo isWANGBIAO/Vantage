@@ -248,7 +248,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 new_file.write_text("new", encoding="utf-8")
                 return _FakeProcess(returncode=0)
 
-            with patch.object(server.os, "getcwd", return_value=temp_dir), patch.object(
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir), patch.object(
                 server.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(side_effect=fake_create_subprocess_exec),
@@ -276,7 +276,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
             old_file_a.write_text("old a", encoding="utf-8")
             old_file_b.write_text("old b", encoding="utf-8")
 
-            with patch.object(server.os, "getcwd", return_value=temp_dir), patch.object(
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir), patch.object(
                 server.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(return_value=_FakeProcess(lines=[], returncode=1, stderr_data=b"boom")),
@@ -312,7 +312,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.os, "getcwd", return_value=temp_dir):
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
                 payload = asyncio.run(server.get_today_action_plan())
 
         self.assertEqual(payload["exists"], True)
@@ -529,7 +529,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.os, "getcwd", return_value=temp_dir):
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
                 payload = asyncio.run(server.get_chat_context())
 
         self.assertEqual(payload["has_action_plan_context"], True)
@@ -562,7 +562,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.os, "getcwd", return_value=temp_dir), patch.object(
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir), patch.object(
                 server,
                 "get_session_usage_summary",
                 return_value={
@@ -601,7 +601,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.os, "getcwd", return_value=temp_dir):
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
                 payload = asyncio.run(server.reset_chat_context())
 
             restored_messages = json.loads(latest_context.read_text(encoding="utf-8"))
@@ -624,7 +624,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.os, "getcwd", return_value=temp_dir):
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
                 payload = asyncio.run(server.reset_chat_context())
 
             restored_messages = json.loads(latest_context.read_text(encoding="utf-8"))
@@ -656,7 +656,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.os, "getcwd", return_value=temp_dir):
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
                 asyncio.run(server.reset_chat_context())
 
             restored_session_payload = json.loads(

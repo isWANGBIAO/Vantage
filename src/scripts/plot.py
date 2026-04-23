@@ -2,6 +2,7 @@
 import platform
 import re
 import shutil
+import sys
 import tempfile
 import subprocess
 import math
@@ -23,6 +24,27 @@ from matplotlib import rcParams
 from matplotlib.ticker import FuncFormatter
 from matplotlib.ticker import MaxNLocator
 from PIL import Image
+
+current_dir = Path(__file__).resolve().parent
+project_root = current_dir.parent.parent
+
+
+def _ensure_project_root_on_sys_path(
+    script_path: str | Path | None = None,
+    path_list: list[str] | None = None,
+) -> Path:
+    current_script = Path(script_path or __file__).resolve()
+    resolved_project_root = current_script.parents[2]
+    resolved_path_list = path_list if path_list is not None else sys.path
+    project_root_str = str(resolved_project_root)
+    if project_root_str not in resolved_path_list:
+        resolved_path_list.insert(0, project_root_str)
+    return resolved_project_root
+
+
+_ensure_project_root_on_sys_path()
+
+from src.core.config import Config
 from src.utils.data_loader import DataLoader
 
 COLORS = {
@@ -262,7 +284,7 @@ def resolve_output_dir():
     if env_root:
         root = Path(env_root)
     else:
-        root = get_project_root() / "plot_outputs"
+        root = Path(Config.get_plot_dir())
     root.mkdir(parents=True, exist_ok=True)
     return root
 

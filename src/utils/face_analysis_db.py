@@ -4,18 +4,28 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-FACE_ANALYSIS_DB_FILE = Path("history") / "face_analysis.db"
+from src.core.config import Config
+
+FACE_ANALYSIS_DB_FILE = None
 REPORT_CACHE_KEY = "latest"
 PROGRESS_CACHE_KEY = "latest"
 CURRENT_ALGORITHM_VERSION = "dark_circle_v3"
 MIGRATABLE_ALGORITHM_VERSIONS = {"dark_circle_v2"}
 
 
-def _db_path(db_file):
+def get_face_analysis_db_file():
+    if FACE_ANALYSIS_DB_FILE:
+        return Path(FACE_ANALYSIS_DB_FILE)
+    return Path(Config.get_history_dir()) / "face_analysis.db"
+
+
+def _db_path(db_file=None):
+    if db_file is None:
+        return get_face_analysis_db_file()
     return Path(db_file)
 
 
-def _connect(db_file=FACE_ANALYSIS_DB_FILE):
+def _connect(db_file=None):
     path = _db_path(db_file)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
@@ -24,7 +34,7 @@ def _connect(db_file=FACE_ANALYSIS_DB_FILE):
 
 
 @contextmanager
-def _open_db(db_file=FACE_ANALYSIS_DB_FILE):
+def _open_db(db_file=None):
     conn = _connect(db_file)
     try:
         yield conn
@@ -33,7 +43,7 @@ def _open_db(db_file=FACE_ANALYSIS_DB_FILE):
         conn.close()
 
 
-def ensure_face_analysis_db(db_file=FACE_ANALYSIS_DB_FILE):
+def ensure_face_analysis_db(db_file=None):
     with _open_db(db_file) as conn:
         conn.executescript(
             """
@@ -154,10 +164,7 @@ def _migrate_scores_to_current_algorithm(conn):
     conn.execute("DELETE FROM face_progress_cache")
 
 
-def initialize_face_analysis_storage(
-    db_file=FACE_ANALYSIS_DB_FILE,
-    algorithm_version=CURRENT_ALGORITHM_VERSION,
-):
+def initialize_face_analysis_storage(db_file=None, algorithm_version=CURRENT_ALGORITHM_VERSION):
     ensure_face_analysis_db(db_file)
     with _open_db(db_file) as conn:
         existing_version = _get_meta(conn, "analysis_algorithm_version")
@@ -206,7 +213,7 @@ def _deserialize_record(row):
     }
 
 
-def upsert_face_analysis_record(record, db_file=FACE_ANALYSIS_DB_FILE):
+def upsert_face_analysis_record(record, db_file=None):
     ensure_face_analysis_db(db_file)
     payload = _serialize_record(record)
     now = time.time()
@@ -244,12 +251,12 @@ def upsert_face_analysis_record(record, db_file=FACE_ANALYSIS_DB_FILE):
         )
 
 
-def upsert_face_analysis_records(records, db_file=FACE_ANALYSIS_DB_FILE):
+def upsert_face_analysis_records(records, db_file=None):
     for record in records:
         upsert_face_analysis_record(record, db_file=db_file)
 
 
-def load_face_analysis_records(db_file=FACE_ANALYSIS_DB_FILE):
+def load_face_analysis_records(db_file=None):
     ensure_face_analysis_db(db_file)
     with _open_db(db_file) as conn:
         rows = conn.execute(
@@ -263,20 +270,20 @@ def load_face_analysis_records(db_file=FACE_ANALYSIS_DB_FILE):
     return [_deserialize_record(row) for row in rows]
 
 
-def load_face_analysis_paths(db_file=FACE_ANALYSIS_DB_FILE):
+def load_face_analysis_paths(db_file=None):
     ensure_face_analysis_db(db_file)
     with _open_db(db_file) as conn:
         rows = conn.execute("SELECT path FROM face_analysis_results").fetchall()
     return {row["path"] for row in rows}
 
 
-def clear_face_analysis_records(db_file=FACE_ANALYSIS_DB_FILE):
+def clear_face_analysis_records(db_file=None):
     ensure_face_analysis_db(db_file)
     with _open_db(db_file) as conn:
         conn.execute("DELETE FROM face_analysis_results")
 
 
-def save_face_report_cache(report, db_file=FACE_ANALYSIS_DB_FILE):
+def save_face_report_cache(report, db_file=None):
     ensure_face_analysis_db(db_file)
     payload = json.dumps(report, ensure_ascii=False)
     now = time.time()
@@ -294,13 +301,13 @@ def save_face_report_cache(report, db_file=FACE_ANALYSIS_DB_FILE):
     return _db_path(db_file)
 
 
-def clear_face_report_cache(db_file=FACE_ANALYSIS_DB_FILE):
+def clear_face_report_cache(db_file=None):
     ensure_face_analysis_db(db_file)
     with _open_db(db_file) as conn:
         conn.execute("DELETE FROM face_report_cache WHERE cache_key = ?", (REPORT_CACHE_KEY,))
 
 
-def load_face_report_cache(db_file=FACE_ANALYSIS_DB_FILE):
+def load_face_report_cache(db_file=None):
     ensure_face_analysis_db(db_file)
     with _open_db(db_file) as conn:
         row = conn.execute(
@@ -315,7 +322,7 @@ def load_face_report_cache(db_file=FACE_ANALYSIS_DB_FILE):
         return None
 
 
-def save_face_progress_cache(progress, db_file=FACE_ANALYSIS_DB_FILE):
+def save_face_progress_cache(progress, db_file=None):
     ensure_face_analysis_db(db_file)
     payload = json.dumps(progress, ensure_ascii=False)
     now = time.time()
@@ -333,13 +340,13 @@ def save_face_progress_cache(progress, db_file=FACE_ANALYSIS_DB_FILE):
     return _db_path(db_file)
 
 
-def clear_face_progress_cache(db_file=FACE_ANALYSIS_DB_FILE):
+def clear_face_progress_cache(db_file=None):
     ensure_face_analysis_db(db_file)
     with _open_db(db_file) as conn:
         conn.execute("DELETE FROM face_progress_cache WHERE cache_key = ?", (PROGRESS_CACHE_KEY,))
 
 
-def load_face_progress_cache(db_file=FACE_ANALYSIS_DB_FILE):
+def load_face_progress_cache(db_file=None):
     ensure_face_analysis_db(db_file)
     with _open_db(db_file) as conn:
         row = conn.execute(

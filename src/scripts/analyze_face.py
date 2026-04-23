@@ -11,6 +11,7 @@ project_root = current_dir.parent.parent
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
+from src.core.config import Config
 from src.services.face_analysis_pipeline import (
     AnalysisConfig,
     FaceParser,
@@ -22,10 +23,10 @@ from src.services.face_analysis_pipeline import (
     scan_photos,
 )
 from src.utils.face_analysis_db import (
-    FACE_ANALYSIS_DB_FILE,
     clear_face_analysis_records,
     clear_face_progress_cache,
     clear_face_report_cache,
+    get_face_analysis_db_file,
     initialize_face_analysis_storage,
     load_face_analysis_paths,
     load_face_analysis_records,
@@ -35,12 +36,25 @@ from src.utils.face_analysis_db import (
 from src.utils.face_report_cache import save_face_report_cache
 
 
-DB_FILE = FACE_ANALYSIS_DB_FILE
-PLOT_OUTPUT_DIR = os.path.join("plot_outputs")
+DB_FILE = None
+PLOT_OUTPUT_DIR = None
 DEFAULT_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsing.farl.lapa.int8.onnx")
 
 
+def get_default_db_file():
+    if DB_FILE:
+        return Path(DB_FILE)
+    return get_face_analysis_db_file()
+
+
+def get_default_plot_output_dir():
+    if PLOT_OUTPUT_DIR:
+        return Path(PLOT_OUTPUT_DIR)
+    return Path(Config.get_plot_dir())
+
+
 def update_progress(current, total, status="analyzing", current_file=""):
+    db_file = get_default_db_file()
     save_face_progress_cache(
         {
             "current": current,
@@ -50,13 +64,13 @@ def update_progress(current, total, status="analyzing", current_file=""):
             "current_file": current_file,
             "timestamp": datetime.now().timestamp(),
         },
-        DB_FILE,
+        db_file,
     )
 
 
 def run_analysis(search_paths, model_path, db_file, output_dir, day=None, limit=None, rebuild=False):
-    os.makedirs("history", exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
+    Path(db_file).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     initialize_face_analysis_storage(db_file)
 
     config = AnalysisConfig()
@@ -127,6 +141,8 @@ def main():
     parser.add_argument("--model", default=DEFAULT_MODEL_PATH, help="Face parsing ONNX model path")
     parser.add_argument("--rebuild", action="store_true", help="Ignore cached rows and rebuild the result set")
     args = parser.parse_args()
+    db_file = get_default_db_file()
+    output_dir = get_default_plot_output_dir()
 
     search_paths = args.dir if args.dir else discover_photo_search_paths()
     if not search_paths:
@@ -135,13 +151,13 @@ def main():
         return
 
     if args.export:
-        exported = export_excel(DB_FILE)
+        exported = export_excel(db_file)
         if exported is None:
             _, report = run_analysis(
                 search_paths=search_paths,
                 model_path=args.model,
-                db_file=DB_FILE,
-                output_dir=PLOT_OUTPUT_DIR,
+                db_file=db_file,
+                output_dir=output_dir,
                 day=args.day,
                 limit=args.limit,
                 rebuild=args.rebuild,
@@ -149,7 +165,7 @@ def main():
             if report.get("count", 0) == 0:
                 print("Export skipped: no valid analyzed rows.")
                 return
-            exported = export_excel(DB_FILE)
+            exported = export_excel(db_file)
 
         if exported:
             print(f"EXPORT_PATH:{exported}")
@@ -160,8 +176,8 @@ def main():
     run_analysis(
         search_paths=search_paths,
         model_path=args.model,
-        db_file=DB_FILE,
-        output_dir=PLOT_OUTPUT_DIR,
+        db_file=db_file,
+        output_dir=output_dir,
         day=args.day,
         limit=args.limit,
         rebuild=args.rebuild,

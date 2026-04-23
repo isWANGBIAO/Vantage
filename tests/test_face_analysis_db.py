@@ -3,7 +3,9 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from src.utils import face_analysis_db
 from src.utils.face_analysis_db import (
     ensure_face_analysis_db,
     initialize_face_analysis_storage,
@@ -17,6 +19,17 @@ from src.utils.face_analysis_db import (
 
 
 class FaceAnalysisDbTests(unittest.TestCase):
+    def test_default_face_analysis_db_file_follows_config_history_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            history_dir = Path(tmpdir) / "history"
+
+            with patch.object(face_analysis_db.Config, "get_history_dir", return_value=history_dir):
+                resolved = face_analysis_db.get_face_analysis_db_file()
+                created = ensure_face_analysis_db()
+
+        self.assertEqual(resolved, history_dir / "face_analysis.db")
+        self.assertEqual(created, history_dir / "face_analysis.db")
+
     def test_upsert_and_load_face_analysis_records(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "face_analysis.db"
