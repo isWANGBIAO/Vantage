@@ -50,7 +50,7 @@ import pandas as pd
 
 from src.core.config import Config
 from src.core.media_storage import get_media_paths_settings_file, resolve_media_storage_paths
-from manager.manager_main import Monitor
+from src.manager.manager_main import Monitor
 from src.services.face_analysis_pipeline import (
     AnalysisConfig,
     FaceParser,
@@ -67,10 +67,10 @@ from src.services.model_call_recorder import (
 from src.services.person_detection import (
     PERSON_DETECTION_CONFIDENCE,
     PERSON_DETECTION_MODEL,
+    get_yolo_model,
 )
 from cv2_enumerate_cameras import enumerate_cameras
-from utils.data_loader import DataLoader
-from ultralytics import YOLO
+from src.utils.data_loader import DataLoader
 
 app = FastAPI()
 
@@ -1143,7 +1143,7 @@ def face_live_loop():
 def yolo_loop():
     print("Starting YOLO detection background thread...")
     try:
-        model = YOLO(PERSON_DETECTION_MODEL)
+        model = get_yolo_model()
         # Initialize an empty run to warm up the model
         import numpy as np
         dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
@@ -2470,6 +2470,10 @@ async def get_project_progress():
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-if __name__ == "__main__":
+def main():
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+if __name__ == "__main__":
+    main()

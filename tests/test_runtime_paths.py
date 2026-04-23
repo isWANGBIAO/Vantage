@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -78,3 +79,16 @@ def test_build_runtime_environment_exposes_stringified_directory_contract(tmp_pa
         "VANTAGE_RUNTIME_DIR": str(paths["runtime_dir"]),
         "VANTAGE_MIGRATION_DIR": str(paths["migration_dir"]),
     }
+
+
+def test_get_project_root_prefers_meipass_when_frozen(tmp_path):
+    resource_root = tmp_path / "runtime" / "_internal"
+    resource_root.mkdir(parents=True)
+
+    with patch.dict(os.environ, {}, clear=True), patch.object(sys, "frozen", True, create=True), patch.object(
+        sys,
+        "_MEIPASS",
+        str(resource_root),
+        create=True,
+    ):
+        assert Config.get_project_root() == resource_root

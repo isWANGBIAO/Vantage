@@ -14,6 +14,9 @@ class Config:
             return Path(explicit_root).expanduser().resolve()
 
         if getattr(sys, "frozen", False):
+            meipass_root = getattr(sys, "_MEIPASS", None)
+            if meipass_root:
+                return Path(meipass_root).resolve()
             return Path(sys.executable).resolve().parent
 
         current = Path(__file__).resolve().parent

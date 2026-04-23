@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -77,3 +78,86 @@ def test_ensure_project_root_on_sys_path_returns_repo_root():
     )
 
     assert repo_root == Path("src/scripts/run_server_background.py").resolve().parents[2]
+
+
+def test_run_server_entrypoint_uses_run_path_in_development_mode(tmp_path):
+    launcher = _load_launcher_module()
+    project_root = tmp_path / "repo"
+    run_calls = []
+
+    mode = launcher._run_server_entrypoint(
+        project_root,
+        is_frozen=False,
+        run_path=lambda path, run_name: run_calls.append((path, run_name)),
+    )
+
+    assert mode == "script"
+    assert run_calls == [(str(project_root / "src" / "server.py"), "__main__")]
+
+
+def test_run_server_entrypoint_calls_server_main_in_frozen_mode(tmp_path):
+    launcher = _load_launcher_module()
+    project_root = tmp_path / "runtime"
+    called = []
+
+    mode = launcher._run_server_entrypoint(
+        project_root,
+        is_frozen=True,
+        server_main=lambda: called.append("server-main"),
+    )
+
+    assert mode == "frozen"
+    assert called == ["server-main"]
+
+
+def test_configure_frozen_runtime_search_paths_adds_internal_runtime_dirs(tmp_path):
+    launcher = _load_launcher_module()
+    resource_root = tmp_path / "runtime" / "_internal"
+    torch_lib = resource_root / "torch" / "lib"
+    onnx_capi = resource_root / "onnxruntime" / "capi"
+    torch_lib.mkdir(parents=True)
+    onnx_capi.mkdir(parents=True)
+
+    added_paths = []
+    env = {"PATH": r"C:\Windows\System32"}
+
+    launcher._configure_frozen_runtime_search_paths(
+        resource_root=resource_root,
+        env=env,
+        add_dll_directory=lambda value: added_paths.append(value),
+    )
+
+    assert env["PATH"].split(os.pathsep)[:3] == [
+        str(resource_root),
+        str(torch_lib),
+        str(onnx_capi),
+    ]
+    assert added_paths == [
+        str(resource_root),
+        str(torch_lib),
+        str(onnx_capi),
+    ]
+
+
+def test_preload_frozen_torch_libraries_uses_stable_dependency_order(tmp_path):
+    launcher = _load_launcher_module()
+    resource_root = tmp_path / "runtime" / "_internal"
+    torch_lib = resource_root / "torch" / "lib"
+    torch_lib.mkdir(parents=True)
+
+    for dll_name in ("torch_global_deps.dll", "c10.dll", "torch_cpu.dll", "torch_cuda.dll"):
+        (torch_lib / dll_name).write_bytes(b"dll")
+
+    loaded = []
+
+    launcher._preload_frozen_torch_libraries(
+        resource_root,
+        load_library=lambda value: loaded.append(Path(value).name),
+    )
+
+    assert loaded == [
+        "torch_global_deps.dll",
+        "c10.dll",
+        "torch_cpu.dll",
+        "torch_cuda.dll",
+    ]
