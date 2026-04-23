@@ -49,6 +49,7 @@ import requests
 import pandas as pd
 
 from src.core.config import Config
+from src.core.media_storage import get_media_paths_settings_file, resolve_media_storage_paths
 from manager.manager_main import Monitor
 from src.services.face_analysis_pipeline import (
     AnalysisConfig,
@@ -920,48 +921,22 @@ def get_camera_index():
             break
     return camera_index
 
-def identify_logs_folder():
-    onedrive_env = os.environ.get("OneDrive") or os.environ.get("OneDriveConsumer")
-    user_home = os.path.expanduser("~")
-    d_drive_root = "D:\\WANGBIAO"
-    roots_to_check = []
-    if os.path.exists(d_drive_root):
-        roots_to_check.append(d_drive_root)
-    if onedrive_env:
-        roots_to_check.append(onedrive_env)
-    roots_to_check.append(os.path.join(user_home, "OneDrive"))
-    roots_to_check.append(user_home)
-
-    picture_dirs = ("Pictures", "图片")
-    screenshot_dirs = ("Screenshots", "屏幕截图")
-    photo_dir_name = "本机照片"
-
-    for root in roots_to_check:
-        for picture_dir in picture_dirs:
-            picture_root = os.path.join(root, picture_dir)
-            photos_path = os.path.join(picture_root, photo_dir_name)
-            if not os.path.exists(photos_path):
-                continue
-            for screenshot_dir_name in screenshot_dirs:
-                screenshots_path = os.path.join(picture_root, screenshot_dir_name)
-                if os.path.exists(screenshots_path):
-                    os.makedirs(photos_path, exist_ok=True)
-                    os.makedirs(screenshots_path, exist_ok=True)
-                    return photos_path, screenshots_path
-
-    default_root = roots_to_check[0] if roots_to_check else (onedrive_env or os.path.join(user_home, "OneDrive"))
-    pictures_path = os.path.join(default_root, "Pictures")
-    if not os.path.exists(pictures_path):
-        pictures_path = os.path.join(default_root, "图片")
-
-    screenshots_path = os.path.join(pictures_path, "Screenshots")
-    if not os.path.exists(screenshots_path):
-        screenshots_path = os.path.join(pictures_path, "屏幕截图")
-
-    photos_path = os.path.join(pictures_path, "本机照片")
-    os.makedirs(photos_path, exist_ok=True)
-    os.makedirs(screenshots_path, exist_ok=True)
-    return photos_path, screenshots_path
+def identify_logs_folder(
+    *,
+    config_dir: str | Path | None = None,
+    user_home: str | None = None,
+    onedrive_env: str | None = None,
+    onedrive_consumer_env: str | None = None,
+    d_drive_root: str = r"D:\WANGBIAO",
+):
+    settings_file = get_media_paths_settings_file(config_dir=config_dir)
+    return resolve_media_storage_paths(
+        settings_file=settings_file,
+        d_drive_root=d_drive_root,
+        user_home=user_home,
+        onedrive_env=onedrive_env,
+        onedrive_consumer_env=onedrive_consumer_env,
+    )
 
 def find_latest_file_recursive(directory, extensions={'.jpg', '.png'}):
     latest_file = None

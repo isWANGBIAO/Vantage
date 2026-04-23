@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import os
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src import server
+from src.core.media_storage import get_media_paths_settings_file, save_media_paths_settings
 from src.scripts import plot
 from src.utils.data_loader import DataLoader
 
@@ -76,23 +78,60 @@ class BackendPathResolutionTests(unittest.TestCase):
 
     def test_identify_logs_folder_prefers_d_drive_over_user_home(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            home = Path(tmpdir)
-            photos_dir = Path(r"D:\\WANGBIAO\\Pictures\\本机照片")
-            screenshots_dir = Path(r"D:\\WANGBIAO\\Pictures\\Screenshots")
+            tmp = Path(tmpdir)
+            config_dir = tmp / "config"
+            fake_d_root = tmp / "portable_d"
+            photos_dir = fake_d_root / "Pictures" / "本机照片"
+            screenshots_dir = fake_d_root / "Pictures" / "Screenshots"
+            photos_dir.mkdir(parents=True)
+            screenshots_dir.mkdir(parents=True)
 
-            def fake_exists(path):
-                path_str = str(path)
-                if path_str.startswith(r"D:\WANGBIAO"):
-                    return True
-                return Path(path_str).exists()
-
-            with patch.object(server.os.path, "expanduser", return_value=str(home)), patch.object(
-                server.os.path, "exists", side_effect=fake_exists
-            ), patch.object(server.os, "makedirs", return_value=None), patch.dict(os.environ, {}, clear=True):
-                actual_photos, actual_screenshots = server.identify_logs_folder()
+            actual_photos, actual_screenshots = server.identify_logs_folder(
+                config_dir=config_dir,
+                user_home=str(tmp / "home"),
+                onedrive_env=None,
+                onedrive_consumer_env=None,
+                d_drive_root=str(fake_d_root),
+            )
+            payload = json.loads(
+                get_media_paths_settings_file(config_dir=config_dir).read_text(encoding="utf-8")
+            )
 
         self.assertEqual(actual_photos, str(photos_dir))
         self.assertEqual(actual_screenshots, str(screenshots_dir))
+        self.assertEqual(payload["photos_path"], str(photos_dir))
+        self.assertEqual(payload["screenshots_path"], str(screenshots_dir))
+
+    def test_identify_logs_folder_reuses_saved_media_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config_dir = tmp / "config"
+            saved_root = tmp / "saved_root"
+            saved_photos = saved_root / "Pictures" / "本机照片"
+            saved_screenshots = saved_root / "Pictures" / "Screenshots"
+            saved_photos.mkdir(parents=True)
+            saved_screenshots.mkdir(parents=True)
+
+            save_media_paths_settings(
+                saved_photos,
+                saved_screenshots,
+                settings_file=get_media_paths_settings_file(config_dir=config_dir),
+            )
+
+            newer_root = tmp / "newer_root"
+            (newer_root / "Pictures" / "本机照片").mkdir(parents=True)
+            (newer_root / "Pictures" / "Screenshots").mkdir(parents=True)
+
+            actual_photos, actual_screenshots = server.identify_logs_folder(
+                config_dir=config_dir,
+                user_home=str(tmp / "home"),
+                onedrive_env=None,
+                onedrive_consumer_env=None,
+                d_drive_root=str(newer_root),
+            )
+
+        self.assertEqual(actual_photos, str(saved_photos))
+        self.assertEqual(actual_screenshots, str(saved_screenshots))
 
     def test_data_loader_resolve_data_root_prefers_user_one_drive_mine(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -155,5 +194,3 @@ class BackendPathResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
