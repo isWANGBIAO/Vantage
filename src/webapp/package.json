@@ -49,15 +49,36 @@
     "files": [
       "dist/**/*",
       "main.cjs",
-      "preload.cjs"
+      "preload.cjs",
+      "src/utils/**/*.cjs"
+    ],
+    "extraResources": [
+      {
+        "from": "../../build/backend-runtime/stage/VantageBackend",
+        "to": "backend-runtime/VantageBackend",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "win": {
       "icon": "../../icon.png",
-      "target": "nsis"
+      "target": [
+        "nsis"
+      ]
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Vantage",
+      "deleteAppDataOnUninstall": false,
+      "warningsAsErrors": false,
+      "customNsisBinary": {
+        "url": "https://github.com/SoundSafari/NSISBI-ElectronBuilder/releases/download/1.0.0/nsisbi-electronbuilder-3.10.3.7z",
+        "checksum": "WRmZUsACjIc2s7bvsFGFRofK31hfS7riPlcfI1V9uFB2Q8s7tidgI/9U16+X0I9X2ZhNxi8N7Z3gKvm6ojvLvg=="
+      }
     }
   }
 }

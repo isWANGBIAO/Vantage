@@ -2,6 +2,7 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog } = require
 const path = require('path');
 const fs = require('fs');
 const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimePaths.cjs');
+const { applyLaunchAtLoginSetting } = require('./src/utils/autoLaunch.cjs');
 const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
 const { getOnboardingState, saveOnboardingCompletion } = require('./src/utils/onboardingConfig.cjs');
 
@@ -54,6 +55,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 // ============ Electron 应用 ============
 const isDev = runtimePaths.appMode !== 'packaged' && !app.isPackaged && process.env.NODE_ENV !== 'production';
+const shouldManageLoginItem = runtimePaths.appMode === 'packaged' || app.isPackaged;
 
 let mainWindow = null;
 let tray = null;
@@ -63,6 +65,21 @@ log.info('Vantage Electron starting...');
 log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
 log.info(`Log file: ${logFile}`);
 log.info(`Runtime data dir: ${runtimePaths.dataDir}`);
+
+function syncLaunchAtLoginSetting() {
+    const onboardingState = getOnboardingState({ runtimePaths, projectRoot });
+    if (!shouldManageLoginItem) {
+        log.info('Launch-at-login management skipped outside packaged installs');
+        return onboardingState;
+    }
+
+    const enabled = applyLaunchAtLoginSetting({
+        app,
+        enabled: onboardingState.launchAtLogin,
+    });
+    log.info(`Launch at login ${enabled ? 'enabled' : 'disabled'} from saved settings`);
+    return onboardingState;
+}
 
 ipcMain.handle('onboarding:get-state', async () => getOnboardingState({ runtimePaths, projectRoot }));
 ipcMain.handle('onboarding:pick-legacy-root', async () => {
@@ -75,13 +92,24 @@ ipcMain.handle('onboarding:pick-legacy-root', async () => {
         path: result.canceled ? null : (result.filePaths[0] || null),
     };
 });
-ipcMain.handle('onboarding:complete', async (event, submission) =>
-    saveOnboardingCompletion({
+
+ipcMain.handle('onboarding:complete', async (event, submission) => {
+    const result = saveOnboardingCompletion({
         runtimePaths,
         submission: submission || {},
         projectRoot,
-    }),
-);
+    });
+
+    if (shouldManageLoginItem) {
+        applyLaunchAtLoginSetting({
+            app,
+            enabled: result.launchAtLogin,
+        });
+        log.info(`Launch at login ${result.launchAtLogin ? 'enabled' : 'disabled'} from onboarding`);
+    }
+
+    return result;
+});
 
 function createWindow() {
     log.info('Creating main window...');
@@ -205,6 +233,7 @@ if (!gotTheLock) {
 
     app.whenReady().then(async () => {
         log.info('App ready, initializing...');
+        syncLaunchAtLoginSetting();
 
         const shouldLaunchBundledBackend = runtimePaths.appMode === 'packaged' || app.isPackaged;
         if (shouldLaunchBundledBackend) {

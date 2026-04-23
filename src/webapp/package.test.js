@@ -10,3 +10,27 @@ test('package exposes frontend test and check scripts', () => {
   assert.match(packageJson.scripts.test, /node --test/);
   assert.match(packageJson.scripts.check, /npm run test/);
 });
+
+test('package bundles the backend runtime and installer shortcuts for Windows', () => {
+  assert.ok(packageJson.build.files.includes('src/utils/**/*.cjs'));
+  assert.deepEqual(packageJson.build.win.target, ['nsis']);
+  assert.ok(Array.isArray(packageJson.build.extraResources));
+  assert.ok(
+    packageJson.build.extraResources.some(
+      (entry) =>
+        entry.from === '../../build/backend-runtime/stage/VantageBackend'
+        && entry.to === 'backend-runtime/VantageBackend',
+    ),
+  );
+  assert.equal(packageJson.build.nsis.oneClick, false);
+  assert.equal(packageJson.build.nsis.allowToChangeInstallationDirectory, true);
+  assert.equal(packageJson.build.nsis.createDesktopShortcut, 'always');
+  assert.equal(packageJson.build.nsis.createStartMenuShortcut, true);
+  assert.equal(packageJson.build.nsis.shortcutName, 'Vantage');
+  assert.equal(packageJson.build.nsis.deleteAppDataOnUninstall, false);
+  assert.equal(packageJson.build.nsis.warningsAsErrors, false);
+  assert.deepEqual(packageJson.build.nsis.customNsisBinary, {
+    url: 'https://github.com/SoundSafari/NSISBI-ElectronBuilder/releases/download/1.0.0/nsisbi-electronbuilder-3.10.3.7z',
+    checksum: 'WRmZUsACjIc2s7bvsFGFRofK31hfS7riPlcfI1V9uFB2Q8s7tidgI/9U16+X0I9X2ZhNxi8N7Z3gKvm6ojvLvg==',
+  });
+});
