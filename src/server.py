@@ -201,6 +201,7 @@ class SystemState:
         self.background_thread_status = {
             "camera_loop": False,
             "face_live_loop": False,
+            "initialize_latest_media_state": False,
             "monitor_loop": False,
             "update_legacy_storage_stats": False,
             "update_storage_stats": False,
@@ -954,6 +955,24 @@ def find_latest_file_recursive(directory, extensions={'.jpg', '.png'}):
                     pass
     return latest_file
 
+
+def initialize_latest_media_state():
+    try:
+        print("Scanning for latest existing images...")
+        if not state.paths.get('photo') and state.photos_path:
+            latest_photo = find_latest_file_recursive(state.photos_path)
+            if latest_photo:
+                state.paths['photo'] = latest_photo
+                print(f"Found latest photo: {latest_photo}")
+
+        if not state.paths.get('screenshot') and state.screenshots_path:
+            latest_screen = find_latest_file_recursive(state.screenshots_path)
+            if latest_screen:
+                state.paths['screenshot'] = latest_screen
+                print(f"Found latest screenshot: {latest_screen}")
+    except Exception as e:
+        print(f"Error finding latest files: {e}")
+
 async def startup_event():
     print("Starting up server...")
     state.is_running = True
@@ -996,23 +1015,7 @@ async def startup_event():
         _mount_static_once("/static/plots", plot_dir, "plots")
         
         _mount_static_once("/static/screenshots", state.screenshots_path, "screenshots")
-
-        # Attempt to find latest existing files to populate state
-        try:
-            print("Scanning for latest existing images...")
-            if not state.paths.get('photo') and state.photos_path:
-                 latest_photo = find_latest_file_recursive(state.photos_path)
-                 if latest_photo:
-                     state.paths['photo'] = latest_photo
-                     print(f"Found latest photo: {latest_photo}")
-
-            if not state.paths.get('screenshot') and state.screenshots_path:
-                 latest_screen = find_latest_file_recursive(state.screenshots_path)
-                 if latest_screen:
-                     state.paths['screenshot'] = latest_screen
-                     print(f"Found latest screenshot: {latest_screen}")
-        except Exception as e:
-            print(f"Error finding latest files: {e}")
+        _start_background_thread_once("initialize_latest_media_state", initialize_latest_media_state)
 
     except Exception as e:
         print(f"Startup logic error: {e}")

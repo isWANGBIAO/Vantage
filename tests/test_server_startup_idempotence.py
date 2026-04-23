@@ -84,7 +84,7 @@ def test_startup_event_is_idempotent_for_static_mounts_and_threads():
                 "/static/screenshots": os.path.abspath(str(screenshots_path)),
             }
             assert after_second_startup == after_first_startup
-            assert _DummyThread.started_count == 6
+            assert _DummyThread.started_count == 7
     finally:
         server.app.router.routes[:] = original_routes
         server.state.photos_path = original_photos
@@ -137,7 +137,7 @@ def test_startup_event_retries_partial_failure_without_duplicate_threads():
                 "/static/plots": os.path.abspath(str(tmp_path / "plot_outputs")),
                 "/static/screenshots": os.path.abspath(str(screenshots_path)),
             }
-            assert _DummyThread.started_count == 6
+            assert _DummyThread.started_count == 7
     finally:
         server.app.router.routes[:] = original_routes
         server.state.photos_path = original_photos
@@ -199,7 +199,7 @@ def test_startup_event_updates_static_mounts_after_shutdown():
                 "/static/plots": os.path.abspath(str(tmp_path / "plot_outputs")),
                 "/static/screenshots": os.path.abspath(str(screenshots_path_2)),
             }
-            assert _DummyThread.started_count == 12
+            assert _DummyThread.started_count == 14
     finally:
         server.app.router.routes[:] = original_routes
         server.state.photos_path = original_photos
@@ -251,6 +251,7 @@ def test_startup_event_resumes_only_missing_threads_after_partial_start_failure(
             assert after_retry == {
                 "camera_loop": 1,
                 "face_live_loop": 1,
+                "initialize_latest_media_state": 1,
                 "monitor_loop": 1,
                 "update_legacy_storage_stats": 2,
                 "update_storage_stats": 1,

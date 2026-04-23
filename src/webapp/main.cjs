@@ -2,6 +2,7 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog } = require
 const path = require('path');
 const fs = require('fs');
 const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimePaths.cjs');
+const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
 const { getOnboardingState, saveOnboardingCompletion } = require('./src/utils/onboardingConfig.cjs');
 
 // ============ 日志系统 ============
@@ -56,6 +57,7 @@ const isDev = runtimePaths.appMode !== 'packaged' && !app.isPackaged && process.
 
 let mainWindow = null;
 let tray = null;
+let bundledBackendProcess = null;
 
 log.info('Vantage Electron starting...');
 log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
@@ -201,8 +203,36 @@ if (!gotTheLock) {
         }
     });
 
-    app.whenReady().then(() => {
+    app.whenReady().then(async () => {
         log.info('App ready, initializing...');
+
+        const shouldLaunchBundledBackend = runtimePaths.appMode === 'packaged' || app.isPackaged;
+        if (shouldLaunchBundledBackend) {
+            try {
+                const backendBootstrap = await ensureBundledBackendReady({
+                    isDev: false,
+                    runtimePaths,
+                    env: process.env,
+                    resourcesPath: process.resourcesPath,
+                    platform: process.platform,
+                    logger: log,
+                });
+                bundledBackendProcess = backendBootstrap.process;
+                log.info(
+                    backendBootstrap.started
+                        ? `Bundled backend started: ${backendBootstrap.executablePath}`
+                        : `Bundled backend reused: ${backendBootstrap.reason}`,
+                );
+            } catch (error) {
+                log.error('Bundled backend startup failed', error);
+                dialog.showErrorBox('Vantage failed to start', `Bundled backend startup failed.\n\n${error.message}`);
+                app.exit(1);
+                return;
+            }
+        } else {
+            log.info('Development Electron flow detected, backend launch remains external');
+        }
+
         createWindow();
         createTray();
 
@@ -224,4 +254,8 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
     log.info('App quitting...');
     app.isQuitting = true;
+    terminateBundledBackendProcess(bundledBackendProcess, {
+        platform: process.platform,
+        logger: log,
+    });
 });

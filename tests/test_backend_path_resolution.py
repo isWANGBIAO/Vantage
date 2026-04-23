@@ -133,6 +133,60 @@ class BackendPathResolutionTests(unittest.TestCase):
         self.assertEqual(actual_photos, str(saved_photos))
         self.assertEqual(actual_screenshots, str(saved_screenshots))
 
+    def test_startup_event_schedules_latest_media_scan_in_background(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            photos_dir = tmp / "photos"
+            screenshots_dir = tmp / "screenshots"
+            plot_dir = tmp / "plot_outputs"
+            photos_dir.mkdir(parents=True)
+            screenshots_dir.mkdir(parents=True)
+
+            started_threads = []
+            original_paths = dict(server.state.paths)
+            original_status = dict(server.state.background_thread_status)
+            original_monitor = server.state.monitor
+            original_photos_path = server.state.photos_path
+            original_screenshots_path = server.state.screenshots_path
+            original_running = server.state.is_running
+
+            try:
+                with patch.object(
+                    server,
+                    "identify_logs_folder",
+                    return_value=(str(photos_dir), str(screenshots_dir)),
+                ), patch.object(
+                    server,
+                    "Monitor",
+                    return_value=object(),
+                ), patch.object(
+                    server,
+                    "_mount_static_once",
+                    return_value=False,
+                ), patch.object(
+                    server,
+                    "_get_plot_dir",
+                    return_value=plot_dir,
+                ), patch.object(
+                    server,
+                    "_start_background_thread_once",
+                    side_effect=lambda name, target: started_threads.append(name) or True,
+                ), patch.object(
+                    server,
+                    "find_latest_file_recursive",
+                    side_effect=AssertionError("startup should not scan latest files synchronously"),
+                ):
+                    asyncio.run(server.startup_event())
+            finally:
+                server.state.paths = original_paths
+                server.state.background_thread_status = original_status
+                server.state.monitor = original_monitor
+                server.state.photos_path = original_photos_path
+                server.state.screenshots_path = original_screenshots_path
+                server.state.is_running = original_running
+
+        self.assertIn("initialize_latest_media_state", started_threads)
+
     def test_data_loader_resolve_data_root_prefers_user_one_drive_mine(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir)
