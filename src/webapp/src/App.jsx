@@ -3,7 +3,7 @@ import './App.css';
 import ActionPlanContainer from './components/ActionPlanContainer';
 import OnboardingShell from './components/OnboardingShell';
 import { Sun, Moon } from 'lucide-react';
-import { loadOnboardingState } from './utils/onboardingState';
+import { completeOnboardingSetup, loadOnboardingState, pickLegacyRoot } from './utils/onboardingState';
 
 function lazyWithPreload(factory) {
   const Component = lazy(factory);
@@ -45,8 +45,10 @@ function App() {
     loading: true,
     completed: true,
     launchAtLogin: false,
+    providerConfigured: false,
+    migrationCompleted: false,
+    legacyRoot: null,
   }));
-  const [onboardingPreviewComplete, setOnboardingPreviewComplete] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -63,6 +65,9 @@ function App() {
           loading: false,
           completed: nextState.completed,
           launchAtLogin: nextState.launchAtLogin,
+          providerConfigured: nextState.providerConfigured,
+          migrationCompleted: nextState.migrationCompleted,
+          legacyRoot: nextState.legacyRoot,
         });
       }
     };
@@ -95,8 +100,23 @@ function App() {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  const showOnboardingShell =
-    !onboardingState.loading && !onboardingState.completed && !onboardingPreviewComplete;
+  const handleCompleteOnboarding = async (submission) => {
+    const result = await completeOnboardingSetup(submission);
+    const nextState = await loadOnboardingState();
+    setOnboardingState({
+      loading: false,
+      completed: nextState.completed,
+      launchAtLogin: nextState.launchAtLogin,
+      providerConfigured: nextState.providerConfigured,
+      migrationCompleted: nextState.migrationCompleted,
+      legacyRoot: nextState.legacyRoot,
+    });
+    return result;
+  };
+
+  const handlePickLegacyRoot = async () => pickLegacyRoot();
+
+  const showOnboardingShell = !onboardingState.loading && !onboardingState.completed;
 
   if (onboardingState.loading) {
     return (
@@ -118,7 +138,11 @@ function App() {
     return (
       <OnboardingShell
         initialLaunchAtLogin={onboardingState.launchAtLogin}
-        onOpenAppPreview={() => setOnboardingPreviewComplete(true)}
+        initialLegacyRoot={onboardingState.legacyRoot}
+        initialProviderConfigured={onboardingState.providerConfigured}
+        initialMigrationCompleted={onboardingState.migrationCompleted}
+        onComplete={handleCompleteOnboarding}
+        onPickLegacyRoot={handlePickLegacyRoot}
       />
     );
   }

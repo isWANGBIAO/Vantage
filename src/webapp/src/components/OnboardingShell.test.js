@@ -14,7 +14,16 @@ test('OnboardingShell defines the four first-run placeholder steps', () => {
 
 test('OnboardingShell allows skipping chat setup and opening the app preview', () => {
   assert.ok(onboardingShellSource.includes('Skip Chat Setup'));
-  assert.ok(onboardingShellSource.includes('Open App Preview'));
+  assert.ok(onboardingShellSource.includes('Finish Setup'));
   assert.ok(onboardingShellSource.includes('Continue'));
   assert.ok(onboardingShellSource.includes('Back'));
+});
+
+test('OnboardingShell collects provider fields and legacy import controls before finishing', () => {
+  assert.ok(onboardingShellSource.includes('Provider Route'));
+  assert.ok(onboardingShellSource.includes('API Base URL'));
+  assert.ok(onboardingShellSource.includes('API Key'));
+  assert.ok(onboardingShellSource.includes('Model'));
+  assert.ok(onboardingShellSource.includes('Import existing history into the packaged app data directory'));
+  assert.ok(onboardingShellSource.includes('Choose Folder'));
 });

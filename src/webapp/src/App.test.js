@@ -30,6 +30,12 @@ test('App keeps dashboard prewarm mounted but passes visibility into Dashboard',
 test('App gates the workspace behind onboarding when setup is incomplete', () => {
   assert.ok(appSource.includes('loadOnboardingState'));
   assert.ok(appSource.includes('<OnboardingShell'));
-  assert.ok(appSource.includes('onboardingPreviewComplete'));
   assert.ok(appSource.includes('showOnboardingShell'));
+  assert.ok(appSource.includes('initialMigrationCompleted={onboardingState.migrationCompleted}'));
+});
+
+test('App submits onboarding completion through the Electron bridge helpers', () => {
+  assert.ok(appSource.includes('completeOnboardingSetup'));
+  assert.ok(appSource.includes('pickLegacyRoot'));
+  assert.ok(appSource.includes('handleCompleteOnboarding'));
 });

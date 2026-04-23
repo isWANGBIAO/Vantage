@@ -1,14 +1,15 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimePaths.cjs');
-const { getOnboardingState } = require('./src/utils/onboardingConfig.cjs');
+const { getOnboardingState, saveOnboardingCompletion } = require('./src/utils/onboardingConfig.cjs');
 
 // ============ 日志系统 ============
+const projectRoot = path.join(__dirname, '..', '..');
 const runtimePaths = resolveRuntimePaths({
     app,
     env: process.env,
-    projectRoot: path.join(__dirname, '..', '..'),
+    projectRoot,
     platform: process.platform,
 });
 ensureRuntimeDirs(runtimePaths);
@@ -61,7 +62,24 @@ log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
 log.info(`Log file: ${logFile}`);
 log.info(`Runtime data dir: ${runtimePaths.dataDir}`);
 
-ipcMain.handle('onboarding:get-state', async () => getOnboardingState({ runtimePaths }));
+ipcMain.handle('onboarding:get-state', async () => getOnboardingState({ runtimePaths, projectRoot }));
+ipcMain.handle('onboarding:pick-legacy-root', async () => {
+    const result = await dialog.showOpenDialog({
+        properties: ['openDirectory'],
+        title: 'Select Legacy Vantage Source Folder',
+    });
+
+    return {
+        path: result.canceled ? null : (result.filePaths[0] || null),
+    };
+});
+ipcMain.handle('onboarding:complete', async (event, submission) =>
+    saveOnboardingCompletion({
+        runtimePaths,
+        submission: submission || {},
+        projectRoot,
+    }),
+);
 
 function createWindow() {
     log.info('Creating main window...');

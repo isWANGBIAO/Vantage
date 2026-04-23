@@ -7,44 +7,44 @@ const STEP_CONTENT = {
     eyebrow: 'First Run',
     title: 'Welcome to Vantage',
     description:
-      'This setup flow will turn the current project into a desktop-style app. In this step we only wire the shell, so nothing is saved yet.',
+      'This setup flow prepares the packaged app experience: user settings, provider configuration, and history import all move out of the source tree.',
     bullets: [
-      'Check where your app data already lives.',
-      'Preview the chat setup path without asking for provider keys yet.',
-      'Confirm how old history import will work before the real migration step lands.',
+      'Review what the packaged runtime will keep under the user data directory.',
+      'Configure the chat provider or explicitly skip it for now.',
+      'Import old history from the current repo only once, then keep using the packaged copy.',
     ],
   },
   provider: {
     eyebrow: 'Chat Setup',
-    title: 'Choose how chat setup should feel',
+    title: 'Connect the chat provider',
     description:
-      'The real provider save flow comes in the next step. Right now this page only reserves the structure for provider selection, API keys, and startup preferences.',
+      'These fields are now saved into providers.json and settings.json. Real backend consumption comes later, but the onboarding flow already persists the values.',
     bullets: [
-      'Primary provider selector placeholder',
-      'API key and endpoint placeholder',
-      'Optional launch-at-login preference preview',
+      'Provider Route, API Base URL, API Key, and Model are all stored in user config.',
+      'Launch-at-login preference is stored here and applied in the installer step later.',
+      'You can still skip chat setup and finish onboarding without blocking the rest of the app.',
     ],
   },
   migration: {
     eyebrow: 'Data Import',
-    title: 'Prepare legacy history import',
+    title: 'Import legacy history into packaged data',
     description:
-      'The actual copy and dedupe logic is not connected in this step. This page exists so the first-run flow already has a stable place for old history import.',
+      'Choose whether to pull the old history folder into the packaged app data directory. The migration is recorded once and the same source will not be imported twice.',
     bullets: [
-      'Auto-detected legacy paths will appear here',
-      'Manual folder picker will connect here next',
-      'Import summary and conflict handling will be added in the real migration step',
+      'Only history and state files are copied here.',
+      'Large photo and screenshot libraries stay where they already live.',
+      'If the same legacy source was already imported, this step will reuse the previous migration record.',
     ],
   },
   complete: {
-    eyebrow: 'Preview Ready',
-    title: 'Onboarding shell is in place',
+    eyebrow: 'Finish',
+    title: 'Write onboarding state and open the app',
     description:
-      'You can open the app preview now. The next step will connect these placeholders to real persistence and migration.',
+      'The final step saves onboarding_completed, provider settings, and optional migration state. After that the main workspace opens directly on next launch.',
     bullets: [
-      'Your workspace tabs stay unchanged behind this shell',
-      'This preview does not write onboarding_completed yet',
-      'Restarting the app will still reopen onboarding until the real save step is added',
+      'settings.json records onboarding and launch-at-login preference.',
+      'providers.json records the provider selection and credentials you entered.',
+      'migration-state.json records where old history came from and when it was imported.',
     ],
   },
 };
@@ -61,9 +61,36 @@ function StepCard({ label, title, isActive, isDone }) {
   );
 }
 
-export default function OnboardingShell({ initialLaunchAtLogin = false, onOpenAppPreview }) {
+function Field({ label, children, hint }) {
+  return (
+    <label className="onboarding-field">
+      <span className="onboarding-field-label">{label}</span>
+      {children}
+      {hint ? <span className="onboarding-field-hint">{hint}</span> : null}
+    </label>
+  );
+}
+
+export default function OnboardingShell({
+  initialLaunchAtLogin = false,
+  initialLegacyRoot = null,
+  initialProviderConfigured = false,
+  initialMigrationCompleted = false,
+  onComplete,
+  onPickLegacyRoot,
+}) {
   const [stepIndex, setStepIndex] = useState(0);
   const [chatSetupSkipped, setChatSetupSkipped] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState(initialProviderConfigured ? 'openai' : 'openai');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [model, setModel] = useState('');
+  const [launchAtLogin, setLaunchAtLogin] = useState(initialLaunchAtLogin);
+  const [importLegacyData, setImportLegacyData] = useState(Boolean(initialLegacyRoot) || initialMigrationCompleted);
+  const [legacyRoot, setLegacyRoot] = useState(initialLegacyRoot || '');
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+
   const currentStep = STEP_ORDER[stepIndex];
   const stepContent = STEP_CONTENT[currentStep];
 
@@ -78,20 +105,49 @@ export default function OnboardingShell({ initialLaunchAtLogin = false, onOpenAp
   );
 
   const handleBack = () => {
+    setSaveError('');
     setStepIndex((current) => Math.max(current - 1, 0));
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
+    setSaveError('');
+
     if (currentStep === 'complete') {
-      onOpenAppPreview();
+      try {
+        setIsSaving(true);
+        await onComplete({
+          launchAtLogin,
+          selectedProvider,
+          baseUrl,
+          apiKey,
+          model,
+          importLegacyData,
+          legacyRoot,
+          skipChatSetup: chatSetupSkipped,
+        });
+      } catch (error) {
+        setSaveError(error?.message || 'Failed to finish onboarding.');
+      } finally {
+        setIsSaving(false);
+      }
       return;
     }
+
     setStepIndex((current) => Math.min(current + 1, STEP_ORDER.length - 1));
   };
 
   const handleSkipChatSetup = () => {
     setChatSetupSkipped(true);
     setStepIndex(STEP_ORDER.indexOf('migration'));
+  };
+
+  const handlePickLegacyRoot = async () => {
+    setSaveError('');
+    const nextRoot = await onPickLegacyRoot();
+    if (nextRoot) {
+      setLegacyRoot(nextRoot);
+      setImportLegacyData(true);
+    }
   };
 
   return (
@@ -130,50 +186,147 @@ export default function OnboardingShell({ initialLaunchAtLogin = false, onOpenAp
                   ))}
                 </ul>
 
-                <div className="onboarding-placeholder-band">
-                  {currentStep === 'provider' ? (
-                    <>
-                      <div className="onboarding-placeholder-item">
-                        Launch at login preview: {initialLaunchAtLogin ? 'On' : 'Off'}
-                      </div>
-                      <div className="onboarding-placeholder-item">
-                        Chat setup status: {chatSetupSkipped ? 'Skipped for this preview' : 'Not configured yet'}
-                      </div>
-                    </>
-                  ) : null}
+                {currentStep === 'provider' ? (
+                  <div className="onboarding-form-grid">
+                    <Field label="Provider Route">
+                      <select
+                        className="onboarding-input"
+                        value={selectedProvider}
+                        onChange={(event) => setSelectedProvider(event.target.value)}
+                        disabled={chatSetupSkipped}
+                      >
+                        <option value="openai">OpenAI-compatible</option>
+                        <option value="gemini">Gemini-compatible</option>
+                        <option value="custom">Custom provider</option>
+                      </select>
+                    </Field>
 
-                  {currentStep === 'migration' ? (
-                    <>
-                      <div className="onboarding-placeholder-item">Legacy history import target: pending</div>
-                      <div className="onboarding-placeholder-item">Manual source picker: pending</div>
-                    </>
-                  ) : null}
+                    <Field
+                      label="API Base URL"
+                      hint="Saved now for onboarding. Real runtime routing will start using it in later steps."
+                    >
+                      <input
+                        className="onboarding-input"
+                        type="text"
+                        value={baseUrl}
+                        onChange={(event) => setBaseUrl(event.target.value)}
+                        placeholder="https://api.example.com/v1"
+                        disabled={chatSetupSkipped}
+                      />
+                    </Field>
 
-                  {currentStep === 'complete' ? (
+                    <Field label="API Key">
+                      <input
+                        className="onboarding-input"
+                        type="password"
+                        value={apiKey}
+                        onChange={(event) => setApiKey(event.target.value)}
+                        placeholder="sk-..."
+                        disabled={chatSetupSkipped}
+                      />
+                    </Field>
+
+                    <Field label="Model">
+                      <input
+                        className="onboarding-input"
+                        type="text"
+                        value={model}
+                        onChange={(event) => setModel(event.target.value)}
+                        placeholder="gpt-5 / gemini-2.5-pro / custom-model"
+                        disabled={chatSetupSkipped}
+                      />
+                    </Field>
+
+                    <label className="onboarding-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={launchAtLogin}
+                        onChange={(event) => setLaunchAtLogin(event.target.checked)}
+                      />
+                      <span>Start Vantage automatically after Windows login</span>
+                    </label>
+                  </div>
+                ) : null}
+
+                {currentStep === 'migration' ? (
+                  <div className="onboarding-form-grid">
+                    <label className="onboarding-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={importLegacyData}
+                        onChange={(event) => setImportLegacyData(event.target.checked)}
+                      />
+                      <span>Import existing history into the packaged app data directory</span>
+                    </label>
+
+                    <Field
+                      label="Legacy Source Folder"
+                      hint="Pick the old source-tree root that contains the history folder."
+                    >
+                      <div className="onboarding-inline-row">
+                        <input
+                          className="onboarding-input"
+                          type="text"
+                          value={legacyRoot}
+                          onChange={(event) => setLegacyRoot(event.target.value)}
+                          placeholder="C:\\Users\\97012\\gitee\\ai"
+                        />
+                        <button
+                          type="button"
+                          className="onboarding-secondary-button"
+                          onClick={handlePickLegacyRoot}
+                        >
+                          Choose Folder
+                        </button>
+                      </div>
+                    </Field>
+
+                    {initialMigrationCompleted ? (
+                      <div className="onboarding-placeholder-item">
+                        A legacy import has already been recorded. Reusing the same source will not copy again.
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {currentStep === 'complete' ? (
+                  <div className="onboarding-form-grid">
                     <div className="onboarding-placeholder-item">
-                      Preview mode only. Real onboarding completion will be saved in the next step.
+                      Chat setup: {chatSetupSkipped ? 'Skipped for now' : `Will save ${selectedProvider}`}
                     </div>
-                  ) : null}
-                </div>
+                    <div className="onboarding-placeholder-item">
+                      Launch at login: {launchAtLogin ? 'Enabled in settings.json' : 'Disabled in settings.json'}
+                    </div>
+                    <div className="onboarding-placeholder-item">
+                      Legacy import: {importLegacyData ? (legacyRoot || 'Source pending') : 'Skipped'}
+                    </div>
+                  </div>
+                ) : null}
+
+                {saveError ? <div className="action-plan-warning">{saveError}</div> : null}
               </div>
 
               <div className="onboarding-actions">
                 <button
                   className="onboarding-secondary-button"
                   onClick={handleBack}
-                  disabled={stepIndex === 0}
+                  disabled={stepIndex === 0 || isSaving}
                 >
                   Back
                 </button>
 
                 {currentStep === 'provider' ? (
-                  <button className="onboarding-secondary-button" onClick={handleSkipChatSetup}>
+                  <button
+                    className="onboarding-secondary-button"
+                    onClick={handleSkipChatSetup}
+                    disabled={isSaving}
+                  >
                     Skip Chat Setup
                   </button>
                 ) : null}
 
-                <button onClick={handleContinue}>
-                  {currentStep === 'complete' ? 'Open App Preview' : 'Continue'}
+                <button onClick={() => void handleContinue()} disabled={isSaving}>
+                  {currentStep === 'complete' ? (isSaving ? 'Saving...' : 'Finish Setup') : 'Continue'}
                 </button>
               </div>
             </div>

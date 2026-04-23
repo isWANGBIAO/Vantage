@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.send('minimize-to-tray');
     },
     getOnboardingState: () => ipcRenderer.invoke('onboarding:get-state'),
+    completeOnboarding: (payload) => ipcRenderer.invoke('onboarding:complete', payload),
+    pickLegacyRoot: () => ipcRenderer.invoke('onboarding:pick-legacy-root'),
     onMessage: (channel, callback) => {
         const validChannels = ['update-available', 'backend-status'];
         if (validChannels.includes(channel)) {
