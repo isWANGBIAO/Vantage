@@ -26,6 +26,12 @@ class OutputModelTests(unittest.TestCase):
             entrypoint="src/output_model.py",
         )
         tracked_client.create_chat_completion.assert_called_once()
+        kwargs = tracked_client.create_chat_completion.call_args.kwargs
+        self.assertEqual(
+            kwargs["messages"][1]["content"],
+            "你是什么模型？你的资料的最新日期是什么？你的最大上下文是多少个token，为多少K？",
+        )
+        self.assertNotIn("浣犳槸", kwargs["messages"][1]["content"])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getFaceReportState } from '../utils/faceReportState';
 import {
   buildBackendUrl,
@@ -22,7 +22,8 @@ const trendViewOrder = ['day', 'week', 'month', 'all'];
 const trendCardPalette = ['#00d2d3', '#74b9ff', '#fdcb6e', '#a29bfe'];
 const pulseDimensions = { width: 960, height: 180 };
 const trendDimensions = { width: 420, height: 180 };
-const livePollIntervalMs = 100;
+const visibleLivePollIntervalMs = 1000;
+const hiddenLivePollIntervalMs = 30000;
 
 function formatScore(score) {
   return Number.isFinite(Number(score)) ? Number(score).toFixed(2) : '--';
@@ -322,7 +323,7 @@ function ExtremeCard({ title, date, score, imageUrl, accent }) {
   );
 }
 
-export default function FaceHistory() {
+export default function FaceHistory({ isVisible = true } = {}) {
   const { t } = useDisplayLanguage();
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(initialProgress);
@@ -331,7 +332,7 @@ export default function FaceHistory() {
   const [error, setError] = useState(null);
   const [reportStatus, setReportStatus] = useState('loading');
 
-  const fetchReport = async ({ showLoading = false } = {}) => {
+  const fetchReport = useCallback(async ({ showLoading = false } = {}) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
@@ -355,9 +356,9 @@ export default function FaceHistory() {
     } finally {
       clearTimeout(timeoutId);
     }
-  };
+  }, [t]);
 
-  const fetchLive = async () => {
+  const fetchLive = useCallback(async () => {
     try {
       const json = await fetchBackendJson('/api/face/live', {
         retryPolicy: 'poll',
@@ -372,20 +373,22 @@ export default function FaceHistory() {
     } catch (err) {
       console.error('Live face poll error', err);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchReport({ showLoading: true });
-    fetchLive();
-  }, []);
+  }, [fetchReport]);
 
   useEffect(() => {
+    const intervalMs = isVisible ? visibleLivePollIntervalMs : hiddenLivePollIntervalMs;
+    fetchLive();
+
     const interval = setInterval(() => {
       fetchLive();
-    }, livePollIntervalMs);
+    }, intervalMs);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchLive, isVisible]);
 
   useEffect(() => {
     if (!loading) {
@@ -423,7 +426,7 @@ export default function FaceHistory() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [loading]);
+  }, [loading, fetchReport, t]);
 
   const handleAnalyze = async () => {
     try {

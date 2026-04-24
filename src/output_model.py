@@ -18,7 +18,7 @@ def print_model_name(client, golbal_model):
                 {"role": "system", "content": "You are a helpful assistant."},
                 {
                     "role": "user",
-                    "content": "浣犳槸浠€涔堟ā鍨嬶紵浣犵殑璧勬枡鐨勬渶鏂版棩鏈熸槸浠€涔堬紵浣犵殑鏈€澶т笂涓嬫枃鏄灏戜釜token锛熶负澶氬皯K锛?",
+                    "content": "你是什么模型？你的资料的最新日期是什么？你的最大上下文是多少个token，为多少K？",
                 },
             ],
         )

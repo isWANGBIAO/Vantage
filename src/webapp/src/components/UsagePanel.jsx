@@ -144,7 +144,7 @@ function DataTable({ columns, rows, emptyMessage }) {
   );
 }
 
-export default function UsagePanel() {
+export default function UsagePanel({ isVisible = true } = {}) {
   const { t } = useDisplayLanguage();
   const [dashboard, setDashboard] = useState(null);
   const [error, setError] = useState('');
@@ -164,6 +164,10 @@ export default function UsagePanel() {
   }, [t]);
 
   useEffect(() => {
+    if (!isVisible) {
+      return undefined;
+    }
+
     void loadUsageDashboard();
 
     const intervalId = setInterval(() => {
@@ -171,7 +175,7 @@ export default function UsagePanel() {
     }, 30000);
 
     return () => clearInterval(intervalId);
-  }, [loadUsageDashboard]);
+  }, [isVisible, loadUsageDashboard]);
 
   const usageDashboard = dashboard || EMPTY_DASHBOARD;
   const summary = usageDashboard.summary || EMPTY_DASHBOARD.summary;

@@ -72,7 +72,7 @@ export default function ActionPlanContainer({ isVisible = true }) {
           </div>
         </div>
         <div style={{ height: '100%', display: subTab === 'usage' ? 'block' : 'none' }}>
-          <UsagePanel />
+          <UsagePanel isVisible={isVisible && subTab === 'usage'} />
         </div>
       </div>
     </div>

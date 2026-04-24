@@ -298,7 +298,7 @@ function AppShell() {
         <Suspense fallback={null}>
           {(activeTab === 'face history' || backgroundTabsReady) ? (
             <div style={{ display: activeTab === 'face history' ? 'block' : 'none' }}>
-              <FaceHistory />
+              <FaceHistory isVisible={activeTab === 'face history'} />
             </div>
           ) : null}
         </Suspense>

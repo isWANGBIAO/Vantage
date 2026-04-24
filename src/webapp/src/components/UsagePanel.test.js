@@ -24,7 +24,7 @@ function loadUsagePanelSortHelper() {
 test('ActionPlanContainer exposes a dedicated usage sub-tab', () => {
   assert.ok(actionPlanContainerSource.includes("setSubTab('usage')"));
   assert.ok(actionPlanContainerSource.includes("t('action_plan.tab.usage')"));
-  assert.ok(actionPlanContainerSource.includes('<UsagePanel />'));
+  assert.ok(actionPlanContainerSource.includes("<UsagePanel isVisible={isVisible && subTab === 'usage'} />"));
 });
 
 test('UsagePanel fetches backend usage aggregates and renders primary sections', () => {
@@ -61,6 +61,13 @@ test('UsagePanel keeps explicit empty and error copy for missing history', () =>
   assert.ok(usagePanelSource.includes("t('usage.empty')"));
   assert.ok(usagePanelSource.includes("t('usage.error.load')"));
   assert.ok(usagePanelSource.includes("t('usage.refresh')"));
+});
+
+test('UsagePanel does not poll while hidden', () => {
+  assert.ok(usagePanelSource.includes('export default function UsagePanel({ isVisible = true } = {})'));
+  assert.ok(usagePanelSource.includes('if (!isVisible) {'));
+  assert.ok(usagePanelSource.includes('return undefined;'));
+  assert.ok(usagePanelSource.includes('}, [isVisible, loadUsageDashboard]);'));
 });
 
 test('UsagePanel sorts timestamped rows newest first without mutating input', () => {
