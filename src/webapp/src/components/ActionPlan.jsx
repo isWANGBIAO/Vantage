@@ -689,7 +689,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     analysisContent,
     planPrompt,
   );
-  const modelReasoningSupportLabel = formatModelReasoningSupportLabel(selectedModel, modelReasoningSupport);
+  const modelReasoningSupportLabel = formatModelReasoningSupportLabel(selectedModel, modelReasoningSupport, t);
   const actualExecutionLabel = formatPoweredByLabel(stats);
   const fallbackExecutionActive = isFallbackExecution(stats, selectedModel);
   const displayedDurationSeconds = computeDisplayedDurationSeconds(stats, {

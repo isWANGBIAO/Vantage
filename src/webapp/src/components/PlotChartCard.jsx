@@ -5,6 +5,7 @@ import { AlertTriangle } from 'lucide-react';
 import { buildChartOption, formatSummaryValue } from '../utils/plotFormatters';
 import { getChartTheme } from '../utils/chartTheme.js';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
+import { localizePlotChart } from '../utils/plotLocalization.js';
 
 function useChartMountReady() {
   const containerRef = useRef(null);
@@ -93,11 +94,12 @@ export default function PlotChartCard({
   chartHeight,
   theme = 'dark',
 }) {
-  const { t } = useDisplayLanguage();
+  const { effectiveLanguage, t } = useDisplayLanguage();
   const themeTokens = getChartTheme(theme);
+  const localizedChart = localizePlotChart(chart, effectiveLanguage);
   const resolvedHeight =
-    chartHeight ?? (featured ? Math.max(chart?.height || 420, 500) : Math.max(chart?.height || 360, 390));
-  const summaries = Array.isArray(chart?.summary) ? chart.summary : [];
+    chartHeight ?? (featured ? Math.max(localizedChart?.height || 420, 500) : Math.max(localizedChart?.height || 360, 390));
+  const summaries = Array.isArray(localizedChart?.summary) ? localizedChart.summary : [];
   const roleLabel = eyebrow === undefined
     ? t(featured ? 'plots.chart.primary' : 'plots.chart.support')
     : eyebrow;
@@ -106,7 +108,7 @@ export default function PlotChartCard({
   return (
     <article
       ref={chartRef}
-      id={`plot-${chart?.id || 'chart'}`}
+      id={`plot-${localizedChart?.id || 'chart'}`}
       style={{
         display: 'grid',
         gap: 18,
@@ -172,9 +174,9 @@ export default function PlotChartCard({
                   color: themeTokens.cardTitle,
                 }}
               >
-                {chart?.title}
+                {localizedChart?.title}
               </h3>
-              {chart?.description ? (
+              {localizedChart?.description ? (
                 <p
                   style={{
                     margin: 0,
@@ -184,7 +186,7 @@ export default function PlotChartCard({
                     color: themeTokens.cardText,
                   }}
                 >
-                  {chart.description}
+                  {localizedChart.description}
                 </p>
               ) : null}
             </div>
@@ -207,9 +209,9 @@ export default function PlotChartCard({
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
             {summaries.map((item) => (
               <SummaryPill
-                key={`${chart?.id || 'chart'}-${item.label}`}
+                key={`${localizedChart?.id || 'chart'}-${item.label}`}
                 label={item.label}
-                value={formatSummaryValue(item)}
+                value={formatSummaryValue(item, effectiveLanguage)}
                 themeTokens={themeTokens}
               />
             ))}
@@ -217,7 +219,7 @@ export default function PlotChartCard({
         ) : null}
       </div>
 
-      {chart?.empty ? (
+      {localizedChart?.empty ? (
         <div
           style={{
             display: 'grid',
@@ -233,7 +235,7 @@ export default function PlotChartCard({
         >
           <div style={{ display: 'grid', gap: 10 }}>
             <AlertTriangle size={24} style={{ justifySelf: 'center' }} />
-            <strong>{chart?.message || t('plots.empty_chart')}</strong>
+            <strong>{localizedChart?.message || t('plots.empty_chart')}</strong>
           </div>
         </div>
       ) : (
@@ -249,7 +251,7 @@ export default function PlotChartCard({
         >
           {isReady ? (
             <ReactECharts
-              option={buildChartOption(chart, theme)}
+              option={buildChartOption(localizedChart, theme, effectiveLanguage)}
               notMerge
               lazyUpdate
               style={{ width: '100%', height: resolvedHeight }}

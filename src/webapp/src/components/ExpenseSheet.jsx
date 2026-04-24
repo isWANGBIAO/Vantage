@@ -14,6 +14,7 @@ import './ExpenseSheet.css';
 import { buildExpenseSheetViewModel } from './expenseSheetModel.js';
 import PlotChartCard from './PlotChartCard.jsx';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
+import { localizeExpenseSuggestion } from '../utils/expenseLocalization.js';
 
 const KPI_HINT_KEYS = {
   cashAndStock: 'expense.kpi_hint.cash_and_stock',
@@ -416,7 +417,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                 {(data?.suggestions || []).length ? (
                   <ul className="expense-suggestion-list">
                     {data.suggestions.map((item, idx) => (
-                      <li key={idx}>{item}</li>
+                      <li key={idx}>{localizeExpenseSuggestion(item, effectiveLanguage)}</li>
                     ))}
                   </ul>
                 ) : (

@@ -177,7 +177,7 @@ function PulseCard({ liveData }) {
             viewBox={`0 0 ${pulseDimensions.width} ${pulseDimensions.height}`}
             style={{ width: '100%', height: 'auto', display: 'block' }}
             role="img"
-            aria-label="实时黑眼圈分数图"
+            aria-label={t('face_history.live_chart_aria')}
           >
             <rect x="0" y="0" width={pulseDimensions.width} height={pulseDimensions.height} fill="rgba(4, 10, 16, 0.92)" />
             <text
@@ -193,7 +193,7 @@ function PulseCard({ liveData }) {
         ) : (
           <div style={{ filter: 'drop-shadow(0 0 12px rgba(0, 210, 211, 0.22))' }}>
             <LineChartSvg
-              ariaLabel="实时黑眼圈分数图"
+              ariaLabel={t('face_history.live_chart_aria')}
               width={pulseDimensions.width}
               height={pulseDimensions.height}
               model={model}
@@ -277,7 +277,7 @@ function TrendCard({ title, accent, points }) {
           </div>
         ) : (
           <LineChartSvg
-            ariaLabel={`${title} dark circle trend`}
+            ariaLabel={t('face_history.trend_chart_aria', { title })}
             width={trendDimensions.width}
             height={trendDimensions.height}
             model={model}
@@ -515,7 +515,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
           {trendViewOrder.map((key, index) => (
             <TrendCard
               key={key}
-              title={data.trend_views[key].label}
+              title={t(`face_history.trend.${key}`)}
               points={data.trend_views[key].points}
               accent={trendCardPalette[index]}
             />

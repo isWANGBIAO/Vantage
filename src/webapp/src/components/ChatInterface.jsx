@@ -1113,7 +1113,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                                 {availableModels.length === 0 && <option value="">{t('chat.default_model')}</option>}
                                 {availableModels.map((model) => (
                                     <option key={model} value={model}>
-                                        {`${model}${formatModelReasoningSupportLabel(model, modelReasoningSupport)}`}
+                                        {`${model}${formatModelReasoningSupportLabel(model, modelReasoningSupport, t)}`}
                                     </option>
                                 ))}
                             </select>
@@ -1383,7 +1383,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                             {availableModels.length === 0 && <option value="">{t('chat.default_model')}</option>}
                             {availableModels.map((model) => (
                                 <option key={model} value={model}>
-                                    {`${model}${formatModelReasoningSupportLabel(model, modelReasoningSupport)}`}
+                                    {`${model}${formatModelReasoningSupportLabel(model, modelReasoningSupport, t)}`}
                                 </option>
                             ))}
                         </select>

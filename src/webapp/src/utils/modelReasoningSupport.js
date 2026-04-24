@@ -30,9 +30,12 @@ export function parseModelReasoningSupport(providers = []) {
   return support;
 }
 
-export function formatModelReasoningSupportLabel(model, modelReasoningSupport) {
+export function formatModelReasoningSupportLabel(model, modelReasoningSupport, t) {
   const supported = modelReasoningSupport?.[model];
   if (supported === false) {
+    if (typeof t === "function") {
+      return t("common.reasoning.unsupported_suffix");
+    }
     return "（不支持思考参数）";
   }
   return "";

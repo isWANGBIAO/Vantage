@@ -1,4 +1,5 @@
 import { getChartTheme } from './chartTheme.js';
+import { localizePlotChart, localizePlotText } from './plotLocalization.js';
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
@@ -28,15 +29,19 @@ function formatCurrency(value) {
   return `¥${formatNumber(value, Math.abs(value) >= 100 ? 0 : 1)}`;
 }
 
-function formatDays(value) {
+function isEnglishLanguage(language) {
+  return String(language || '').toLowerCase().startsWith('en');
+}
+
+function formatDays(value, language = 'zh-CN') {
   if (!isFiniteNumber(value)) {
     return '--';
   }
 
-  return `${formatNumber(value, 1)} 天`;
+  return isEnglishLanguage(language) ? `${formatNumber(value, 1)} days` : `${formatNumber(value, 1)} 天`;
 }
 
-function formatDurationHours(value) {
+function formatDurationHours(value, language = 'zh-CN') {
   if (!isFiniteNumber(value)) {
     return '--';
   }
@@ -46,14 +51,14 @@ function formatDurationHours(value) {
   const minutes = Math.abs(totalMinutes % 60);
 
   if (hours > 0 && minutes > 0) {
-    return `${hours}小时${minutes}分钟`;
+    return isEnglishLanguage(language) ? `${hours} h ${minutes} min` : `${hours}小时${minutes}分钟`;
   }
 
   if (hours > 0) {
-    return `${hours}小时`;
+    return isEnglishLanguage(language) ? `${hours} h` : `${hours}小时`;
   }
 
-  return `${minutes}分钟`;
+  return isEnglishLanguage(language) ? `${minutes} min` : `${minutes}分钟`;
 }
 
 function formatPace(value) {
@@ -80,7 +85,7 @@ function formatWrappedClockLabel(value) {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
-function formatBySeriesName(seriesName, value) {
+function formatBySeriesName(seriesName, value, language = 'zh-CN') {
   const normalized = String(seriesName || '').toLowerCase();
 
   if (normalized.includes('体脂') || normalized.includes('body fat')) {
@@ -105,6 +110,10 @@ function formatBySeriesName(seriesName, value) {
 
   if (normalized.includes('speed')) {
     return `${formatNumber(value, 1)} m/min`;
+  }
+
+  if (normalized.includes('sleep') || normalized.includes('screen') || normalized.includes('remaining')) {
+    return formatDurationHours(value, language);
   }
 
   if (normalized.includes('duration')) {
@@ -135,7 +144,7 @@ function formatBySeriesName(seriesName, value) {
   }
 
   if (normalized.includes('间隔') || normalized.includes('频率') || normalized.includes('周期')) {
-    return formatDays(value);
+    return formatDays(value, language);
   }
 
   if (normalized.includes('入睡') || normalized.includes('起床') || normalized.includes('作息')) {
@@ -149,7 +158,7 @@ function formatBySeriesName(seriesName, value) {
     normalized.includes('时长') ||
     normalized.includes('hour')
   ) {
-    return formatDurationHours(value);
+    return formatDurationHours(value, language);
   }
 
   return formatNumber(value, 2);
@@ -159,30 +168,30 @@ function tooltipHeader(point) {
   return point?.axisValueLabel || point?.name || point?.value?.[0] || '';
 }
 
-function buildTooltipRows(params, formatter) {
+function buildTooltipRows(params, formatter, language = 'zh-CN') {
   return params
     .map((param) => {
       const marker = param.marker || '•';
-      const seriesName = param.seriesName || '';
+      const seriesName = localizePlotText(param.seriesName || '', language);
       const rawValue = Array.isArray(param.value) ? param.value[param.value.length - 1] : param.value;
-      const value = formatter(seriesName, rawValue);
+      const value = formatter(seriesName, rawValue, language);
       return `${marker} ${seriesName}: ${value}`;
     })
     .join('<br/>');
 }
 
-function genericTooltipFormatter(params) {
+function genericTooltipFormatter(params, language = 'zh-CN') {
   const points = Array.isArray(params) ? params : [params];
   if (!points.length) {
     return '';
   }
 
   const header = tooltipHeader(points[0]);
-  const rows = buildTooltipRows(points, formatBySeriesName);
+  const rows = buildTooltipRows(points, formatBySeriesName, language);
   return header ? `${header}<br/>${rows}` : rows;
 }
 
-function weightBodyfatFormatter(params) {
+function weightBodyfatFormatter(params, language = 'zh-CN') {
   const points = Array.isArray(params) ? params : [params];
   if (!points.length) {
     return '';
@@ -190,17 +199,17 @@ function weightBodyfatFormatter(params) {
 
   const header = tooltipHeader(points[0]);
   const rows = buildTooltipRows(points, (seriesName, value) => {
-    if (String(seriesName).includes('体脂')) {
+    if (String(seriesName).includes('体脂') || String(seriesName).toLowerCase().includes('body fat')) {
       return `${formatNumber(value, 1)}%`;
     }
 
     return `${formatNumber(value, 1)} kg`;
-  });
+  }, language);
 
   return `${header}<br/>${rows}`;
 }
 
-function runningFormatter(params) {
+function runningFormatter(params, language = 'zh-CN') {
   const points = Array.isArray(params) ? params : [params];
   if (!points.length) {
     return '';
@@ -208,20 +217,21 @@ function runningFormatter(params) {
 
   const header = tooltipHeader(points[0]);
   const rows = buildTooltipRows(points, (seriesName, value) => {
-    if (String(seriesName).includes('配速')) {
+    const text = String(seriesName).toLowerCase();
+    if (String(seriesName).includes('配速') || text.includes('pace')) {
       return formatPace(value);
     }
 
-    if (String(seriesName).includes('距离')) {
+    if (String(seriesName).includes('距离') || text.includes('distance')) {
       return `${formatNumber(value, 2)} km`;
     }
 
-    if (String(seriesName).includes('心率')) {
+    if (String(seriesName).includes('心率') || text.includes('heart rate')) {
       return `${formatNumber(value, 0)} bpm`;
     }
 
     return formatNumber(value, 2);
-  });
+  }, language);
 
   return `${header}<br/>${rows}`;
 }
@@ -237,7 +247,7 @@ function sleepScheduleFormatter(params) {
   return `${header}<br/>${rows}`;
 }
 
-function radarFormatter(params) {
+function radarFormatter(params, language = 'zh-CN') {
   const points = Array.isArray(params) ? params : [params];
   if (!points.length) {
     return '';
@@ -246,23 +256,25 @@ function radarFormatter(params) {
   const point = points[0];
   const labels = Array.isArray(point?.dimensionNames) ? point.dimensionNames : [];
   const values = Array.isArray(point?.value) ? point.value : [];
-  const rows = labels.map((label, index) => `${label}: ${formatNumber(values[index], 1)}`).join('<br/>');
+  const rows = labels
+    .map((label, index) => `${localizePlotText(label, language)}: ${formatNumber(values[index], 1)}`)
+    .join('<br/>');
 
-  return `${point.seriesName || '目标雷达'}<br/>${rows}`;
+  return `${localizePlotText(point.seriesName || '目标雷达', language)}<br/>${rows}`;
 }
 
-function createTooltipFormatter(chartId) {
+function createTooltipFormatter(chartId, language = 'zh-CN') {
   switch (chartId) {
     case 'weight-bodyfat':
-      return weightBodyfatFormatter;
+      return (params) => weightBodyfatFormatter(params, language);
     case 'sleep-schedule':
       return sleepScheduleFormatter;
     case 'running':
-      return runningFormatter;
+      return (params) => runningFormatter(params, language);
     case 'radar-goal':
-      return radarFormatter;
+      return (params) => radarFormatter(params, language);
     default:
-      return genericTooltipFormatter;
+      return (params) => genericTooltipFormatter(params, language);
   }
 }
 
@@ -537,13 +549,13 @@ function applySleepScheduleAxisFormatting(axis) {
   };
 }
 
-export function formatSummaryValue(summary) {
+export function formatSummaryValue(summary, language = 'zh-CN') {
   if (summary == null) {
     return '--';
   }
 
   if (typeof summary === 'string') {
-    return summary;
+    return localizePlotText(summary, language);
   }
 
   if (typeof summary === 'number') {
@@ -551,11 +563,11 @@ export function formatSummaryValue(summary) {
   }
 
   if (summary.text) {
-    return summary.text;
+    return localizePlotText(summary.text, language);
   }
 
   const value = summary.value;
-  const unit = summary.unit || summary.suffix || '';
+  const unit = localizePlotText(summary.unit || summary.suffix || '', language);
   const precision = summary.precision ?? 1;
   const type = summary.type || '';
 
@@ -567,12 +579,12 @@ export function formatSummaryValue(summary) {
     return formatCurrency(Number(value));
   }
 
-  if (type === 'days' || unit === '天') {
-    return formatDays(Number(value));
+  if (type === 'days' || unit === '天' || unit === 'days') {
+    return formatDays(Number(value), language);
   }
 
-  if (type === 'duration' || unit === '小时') {
-    return formatDurationHours(Number(value));
+  if (type === 'duration' || unit === '小时' || unit === 'Hours') {
+    return formatDurationHours(Number(value), language);
   }
 
   if (type === 'pace') {
@@ -588,12 +600,14 @@ export function formatSummaryValue(summary) {
     return unit ? `${formatted} ${unit}` : formatted;
   }
 
-  return unit ? `${value} ${unit}` : String(value);
+  const localizedValue = localizePlotText(value, language);
+  return unit ? `${localizedValue} ${unit}` : String(localizedValue);
 }
 
-export function buildChartOption(chart, theme = 'dark') {
+export function buildChartOption(chart, theme = 'dark', language = 'zh-CN') {
   const themeTokens = getChartTheme(theme);
-  const source = chart?.option || {};
+  const localizedChart = localizePlotChart(chart, language);
+  const source = localizedChart?.option || {};
   const tooltip = source.tooltip || {};
   const mergedXAxis = mergeAxis(source.xAxis, themeTokens, 'category');
   const mergedYAxisBase = mergeAxis(source.yAxis, themeTokens, 'value');
@@ -625,7 +639,7 @@ export function buildChartOption(chart, theme = 'dark') {
         type: 'line',
       },
       ...tooltip,
-      formatter: createTooltipFormatter(chart?.id),
+      formatter: createTooltipFormatter(chart?.id, language),
     },
     xAxis: mergedXAxis,
     yAxis: mergedYAxis,

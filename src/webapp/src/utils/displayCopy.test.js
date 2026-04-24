@@ -14,6 +14,10 @@ const MANUAL_KEYS = [
   'app.theme.switch_to_light',
   'app.theme.switch_to_dark',
   'plots.chart.support',
+  'face_history.trend.day',
+  'face_history.trend.week',
+  'face_history.trend.month',
+  'face_history.trend.all',
 ];
 
 function collectUiFiles(dirPath, results = []) {

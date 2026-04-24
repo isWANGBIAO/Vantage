@@ -6,6 +6,7 @@ import { fetchBackendJson } from '../utils/backendRequest';
 import { buildChartOption, formatSummaryValue } from '../utils/plotFormatters';
 import { getChartTheme } from '../utils/chartTheme.js';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
+import { localizePlotChart, localizePlotWarnings } from '../utils/plotLocalization.js';
 
 const SECTION_DEFINITIONS = [
   {
@@ -405,6 +406,7 @@ function ChartCard({
   theme = 'dark',
   themeTokens,
   t,
+  language,
 }) {
   const chartHeight = featured ? Math.max(chart?.height || 420, 500) : Math.max(chart?.height || 360, 390);
   const summaries = Array.isArray(chart?.summary) ? chart.summary : [];
@@ -514,7 +516,7 @@ function ChartCard({
               <SummaryPill
                 key={`${chart.id}-${item.label}`}
                 label={item.label}
-                value={formatSummaryValue(item)}
+                value={formatSummaryValue(item, language)}
                 themeTokens={themeTokens}
               />
             ))}
@@ -554,7 +556,7 @@ function ChartCard({
           }}
         >
           {isReady ? (
-            <ReactECharts option={buildChartOption(chart, theme)} notMerge lazyUpdate style={{ width: '100%', height: chartHeight }} />
+            <ReactECharts option={buildChartOption(chart, theme, language)} notMerge lazyUpdate style={{ width: '100%', height: chartHeight }} />
           ) : (
             <div
               style={{
@@ -624,6 +626,7 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap, theme, th
               theme={theme}
               themeTokens={themeTokens}
               t={t}
+              language={section.language}
             />
           ))}
         </div>
@@ -654,6 +657,7 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap, theme, th
               theme={theme}
               themeTokens={themeTokens}
               t={t}
+              language={section.language}
             />
           ))}
         </div>
@@ -706,21 +710,32 @@ export default function Plots({ theme = 'dark' }) {
     fetchPlots();
   }, [fetchPlots]);
 
-  const visibleCharts = useMemo(() => charts.filter((chart) => chart.id !== 'balance'), [charts]);
+  const localizedCharts = useMemo(
+    () => charts.map((chart) => localizePlotChart(chart, effectiveLanguage)),
+    [charts, effectiveLanguage],
+  );
+  const localizedWarnings = useMemo(
+    () => localizePlotWarnings(warnings, effectiveLanguage),
+    [warnings, effectiveLanguage],
+  );
+  const visibleCharts = useMemo(() => localizedCharts.filter((chart) => chart.id !== 'balance'), [localizedCharts]);
   const visibleChartIds = useMemo(() => new Set(visibleCharts.map((chart) => chart.id)), [visibleCharts]);
-  const sections = useMemo(() => buildSections(visibleCharts, t), [t, visibleCharts]);
+  const sections = useMemo(
+    () => buildSections(visibleCharts, t).map((section) => ({ ...section, language: effectiveLanguage })),
+    [effectiveLanguage, t, visibleCharts],
+  );
 
   const warningCharts = useMemo(() => {
     const ids = new Set();
-    warnings.forEach((warning) => {
+    localizedWarnings.forEach((warning) => {
       getWarningCharts(warning).forEach((chartId) => ids.add(chartId));
     });
     return ids;
-  }, [warnings]);
+  }, [localizedWarnings]);
 
   const warningMap = useMemo(() => {
     const chartWarningMap = new Map();
-    warnings.forEach((warning) => {
+    localizedWarnings.forEach((warning) => {
       getWarningCharts(warning).forEach((chartId) => {
         if (!chartWarningMap.has(chartId)) {
           chartWarningMap.set(chartId, []);
@@ -729,7 +744,7 @@ export default function Plots({ theme = 'dark' }) {
       });
     });
     return chartWarningMap;
-  }, [warnings]);
+  }, [localizedWarnings]);
 
   const navigationCharts = useMemo(() => {
     const orderedCharts = [];
@@ -743,7 +758,7 @@ export default function Plots({ theme = 'dark' }) {
   }, [sections]);
 
   const sectionCount = sections.length;
-  const warningCount = warnings.length;
+  const warningCount = localizedWarnings.length;
   const generatedText = formatGeneratedAt(generatedAt, effectiveLanguage, t);
 
   const scrollToChart = useCallback((chartId) => {
@@ -912,7 +927,7 @@ export default function Plots({ theme = 'dark' }) {
         ) : null}
 
         <WarningPanel
-          warnings={warnings}
+          warnings={localizedWarnings}
           onSelectChart={scrollToChart}
           availableChartIds={visibleChartIds}
           themeTokens={themeTokens}
