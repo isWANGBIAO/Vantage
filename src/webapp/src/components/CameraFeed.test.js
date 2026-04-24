@@ -12,3 +12,9 @@ test('CameraFeed button text uses readable ASCII labels', () => {
     false,
   );
 });
+
+test('CameraFeed only opens the live stream when the dashboard is visible', () => {
+  assert.ok(cameraFeedSource.includes('export default function CameraFeed({ isVisible = false })'));
+  assert.ok(cameraFeedSource.includes('status.online && isVisible'));
+  assert.ok(cameraFeedSource.includes("buildBackendUrl('/api/stream')"));
+});

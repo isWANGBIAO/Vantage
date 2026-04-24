@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { buildBackendUrl, fetchBackendJson } from '../utils/backendRequest';
 
-export default function CameraFeed() {
+export default function CameraFeed({ isVisible = false }) {
     const [status, setStatus] = useState({ online: false, show_person_box: true });
     const [toggling, setToggling] = useState(false);
 
@@ -30,7 +30,7 @@ export default function CameraFeed() {
             overflow: 'hidden',
             borderRadius: '8px'
         }}>
-            {status.online ? (
+            {status.online && isVisible ? (
                 <img
                     src={buildBackendUrl('/api/stream')}
                     alt="Live Stream"
@@ -42,12 +42,12 @@ export default function CameraFeed() {
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     color: 'var(--text-muted)'
                 }}>
-                    Camera Disconnected
+                    {status.online ? 'Camera Ready' : 'Camera Disconnected'}
                 </div>
             )}
 
             {/* Toggle Detection Overlay Button */}
-            {status.online && (
+            {status.online && isVisible && (
                 <button
                     onClick={async () => {
                         setToggling(true);
@@ -105,7 +105,7 @@ export default function CameraFeed() {
                     background: status.online ? 'var(--accent-color)' : '#999',
                     boxShadow: status.online ? '0 0 8px var(--accent-color)' : 'none'
                 }}></span>
-                {status.online ? 'LIVE' : 'OFFLINE'}
+                {status.online ? (isVisible ? 'LIVE' : 'READY') : 'OFFLINE'}
             </div>
         </div>
     );

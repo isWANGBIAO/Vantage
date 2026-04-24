@@ -10,3 +10,7 @@ test('Dashboard keeps startup prewarm polling active while delegating geolocatio
   assert.ok(dashboardSource.includes('shouldUseDashboardGeolocation'));
   assert.ok(dashboardSource.includes('isVisible = false'));
 });
+
+test('Dashboard passes visibility into CameraFeed so hidden prewarm does not stream video', () => {
+  assert.ok(dashboardSource.includes('<CameraFeed isVisible={isVisible} />'));
+});

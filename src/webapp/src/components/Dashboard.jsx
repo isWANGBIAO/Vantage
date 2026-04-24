@@ -386,7 +386,7 @@ export default function Dashboard({ isVisible = false }) {
             {t('dashboard.camera_feed')}
           </div>
           <div style={{ flex: 1, position: 'relative' }}>
-            <CameraFeed />
+            <CameraFeed isVisible={isVisible} />
           </div>
         </div>
 
