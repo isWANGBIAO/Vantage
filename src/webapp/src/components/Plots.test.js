@@ -25,3 +25,9 @@ test('Plots refresh button starts the backend plot refresh job before reloading 
 test('Plots maps backend affected_chart_ids warnings back to charts', () => {
   assert.ok(plotsSource.includes('warning?.affected_chart_ids'));
 });
+
+test('Plots keeps the balance chart out of empty finance sections', () => {
+  assert.ok(plotsSource.includes("localizedCharts.filter((chart) => chart.id !== 'balance')"));
+  assert.ok(!plotsSource.includes("key: 'finance'"));
+  assert.ok(!plotsSource.includes("leadIds: ['balance']"));
+});

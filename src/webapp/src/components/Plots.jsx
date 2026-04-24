@@ -21,12 +21,6 @@ const SECTION_DEFINITIONS = [
     leadIds: ['running'],
     supportIds: ['running-form', 'running-hrc', 'hhh-frequency', 'hhh-interval'],
   },
-  {
-    key: 'finance',
-    accent: '#f59f54',
-    leadIds: ['balance'],
-    supportIds: [],
-  },
 ];
 
 function formatGeneratedAt(value, locale, t) {
