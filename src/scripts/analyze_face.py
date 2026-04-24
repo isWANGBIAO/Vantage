@@ -53,13 +53,13 @@ def get_default_plot_output_dir():
     return Path(Config.get_plot_dir())
 
 
-def update_progress(current, total, status="analyzing", current_file=""):
+def update_progress(current, total, status="analyzing", current_file="", percent=None):
     db_file = get_default_db_file()
     save_face_progress_cache(
         {
             "current": current,
             "total": total,
-            "percent": round((current / total) * 100, 2) if total > 0 else 0,
+            "percent": percent if percent is not None else (round((current / total) * 100, 2) if total > 0 else 0),
             "status": status,
             "current_file": current_file,
             "timestamp": datetime.now().timestamp(),
@@ -97,17 +97,23 @@ def run_analysis(search_paths, model_path, db_file, output_dir, day=None, limit=
     print(f"Remaining to analyze: {len(photos_to_analyze)}")
 
     total = len(photos_to_analyze)
-    if total == 0:
-        update_progress(1, 1, status="done")
-    else:
+    if total > 0:
         for index, photo in enumerate(
             tqdm(photos_to_analyze, total=total, desc="Analyzing face photos", unit="photo"),
             start=1,
         ):
-            update_progress(index, total, current_file=os.path.basename(photo["path"]))
             record = analyze_photo_file(photo["path"], detector=detector, parser=parser, config=config)
             upsert_face_analysis_record(record, db_file)
-        update_progress(total, total, status="done")
+            update_progress(
+                index,
+                total,
+                current_file=os.path.basename(photo["path"]),
+                percent=round((index / total) * 99, 2),
+            )
+
+    progress_total = total if total > 0 else 1
+    progress_current = total if total > 0 else 1
+    update_progress(progress_current, progress_total, status="building_report", percent=99)
 
     analyzed_records = load_face_analysis_records(db_file)
     report = build_face_report(analyzed_records, output_dir)
@@ -117,6 +123,7 @@ def run_analysis(search_paths, model_path, db_file, output_dir, day=None, limit=
     else:
         clear_face_report_cache(db_file)
         print("No valid face data found.")
+    update_progress(progress_current, progress_total, status="done", percent=100)
 
     return analyzed_records, report
 
