@@ -360,7 +360,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
 
   const fetchLive = useCallback(async () => {
     try {
-      const json = await fetchBackendJson('/api/face/live', {
+      const json = await fetchBackendJson(`/api/face/live?active=${isVisible ? '1' : '0'}`, {
         retryPolicy: 'poll',
       });
       setLiveData({
@@ -373,7 +373,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
     } catch (err) {
       console.error('Live face poll error', err);
     }
-  }, []);
+  }, [isVisible]);
 
   useEffect(() => {
     fetchReport({ showLoading: true });

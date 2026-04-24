@@ -18,11 +18,13 @@ class FaceLiveEndpointTests(unittest.TestCase):
         self.original_points = getattr(server.state, "live_face_points", None)
         self.original_camera = server.state.camera
         self.original_latest_live_face_score = getattr(server.state, "latest_live_face_score", None)
+        self.original_face_live_last_seen_at = getattr(server.state, "face_live_last_seen_at", None)
 
     def tearDown(self):
         server.state.live_face_points = [] if self.original_points is None else self.original_points
         server.state.camera = self.original_camera
         server.state.latest_live_face_score = self.original_latest_live_face_score
+        server.state.face_live_last_seen_at = self.original_face_live_last_seen_at
 
     def test_store_live_face_result_keeps_only_passing_points_within_window(self):
         server.state.live_face_points = []
@@ -85,6 +87,24 @@ class FaceLiveEndpointTests(unittest.TestCase):
 
     def test_live_sampling_interval_is_100ms(self):
         self.assertEqual(server.FACE_LIVE_SAMPLE_INTERVAL_SECONDS, 0.1)
+
+    def test_face_live_viewer_activity_expires_without_visible_polling(self):
+        server.mark_face_live_viewer_active(now_ts=100.0)
+
+        self.assertTrue(server.has_active_face_live_viewer(now_ts=102.0))
+        self.assertFalse(server.has_active_face_live_viewer(now_ts=110.0))
+
+    def test_get_face_live_only_marks_viewer_active_when_requested(self):
+        server.state.camera = _DummyCamera(True)
+        server.state.face_live_last_seen_at = 0.0
+
+        asyncio.run(server.get_face_live(active=False))
+        self.assertEqual(server.state.face_live_last_seen_at, 0.0)
+
+        with patch.object(server.time, "time", return_value=123.0):
+            asyncio.run(server.get_face_live(active=True))
+
+        self.assertEqual(server.state.face_live_last_seen_at, 123.0)
 
     def test_format_live_face_score_label_formats_numeric_and_missing(self):
         self.assertEqual(server.format_live_face_score_label(31.234), "Dark Circle Score: 31.23")

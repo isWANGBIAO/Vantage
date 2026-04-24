@@ -15,5 +15,6 @@ test('FaceHistory throttles hidden live polling through visibility state', () =>
   assert.ok(faceHistorySource.includes('const visibleLivePollIntervalMs = 1000;'));
   assert.ok(faceHistorySource.includes('const hiddenLivePollIntervalMs = 30000;'));
   assert.ok(faceHistorySource.includes('const intervalMs = isVisible ? visibleLivePollIntervalMs : hiddenLivePollIntervalMs;'));
+  assert.ok(faceHistorySource.includes("`/api/face/live?active=${isVisible ? '1' : '0'}`"));
   assert.equal(faceHistorySource.includes('livePollIntervalMs = 100'), false);
 });

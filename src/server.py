@@ -83,6 +83,8 @@ FACE_ANALYSIS_DB_FILE = None
 FACE_REPORT_PLOT_OUTPUT_DIR = None
 FACE_LIVE_WINDOW_SECONDS = 60
 FACE_LIVE_SAMPLE_INTERVAL_SECONDS = 0.1
+FACE_LIVE_IDLE_INTERVAL_SECONDS = 1.0
+FACE_LIVE_VIEWER_TTL_SECONDS = 5.0
 FACE_OVERLAY_BASE_SCORE_FONT_SCALE = 1.9
 FACE_OVERLAY_SCORE_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
 FACE_OVERLAY_SCORE_THICKNESS = 8
@@ -329,6 +331,7 @@ class SystemState:
         self.person_boxes = []
         self.live_face_points = deque()
         self.latest_live_face_score = None
+        self.face_live_last_seen_at = 0.0
         self.last_processed_face_photo_path = None
 
 state = SystemState()
@@ -447,6 +450,16 @@ def format_live_face_score_label(score):
     if score is None or not math.isfinite(float(score)):
         return "Dark Circle Score: --"
     return f"Dark Circle Score: {float(score):.2f}"
+
+
+def mark_face_live_viewer_active(now_ts=None):
+    state.face_live_last_seen_at = now_ts if now_ts is not None else time.time()
+
+
+def has_active_face_live_viewer(now_ts=None):
+    now_ts = now_ts if now_ts is not None else time.time()
+    last_seen_at = getattr(state, "face_live_last_seen_at", 0.0) or 0.0
+    return (now_ts - last_seen_at) <= FACE_LIVE_VIEWER_TTL_SECONDS
 
 
 def refresh_face_report_cache(db_file=None, output_dir=None):
@@ -1253,6 +1266,10 @@ def camera_loop():
 def face_live_loop():
     print("Starting live face analysis loop...")
     while state.is_running:
+        if not has_active_face_live_viewer():
+            time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
+            continue
+
         frame_copy = None
         with state.lock:
             if state.latest_frame is not None:
@@ -2401,7 +2418,10 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
 
 
 @app.get("/api/face/live")
-async def get_face_live():
+async def get_face_live(active: bool = False):
+    if active:
+        mark_face_live_viewer_active()
+
     camera_online = _camera_online()
     if not camera_online:
         return {
