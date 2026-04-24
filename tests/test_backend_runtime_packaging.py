@@ -41,8 +41,9 @@ def test_collect_backend_runtime_resources_requires_models_and_prompts(tmp_path)
 
     resources = collect_backend_runtime_resources(tmp_path)
 
-    packaged_paths = {resource.relative_destination / resource.source.name for resource in resources}
+    packaged_paths = {resource.output_relative_path for resource in resources}
     assert Path("opencv-data") / "haarcascade_frontalface_default.xml" in packaged_paths
+    assert Path("scienceplots") / "styles" in packaged_paths
     assert Path("yolo26m.pt") in packaged_paths
     assert Path("src") / "scripts" / "models" / "face_parsing.farl.lapa.int8.onnx" in packaged_paths
     for resource_name in REQUIRED_ROOT_RESOURCE_NAMES:
@@ -96,6 +97,10 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         f"{tmp_path / 'src' / 'scripts' / 'models' / 'face_parsing.farl.lapa.int8.onnx'};"
         "src/scripts/models"
     ) in args
+    assert any(
+        value.endswith(";scienceplots/styles") and "scienceplots" in value and "styles" in value
+        for value in args
+    )
 
 
 def test_remove_conflicting_runtime_libraries_deletes_known_vc_runtime_copies(tmp_path):

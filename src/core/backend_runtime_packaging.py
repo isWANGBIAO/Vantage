@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import cv2
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ REQUIRED_RESOURCE_SPECS = (
 )
 
 OPENCV_FACE_CASCADE_NAME = "haarcascade_frontalface_default.xml"
+SCIENCEPLOTS_STYLES_DIR_NAME = "styles"
 CONFLICTING_RUNTIME_DLL_NAMES = (
     "msvcp140.dll",
     "vcruntime140.dll",
@@ -46,6 +48,8 @@ class BundledResource:
     def output_relative_path(self) -> Path:
         if str(self.relative_destination) in ("", "."):
             return Path(self.source.name)
+        if self.source.is_dir():
+            return self.relative_destination
         return self.relative_destination / self.source.name
 
 
@@ -84,6 +88,18 @@ def resolve_opencv_face_cascade_source() -> Path:
     return cascade_path.resolve()
 
 
+def resolve_scienceplots_styles_source() -> Path:
+    spec = importlib.util.find_spec("scienceplots")
+    search_locations = getattr(spec, "submodule_search_locations", None) if spec else None
+    if not search_locations:
+        raise FileNotFoundError("Missing scienceplots package")
+
+    styles_path = Path(next(iter(search_locations))) / SCIENCEPLOTS_STYLES_DIR_NAME
+    if not styles_path.exists():
+        raise FileNotFoundError(f"Missing scienceplots styles: {styles_path}")
+    return styles_path.resolve()
+
+
 def collect_backend_runtime_resources(project_root: str | Path) -> list[BundledResource]:
     resolved_root = Path(project_root).resolve()
     resources: list[BundledResource] = []
@@ -108,6 +124,16 @@ def collect_backend_runtime_resources(project_root: str | Path) -> list[BundledR
             BundledResource(
                 resolve_opencv_face_cascade_source(),
                 Path("opencv-data"),
+            )
+        )
+    except FileNotFoundError as exc:
+        missing.append(str(exc))
+
+    try:
+        resources.append(
+            BundledResource(
+                resolve_scienceplots_styles_source(),
+                Path("scienceplots") / SCIENCEPLOTS_STYLES_DIR_NAME,
             )
         )
     except FileNotFoundError as exc:
