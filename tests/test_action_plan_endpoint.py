@@ -510,6 +510,45 @@ class ActionPlanEndpointTests(unittest.TestCase):
         combined = "".join(chunks)
         self.assertIn('"error": "fatal action plan error"', combined)
 
+    def test_generate_action_plan_uses_packaged_run_prompt_bridge_when_frozen(self):
+        fake_process = _FakeProcess(lines=[b'STREAM_ANALYSIS_CONTENT:"ok"\n'])
+        executable_path = r"C:\Program Files\Vantage\VantageBackend.exe"
+        runtime_root = Path(r"C:\Program Files\Vantage\resources\backend-runtime\VantageBackend\_internal")
+
+        with patch.object(server.sys, "frozen", True, create=True), patch.object(
+            server.sys,
+            "executable",
+            executable_path,
+        ), patch.object(
+            server.Config,
+            "get_project_root",
+            return_value=runtime_root,
+        ), patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=fake_process),
+        ) as mock_create:
+            response = asyncio.run(
+                server.generate_action_plan(
+                    server.ActionPlanRequest(
+                        model="gpt-5.3-codex-spark",
+                        reasoning_effort="high",
+                    ),
+                ),
+            )
+            asyncio.run(_read_all_stream_chunks(response))
+
+        cmd = list(mock_create.await_args.args)
+        self.assertEqual(
+            cmd,
+            [
+                executable_path,
+                "--run-prompt",
+                "--model=gpt-5.3-codex-spark",
+            ],
+        )
+        self.assertEqual(mock_create.await_args.kwargs["cwd"], str(runtime_root))
+
     def test_get_chat_context_reports_action_plan_base_version(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             history_dir = Path(temp_dir) / "history"

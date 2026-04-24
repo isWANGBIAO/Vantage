@@ -74,6 +74,8 @@ from src.utils.data_loader import DataLoader
 
 app = FastAPI()
 
+RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
+
 FACE_ANALYSIS_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsing.farl.lapa.int8.onnx")
 FACE_ANALYSIS_DB_FILE = None
 FACE_REPORT_PLOT_OUTPUT_DIR = None
@@ -92,6 +94,27 @@ _face_report_refresh_lock = threading.Lock()
 
 def _get_runtime_workdir():
     return Path(Config.get_project_root())
+
+
+def _is_frozen_runtime():
+    return bool(getattr(sys, "frozen", False))
+
+
+def _resolve_run_prompt_script_path():
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
+    if not os.path.exists(script_path):
+        script_path = os.path.abspath("src/scripts/run_prompt.py")
+    return script_path
+
+
+def _build_run_prompt_subprocess(run_prompt_args=None):
+    resolved_args = list(run_prompt_args or [])
+    if _is_frozen_runtime():
+        return [sys.executable, RUN_PROMPT_BRIDGE_ARG, *resolved_args], str(_get_runtime_workdir())
+
+    script_path = _resolve_run_prompt_script_path()
+    return [sys.executable, script_path, *resolved_args], os.path.dirname(script_path)
 
 
 def _get_face_analysis_db_file():
@@ -1934,25 +1957,19 @@ async def list_llm_models():
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
-    if not os.path.exists(script_path):
-         script_path = os.path.abspath("src/scripts/run_prompt.py")
-    
     context_file = request.context_file
     if not context_file:
          context_file = _get_latest_context_file()
 
-    cmd = [
-        sys.executable,
-        script_path,
+    run_prompt_args = [
         "--chat_message", request.message,
         "--context_file", context_file
     ]
     if request.model:
-        cmd.extend(["--model", request.model])
+        run_prompt_args.extend(["--model", request.model])
     if request.client_sent_at:
-        cmd.extend(["--client_sent_at", request.client_sent_at])
+        run_prompt_args.extend(["--client_sent_at", request.client_sent_at])
+    cmd, run_prompt_cwd = _build_run_prompt_subprocess(run_prompt_args)
     
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -1967,7 +1984,7 @@ async def chat_endpoint(request: ChatRequest):
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=os.path.dirname(script_path),
+                cwd=run_prompt_cwd,
                 env=env
             )
             stderr_task = asyncio.create_task(
@@ -2013,12 +2030,7 @@ async def chat_endpoint(request: ChatRequest):
 
 @app.post("/api/action_plan")
 async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
-    if not os.path.exists(script_path):
-         script_path = os.path.abspath("src/scripts/run_prompt.py")
-    
-    cmd = [sys.executable, script_path]
+    run_prompt_args = []
     
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -2028,7 +2040,8 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
     )
     selected_model = request.model if request else None
     if selected_model:
-        cmd.append(f"--model={selected_model}")
+        run_prompt_args.append(f"--model={selected_model}")
+    cmd, run_prompt_cwd = _build_run_prompt_subprocess(run_prompt_args)
     replace_today = request.replace_today if request else False
     previous_today_files = _list_today_action_plan_files() if replace_today else []
     
@@ -2039,7 +2052,7 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=os.path.dirname(script_path),
+            cwd=run_prompt_cwd,
             env=env
         )
         logging.info(
@@ -2104,12 +2117,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
         buffer.write(content)
         print(f"[Transcribe] File size: {len(content)} bytes")
         
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    script_path = os.path.join(current_dir, "scripts", "run_prompt.py")
-    if not os.path.exists(script_path):
-         script_path = os.path.abspath("src/scripts/run_prompt.py")
-    
-    cmd = [sys.executable, script_path, "--transcribe", temp_filename]
+    cmd, run_prompt_cwd = _build_run_prompt_subprocess(["--transcribe", temp_filename])
     print(f"[Transcribe] Running command: {' '.join(cmd)}")
     
     env = os.environ.copy()
@@ -2121,7 +2129,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=project_root,
+            cwd=run_prompt_cwd,
             env=env
         )
         

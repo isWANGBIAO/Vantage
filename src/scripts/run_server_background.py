@@ -24,6 +24,9 @@ from src.core.config import Config
 from src.core.runtime_library_bootstrap import apply_runtime_library_dirs, preload_torch_libraries
 
 
+RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
+
+
 def _redirect_standard_streams(log_path: Path):
     log_file = open(log_path, "a", encoding="utf-8", buffering=1)
     os.dup2(log_file.fileno(), 1)
@@ -100,7 +103,29 @@ def _run_server_entrypoint(
     return "script"
 
 
+def _run_prompt_entrypoint(args: list[str], *, run_prompt_main=None):
+    if getattr(sys, "frozen", False):
+        resource_root = Config.get_project_root()
+        _configure_frozen_runtime_search_paths(resource_root)
+        _preload_frozen_torch_libraries(resource_root)
+
+    resolved_run_prompt_main = run_prompt_main
+    if resolved_run_prompt_main is None:
+        from src.scripts.run_prompt import main as resolved_run_prompt_main
+
+    previous_argv = sys.argv[:]
+    try:
+        sys.argv = ["run_prompt.py", *args]
+        resolved_run_prompt_main()
+    finally:
+        sys.argv = previous_argv
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == RUN_PROMPT_BRIDGE_ARG:
+        _run_prompt_entrypoint(sys.argv[2:])
+        return
+
     launched_at = datetime.now()
     runtime_context = _resolve_runtime_context()
     project_root = runtime_context["project_root"]

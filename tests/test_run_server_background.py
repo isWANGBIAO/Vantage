@@ -110,6 +110,21 @@ def test_run_server_entrypoint_calls_server_main_in_frozen_mode(tmp_path):
     assert called == ["server-main"]
 
 
+def test_run_prompt_entrypoint_delegates_args_to_run_prompt_main():
+    launcher = _load_launcher_module()
+    captured_argv = []
+
+    def fake_main():
+        captured_argv.extend(launcher.sys.argv)
+
+    launcher._run_prompt_entrypoint(
+        ["--model", "gpt-5.3-codex-spark"],
+        run_prompt_main=fake_main,
+    )
+
+    assert captured_argv == ["run_prompt.py", "--model", "gpt-5.3-codex-spark"]
+
+
 def test_configure_frozen_runtime_search_paths_adds_internal_runtime_dirs(tmp_path):
     launcher = _load_launcher_module()
     resource_root = tmp_path / "runtime" / "_internal"
