@@ -9,6 +9,13 @@ from src import server
 
 
 class BalanceSheetEndpointTests(unittest.TestCase):
+    def test_parse_required_flag_checks_optional_words_before_required_substrings(self):
+        self.assertFalse(server._parse_required_flag("非必须"))
+        self.assertFalse(server._parse_required_flag("不必须"))
+        self.assertFalse(server._parse_required_flag("not required"))
+        self.assertTrue(server._parse_required_flag("必须"))
+        self.assertTrue(server._parse_required_flag("yes"))
+
     def test_find_first_column_prefers_exact_match_over_partial_match(self):
         columns = ["股票资产", "现金及现金等价物+股票", "期间支出", "日均支出"]
 

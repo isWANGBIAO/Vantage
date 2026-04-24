@@ -757,10 +757,21 @@ def _parse_required_flag(value):
     text = str(value).strip()
     if not text:
         return None
-    if any(k in text for k in ["必须", "必需", "是", "yes", "YES", "Yes", "Y", "y"]):
-        return True
-    if any(k in text for k in ["非必须", "不必须", "否", "no", "NO", "No", "N", "n"]):
+
+    lower_text = text.lower()
+    optional_tokens = ["非必须", "不必须", "不是", "否", "not required", "optional", "no", "n"]
+    required_tokens = ["必须", "必需", "是", "required", "yes", "y"]
+
+    def matches(token):
+        token_text = token.lower()
+        if token_text in {"是", "否", "yes", "no", "y", "n", "required", "optional"}:
+            return lower_text == token_text
+        return token_text in lower_text
+
+    if any(matches(k) for k in optional_tokens):
         return False
+    if any(matches(k) for k in required_tokens):
+        return True
     return None
 
 def _find_first_column(columns_or_df, keywords):

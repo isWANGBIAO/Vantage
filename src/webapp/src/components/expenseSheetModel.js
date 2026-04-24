@@ -3,8 +3,8 @@ const BUDGET_SHEET_NAMES = ['budget', '预算'];
 const ASSET_SHEET_NAMES = ['asset', '资产'];
 const SOCIAL_SHEET_NAMES = ['人情'];
 
-const REQUIRED_TOKENS = ['必须', '必需', '是', 'yes', 'y'];
-const OPTIONAL_TOKENS = ['非必须', '不必须', '否', 'no', 'n'];
+const REQUIRED_TOKENS = ['必须', '必需', '是', 'required', 'yes', 'y'];
+const OPTIONAL_TOKENS = ['非必须', '不必须', '不是', '否', 'not required', 'optional', 'no', 'n'];
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function normalizeText(value) {
@@ -102,8 +102,17 @@ function getCell(sheet, row, aliases) {
 function parseRequiredFlag(value) {
   const text = normalizeText(value).toLowerCase();
   if (!text) return null;
-  if (REQUIRED_TOKENS.some((token) => text.includes(token))) return true;
-  if (OPTIONAL_TOKENS.some((token) => text.includes(token))) return false;
+
+  const matches = (token) => {
+    const normalizedToken = token.toLowerCase();
+    if (['是', '否', 'yes', 'no', 'y', 'n', 'required', 'optional'].includes(normalizedToken)) {
+      return text === normalizedToken;
+    }
+    return text.includes(normalizedToken);
+  };
+
+  if (OPTIONAL_TOKENS.some(matches)) return false;
+  if (REQUIRED_TOKENS.some(matches)) return true;
   return null;
 }
 

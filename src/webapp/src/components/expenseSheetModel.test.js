@@ -156,3 +156,31 @@ test('buildExpenseSheetViewModel prefers full trend_points history for the chart
   assert.equal(viewModel.kpis.find((item) => item.id === 'cashAndStock').value, 6180);
   assert.equal(viewModel.recentSpending.some((item) => item.date === '2026-04-12'), false);
 });
+
+test('buildExpenseSheetViewModel treats non-required budget flags as optional', () => {
+  const payload = {
+    summary: {},
+    sheets: [
+      {
+        name: 'Budget',
+        columns: ['item', '是否必须', 'monthly'],
+        rows: [
+          ['Optional hosting', '非必须', 300],
+          ['Required rent', '必须', 1200],
+          ['Optional media', 'not required', 80],
+        ],
+        row_count: 3,
+        truncated: false,
+      },
+    ],
+  };
+
+  const viewModel = buildExpenseSheetViewModel(payload);
+  const optionalHosting = viewModel.budget.topItems.find((item) => item.name === 'Optional hosting');
+  const optionalMedia = viewModel.budget.topItems.find((item) => item.name === 'Optional media');
+  const requiredRent = viewModel.budget.topItems.find((item) => item.name === 'Required rent');
+
+  assert.equal(optionalHosting.required, false);
+  assert.equal(optionalMedia.required, false);
+  assert.equal(requiredRent.required, true);
+});
