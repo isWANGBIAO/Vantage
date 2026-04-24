@@ -2330,18 +2330,26 @@ async def export_face_excel():
             capture_output=True,
             cwd=str(_get_runtime_workdir()),
         )
+
+        def decode_output(value):
+            if isinstance(value, str):
+                return value
+            if value is None:
+                return ""
+            try:
+                return value.decode("utf-8")
+            except UnicodeDecodeError:
+                return value.decode("gbk", errors="replace")
+
+        stdout_text = decode_output(proc.stdout)
+        stderr_text = decode_output(proc.stderr)
         
         if proc.returncode != 0:
-            return JSONResponse(status_code=500, content={"error": proc.stderr.decode('utf-8', errors='replace')})
+            return JSONResponse(status_code=500, content={"error": stderr_text})
             
         # The script should output the path to the excel file in stdout, e.g. "EXPORT_PATH:..."
         excel_path = None
-        
-        try:
-             stdout_text = proc.stdout.decode('utf-8')
-        except:
-             stdout_text = proc.stdout.decode('gbk', errors='replace')
-             
+              
         for line in stdout_text.splitlines():
             if line.startswith("EXPORT_PATH:"):
                 excel_path = line.replace("EXPORT_PATH:", "").strip()
@@ -2350,7 +2358,7 @@ async def export_face_excel():
         if excel_path and os.path.exists(excel_path):
             return FileResponse(excel_path, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename="Face_Analysis_History.xlsx")
         else:
-             return JSONResponse(status_code=500, content={"error": "Export failed", "details": proc.stdout})
+             return JSONResponse(status_code=500, content={"error": "Export failed", "details": stdout_text or stderr_text})
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})

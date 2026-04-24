@@ -1,8 +1,10 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import BackgroundTasks
@@ -141,6 +143,20 @@ class FaceReportEndpointTests(unittest.TestCase):
                 payload = asyncio.run(server.get_face_report())
 
         self.assertEqual(payload["error"], "No report generated")
+
+    def test_export_face_excel_returns_text_details_when_export_path_is_missing(self):
+        proc = SimpleNamespace(returncode=0, stdout=b"no export path\n", stderr=b"")
+
+        with (
+            patch.object(server.subprocess, "run", return_value=proc),
+            patch.object(server, "_get_runtime_workdir", return_value=Path("C:/runtime")),
+        ):
+            response = asyncio.run(server.export_face_excel())
+
+        self.assertEqual(response.status_code, 500)
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(payload["error"], "Export failed")
+        self.assertEqual(payload["details"], "no export path\n")
 
     def test_process_captured_face_photo_writes_record_and_refreshes_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
