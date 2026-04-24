@@ -4,9 +4,12 @@ import { readFileSync } from 'node:fs';
 
 const cameraFeedSource = readFileSync(new URL('./CameraFeed.jsx', import.meta.url), 'utf8');
 
-test('CameraFeed button text uses readable ASCII labels', () => {
-  assert.ok(cameraFeedSource.includes('DETECTING'));
-  assert.ok(cameraFeedSource.includes('OFF'));
+test('CameraFeed routes visible status labels through the display language layer', () => {
+  assert.ok(cameraFeedSource.includes('useDisplayLanguage()'));
+  assert.ok(cameraFeedSource.includes("t('camera_feed.ready')"));
+  assert.ok(cameraFeedSource.includes("t('camera_feed.live')"));
+  assert.ok(!cameraFeedSource.includes("'Camera Ready'"));
+  assert.ok(!cameraFeedSource.includes("'LIVE'"));
   assert.equal(
     [...cameraFeedSource].some((ch) => ch.charCodeAt(0) > 127),
     false,

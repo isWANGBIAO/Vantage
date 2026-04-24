@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { buildBackendUrl, fetchBackendJson } from '../utils/backendRequest';
+import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 export default function CameraFeed({ isVisible = false }) {
+    const { t } = useDisplayLanguage();
     const [status, setStatus] = useState({ online: false, show_person_box: true });
     const [toggling, setToggling] = useState(false);
 
@@ -33,7 +35,7 @@ export default function CameraFeed({ isVisible = false }) {
             {status.online && isVisible ? (
                 <img
                     src={buildBackendUrl('/api/stream')}
-                    alt="Live Stream"
+                    alt={t('camera_feed.live_stream_alt')}
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
             ) : (
@@ -42,7 +44,7 @@ export default function CameraFeed({ isVisible = false }) {
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     color: 'var(--text-muted)'
                 }}>
-                    {status.online ? 'Camera Ready' : 'Camera Disconnected'}
+                    {status.online ? t('camera_feed.ready') : t('camera_feed.disconnected')}
                 </div>
             )}
 
@@ -78,12 +80,12 @@ export default function CameraFeed({ isVisible = false }) {
                         transition: 'all 0.2s',
                         backdropFilter: 'blur(4px)'
                     }}
-                    title={status.show_person_box ? "Disable Person Detection" : "Enable Person Detection"}
+                    title={status.show_person_box ? t('camera_feed.disable_detection') : t('camera_feed.enable_detection')}
                 >
                     <span style={{
                         display: 'inline-flex', alignItems: 'center', justifyContent: 'center'
                     }}>
-                        {status.show_person_box ? 'DETECTING' : 'OFF'}
+                        {status.show_person_box ? t('camera_feed.detecting') : t('camera_feed.detection_off')}
                     </span>
                 </button>
             )}
@@ -105,7 +107,7 @@ export default function CameraFeed({ isVisible = false }) {
                     background: status.online ? 'var(--accent-color)' : '#999',
                     boxShadow: status.online ? '0 0 8px var(--accent-color)' : 'none'
                 }}></span>
-                {status.online ? (isVisible ? 'LIVE' : 'READY') : 'OFFLINE'}
+                {status.online ? (isVisible ? t('camera_feed.live') : t('camera_feed.ready_short')) : t('camera_feed.offline')}
             </div>
         </div>
     );
