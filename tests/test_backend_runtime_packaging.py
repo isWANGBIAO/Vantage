@@ -1,18 +1,22 @@
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from src.core.backend_runtime_packaging import (
     APP_EXE_NAME,
     CONFLICTING_RUNTIME_DLL_NAMES,
+    PROJECT_ACTIVITY_SNAPSHOT_NAME,
     REQUIRED_ROOT_RESOURCE_NAMES,
     RUNTIME_NAME,
     build_backend_runtime_manifest,
     build_pyinstaller_arguments,
+    build_project_activity_snapshot,
     collect_backend_runtime_resources,
     remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
+    write_project_activity_snapshot,
 )
 
 
@@ -147,3 +151,42 @@ def test_build_backend_runtime_manifest_records_relative_outputs(tmp_path):
     assert manifest["app_mode"] == "packaged"
     assert "yolo26m.pt" in manifest["resource_outputs"]
     assert "src/scripts/models/face_parsing.farl.lapa.int8.onnx" in manifest["resource_outputs"]
+
+
+def test_build_project_activity_snapshot_parses_recent_git_log(tmp_path):
+    def fake_run(command, **kwargs):
+        assert command[:2] == ["git", "log"]
+        assert kwargs["cwd"] == tmp_path
+        return SimpleNamespace(
+            returncode=0,
+            stdout=b"abc1234|2026-04-24|fix packaged progress\n",
+            stderr=b"",
+        )
+
+    snapshot = build_project_activity_snapshot(
+        tmp_path,
+        built_at=datetime(2026, 4, 24, 12, 0, 0),
+        run_command=fake_run,
+    )
+
+    assert snapshot["generated_at"] == "2026-04-24T12:00:00"
+    assert snapshot["commits"] == [
+        {"hash": "abc1234", "date": "2026-04-24", "message": "fix packaged progress"}
+    ]
+
+
+def test_write_project_activity_snapshot_returns_packaged_resource(tmp_path):
+    def fake_run(command, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=b"abc1234|2026-04-24|fix packaged progress\n", stderr=b"")
+
+    output_path = tmp_path / "build" / PROJECT_ACTIVITY_SNAPSHOT_NAME
+    resource = write_project_activity_snapshot(
+        tmp_path,
+        output_path,
+        built_at=datetime(2026, 4, 24, 12, 0, 0),
+        run_command=fake_run,
+    )
+
+    assert resource.source == output_path
+    assert resource.output_relative_path == Path(PROJECT_ACTIVITY_SNAPSHOT_NAME)
+    assert output_path.exists()

@@ -22,12 +22,14 @@ def _ensure_project_root_on_sys_path(
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
 from src.core.backend_runtime_packaging import (
+    PROJECT_ACTIVITY_SNAPSHOT_NAME,
     build_pyinstaller_arguments,
     collect_backend_runtime_resources,
     remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
     validate_backend_runtime_bundle,
     write_backend_runtime_manifest,
+    write_project_activity_snapshot,
 )
 
 
@@ -63,17 +65,29 @@ def _run_pyinstaller(pyinstaller_args: list[str]):
     run_pyinstaller(pyinstaller_args)
 
 
+def _sync_extra_runtime_resources(layout: dict[str, Path], resources):
+    resource_dir = layout["resource_dir"]
+    for resource in resources:
+        target = resource_dir / resource.output_relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(resource.source, target)
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
     layout = resolve_backend_runtime_layout(PROJECT_ROOT)
-    resources = collect_backend_runtime_resources(PROJECT_ROOT)
 
     if not args.keep_build_root:
         _clean_existing_build(layout)
 
     layout["build_root"].mkdir(parents=True, exist_ok=True)
+    project_activity_resource = write_project_activity_snapshot(
+        PROJECT_ROOT,
+        layout["build_root"] / PROJECT_ACTIVITY_SNAPSHOT_NAME,
+    )
+    resources = collect_backend_runtime_resources(PROJECT_ROOT, extra_resources=[project_activity_resource])
 
     if not args.skip_build:
         pyinstaller_args = build_pyinstaller_arguments(
@@ -82,6 +96,8 @@ def main() -> int:
             resources=resources,
         )
         _run_pyinstaller(pyinstaller_args)
+    else:
+        _sync_extra_runtime_resources(layout, [project_activity_resource])
 
     removed_runtime_dlls = remove_conflicting_runtime_libraries(layout["runtime_dir"])
     manifest = write_backend_runtime_manifest(layout=layout, resources=resources)

@@ -76,6 +76,7 @@ from src.utils.data_loader import DataLoader
 app = FastAPI()
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
+PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
 
 FACE_ANALYSIS_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsing.farl.lapa.int8.onnx")
 FACE_ANALYSIS_DB_FILE = None
@@ -97,6 +98,90 @@ _face_analysis_job_running = False
 
 def _get_runtime_workdir():
     return Path(Config.get_project_root())
+
+
+def _get_project_progress_root():
+    configured_root = Path(Config.get_project_root())
+    if (configured_root / "Prompt_Project_Management.md").exists():
+        return configured_root
+
+    current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    return current_dir.parent
+
+
+def _find_git_root(start_dir):
+    current = Path(start_dir).resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _decode_process_output(value):
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return value.decode("gbk", errors="replace")
+
+
+def _load_project_activity_snapshot(project_root):
+    snapshot_path = Path(project_root) / PROJECT_ACTIVITY_SNAPSHOT_NAME
+    if not snapshot_path.exists():
+        return []
+
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"Project activity snapshot parsing error: {exc}")
+        return []
+
+    commits = payload.get("commits", [])
+    if not isinstance(commits, list):
+        return []
+
+    normalized_commits = []
+    for commit in commits:
+        if not isinstance(commit, dict):
+            continue
+        commit_hash = str(commit.get("hash", "")).strip()
+        date_text = str(commit.get("date", "")).strip()
+        message = str(commit.get("message", "")).strip()
+        if commit_hash and date_text and message:
+            normalized_commits.append({"hash": commit_hash, "date": date_text, "message": message})
+    return normalized_commits
+
+
+def _load_recent_git_commits(project_root, days=14):
+    git_root = _find_git_root(project_root) or _find_git_root(Path.cwd())
+    if git_root is None:
+        return []
+
+    recent_commits = []
+    try:
+        time_limit = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        git_cmd = ["git", "log", f'--since="{time_limit}"', "--pretty=format:%h|%ad|%s", "--date=short"]
+        proc = subprocess.run(git_cmd, capture_output=True, cwd=git_root)
+
+        if proc.returncode != 0 or not proc.stdout:
+            return []
+
+        out_text = _decode_process_output(proc.stdout)
+        for line in out_text.splitlines():
+            parts = line.split("|", 2)
+            if len(parts) == 3:
+                recent_commits.append({
+                    "hash": parts[0],
+                    "date": parts[1],
+                    "message": parts[2],
+                })
+    except Exception as e:
+        print(f"Git log parsing error: {e}")
+
+    return recent_commits
 
 
 def _is_frozen_runtime():
@@ -2467,15 +2552,14 @@ def get_sedentary_stats():
 async def get_project_progress():
     """Parse Prompt_Project_Management.md and git logs to return project momentum."""
     try:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(current_dir)
-        md_file = os.path.join(project_root, "Prompt_Project_Management.md")
+        project_root = _get_project_progress_root()
+        md_file = project_root / "Prompt_Project_Management.md"
         
         completed_tasks = []
         pending_tasks = []
         current_project = "General"
         
-        if os.path.exists(md_file):
+        if md_file.exists():
             with open(md_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
                 for line in lines:
@@ -2500,32 +2584,10 @@ async def get_project_progress():
         total_tasks = len(completed_tasks) + len(pending_tasks)
         completion_rate = (len(completed_tasks) / total_tasks) if total_tasks > 0 else 0
         
-        # Git commits (last 14 days)
-        recent_commits = []
-        try:
-            # We use subprocess to get git log: hash|date|subject
-            time_limit = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
-            git_cmd = ["git", "log", f'--since="{time_limit}"', "--pretty=format:%h|%ad|%s", "--date=short"]
-            
-            # Use raw bytes and decode manually to handle Windows GBK vs UTF-8 reliably
-            proc = subprocess.run(git_cmd, capture_output=True, cwd=project_root)
-            
-            if proc.returncode == 0 and proc.stdout:
-                 try:
-                      out_text = proc.stdout.decode('utf-8')
-                 except:
-                      out_text = proc.stdout.decode('gbk', errors='replace')
-                      
-                 for line in out_text.splitlines():
-                      parts = line.split("|", 2)
-                      if len(parts) == 3:
-                           recent_commits.append({
-                               "hash": parts[0],
-                               "date": parts[1],
-                               "message": parts[2]
-                           })
-        except Exception as e:
-            print(f"Git log parsing error: {e}")
+        # Git commits (last 14 days). Packaged builds fall back to a bundled snapshot.
+        recent_commits = _load_recent_git_commits(project_root)
+        if not recent_commits:
+            recent_commits = _load_project_activity_snapshot(project_root)
             
         return {
             "tasks": {

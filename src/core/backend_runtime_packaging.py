@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import cv2
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
 RUNTIME_NAME = "VantageBackend"
 APP_EXE_NAME = f"{RUNTIME_NAME}.exe"
+PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
 
 REQUIRED_ROOT_RESOURCE_NAMES = (
     "Prompt_Action_Plan.md",
@@ -100,7 +102,10 @@ def resolve_scienceplots_styles_source() -> Path:
     return styles_path.resolve()
 
 
-def collect_backend_runtime_resources(project_root: str | Path) -> list[BundledResource]:
+def collect_backend_runtime_resources(
+    project_root: str | Path,
+    extra_resources: list[BundledResource] | None = None,
+) -> list[BundledResource]:
     resolved_root = Path(project_root).resolve()
     resources: list[BundledResource] = []
     missing: list[str] = []
@@ -144,7 +149,69 @@ def collect_backend_runtime_resources(project_root: str | Path) -> list[BundledR
             "Missing backend runtime resources: " + ", ".join(sorted(missing))
         )
 
+    if extra_resources:
+        resources.extend(extra_resources)
+
     return sorted(resources, key=lambda resource: resource.output_relative_path.as_posix())
+
+
+def _decode_process_output(value) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return value.decode("gbk", errors="replace")
+
+
+def build_project_activity_snapshot(
+    project_root: str | Path,
+    *,
+    days: int = 14,
+    built_at: datetime | None = None,
+    run_command=None,
+) -> dict[str, object]:
+    resolved_root = Path(project_root).resolve()
+    built_at = built_at or datetime.now()
+    time_limit = (built_at - timedelta(days=days)).strftime("%Y-%m-%d")
+    git_cmd = ["git", "log", f'--since="{time_limit}"', "--pretty=format:%h|%ad|%s", "--date=short"]
+    run = run_command or subprocess.run
+    proc = run(git_cmd, capture_output=True, cwd=resolved_root)
+
+    commits: list[dict[str, str]] = []
+    if proc.returncode == 0 and getattr(proc, "stdout", None):
+        out_text = _decode_process_output(proc.stdout)
+        for line in out_text.splitlines():
+            parts = line.split("|", 2)
+            if len(parts) == 3:
+                commits.append({"hash": parts[0], "date": parts[1], "message": parts[2]})
+
+    return {
+        "generated_at": built_at.isoformat(timespec="seconds"),
+        "since": time_limit,
+        "source": "git log",
+        "commits": commits,
+    }
+
+
+def write_project_activity_snapshot(
+    project_root: str | Path,
+    output_path: str | Path,
+    *,
+    built_at: datetime | None = None,
+    run_command=None,
+) -> BundledResource:
+    resolved_output_path = Path(output_path).resolve()
+    snapshot = build_project_activity_snapshot(
+        project_root,
+        built_at=built_at,
+        run_command=run_command,
+    )
+    resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_output_path.write_text(json.dumps(snapshot, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    return BundledResource(resolved_output_path, Path("."))
 
 
 def build_pyinstaller_arguments(
