@@ -329,6 +329,7 @@ class SystemState:
         self.screenshots_size = 0  # Cache for screenshots storage size
         self.show_person_box = True
         self.person_boxes = []
+        self.video_stream_client_count = 0
         self.live_face_points = deque()
         self.latest_live_face_score = None
         self.face_live_last_seen_at = 0.0
@@ -460,6 +461,25 @@ def has_active_face_live_viewer(now_ts=None):
     now_ts = now_ts if now_ts is not None else time.time()
     last_seen_at = getattr(state, "face_live_last_seen_at", 0.0) or 0.0
     return (now_ts - last_seen_at) <= FACE_LIVE_VIEWER_TTL_SECONDS
+
+
+def register_video_stream_client():
+    with state.lock:
+        state.video_stream_client_count = max(0, getattr(state, "video_stream_client_count", 0)) + 1
+
+
+def unregister_video_stream_client():
+    with state.lock:
+        state.video_stream_client_count = max(0, getattr(state, "video_stream_client_count", 0) - 1)
+
+
+def has_active_video_stream_client():
+    with state.lock:
+        return getattr(state, "video_stream_client_count", 0) > 0
+
+
+def should_run_yolo_detection():
+    return bool(state.show_person_box and has_active_video_stream_client())
 
 
 def refresh_face_report_cache(db_file=None, output_dir=None):
@@ -1300,7 +1320,9 @@ def yolo_loop():
         return
 
     while state.is_running:
-        if not state.show_person_box:
+        if not should_run_yolo_detection():
+            with state.lock:
+                state.person_boxes = []
             time.sleep(1)
             continue
             
@@ -1339,68 +1361,71 @@ def yolo_loop():
         time.sleep(0.1)
 
 def generate_frames():
-    while True:
-        frame = None
-        overlay_score = None
-        with state.lock:
-            if state.latest_frame is not None:
-                frame = state.latest_frame.copy()
-            else:
-                # Create a black placeholder image (16:9 aspect ratio)
-                import numpy as np
-                frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-                cv2.putText(frame, "Camera Offline", (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 2)
-            overlay_score = state.latest_live_face_score
-            
-            # Draw YOLO bounding boxes if enabled
-            if state.show_person_box and frame is not None:
-                for (x1, y1, x2, y2) in state.person_boxes:
-                    # Neon Green box
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                    # Keep the person label above the box even when using a large font.
-                    person_font = cv2.FONT_HERSHEY_SIMPLEX
-                    person_label = "Person"
-                    (_, person_text_height), person_baseline = cv2.getTextSize(
-                        person_label,
-                        person_font,
-                        FACE_OVERLAY_PERSON_FONT_SCALE,
-                        FACE_OVERLAY_PERSON_THICKNESS,
-                    )
-                    person_y = max(person_text_height + person_baseline + 8, y1 - 16)
-                    cv2.putText(
-                        frame,
-                        person_label,
-                        (x1, person_y),
-                        person_font,
-                        FACE_OVERLAY_PERSON_FONT_SCALE,
-                        (0, 255, 0),
-                        FACE_OVERLAY_PERSON_THICKNESS,
-                    )
-                    score_label = format_live_face_score_label(overlay_score)
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    font_scale = FACE_OVERLAY_SCORE_FONT_SCALE
-                    thickness = FACE_OVERLAY_SCORE_THICKNESS
-                    padding = FACE_OVERLAY_SCORE_PADDING
-                    (text_width, text_height), baseline = cv2.getTextSize(score_label, font, font_scale, thickness)
-                    text_x = max(6, x2 - text_width)
-                    text_y = max(text_height + baseline + padding, y1 - 12)
-                    background_tl = (
-                        max(0, text_x - padding),
-                        max(0, text_y - text_height - baseline - padding),
-                    )
-                    background_br = (
-                        min(frame.shape[1] - 1, text_x + text_width + padding),
-                        min(frame.shape[0] - 1, text_y + padding),
-                    )
-                    cv2.rectangle(frame, background_tl, background_br, (0, 255, 0), -1)
-                    cv2.putText(frame, score_label, (text_x, text_y), font, font_scale, (0, 0, 0), thickness)
+    register_video_stream_client()
+    try:
+        while True:
+            frame = None
+            overlay_score = None
+            with state.lock:
+                if state.latest_frame is not None:
+                    frame = state.latest_frame.copy()
+                else:
+                    # Create a black placeholder image (16:9 aspect ratio)
+                    import numpy as np
+                    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+                    cv2.putText(frame, "Camera Offline", (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 2)
+                overlay_score = state.latest_live_face_score
 
-        
-        ret, buffer = cv2.imencode('.jpg', frame)
-        frame_bytes = buffer.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        time.sleep(0.04)
+                # Draw YOLO bounding boxes if enabled
+                if state.show_person_box and frame is not None:
+                    for (x1, y1, x2, y2) in state.person_boxes:
+                        # Neon Green box
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                        # Keep the person label above the box even when using a large font.
+                        person_font = cv2.FONT_HERSHEY_SIMPLEX
+                        person_label = "Person"
+                        (_, person_text_height), person_baseline = cv2.getTextSize(
+                            person_label,
+                            person_font,
+                            FACE_OVERLAY_PERSON_FONT_SCALE,
+                            FACE_OVERLAY_PERSON_THICKNESS,
+                        )
+                        person_y = max(person_text_height + person_baseline + 8, y1 - 16)
+                        cv2.putText(
+                            frame,
+                            person_label,
+                            (x1, person_y),
+                            person_font,
+                            FACE_OVERLAY_PERSON_FONT_SCALE,
+                            (0, 255, 0),
+                            FACE_OVERLAY_PERSON_THICKNESS,
+                        )
+                        score_label = format_live_face_score_label(overlay_score)
+                        font = cv2.FONT_HERSHEY_SIMPLEX
+                        font_scale = FACE_OVERLAY_SCORE_FONT_SCALE
+                        thickness = FACE_OVERLAY_SCORE_THICKNESS
+                        padding = FACE_OVERLAY_SCORE_PADDING
+                        (text_width, text_height), baseline = cv2.getTextSize(score_label, font, font_scale, thickness)
+                        text_x = max(6, x2 - text_width)
+                        text_y = max(text_height + baseline + padding, y1 - 12)
+                        background_tl = (
+                            max(0, text_x - padding),
+                            max(0, text_y - text_height - baseline - padding),
+                        )
+                        background_br = (
+                            min(frame.shape[1] - 1, text_x + text_width + padding),
+                            min(frame.shape[0] - 1, text_y + padding),
+                        )
+                        cv2.rectangle(frame, background_tl, background_br, (0, 255, 0), -1)
+                        cv2.putText(frame, score_label, (text_x, text_y), font, font_scale, (0, 0, 0), thickness)
+
+            ret, buffer = cv2.imencode('.jpg', frame)
+            frame_bytes = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.04)
+    finally:
+        unregister_video_stream_client()
 
 @app.get("/api/stream")
 async def video_feed():

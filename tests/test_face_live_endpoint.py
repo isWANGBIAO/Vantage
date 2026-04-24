@@ -17,14 +17,25 @@ class FaceLiveEndpointTests(unittest.TestCase):
     def setUp(self):
         self.original_points = getattr(server.state, "live_face_points", None)
         self.original_camera = server.state.camera
+        self.original_latest_frame = getattr(server.state, "latest_frame", None)
         self.original_latest_live_face_score = getattr(server.state, "latest_live_face_score", None)
         self.original_face_live_last_seen_at = getattr(server.state, "face_live_last_seen_at", None)
+        self.original_show_person_box = getattr(server.state, "show_person_box", None)
+        self.original_person_boxes = getattr(server.state, "person_boxes", None)
+        self.original_video_stream_client_count = getattr(server.state, "video_stream_client_count", None)
 
     def tearDown(self):
         server.state.live_face_points = [] if self.original_points is None else self.original_points
         server.state.camera = self.original_camera
+        server.state.latest_frame = self.original_latest_frame
         server.state.latest_live_face_score = self.original_latest_live_face_score
         server.state.face_live_last_seen_at = self.original_face_live_last_seen_at
+        server.state.show_person_box = self.original_show_person_box
+        server.state.person_boxes = [] if self.original_person_boxes is None else self.original_person_boxes
+        if self.original_video_stream_client_count is None and hasattr(server.state, "video_stream_client_count"):
+            delattr(server.state, "video_stream_client_count")
+        else:
+            server.state.video_stream_client_count = self.original_video_stream_client_count
 
     def test_store_live_face_result_keeps_only_passing_points_within_window(self):
         server.state.live_face_points = []
@@ -105,6 +116,45 @@ class FaceLiveEndpointTests(unittest.TestCase):
             asyncio.run(server.get_face_live(active=True))
 
         self.assertEqual(server.state.face_live_last_seen_at, 123.0)
+
+    def test_yolo_detection_requires_enabled_boxes_and_active_video_stream_client(self):
+        server.state.show_person_box = True
+        server.state.video_stream_client_count = 0
+
+        self.assertFalse(server.should_run_yolo_detection())
+
+        server.register_video_stream_client()
+        self.assertTrue(server.should_run_yolo_detection())
+
+        server.state.show_person_box = False
+        self.assertFalse(server.should_run_yolo_detection())
+
+    def test_video_stream_client_count_never_goes_below_zero(self):
+        server.state.video_stream_client_count = 0
+
+        server.unregister_video_stream_client()
+        self.assertEqual(server.state.video_stream_client_count, 0)
+
+        server.register_video_stream_client()
+        server.register_video_stream_client()
+        self.assertEqual(server.state.video_stream_client_count, 2)
+
+        server.unregister_video_stream_client()
+        self.assertEqual(server.state.video_stream_client_count, 1)
+
+    def test_generate_frames_registers_and_unregisters_video_stream_client(self):
+        server.state.video_stream_client_count = 0
+        server.state.latest_frame = None
+
+        frame_generator = server.generate_frames()
+        self.assertEqual(server.state.video_stream_client_count, 0)
+
+        first_frame = next(frame_generator)
+        self.assertIn(b"Content-Type: image/jpeg", first_frame)
+        self.assertEqual(server.state.video_stream_client_count, 1)
+
+        frame_generator.close()
+        self.assertEqual(server.state.video_stream_client_count, 0)
 
     def test_format_live_face_score_label_formats_numeric_and_missing(self):
         self.assertEqual(server.format_live_face_score_label(31.234), "Dark Circle Score: 31.23")
