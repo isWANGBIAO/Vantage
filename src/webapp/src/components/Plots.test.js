@@ -21,3 +21,7 @@ test('Plots refresh button starts the backend plot refresh job before reloading 
   assert.ok(plotsSource.includes("retryPolicy: 'mutation'"));
   assert.ok(!plotsSource.includes("'/api/plots/data${refresh ? '?refresh=1' : ''}'"));
 });
+
+test('Plots maps backend affected_chart_ids warnings back to charts', () => {
+  assert.ok(plotsSource.includes('warning?.affected_chart_ids'));
+});

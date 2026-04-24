@@ -77,6 +77,10 @@ function getWarningCharts(warning) {
     return warning.chart_ids;
   }
 
+  if (Array.isArray(warning?.affected_chart_ids)) {
+    return warning.affected_chart_ids;
+  }
+
   if (Array.isArray(warning?.affectedCharts)) {
     return warning.affectedCharts;
   }
