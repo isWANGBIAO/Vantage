@@ -3,65 +3,88 @@ chcp 65001 >nul
 setlocal enabledelayedexpansion
 
 echo ========================================
-echo    Vantage - Electron Launcher
+echo    Vantage - Build and Install
 echo ========================================
 echo.
 
 set "PROJECT_ROOT=%~dp0"
 cd /d "%PROJECT_ROOT%"
-set "ELECTRON_RUN_AS_NODE="
-set "BACKEND_STATUS_URL=http://127.0.0.1:8000/api/status"
-set "BACKEND_WAIT_TIMEOUT=60"
-set "SERVER_LATEST_POINTER=%PROJECT_ROOT%logs\server.latest.log"
+set "INSTALL_ROOT=%LOCALAPPDATA%\Programs\Vantage"
+set "INSTALLED_EXE=%INSTALL_ROOT%\Vantage.exe"
+set "STARTUP_FOLDER=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 
-echo [0/3] Cleaning residual processes...
-
+echo [0/6] Cleaning residual source processes...
 python src\scripts\cleanup_vantage_python_processes.py --include-desktop >nul 2>&1
+echo       Source cleanup complete
 
-echo       Cleanup complete
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 2"
-
-echo [1/3] Starting backend...
-
-if not exist "%PROJECT_ROOT%logs" mkdir "%PROJECT_ROOT%logs"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath python -ArgumentList 'src/scripts/run_server_background.py' -WorkingDirectory '%PROJECT_ROOT%' -WindowStyle Hidden"
-
-echo       Waiting for backend...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$elapsed = 0; while ($elapsed -lt %BACKEND_WAIT_TIMEOUT%) { try { $response = Invoke-WebRequest -Uri '%BACKEND_STATUS_URL%' -UseBasicParsing -TimeoutSec 2; if ($response.StatusCode -eq 200) { $status = $response.Content | ConvertFrom-Json; if ($status.camera_online) { Write-Host '      Backend ready (camera online)' } else { Write-Host '      Backend ready (camera offline)' }; exit 0 } } catch { }; $elapsed += 1; Write-Host ('      Waiting for backend... ' + $elapsed + '/%BACKEND_WAIT_TIMEOUT%s'); Start-Sleep -Seconds 1 }; Write-Host '      Backend did not become ready within %BACKEND_WAIT_TIMEOUT% seconds'; try { $response = Invoke-WebRequest -Uri '%BACKEND_STATUS_URL%' -UseBasicParsing -TimeoutSec 2; if ($response.StatusCode -eq 200) { Write-Host '      Latest /api/status:'; Write-Host $response.Content } } catch { Write-Host ('      Final status check failed: ' + $_.Exception.Message) }; $latestLogPath = $null; if (Test-Path '%SERVER_LATEST_POINTER%') { try { $candidate = (Get-Content '%SERVER_LATEST_POINTER%' -ErrorAction Stop | Select-Object -First 1).Trim(); if ($candidate -and (Test-Path $candidate)) { $latestLogPath = $candidate } } catch { } }; if (-not $latestLogPath) { $serverLogDir = Join-Path '%PROJECT_ROOT%logs' 'server'; if (Test-Path $serverLogDir) { $latestFile = Get-ChildItem $serverLogDir -Filter 'server-*.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($latestFile) { $latestLogPath = $latestFile.FullName } } }; if ($latestLogPath) { Write-Host ('      Last 20 lines of ' + $latestLogPath + ':'); Get-Content $latestLogPath -Tail 20 }; exit 1"
-if errorlevel 1 exit /b 1
-
-echo [2/3] Checking frontend dependencies...
+echo [1/6] Checking frontend dependencies...
 if not exist "%PROJECT_ROOT%src\webapp\node_modules" (
     echo       Installing dependencies...
-    cd /d "%PROJECT_ROOT%src\webapp"
+    pushd "%PROJECT_ROOT%src\webapp"
     call npm install
+    if errorlevel 1 (
+        popd
+        echo       npm install failed
+        exit /b 1
+    )
+    popd
 ) else (
     echo       Dependencies already installed
 )
 
-echo [3/3] Launching Electron...
-cd /d "%PROJECT_ROOT%src\webapp"
-
-echo       Checking frontend build state...
-node check_build.js
-if %errorlevel% neq 0 (
-    echo       Build required, running npm run build...
-    call npm run build
-) else (
-    echo       Build is up to date
+echo [2/6] Building backend runtime...
+python src\scripts\build_backend_runtime.py
+if errorlevel 1 (
+    echo       Backend runtime build failed
+    exit /b 1
 )
 
-if exist "%PROJECT_ROOT%src\webapp\dist\index.html" (
-    echo       Starting production Electron app in background...
-    cd /d "%PROJECT_ROOT%"
-    python src\scripts\run_frontend_background.py production
-) else (
-    echo       Starting development Electron app in background...
-    cd /d "%PROJECT_ROOT%"
-    python src\scripts\run_frontend_background.py development
+echo [3/6] Verifying backend runtime...
+python src\scripts\verify_backend_runtime.py --timeout-seconds 60
+if errorlevel 1 (
+    echo       Backend runtime verification failed
+    exit /b 1
 )
+
+echo [4/6] Building Windows installer...
+pushd "%PROJECT_ROOT%src\webapp"
+call npm run electron:build
+if errorlevel 1 (
+    popd
+    echo       Installer build failed
+    exit /b 1
+)
+popd
+
+echo [5/6] Preparing silent install...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$targets = Get-ChildItem -Path '%STARTUP_FOLDER%' -Filter 'RUN.bat*.lnk' -ErrorAction SilentlyContinue; if ($targets) { $targets | Remove-Item -Force; Write-Host '      Removed startup shortcut residue' } else { Write-Host '      No startup shortcut residue found' }"
+
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$installer = Get-ChildItem -Path '%PROJECT_ROOT%src\\webapp\\electron-dist' -Filter 'Vantage Setup *.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($installer) { $installer.FullName }"`) do set "INSTALLER_PATH=%%I"
+
+if not defined INSTALLER_PATH (
+    echo       Installer package not found in src\webapp\electron-dist
+    exit /b 1
+)
+
+echo       Latest installer: %INSTALLER_PATH%
+taskkill /IM Vantage.exe /F >nul 2>&1
+taskkill /IM VantageBackend.exe /F >nul 2>&1
+
+echo [6/6] Installing and launching Vantage...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$process = Start-Process -FilePath '%INSTALLER_PATH%' -ArgumentList '/S' -Wait -PassThru; exit $process.ExitCode"
+if errorlevel 1 (
+    echo       Silent installer failed
+    exit /b 1
+)
+
+if not exist "%INSTALLED_EXE%" (
+    echo       Installed executable not found: %INSTALLED_EXE%
+    exit /b 1
+)
+
+start "" "%INSTALLED_EXE%"
 
 echo.
 echo ========================================
-echo    Application launched in background
+echo    Build, install, and launch complete
 echo ========================================
