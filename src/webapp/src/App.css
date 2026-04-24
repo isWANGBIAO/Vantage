@@ -112,23 +112,37 @@
 }
 
 .theme-toggle {
-  background: var(--bg-surface);
+  background: rgba(108, 92, 231, 0.08);
   background-image: none;
-  border: 1px solid var(--border-color);
+  border: 1px solid rgba(108, 92, 231, 0.28);
   border-radius: 999px;
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
+  min-height: 36px;
+  padding: 0 0.8rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0.4rem;
   cursor: pointer;
   color: var(--primary-color);
   transition: all 0.3s ease;
+  box-shadow: none;
+  white-space: nowrap;
+}
+
+.theme-toggle[data-next-theme='light'] {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.32);
+  color: #b45309;
 }
 
 .theme-toggle svg {
+  flex: 0 0 auto;
   stroke: currentColor;
+}
+
+.theme-toggle span {
+  font-size: 0.9rem;
+  line-height: 1;
 }
 
 .settings-entry-button {

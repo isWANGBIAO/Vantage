@@ -37,6 +37,11 @@ test('App persists the header theme toggle through formal settings', () => {
   assert.ok(appSource.includes('theme: nextTheme'));
 });
 
+test('App renders the header theme toggle as a labelled pill instead of a blank circle', () => {
+  assert.ok(appSource.includes('className="theme-toggle"'));
+  assert.ok(appSource.includes("<span>{t(theme === 'dark' ? 'settings.general.theme_light' : 'settings.general.theme_dark')}</span>"));
+});
+
 test('App keeps the global footer off full-height tabs including system logs', () => {
   assert.ok(appSource.includes("activeTab !== 'system logs'"));
 });

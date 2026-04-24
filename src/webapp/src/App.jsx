@@ -320,11 +320,13 @@ function AppShell() {
 
           <button
             className="theme-toggle"
+            data-next-theme={theme === 'dark' ? 'light' : 'dark'}
             onClick={handleToggleTheme}
             title={t(theme === 'dark' ? 'app.theme.switch_to_light' : 'app.theme.switch_to_dark')}
             aria-label={t(theme === 'dark' ? 'app.theme.switch_to_light' : 'app.theme.switch_to_dark')}
           >
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            <span>{t(theme === 'dark' ? 'settings.general.theme_light' : 'settings.general.theme_dark')}</span>
           </button>
         </div>
       </header>
