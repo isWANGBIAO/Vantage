@@ -33,6 +33,7 @@ import asyncio
 import math
 import calendar
 import tempfile
+import copy
 from collections import deque
 from contextlib import suppress
 from contextlib import asynccontextmanager
@@ -98,6 +99,9 @@ _face_report_refresh_lock = threading.Lock()
 _face_analysis_job_lock = threading.Lock()
 _face_analysis_job_running = False
 _plot_refresh_lock = threading.Lock()
+_plot_dashboard_cache_lock = threading.Lock()
+_plot_dashboard_cache_key = None
+_plot_dashboard_cache_payload = None
 
 
 def _get_runtime_workdir():
@@ -219,6 +223,34 @@ def _get_plot_dir():
     if FACE_REPORT_PLOT_OUTPUT_DIR:
         return Path(FACE_REPORT_PLOT_OUTPUT_DIR)
     return Path(Config.get_plot_dir())
+
+
+def _file_signature(path):
+    candidate = Path(path)
+    try:
+        stat = candidate.stat()
+    except OSError:
+        return (str(candidate), None, None)
+    return (str(candidate), stat.st_mtime_ns, stat.st_size)
+
+
+def _get_plot_dashboard_cache_key():
+    project_data_root = Path(project_root) / "data"
+    source_paths = [
+        DataLoader.resolve_data_path("Time.xlsx"),
+        DataLoader.resolve_data_path("Balance Sheet.xlsx"),
+        project_data_root / "mi_fiteness_data" / "20260416_881116692_MiFitness_hlth_center_sport_record.csv",
+        project_data_root / "zepplift_data" / "SPORT" / "SPORT_running_master.csv",
+        project_data_root / "zepplift_data" / "SPORT" / "SPORT_1776331608562.csv",
+    ]
+    return tuple(_file_signature(path) for path in source_paths)
+
+
+def _clear_plot_dashboard_cache():
+    global _plot_dashboard_cache_key, _plot_dashboard_cache_payload
+    with _plot_dashboard_cache_lock:
+        _plot_dashboard_cache_key = None
+        _plot_dashboard_cache_payload = None
 
 
 def _runtime_logs_root():
@@ -1738,6 +1770,7 @@ async def refresh_plots():
         _plot_refresh_lock.release()
 
     print("Plots refreshed successfully")
+    _clear_plot_dashboard_cache()
     return {"message": "Plots refreshed successfully"}
 
 def ensure_thumbnail(file_path, thumb_path):
@@ -1809,10 +1842,19 @@ async def list_plots():
 
 @app.get("/api/plots/data")
 async def get_plot_dashboard_data():
+    global _plot_dashboard_cache_key, _plot_dashboard_cache_payload
     try:
         from src.services.plot_dashboard import build_plot_dashboard_data
 
+        cache_key = _get_plot_dashboard_cache_key()
+        with _plot_dashboard_cache_lock:
+            if _plot_dashboard_cache_key == cache_key and _plot_dashboard_cache_payload is not None:
+                return copy.deepcopy(_plot_dashboard_cache_payload)
+
         payload = await asyncio.to_thread(build_plot_dashboard_data)
+        with _plot_dashboard_cache_lock:
+            _plot_dashboard_cache_key = cache_key
+            _plot_dashboard_cache_payload = copy.deepcopy(payload)
         return payload
     except Exception as e:
         print(f"Error building plot dashboard data: {e}")
