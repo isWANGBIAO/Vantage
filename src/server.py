@@ -91,11 +91,13 @@ FACE_OVERLAY_SCORE_THICKNESS = 8
 FACE_OVERLAY_SCORE_PADDING = 24
 FACE_OVERLAY_PERSON_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
 FACE_OVERLAY_PERSON_THICKNESS = 6
+PLOT_REFRESH_TIMEOUT_SECONDS = 60
 _face_analysis_runtime = None
 _face_analysis_runtime_lock = threading.Lock()
 _face_report_refresh_lock = threading.Lock()
 _face_analysis_job_lock = threading.Lock()
 _face_analysis_job_running = False
+_plot_refresh_lock = threading.Lock()
 
 
 def _get_runtime_workdir():
@@ -1712,13 +1714,28 @@ async def refresh_plots():
             check=True,
             env=env,
             cwd=str(_get_runtime_workdir()),
+            timeout=PLOT_REFRESH_TIMEOUT_SECONDS,
+        )
+
+    if not _plot_refresh_lock.acquire(blocking=False):
+        return JSONResponse(
+            status_code=409,
+            content={"error": "Plots refresh is already running", "status": "running"},
         )
 
     try:
         await asyncio.to_thread(run_plot_script)
+    except subprocess.TimeoutExpired:
+        print(f"Error refreshing plots: timed out after {PLOT_REFRESH_TIMEOUT_SECONDS}s")
+        return JSONResponse(
+            status_code=504,
+            content={"error": f"plot.py timed out after {PLOT_REFRESH_TIMEOUT_SECONDS}s"},
+        )
     except Exception as e:
         print(f"Error refreshing plots: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        _plot_refresh_lock.release()
 
     print("Plots refreshed successfully")
     return {"message": "Plots refreshed successfully"}

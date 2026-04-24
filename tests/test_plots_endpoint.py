@@ -29,6 +29,17 @@ class PlotRefreshEndpointTests(unittest.TestCase):
         self.assertTrue(kwargs["check"])
         self.assertEqual(Path(kwargs["cwd"]), Path("C:/runtime"))
         self.assertEqual(kwargs["env"]["PYTHONIOENCODING"], "utf-8")
+        self.assertEqual(kwargs["timeout"], server.PLOT_REFRESH_TIMEOUT_SECONDS)
+
+    def test_refresh_plots_rejects_concurrent_refresh(self):
+        acquired = server._plot_refresh_lock.acquire(blocking=False)
+        self.assertTrue(acquired)
+        try:
+            response = asyncio.run(server.refresh_plots())
+        finally:
+            server._plot_refresh_lock.release()
+
+        self.assertEqual(response.status_code, 409)
 
 
 if __name__ == "__main__":
