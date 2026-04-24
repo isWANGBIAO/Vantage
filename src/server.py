@@ -91,6 +91,8 @@ FACE_OVERLAY_PERSON_THICKNESS = 6
 _face_analysis_runtime = None
 _face_analysis_runtime_lock = threading.Lock()
 _face_report_refresh_lock = threading.Lock()
+_face_analysis_job_lock = threading.Lock()
+_face_analysis_job_running = False
 
 
 def _get_runtime_workdir():
@@ -2269,6 +2271,19 @@ async def get_balance_sheet():
 @app.post("/api/face/analyze")
 async def analyze_face_history(background_tasks: BackgroundTasks):
     """Trigger background analysis of face history"""
+    global _face_analysis_job_running
+
+    with _face_analysis_job_lock:
+        if _face_analysis_job_running:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "Face analysis is already running",
+                    "status": "running",
+                },
+            )
+        _face_analysis_job_running = True
+
     current_dir = os.path.dirname(os.path.abspath(__file__))
     script_path = os.path.join(current_dir, "scripts", "analyze_face.py")
     if not os.path.exists(script_path):
@@ -2291,6 +2306,10 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
             print("Face analysis complete.")
         except Exception as e:
             print(f"Face analysis failed: {e}")
+        finally:
+            global _face_analysis_job_running
+            with _face_analysis_job_lock:
+                _face_analysis_job_running = False
 
     background_tasks.add_task(run_analysis)
     return {"message": "Analysis started in background"}

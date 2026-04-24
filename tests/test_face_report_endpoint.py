@@ -55,6 +55,23 @@ class FaceReportEndpointTests(unittest.TestCase):
                     str((tmp / "logs" / "face-analysis" / "face-analysis-20260420_221530.log").resolve()),
                 )
 
+    def test_face_analysis_rejects_duplicate_background_start(self):
+        background_tasks = BackgroundTasks()
+
+        try:
+            first_payload = asyncio.run(server.analyze_face_history(background_tasks))
+            second_response = asyncio.run(server.analyze_face_history(background_tasks))
+
+            self.assertEqual(first_payload["message"], "Analysis started in background")
+            self.assertEqual(second_response.status_code, 409)
+            payload = json.loads(second_response.body.decode("utf-8"))
+            self.assertEqual(payload["status"], "running")
+            self.assertEqual(len(background_tasks.tasks), 1)
+        finally:
+            if hasattr(server, "_face_analysis_job_running"):
+                with server._face_analysis_job_lock:
+                    server._face_analysis_job_running = False
+
     def test_cached_report_returns_without_running_subprocess(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
