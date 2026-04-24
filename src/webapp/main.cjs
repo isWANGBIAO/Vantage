@@ -14,11 +14,14 @@ const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimeP
 const { applyLaunchAtLoginSetting } = require('./src/utils/autoLaunch.cjs');
 const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
 const {
+    buildSettingsState,
     getOnboardingState,
     loadSettings,
+    saveSettingsPayload,
     saveOnboardingCompletion,
     sanitizeDisplayLanguage,
 } = require('./src/utils/onboardingConfig.cjs');
+const packageJson = require('./package.json');
 
 const projectRoot = path.join(__dirname, '..', '..');
 const runtimePaths = resolveRuntimePaths({
@@ -128,6 +131,37 @@ function persistSettings(nextSettings) {
     fs.writeFileSync(settingsFile, JSON.stringify(nextSettings, null, 2), 'utf8');
 }
 
+const settingsPathAllowlist = {
+    config: () => runtimePaths.configDir,
+    history: () => runtimePaths.historyDir,
+    logs: () => runtimePaths.logDir,
+    plots: () => runtimePaths.plotDir,
+    cache: () => runtimePaths.cacheDir,
+    runtime: () => runtimePaths.runtimeDir,
+    data: () => runtimePaths.dataDir,
+};
+
+function resolveAllowedSettingsPath(pathKey) {
+    const resolver = settingsPathAllowlist[pathKey];
+    if (!resolver) {
+        return null;
+    }
+
+    const resolvedPath = path.resolve(resolver());
+    const allowedPaths = Object.values(settingsPathAllowlist).map((entry) => path.resolve(entry()));
+    return allowedPaths.includes(resolvedPath) ? resolvedPath : null;
+}
+
+function getSettingsStatePayload() {
+    return buildSettingsState({
+        runtimePaths,
+        projectRoot,
+        appVersion: packageJson.version,
+        appMode: runtimePaths.appMode,
+        systemLocale: app.getLocale(),
+    });
+}
+
 function syncTrayMenu() {
     if (!tray) {
         return;
@@ -190,6 +224,47 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 ipcMain.handle('onboarding:get-state', async () => getOnboardingState({ runtimePaths, projectRoot }));
+
+ipcMain.handle('settings:get-state', async () => getSettingsStatePayload());
+
+ipcMain.handle('settings:save', async (event, payload) => {
+    const state = saveSettingsPayload({
+        runtimePaths,
+        payload: payload || {},
+        projectRoot,
+        appVersion: packageJson.version,
+        appMode: runtimePaths.appMode,
+        systemLocale: app.getLocale(),
+    });
+
+    if (shouldManageLoginItem) {
+        applyLaunchAtLoginSetting({
+            app,
+            enabled: state.settings.launchAtLogin,
+        });
+        log.info(`Launch at login ${state.settings.launchAtLogin ? 'enabled' : 'disabled'} from settings`);
+    } else {
+        log.info('Launch-at-login settings save skipped outside packaged installs');
+    }
+
+    syncTrayMenu();
+    return state;
+});
+
+ipcMain.handle('settings:open-path', async (event, pathKey) => {
+    const targetPath = resolveAllowedSettingsPath(pathKey);
+    if (!targetPath) {
+        return { opened: false, error: 'Path is not allowed.' };
+    }
+
+    fs.mkdirSync(targetPath, { recursive: true });
+    const error = await shell.openPath(targetPath);
+    return {
+        opened: !error,
+        path: targetPath,
+        error: error || null,
+    };
+});
 
 ipcMain.handle('onboarding:pick-legacy-root', async () => {
     const copy = getMainProcessCopy();

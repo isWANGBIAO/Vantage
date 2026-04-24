@@ -51,6 +51,7 @@ import requests
 import pandas as pd
 
 from src.core.config import Config
+from src.core.user_config import load_settings
 from src.core.media_storage import get_media_paths_settings_file, resolve_media_storage_paths
 from src.manager.manager_main import Monitor
 from src.services.face_analysis_pipeline import (
@@ -86,6 +87,7 @@ FACE_LIVE_WINDOW_SECONDS = 60
 FACE_LIVE_SAMPLE_INTERVAL_SECONDS = 0.1
 FACE_LIVE_IDLE_INTERVAL_SECONDS = 1.0
 FACE_LIVE_VIEWER_TTL_SECONDS = 5.0
+BACKGROUND_MODE_CACHE_TTL_SECONDS = 2.0
 FACE_OVERLAY_BASE_SCORE_FONT_SCALE = 1.9
 FACE_OVERLAY_SCORE_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
 FACE_OVERLAY_SCORE_THICKNESS = 8
@@ -371,6 +373,10 @@ class SystemState:
         self.last_processed_face_photo_path = None
 
 state = SystemState()
+_background_mode_cache = {
+    "mode": None,
+    "loaded_at": 0.0,
+}
 
 
 def _mount_static_once(route_path, directory, name):
@@ -498,6 +504,36 @@ def has_active_face_live_viewer(now_ts=None):
     return (now_ts - last_seen_at) <= FACE_LIVE_VIEWER_TTL_SECONDS
 
 
+def sanitize_background_mode(value):
+    return value if value in {"balanced", "prewarm", "power_saver"} else "balanced"
+
+
+def load_background_mode(now_ts=None):
+    now_ts = now_ts if now_ts is not None else time.time()
+    cached_mode = _background_mode_cache.get("mode")
+    cached_at = float(_background_mode_cache.get("loaded_at") or 0.0)
+    if cached_mode and now_ts - cached_at < BACKGROUND_MODE_CACHE_TTL_SECONDS:
+        return cached_mode
+
+    try:
+        settings = load_settings()
+        mode = sanitize_background_mode(settings.get("background_mode"))
+    except Exception as exc:
+        print(f"Failed to load background mode setting: {exc}")
+        mode = "balanced"
+
+    _background_mode_cache["mode"] = mode
+    _background_mode_cache["loaded_at"] = now_ts
+    return mode
+
+
+def should_run_face_live_analysis(now_ts=None):
+    background_mode = load_background_mode()
+    if background_mode == "prewarm":
+        return True
+    return has_active_face_live_viewer(now_ts=now_ts)
+
+
 def register_video_stream_client():
     with state.lock:
         state.video_stream_client_count = max(0, getattr(state, "video_stream_client_count", 0)) + 1
@@ -514,7 +550,11 @@ def has_active_video_stream_client():
 
 
 def should_run_yolo_detection():
-    return bool(state.show_person_box and has_active_video_stream_client())
+    if not state.show_person_box:
+        return False
+    if load_background_mode() == "prewarm":
+        return True
+    return has_active_video_stream_client()
 
 
 def refresh_face_report_cache(db_file=None, output_dir=None):
@@ -1355,7 +1395,7 @@ def camera_loop():
 def face_live_loop():
     print("Starting live face analysis loop...")
     while state.is_running:
-        if not has_active_face_live_viewer():
+        if not should_run_face_live_analysis():
             time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
             continue
 

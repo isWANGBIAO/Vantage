@@ -11,7 +11,7 @@ class LLMClientTests(unittest.TestCase):
     def _env(self):
         return {
             "CLIPROXYAPI_BASE_URL": "http://127.0.0.1:8317/v1",
-            "CLIPROXYAPI_API_KEY": "wb-proxy-2026",
+            "CLIPROXYAPI_API_KEY": "unit-test-key",
             "CLIPROXYAPI_MODEL": "gpt-5.1",
             "CLIPROXYAPI_SECONDARY_BASE_URL": "http://127.0.0.1:8045/v1",
             "CLIPROXYAPI_SECONDARY_API_KEY": "secondary-key",
@@ -51,6 +51,7 @@ class LLMClientTests(unittest.TestCase):
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
             patch.dict(os.environ, self._env(), clear=True),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             get_patch,
         ):
             return client_cls()
@@ -100,6 +101,30 @@ class LLMClientTests(unittest.TestCase):
             ["gpt-5.2", "gemini-3.1-pro-high", "Pro/deepseek-ai/DeepSeek-V3.2"],
         )
         self.assertEqual(providers[0]["models"], ["gpt-5.2", "gpt-5.2-codex", "gpt-5.1", "gpt-5"])
+
+    def test_user_provider_config_overrides_environment_chain_without_exposing_key(self):
+        user_provider = {
+            "route": "cliproxyapi",
+            "base_url": "https://user-config.invalid/v1",
+            "api_key": "sk-user-secret",
+            "model": "gpt-5.4",
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=user_provider),
+            patch.object(llm_client.requests, "get", return_value=self._models_response(["gpt-5.4"])),
+        ):
+            client = llm_client.LLMClient()
+
+        self.assertEqual(len(client.providers), 1)
+        self.assertEqual(client.providers[0]["route"], "cliproxyapi")
+        self.assertEqual(client.providers[0]["base_url"], "https://user-config.invalid/v1")
+        self.assertEqual(client.providers[0]["headers"]["Authorization"], "Bearer sk-user-secret")
+        catalog = client.get_model_catalog()
+        self.assertNotIn("api_key", catalog[0])
+        self.assertNotIn("headers", catalog[0])
 
     def test_retries_next_primary_model_after_model_error(self):
         client = self._make_client(discovered_models=["gpt-5.2", "gpt-5.1", "gpt-5"])
@@ -227,6 +252,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(
                 os.environ,
                 {
@@ -261,6 +287,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(
                 os.environ,
                 {
@@ -306,6 +333,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(
                 os.environ,
                 {
@@ -347,6 +375,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(
                 os.environ,
                 {
@@ -396,6 +425,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(
                 os.environ,
                 {
@@ -445,6 +475,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(os.environ, env, clear=True),
             patch.object(
                 llm_client.requests,
@@ -468,6 +499,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(os.environ, self._env(), clear=True),
             patch.object(
                 llm_client.requests,
@@ -496,6 +528,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(os.environ, self._env(), clear=True),
             patch.object(
                 llm_client.requests,
@@ -527,6 +560,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(os.environ, self._env(), clear=True),
             patch.object(
                 llm_client.requests,
@@ -574,6 +608,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(os.environ, self._env(), clear=True),
             patch.object(
                 llm_client.requests,
@@ -605,6 +640,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(os.environ, self._env(), clear=True),
             patch.object(
                 llm_client.requests,
@@ -644,6 +680,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(os.environ, self._env(), clear=True),
             patch.object(
                 llm_client.requests,
@@ -676,6 +713,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.dict(os.environ, self._env(), clear=True),
             patch.object(
                 llm_client.requests,

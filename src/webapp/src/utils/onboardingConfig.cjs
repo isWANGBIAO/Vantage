@@ -6,6 +6,8 @@ const DEFAULT_SETTINGS = {
   onboarding_completed: false,
   launch_at_login: false,
   display_language: 'system',
+  theme: 'dark',
+  background_mode: 'balanced',
 };
 
 const DEFAULT_PROVIDER_CONFIG = {
@@ -72,6 +74,16 @@ function sanitizeDisplayLanguage(value) {
     : DEFAULT_SETTINGS.display_language;
 }
 
+function sanitizeTheme(value) {
+  return value === 'dark' || value === 'light' ? value : DEFAULT_SETTINGS.theme;
+}
+
+function sanitizeBackgroundMode(value) {
+  return value === 'balanced' || value === 'prewarm' || value === 'power_saver'
+    ? value
+    : DEFAULT_SETTINGS.background_mode;
+}
+
 function sanitizeSettings(payload) {
   const safePayload = payload && typeof payload === 'object' ? payload : {};
   return {
@@ -85,6 +97,8 @@ function sanitizeSettings(payload) {
         ? safePayload.launch_at_login
         : DEFAULT_SETTINGS.launch_at_login,
     display_language: sanitizeDisplayLanguage(safePayload.display_language),
+    theme: sanitizeTheme(safePayload.theme),
+    background_mode: sanitizeBackgroundMode(safePayload.background_mode),
   };
 }
 
@@ -140,6 +154,14 @@ function loadProviderConfig(runtimePaths) {
   return sanitizeProviderConfig(readJsonFile(getProvidersFile(runtimePaths)));
 }
 
+function saveSettings(runtimePaths, settings) {
+  return writeJsonFile(getSettingsFile(runtimePaths), sanitizeSettings(settings));
+}
+
+function saveProviderConfig(runtimePaths, providerConfig) {
+  return writeJsonFile(getProvidersFile(runtimePaths), sanitizeProviderConfig(providerConfig));
+}
+
 function loadMigrationState(runtimePaths) {
   return sanitizeMigrationState(readJsonFile(getMigrationStateFile(runtimePaths)));
 }
@@ -149,6 +171,157 @@ function hasProviderConfig(providerConfig) {
     return false;
   }
   return Boolean(providerConfig.providers[providerConfig.selected_provider]);
+}
+
+function maskApiKey(apiKey) {
+  return normalizeOptionalString(apiKey) ? '********' : '';
+}
+
+function maskProviderConfig(providerConfig) {
+  const sanitized = sanitizeProviderConfig(providerConfig);
+  const providers = {};
+  for (const [route, provider] of Object.entries(sanitized.providers)) {
+    providers[route] = {
+      ...provider,
+      api_key: maskApiKey(provider.api_key),
+      has_api_key: Boolean(normalizeOptionalString(provider.api_key)),
+    };
+  }
+
+  return {
+    ...sanitized,
+    providers,
+  };
+}
+
+function buildRuntimePathEntries(runtimePaths) {
+  return {
+    config: runtimePaths.configDir,
+    history: runtimePaths.historyDir,
+    logs: runtimePaths.logDir,
+    plots: runtimePaths.plotDir,
+    cache: runtimePaths.cacheDir,
+    runtime: runtimePaths.runtimeDir,
+    data: runtimePaths.dataDir,
+  };
+}
+
+function buildSettingsState({
+  runtimePaths,
+  projectRoot,
+  appVersion = '0.0.0',
+  appMode,
+  systemLocale = 'en-US',
+} = {}) {
+  const settings = loadSettings(runtimePaths);
+  const providerConfig = loadProviderConfig(runtimePaths);
+  const migrationState = loadMigrationState(runtimePaths);
+  const runtimePathEntries = buildRuntimePathEntries(runtimePaths);
+
+  return {
+    mode: 'electron',
+    settings: {
+      displayLanguage: settings.display_language,
+      theme: settings.theme,
+      launchAtLogin: settings.launch_at_login,
+      backgroundMode: settings.background_mode,
+    },
+    provider: maskProviderConfig(providerConfig),
+    runtimePaths: runtimePathEntries,
+    migration: {
+      completed: migrationState.completed,
+      sourcePath: migrationState.source_path || detectLegacyRoot({ runtimePaths, projectRoot }),
+      importedAt: migrationState.imported_at,
+    },
+    app: {
+      version: appVersion,
+      mode: appMode || runtimePaths.appMode || 'development',
+      backendRuntimePath: runtimePaths.runtimeDir,
+      dataDir: runtimePaths.dataDir,
+    },
+    systemLocale,
+  };
+}
+
+function buildProviderConfigFromSettingsPayload(payload, currentProviderConfig) {
+  const providerPayload = payload && typeof payload.provider === 'object' ? payload.provider : {};
+  const providerHasRuntimeFields = Boolean(
+    normalizeOptionalString(providerPayload.apiKey)
+    || normalizeOptionalString(providerPayload.baseUrl)
+    || normalizeOptionalString(providerPayload.model)
+    || normalizeOptionalString(currentProviderConfig.selected_provider),
+  );
+  if (!providerHasRuntimeFields) {
+    return currentProviderConfig;
+  }
+
+  const selectedProvider =
+    normalizeOptionalString(providerPayload.route)
+    || normalizeOptionalString(currentProviderConfig.selected_provider)
+    || 'cliproxyapi';
+  const currentProviders = currentProviderConfig.providers || {};
+  const currentProvider = currentProviders[selectedProvider] || {};
+  const submittedApiKey = normalizeOptionalString(providerPayload.apiKey);
+  const apiKey =
+    submittedApiKey && submittedApiKey !== '********'
+      ? submittedApiKey
+      : (normalizeOptionalString(currentProvider.api_key) || '');
+
+  return {
+    version: 1,
+    selected_provider: selectedProvider,
+    providers: {
+      ...currentProviders,
+      [selectedProvider]: {
+        api_key: apiKey,
+        base_url:
+          normalizeOptionalString(providerPayload.baseUrl)
+          || normalizeOptionalString(currentProvider.base_url)
+          || '',
+        model:
+          normalizeOptionalString(providerPayload.model)
+          || normalizeOptionalString(currentProvider.model)
+          || '',
+      },
+    },
+  };
+}
+
+function saveSettingsPayload({
+  runtimePaths,
+  payload,
+  projectRoot,
+  appVersion = '0.0.0',
+  appMode,
+  systemLocale = 'en-US',
+} = {}) {
+  const currentSettings = loadSettings(runtimePaths);
+  const currentProviderConfig = loadProviderConfig(runtimePaths);
+  const safePayload = payload && typeof payload === 'object' ? payload : {};
+
+  saveSettings(runtimePaths, {
+    ...currentSettings,
+    display_language: sanitizeDisplayLanguage(safePayload.displayLanguage),
+    theme: sanitizeTheme(safePayload.theme),
+    launch_at_login:
+      typeof safePayload.launchAtLogin === 'boolean'
+        ? safePayload.launchAtLogin
+        : currentSettings.launch_at_login,
+    background_mode: sanitizeBackgroundMode(safePayload.backgroundMode),
+  });
+
+  saveProviderConfig(
+    runtimePaths,
+    buildProviderConfigFromSettingsPayload(safePayload, currentProviderConfig),
+  );
+
+  return buildSettingsState({
+    runtimePaths,
+    projectRoot,
+    appVersion,
+    appMode,
+    systemLocale,
+  });
 }
 
 function detectLegacyRoot({ runtimePaths, projectRoot }) {
@@ -276,6 +449,8 @@ function saveOnboardingCompletion({ runtimePaths, submission, projectRoot, now =
     display_language: sanitizeDisplayLanguage(
       submission.displayLanguage ?? currentSettings.display_language,
     ),
+    theme: currentSettings.theme,
+    background_mode: currentSettings.background_mode,
   };
   writeJsonFile(getSettingsFile(runtimePaths), settings);
 
@@ -301,6 +476,8 @@ module.exports = {
   DEFAULT_SETTINGS,
   DEFAULT_PROVIDER_CONFIG,
   DEFAULT_MIGRATION_STATE,
+  buildRuntimePathEntries,
+  buildSettingsState,
   detectLegacyRoot,
   getMigrationStateFile,
   getOnboardingState,
@@ -309,9 +486,15 @@ module.exports = {
   loadMigrationState,
   loadProviderConfig,
   loadSettings,
+  maskProviderConfig,
+  sanitizeBackgroundMode,
   sanitizeDisplayLanguage,
   sanitizeMigrationState,
   sanitizeProviderConfig,
   sanitizeSettings,
+  sanitizeTheme,
+  saveProviderConfig,
+  saveSettings,
+  saveSettingsPayload,
   saveOnboardingCompletion,
 };

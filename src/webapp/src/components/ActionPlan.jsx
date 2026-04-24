@@ -621,19 +621,27 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   ]);
 
   useEffect(() => {
+    const applyModelCatalog = (data) => {
+      const modelList = Array.isArray(data?.models) ? data.models : [];
+      setAvailableModels(modelList);
+      setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
+
+      const storageModel = localStorage.getItem('preferred_llm_model');
+      if (modelList.length > 0) {
+        const defaultModel = data?.default_model;
+        const fallbackModel = modelList.includes(defaultModel) ? defaultModel : modelList[0];
+        const nextModel = modelList.includes(storageModel) ? storageModel : fallbackModel;
+        setSelectedModel(nextModel);
+        return nextModel;
+      }
+
+      return null;
+    };
+
     const initializeModels = async () => {
       try {
         const data = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load' });
-        const modelList = Array.isArray(data?.models) ? data.models : [];
-        setAvailableModels(modelList);
-        setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
-
-        const storageModel = localStorage.getItem('preferred_llm_model');
-        if (modelList.length > 0) {
-          const nextModel = modelList.includes(storageModel) ? storageModel : modelList[0];
-          setSelectedModel(nextModel);
-          return nextModel;
-        }
+        return applyModelCatalog(data);
       } catch (error) {
         console.error('Failed to load model list:', error);
       }
@@ -672,7 +680,13 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
 
     void initializeActionPlan();
 
+    const handleModelCatalogUpdated = (event) => {
+      applyModelCatalog(event.detail);
+    };
+    window.addEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
+
     return () => {
+      window.removeEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
       controller.abort();
       if (loadAbortControllerRef.current?.signal === controller.signal) {
         loadAbortControllerRef.current = null;

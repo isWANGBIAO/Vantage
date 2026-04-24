@@ -19,6 +19,24 @@ test('App code-splits non-default tabs but still preloads them after startup', (
   assert.equal(appSource.includes("import Dashboard from './components/Dashboard'"), false);
 });
 
+test('App exposes Settings through a top-right gear without adding it to tab prewarm', () => {
+  assert.ok(appSource.includes("const Settings = lazyWithPreload(() => import('./components/Settings'))"));
+  assert.ok(appSource.includes("activeTab === 'settings'"));
+  assert.ok(appSource.includes("t('app.nav.settings')"));
+  assert.ok(appSource.includes('SettingsIcon'));
+  assert.ok(appSource.includes('className="settings-entry-button"'));
+  assert.equal(appSource.includes('theme-toggle settings-entry-button'), false);
+  assert.ok(appSource.includes('<span>{t(\'app.nav.settings\')}</span>'));
+  assert.equal(appSource.includes('BACKGROUND_TAB_COMPONENTS = [\n  Dashboard,\n  ProjectProgress,\n  ExpenseSheet,\n  Plots,\n  SystemLogs,\n  FaceHistory,\n  Settings'), false);
+});
+
+test('App persists the header theme toggle through formal settings', () => {
+  assert.ok(appSource.includes('handleToggleTheme'));
+  assert.ok(appSource.includes('saveSettingsState'));
+  assert.ok(appSource.includes('displayLanguage,'));
+  assert.ok(appSource.includes('theme: nextTheme'));
+});
+
 test('App keeps the global footer off full-height tabs including system logs', () => {
   assert.ok(appSource.includes("activeTab !== 'system logs'"));
 });

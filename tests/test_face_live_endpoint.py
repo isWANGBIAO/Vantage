@@ -105,6 +105,20 @@ class FaceLiveEndpointTests(unittest.TestCase):
         self.assertTrue(server.has_active_face_live_viewer(now_ts=102.0))
         self.assertFalse(server.has_active_face_live_viewer(now_ts=110.0))
 
+    def test_background_mode_controls_face_live_analysis_gating(self):
+        server.state.face_live_last_seen_at = 0.0
+
+        with patch.object(server, "load_background_mode", return_value="balanced"):
+            self.assertFalse(server.should_run_face_live_analysis(now_ts=100.0))
+
+        with patch.object(server, "load_background_mode", return_value="prewarm"):
+            self.assertTrue(server.should_run_face_live_analysis(now_ts=100.0))
+
+        server.mark_face_live_viewer_active(now_ts=100.0)
+        with patch.object(server, "load_background_mode", return_value="power_saver"):
+            self.assertTrue(server.should_run_face_live_analysis(now_ts=102.0))
+            self.assertFalse(server.should_run_face_live_analysis(now_ts=110.0))
+
     def test_get_face_live_only_marks_viewer_active_when_requested(self):
         server.state.camera = _DummyCamera(True)
         server.state.face_live_last_seen_at = 0.0
@@ -121,13 +135,23 @@ class FaceLiveEndpointTests(unittest.TestCase):
         server.state.show_person_box = True
         server.state.video_stream_client_count = 0
 
-        self.assertFalse(server.should_run_yolo_detection())
+        with patch.object(server, "load_background_mode", return_value="balanced"):
+            self.assertFalse(server.should_run_yolo_detection())
 
         server.register_video_stream_client()
-        self.assertTrue(server.should_run_yolo_detection())
+        with patch.object(server, "load_background_mode", return_value="balanced"):
+            self.assertTrue(server.should_run_yolo_detection())
 
         server.state.show_person_box = False
-        self.assertFalse(server.should_run_yolo_detection())
+        with patch.object(server, "load_background_mode", return_value="balanced"):
+            self.assertFalse(server.should_run_yolo_detection())
+
+    def test_yolo_prewarm_mode_can_run_without_video_stream_client(self):
+        server.state.show_person_box = True
+        server.state.video_stream_client_count = 0
+
+        with patch.object(server, "load_background_mode", return_value="prewarm"):
+            self.assertTrue(server.should_run_yolo_detection())
 
     def test_video_stream_client_count_never_goes_below_zero(self):
         server.state.video_stream_client_count = 0

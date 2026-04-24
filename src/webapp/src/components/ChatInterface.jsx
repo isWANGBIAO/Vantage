@@ -305,30 +305,37 @@ export default function ChatInterface({ embedded = false } = {}) {
 
         };
 
+        const applyModelCatalog = (data) => {
+
+            const modelList = Array.isArray(data?.models) ? data.models : [];
+
+            setAvailableModels(modelList);
+
+            setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
+            setModelProviderLabels(buildModelProviderLabels(data?.providers));
+
+
+
+            const storageModel = localStorage.getItem('preferred_llm_model');
+
+            if (modelList.length > 0) {
+
+                const defaultModel = data?.default_model;
+                const fallbackModel = modelList.includes(defaultModel) ? defaultModel : modelList[0];
+                const nextModel = modelList.includes(storageModel) ? storageModel : fallbackModel;
+
+                setSelectedModel(nextModel);
+
+            }
+
+        };
+
         const initializeModels = async () => {
 
             try {
 
                 const data = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load' });
-
-                const modelList = Array.isArray(data?.models) ? data.models : [];
-
-                setAvailableModels(modelList);
-
-                setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
-                setModelProviderLabels(buildModelProviderLabels(data?.providers));
-
-
-
-                const storageModel = localStorage.getItem('preferred_llm_model');
-
-                if (modelList.length > 0) {
-
-                    const nextModel = modelList.includes(storageModel) ? storageModel : modelList[0];
-
-                    setSelectedModel(nextModel);
-
-                }
+                applyModelCatalog(data);
 
             } catch (error) {
 
@@ -343,6 +350,11 @@ export default function ChatInterface({ embedded = false } = {}) {
         initializeModels();
         void syncChatContext();
 
+        const handleModelCatalogUpdated = (event) => {
+            applyModelCatalog(event.detail);
+        };
+        window.addEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
+
         const handleChatContextBaseUpdated = (event) => {
             void syncChatContext({
                 baseVersionOverride: event?.detail?.baseContextVersion ?? null,
@@ -353,6 +365,7 @@ export default function ChatInterface({ embedded = false } = {}) {
         window.addEventListener(CHAT_CONTEXT_BASE_UPDATED_EVENT, handleChatContextBaseUpdated);
 
         return () => {
+            window.removeEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
             window.removeEventListener(CHAT_CONTEXT_BASE_UPDATED_EVENT, handleChatContextBaseUpdated);
         };
 

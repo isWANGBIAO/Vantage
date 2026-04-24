@@ -17,6 +17,8 @@ DEFAULT_SETTINGS = {
     "onboarding_completed": False,
     "launch_at_login": False,
     "display_language": "system",
+    "theme": "dark",
+    "background_mode": "balanced",
 }
 
 DEFAULT_PROVIDER_CONFIG = {
@@ -109,20 +111,52 @@ def _coerce_display_language(payload: dict | None, key: str = "display_language"
     return "system"
 
 
+def _coerce_theme(payload: dict | None, key: str = "theme") -> str:
+    value = payload.get(key) if isinstance(payload, dict) else None
+    if value in {"dark", "light"}:
+        return value
+    return "dark"
+
+
+def _coerce_background_mode(payload: dict | None, key: str = "background_mode") -> str:
+    value = payload.get(key) if isinstance(payload, dict) else None
+    if value in {"balanced", "prewarm", "power_saver"}:
+        return value
+    return "balanced"
+
+
+def _sanitize_provider_entry(entry: dict | None) -> dict:
+    return {
+        "api_key": _coerce_optional_str(entry, "api_key") or "",
+        "base_url": _coerce_optional_str(entry, "base_url") or "",
+        "model": _coerce_optional_str(entry, "model") or "",
+    }
+
+
 def _sanitize_settings(payload: dict | None) -> dict:
     return {
         "version": SETTINGS_VERSION,
         "onboarding_completed": _coerce_bool(payload, "onboarding_completed", False),
         "launch_at_login": _coerce_bool(payload, "launch_at_login", False),
         "display_language": _coerce_display_language(payload),
+        "theme": _coerce_theme(payload),
+        "background_mode": _coerce_background_mode(payload),
     }
 
 
 def _sanitize_provider_config(payload: dict | None) -> dict:
+    providers = {}
+    raw_providers = _coerce_dict(payload, "providers")
+    for key, entry in raw_providers.items():
+        normalized_key = str(key).strip() if isinstance(key, str) else ""
+        if not normalized_key:
+            continue
+        providers[normalized_key] = _sanitize_provider_entry(entry if isinstance(entry, dict) else None)
+
     return {
         "version": PROVIDERS_VERSION,
         "selected_provider": _coerce_optional_str(payload, "selected_provider"),
-        "providers": _coerce_dict(payload, "providers"),
+        "providers": providers,
     }
 
 
@@ -161,6 +195,34 @@ def load_provider_config(providers_file: str | Path | None = None) -> dict:
 def save_provider_config(payload: dict | None, providers_file: str | Path | None = None) -> dict:
     resolved_providers_file = Path(providers_file) if providers_file else get_providers_file()
     return _write_json_payload(resolved_providers_file, _sanitize_provider_config(payload))
+
+
+def get_active_provider_config(providers_file: str | Path | None = None) -> dict | None:
+    provider_config = load_provider_config(providers_file=providers_file)
+    route = _coerce_optional_str(provider_config, "selected_provider")
+    if not route:
+        return None
+
+    providers = provider_config.get("providers")
+    if not isinstance(providers, dict):
+        return None
+
+    provider = providers.get(route)
+    if not isinstance(provider, dict):
+        return None
+
+    api_key = _coerce_optional_str(provider, "api_key")
+    base_url = _coerce_optional_str(provider, "base_url")
+    model = _coerce_optional_str(provider, "model")
+    if not api_key or not base_url or not model:
+        return None
+
+    return {
+        "route": route,
+        "api_key": api_key,
+        "base_url": base_url,
+        "model": model,
+    }
 
 
 def load_migration_state(migration_state_file: str | Path | None = None) -> dict:

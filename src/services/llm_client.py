@@ -8,6 +8,7 @@ import uuid
 import requests
 
 from src.core.config import Config
+from src.core import user_config
 from src.services.model_call_recorder import SessionRecorder
 
 SYNC_REQUEST_TIMEOUT_SECONDS = 120
@@ -249,6 +250,39 @@ class LLMClient:
         ]
 
     def _build_provider_chain(self):
+        user_provider = user_config.get_active_provider_config()
+        if user_provider:
+            provider = {
+                "route": user_provider["route"],
+                "base_url": user_provider["base_url"].rstrip("/"),
+                "model": user_provider["model"],
+                "models": [user_provider["model"]],
+                "headers": self._build_headers(user_provider["api_key"]),
+            }
+            discovered_models = self._discover_primary_models(provider)
+            if discovered_models:
+                provider["models"] = [model_info["id"] for model_info in discovered_models]
+                if provider["model"] not in provider["models"]:
+                    provider["models"] = [provider["model"], *provider["models"]]
+                provider["model_capabilities"] = {
+                    model_info["id"]: model_info.get("supported_parameters")
+                    for model_info in discovered_models
+                }
+                provider["model_capabilities"].setdefault(provider["model"], None)
+                logging.info(
+                    "Using user LLM provider route %s with configured model %s",
+                    provider["route"],
+                    provider["model"],
+                )
+            else:
+                provider["model_capabilities"] = {provider["model"]: None}
+                logging.info(
+                    "Using user LLM provider route %s with configured model %s",
+                    provider["route"],
+                    provider["model"],
+                )
+            return [provider]
+
         providers = []
 
         primary = self._provider_from_env(

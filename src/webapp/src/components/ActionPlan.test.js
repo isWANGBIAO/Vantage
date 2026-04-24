@@ -54,6 +54,12 @@ test('ActionPlan shows actual execution metadata and flags fallback runs', () =>
   assert.ok(actionPlanSource.includes("t('action_plan.execution.fallback_label'"));
 });
 
+test('ActionPlan uses backend default model before falling back to the first model', () => {
+  assert.ok(actionPlanSource.includes('const defaultModel = data?.default_model'));
+  assert.ok(actionPlanSource.includes('modelList.includes(defaultModel) ? defaultModel : modelList[0]'));
+  assert.ok(actionPlanSource.includes("vantage:llm-models-updated"));
+});
+
 test('ActionPlan shows live elapsed time while generation is active', () => {
   assert.ok(actionPlanSource.includes('computeDisplayedDurationSeconds'));
   assert.ok(actionPlanSource.includes('const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now())'));

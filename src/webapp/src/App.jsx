@@ -1,9 +1,10 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
-import { Moon, Sun } from 'lucide-react';
+import { Moon, Settings as SettingsIcon, Sun } from 'lucide-react';
 import './App.css';
 import ActionPlanContainer from './components/ActionPlanContainer';
 import OnboardingShell from './components/OnboardingShell';
 import { completeOnboardingSetup, loadOnboardingState, pickLegacyRoot } from './utils/onboardingState';
+import { loadSettingsState, saveSettingsState } from './utils/settingsState';
 import {
   DisplayLanguageProvider,
   useDisplayLanguage,
@@ -21,6 +22,7 @@ const ExpenseSheet = lazyWithPreload(() => import('./components/ExpenseSheet'));
 const Plots = lazyWithPreload(() => import('./components/Plots'));
 const SystemLogs = lazyWithPreload(() => import('./components/SystemLogs'));
 const FaceHistory = lazyWithPreload(() => import('./components/FaceHistory'));
+const Settings = lazyWithPreload(() => import('./components/Settings'));
 
 const BACKGROUND_TAB_COMPONENTS = [
   Dashboard,
@@ -69,6 +71,7 @@ function AppShell() {
   const { t, displayLanguage, setDisplayLanguage } = useDisplayLanguage();
   const [activeTab, setActiveTab] = useState('action plan');
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  const [settingsState, setSettingsState] = useState(null);
   const [backgroundTabsReady, setBackgroundTabsReady] = useState(false);
   const lastAppliedOnboardingLanguageRef = useRef(null);
   const [onboardingState, setOnboardingState] = useState(() => ({
@@ -90,6 +93,27 @@ function AppShell() {
     localStorage.setItem('theme', theme);
     void window.electronAPI?.setTitleBarTheme?.(theme);
   }, [theme]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const initializeSettingsState = async () => {
+      const nextState = await loadSettingsState();
+      if (cancelled) {
+        return;
+      }
+      if (nextState.settings?.theme) {
+        setTheme(nextState.settings.theme);
+      }
+      setSettingsState(nextState);
+    };
+
+    void initializeSettingsState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,8 +173,22 @@ function AppShell() {
     }
   }, [displayLanguage, onboardingState.displayLanguage, onboardingState.loading, setDisplayLanguage]);
 
-  const toggleTheme = () => {
-    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  const handleToggleTheme = async () => {
+    const nextTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(nextTheme);
+
+    try {
+      const currentState = settingsState || await loadSettingsState();
+      const savedState = await saveSettingsState({
+        displayLanguage,
+        theme: nextTheme,
+        launchAtLogin: Boolean(currentState.settings?.launchAtLogin),
+        backgroundMode: currentState.settings?.backgroundMode || 'balanced',
+      });
+      setSettingsState(savedState);
+    } catch (error) {
+      console.warn('Failed to persist theme setting.', error);
+    }
   };
 
   const handleCompleteOnboarding = async (submission) => {
@@ -169,6 +207,24 @@ function AppShell() {
   };
 
   const handlePickLegacyRoot = async () => pickLegacyRoot();
+
+  const handleSettingsApplied = (settings) => {
+    if (settings?.theme) {
+      setTheme(settings.theme);
+    }
+    if (settings?.displayLanguage) {
+      void setDisplayLanguage(settings.displayLanguage);
+    }
+    if (settings) {
+      setSettingsState((prev) => ({
+        ...(prev || {}),
+        settings: {
+          ...(prev?.settings || {}),
+          ...settings,
+        },
+      }));
+    }
+  };
 
   const showOnboardingShell = !onboardingState.loading && !onboardingState.completed;
 
@@ -252,9 +308,21 @@ function AppShell() {
           <DisplayLanguageSelect />
 
           <button
+            className="settings-entry-button"
+            data-active={activeTab === 'settings' ? 'true' : 'false'}
+            onClick={() => setActiveTab('settings')}
+            title={t('app.nav.settings')}
+            aria-label={t('app.nav.settings')}
+          >
+            <SettingsIcon size={18} />
+            <span>{t('app.nav.settings')}</span>
+          </button>
+
+          <button
             className="theme-toggle"
-            onClick={toggleTheme}
+            onClick={handleToggleTheme}
             title={t(theme === 'dark' ? 'app.theme.switch_to_light' : 'app.theme.switch_to_dark')}
+            aria-label={t(theme === 'dark' ? 'app.theme.switch_to_light' : 'app.theme.switch_to_dark')}
           >
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
           </button>
@@ -307,6 +375,11 @@ function AppShell() {
             </div>
           ) : null}
         </Suspense>
+        <Suspense fallback={null}>
+          {activeTab === 'settings' ? (
+            <Settings currentTheme={theme} onSettingsApplied={handleSettingsApplied} />
+          ) : null}
+        </Suspense>
       </main>
 
       {activeTab !== 'plots' &&
@@ -314,6 +387,7 @@ function AppShell() {
         activeTab !== 'face history' &&
         activeTab !== 'expense sheet' &&
         activeTab !== 'system logs' &&
+        activeTab !== 'settings' &&
         activeTab !== 'project progress' && (
           <footer
             style={{

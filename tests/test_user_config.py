@@ -25,6 +25,8 @@ def test_load_settings_creates_default_settings_file(tmp_path):
         "onboarding_completed": False,
         "launch_at_login": False,
         "display_language": "system",
+        "theme": "dark",
+        "background_mode": "balanced",
     }
     assert payload == expected
     assert json.loads((config_dir / "settings.json").read_text(encoding="utf-8")) == expected
@@ -95,6 +97,8 @@ def test_save_settings_normalizes_partial_payload(tmp_path):
         "onboarding_completed": False,
         "launch_at_login": True,
         "display_language": "system",
+        "theme": "dark",
+        "background_mode": "balanced",
     }
     assert payload == expected
     assert json.loads(settings_file.read_text(encoding="utf-8")) == expected
@@ -124,6 +128,56 @@ def test_load_settings_repairs_invalid_display_language(tmp_path):
         "onboarding_completed": True,
         "launch_at_login": False,
         "display_language": "system",
+        "theme": "dark",
+        "background_mode": "balanced",
     }
     assert payload == expected
     assert json.loads(settings_file.read_text(encoding="utf-8")) == expected
+
+
+def test_save_settings_accepts_theme_and_background_mode(tmp_path):
+    user_config = _load_user_config_module()
+    settings_file = tmp_path / "config" / "settings.json"
+
+    payload = user_config.save_settings(
+        {
+            "theme": "light",
+            "background_mode": "power_saver",
+        },
+        settings_file=settings_file,
+    )
+
+    assert payload["theme"] == "light"
+    assert payload["background_mode"] == "power_saver"
+
+
+def test_get_active_provider_config_returns_selected_complete_provider(tmp_path):
+    user_config = _load_user_config_module()
+    providers_file = tmp_path / "config" / "providers.json"
+    providers_file.parent.mkdir(parents=True, exist_ok=True)
+    providers_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "selected_provider": "cliproxyapi",
+                "providers": {
+                    "cliproxyapi": {
+                        "api_key": "sk-demo",
+                        "base_url": "https://example.invalid/v1",
+                        "model": "gpt-5.4",
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    provider = user_config.get_active_provider_config(providers_file=providers_file)
+
+    assert provider == {
+        "route": "cliproxyapi",
+        "api_key": "sk-demo",
+        "base_url": "https://example.invalid/v1",
+        "model": "gpt-5.4",
+    }

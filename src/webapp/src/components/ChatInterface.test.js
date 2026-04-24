@@ -78,6 +78,12 @@ test('ChatInterface copy uses readable labels for model and voice flow', () => {
   }
 });
 
+test('ChatInterface uses backend default model before falling back to the first model', () => {
+  assert.ok(chatSource.includes('const defaultModel = data?.default_model'));
+  assert.ok(chatSource.includes('modelList.includes(defaultModel) ? defaultModel : modelList[0]'));
+  assert.ok(chatSource.includes("vantage:llm-models-updated"));
+});
+
 test('consumeChatStreamChunk reassembles split NDJSON lines without losing content', () => {
   const { consumeChatStreamChunk } = loadChatHelpers();
   let state = {
