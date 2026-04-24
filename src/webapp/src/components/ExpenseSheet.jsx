@@ -139,7 +139,14 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     setBalanceChartError('');
 
     try {
-      const plotsPromise = fetchBackendJson(`/api/plots/data${refresh ? '?refresh=1' : ''}`)
+      if (refresh) {
+        await fetchBackendJson('/api/plots/refresh', {
+          method: 'POST',
+          retryPolicy: 'mutation',
+        });
+      }
+
+      const plotsPromise = fetchBackendJson('/api/plots/data')
         .then((payload) => ({ ok: true, payload }))
         .catch((err) => ({ ok: false, error: err.message || t('expense.error.load_chart') }));
 

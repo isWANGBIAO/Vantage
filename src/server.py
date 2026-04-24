@@ -1551,7 +1551,7 @@ async def image_proxy(path: str):
     return FileResponse(abs_path)
 
 @app.post("/api/plots/refresh")
-async def refresh_plots(background_tasks: BackgroundTasks):
+async def refresh_plots():
     # Locate plot.py in src/scripts
     current_dir = os.path.dirname(os.path.abspath(__file__)) # src/server.py -> src
     script_path = os.path.join(current_dir, "scripts", "plot.py")
@@ -1566,19 +1566,21 @@ async def refresh_plots(background_tasks: BackgroundTasks):
     def run_plot_script():
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
-        try:
-            subprocess.run(
-                [sys.executable, script_path, "--dark"],
-                check=True,
-                env=env,
-                cwd=str(_get_runtime_workdir()),
-            )
-            print("Plots refreshed successfully")
-        except Exception as e:
-            print(f"Error refreshing plots: {e}")
+        subprocess.run(
+            [sys.executable, script_path, "--dark"],
+            check=True,
+            env=env,
+            cwd=str(_get_runtime_workdir()),
+        )
 
-    background_tasks.add_task(run_plot_script)
-    return {"message": "Plot refresh started in background"}
+    try:
+        await asyncio.to_thread(run_plot_script)
+    except Exception as e:
+        print(f"Error refreshing plots: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    print("Plots refreshed successfully")
+    return {"message": "Plots refreshed successfully"}
 
 def ensure_thumbnail(file_path, thumb_path):
     if not os.path.exists(thumb_path):

@@ -683,7 +683,14 @@ export default function Plots({ theme = 'dark' }) {
     setError(null);
 
     try {
-      const data = await fetchBackendJson(`/api/plots/data${refresh ? '?refresh=1' : ''}`);
+      if (refresh) {
+        await fetchBackendJson('/api/plots/refresh', {
+          method: 'POST',
+          retryPolicy: 'mutation',
+        });
+      }
+
+      const data = await fetchBackendJson('/api/plots/data');
       setCharts(Array.isArray(data?.charts) ? data.charts : []);
       setWarnings(Array.isArray(data?.warnings) ? data.warnings : []);
       setGeneratedAt(data?.generated_at || null);

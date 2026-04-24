@@ -14,3 +14,10 @@ test('Plots routes visible shell copy through the display language layer', () =>
   assert.ok(plotsSource.includes("t('plots.warning.title')"));
   assert.ok(plotsSource.includes("t('plots.summary.generated_at')"));
 });
+
+test('Plots refresh button starts the backend plot refresh job before reloading data', () => {
+  assert.ok(plotsSource.includes("fetchBackendJson('/api/plots/refresh', {"));
+  assert.ok(plotsSource.includes("method: 'POST'"));
+  assert.ok(plotsSource.includes("retryPolicy: 'mutation'"));
+  assert.ok(!plotsSource.includes("'/api/plots/data${refresh ? '?refresh=1' : ''}'"));
+});

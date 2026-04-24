@@ -20,3 +20,10 @@ test('Expense Sheet pulls static UI copy from the display language layer', () =>
   assert.ok(jsxSource.includes("t('expense.balance_chart_title')"));
   assert.ok(jsxSource.includes("t('expense.raw_sheets_aria')"));
 });
+
+test('Expense Sheet refresh starts the backend plot refresh job before reloading charts', () => {
+  assert.ok(jsxSource.includes("fetchBackendJson('/api/plots/refresh', {"));
+  assert.ok(jsxSource.includes("method: 'POST'"));
+  assert.ok(jsxSource.includes("retryPolicy: 'mutation'"));
+  assert.ok(!jsxSource.includes("'/api/plots/data${refresh ? '?refresh=1' : ''}'"));
+});
