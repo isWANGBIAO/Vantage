@@ -2,6 +2,7 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const { loadProviderConfig } = require('./onboardingConfig.cjs');
 
 function resolveBundledBackendExecutable({
   env = process.env,
@@ -16,7 +17,39 @@ function resolveBundledBackendExecutable({
   return path.join(resourcesPath, 'backend-runtime', 'VantageBackend', executableName);
 }
 
-function buildBundledBackendEnvironment({ runtimePaths, env = process.env } = {}) {
+function applySelectedProviderEnvironment(nextEnv, providerConfig) {
+  const selectedProviderKey = providerConfig?.selected_provider;
+  if (!selectedProviderKey) {
+    return nextEnv;
+  }
+
+  const selectedProvider = providerConfig?.providers?.[selectedProviderKey];
+  if (!selectedProvider || typeof selectedProvider !== 'object') {
+    return nextEnv;
+  }
+
+  const apiKey = typeof selectedProvider.api_key === 'string' ? selectedProvider.api_key.trim() : '';
+  const baseUrl = typeof selectedProvider.base_url === 'string' ? selectedProvider.base_url.trim() : '';
+  const model = typeof selectedProvider.model === 'string' ? selectedProvider.model.trim() : '';
+
+  if (apiKey) {
+    nextEnv.CLIPROXYAPI_API_KEY = apiKey;
+  }
+  if (baseUrl) {
+    nextEnv.CLIPROXYAPI_BASE_URL = baseUrl;
+  }
+  if (model) {
+    nextEnv.CLIPROXYAPI_MODEL = model;
+  }
+
+  return nextEnv;
+}
+
+function buildBundledBackendEnvironment({
+  runtimePaths,
+  env = process.env,
+  loadProviderConfigFn = loadProviderConfig,
+} = {}) {
   const nextEnv = {
     ...env,
     VANTAGE_APP_MODE: 'packaged',
@@ -30,7 +63,8 @@ function buildBundledBackendEnvironment({ runtimePaths, env = process.env } = {}
     VANTAGE_MIGRATION_DIR: runtimePaths.migrationDir,
   };
   delete nextEnv.VANTAGE_PROJECT_ROOT;
-  return nextEnv;
+
+  return applySelectedProviderEnvironment(nextEnv, loadProviderConfigFn(runtimePaths));
 }
 
 function requestBackendStatus({

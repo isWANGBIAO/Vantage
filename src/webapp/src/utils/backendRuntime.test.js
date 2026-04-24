@@ -56,6 +56,30 @@ test('buildBundledBackendEnvironment injects the packaged runtime contract', () 
   assert.equal('VANTAGE_PROJECT_ROOT' in env, false);
 });
 
+test('buildBundledBackendEnvironment maps selected onboarding provider into backend env', () => {
+  const env = buildBundledBackendEnvironment({
+    runtimePaths,
+    env: {
+      PATH: 'C:\\Windows\\System32',
+    },
+    loadProviderConfigFn: () => ({
+      version: 1,
+      selected_provider: 'custom',
+      providers: {
+        custom: {
+          api_key: 'test-api-key',
+          base_url: 'https://proxy.example.com/v1',
+          model: 'gpt-5.4',
+        },
+      },
+    }),
+  });
+
+  assert.equal(env.CLIPROXYAPI_API_KEY, 'test-api-key');
+  assert.equal(env.CLIPROXYAPI_BASE_URL, 'https://proxy.example.com/v1');
+  assert.equal(env.CLIPROXYAPI_MODEL, 'gpt-5.4');
+});
+
 test('ensureBundledBackendReady spawns the bundled backend in packaged mode', async () => {
   let spawnCall = null;
   const fakeChild = {
