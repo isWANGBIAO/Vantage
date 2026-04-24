@@ -93,6 +93,7 @@ FACE_OVERLAY_SCORE_PADDING = 24
 FACE_OVERLAY_PERSON_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
 FACE_OVERLAY_PERSON_THICKNESS = 6
 PLOT_REFRESH_TIMEOUT_SECONDS = 60
+FACE_EXPORT_TIMEOUT_SECONDS = 60
 _face_analysis_runtime = None
 _face_analysis_runtime_lock = threading.Lock()
 _face_report_refresh_lock = threading.Lock()
@@ -2575,12 +2576,18 @@ async def export_face_excel():
         if not os.path.exists(script_path):
              script_path = os.path.abspath("src/scripts/analyze_face.py")
              
-        # Run script with --export flag
-        proc = subprocess.run(
-            [sys.executable, script_path, "--export"],
-            capture_output=True,
-            cwd=str(_get_runtime_workdir()),
-        )
+        def run_export_script():
+            return subprocess.run(
+                [sys.executable, script_path, "--export"],
+                capture_output=True,
+                cwd=str(_get_runtime_workdir()),
+                timeout=FACE_EXPORT_TIMEOUT_SECONDS,
+            )
+
+        try:
+            proc = await asyncio.to_thread(run_export_script)
+        except subprocess.TimeoutExpired:
+            return JSONResponse(status_code=504, content={"error": "Export timed out"})
 
         def decode_output(value):
             if isinstance(value, str):

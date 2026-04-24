@@ -175,6 +175,25 @@ class FaceReportEndpointTests(unittest.TestCase):
         self.assertEqual(payload["error"], "Export failed")
         self.assertEqual(payload["details"], "no export path\n")
 
+    def test_export_face_excel_runs_subprocess_off_event_loop(self):
+        proc = SimpleNamespace(returncode=0, stdout=b"EXPORT_PATH:C:/runtime/face.xlsx\n", stderr=b"")
+        to_thread_calls = []
+
+        async def fake_to_thread(func):
+            to_thread_calls.append(func)
+            return proc
+
+        with (
+            patch.object(server.asyncio, "to_thread", side_effect=fake_to_thread),
+            patch.object(server.subprocess, "run", return_value=proc),
+            patch.object(server.os.path, "exists", return_value=True),
+            patch.object(server, "FileResponse", side_effect=lambda path, **kwargs: {"path": path, **kwargs}),
+        ):
+            response = asyncio.run(server.export_face_excel())
+
+        self.assertEqual(len(to_thread_calls), 1)
+        self.assertEqual(response["path"], "C:/runtime/face.xlsx")
+
     def test_process_captured_face_photo_writes_record_and_refreshes_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
