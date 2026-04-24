@@ -1876,6 +1876,17 @@ def _get_action_plan_context_file() -> str:
     return os.path.join(_get_history_dir(), "latest_action_plan_context.json")
 
 
+def _resolve_chat_context_file(context_file: Optional[str] = None) -> str:
+    default_context = Path(_get_latest_context_file()).resolve()
+    if not context_file:
+        return str(default_context)
+
+    requested_context = Path(context_file).expanduser().resolve()
+    if requested_context != default_context:
+        raise ValueError("Unsupported chat context file")
+    return str(default_context)
+
+
 def _get_context_session_file(path: str) -> Path:
     context_path = Path(path)
     return context_path.with_name(f"{context_path.stem}_session.json")
@@ -2100,9 +2111,10 @@ async def list_llm_models():
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    context_file = request.context_file
-    if not context_file:
-         context_file = _get_latest_context_file()
+    try:
+        context_file = _resolve_chat_context_file(request.context_file)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
 
     run_prompt_args = [
         "--chat_message", request.message,

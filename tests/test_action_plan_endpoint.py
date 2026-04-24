@@ -178,6 +178,31 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertIn(sent_at, cmd)
         self.assertEqual(mock_create.await_args.kwargs["env"]["AI_REASONING_EFFORT"], "high")
 
+    def test_chat_endpoint_rejects_context_files_outside_history(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_dir = Path(temp_dir) / "history"
+            history_dir.mkdir()
+            outside_context = Path(temp_dir) / "outside.json"
+
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir), patch.object(
+                server.asyncio,
+                "create_subprocess_exec",
+                AsyncMock(),
+            ) as mock_create:
+                response = asyncio.run(
+                    server.chat_endpoint(
+                        server.ChatRequest(
+                            message="hello",
+                            context_file=str(outside_context),
+                        ),
+                    ),
+                )
+
+        self.assertEqual(response.status_code, 400)
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(payload["error"], "Unsupported chat context file")
+        mock_create.assert_not_called()
+
     def test_transcribe_audio_removes_temp_file_when_subprocess_spawn_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             fixed_time = 1234567890
