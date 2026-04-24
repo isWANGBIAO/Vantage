@@ -2633,8 +2633,18 @@ async def get_face_progress():
             return {"status": "idle", "percent": 0}
 
         # Check if stale (e.g. older than 1 minute)
-        if time.time() - data.get("timestamp", 0) > 60:
-             return {"status": "idle", "percent": 0}
+        age_seconds = time.time() - data.get("timestamp", 0)
+        if age_seconds > 60:
+            with _face_analysis_job_lock:
+                job_running = _face_analysis_job_running
+            if job_running:
+                stale_data = dict(data)
+                if not stale_data.get("status") or stale_data.get("status") == "idle":
+                    stale_data["status"] = "running"
+                stale_data["stale"] = True
+                stale_data["last_update_age_seconds"] = round(age_seconds, 1)
+                return stale_data
+            return {"status": "idle", "percent": 0}
              
         return data
     except Exception as e:

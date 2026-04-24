@@ -13,6 +13,7 @@ from src import server
 from src.utils.face_analysis_db import (
     initialize_face_analysis_storage,
     load_face_analysis_records,
+    save_face_progress_cache,
     save_face_report_cache,
 )
 from src.utils.face_report_cache import load_face_report_cache
@@ -160,6 +161,26 @@ class FaceReportEndpointTests(unittest.TestCase):
                 payload = asyncio.run(server.get_face_report())
 
         self.assertEqual(payload["error"], "No report generated")
+
+    def test_stale_progress_stays_running_when_background_job_is_active(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "face_analysis.db"
+            initialize_face_analysis_storage(db_path)
+            save_face_progress_cache({"status": "running", "percent": 42, "timestamp": 100}, db_path)
+
+            try:
+                with server._face_analysis_job_lock:
+                    server._face_analysis_job_running = True
+
+                with patch.object(server, "FACE_ANALYSIS_DB_FILE", db_path), patch.object(server.time, "time", return_value=200):
+                    payload = asyncio.run(server.get_face_progress())
+            finally:
+                with server._face_analysis_job_lock:
+                    server._face_analysis_job_running = False
+
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["percent"], 42)
+        self.assertTrue(payload["stale"])
 
     def test_export_face_excel_returns_text_details_when_export_path_is_missing(self):
         proc = SimpleNamespace(returncode=0, stdout=b"no export path\n", stderr=b"")
