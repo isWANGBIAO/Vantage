@@ -2150,14 +2150,33 @@ async def transcribe_audio(file: UploadFile = File(...)):
             except:
                 stderr_text = stderr.decode('gbk', errors='replace')
             print(f"[Transcribe] Stderr: {stderr_text}")
+        else:
+            stderr_text = ""
         
         print(f"[Transcribe] Stdout: {output}")
             
         transcription = ""
+        transcription_error = ""
         for line in output.splitlines():
             if line.startswith("TRANSCRIPTION_RESULT:"):
                 transcription = line.replace("TRANSCRIPTION_RESULT:", "").strip()
                 break
+            if line.startswith("TRANSCRIPTION_ERROR:"):
+                transcription_error = line.replace("TRANSCRIPTION_ERROR:", "").strip()
+        
+        if proc.returncode != 0:
+            details = transcription_error or stderr_text or output.strip()
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Transcription failed", "details": details},
+            )
+        
+        if not transcription:
+            details = transcription_error or stderr_text or output.strip() or "No transcription result returned"
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Transcription failed", "details": details},
+            )
         
         print(f"[Transcribe] Result: '{transcription}'")
                 

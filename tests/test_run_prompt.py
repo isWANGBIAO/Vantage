@@ -107,6 +107,28 @@ class RunPromptTests(unittest.TestCase):
 
         self.assertEqual(formatted, "What time is it?")
 
+    def test_transcribe_mode_exits_nonzero_when_audio_service_fails(self):
+        stdout = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            sys,
+            "argv",
+            ["run_prompt.py", "--transcribe", "audio.webm"],
+        ), patch.object(run_prompt.Config, "load_env"), patch.object(
+            run_prompt.Config,
+            "get_history_dir",
+            return_value=Path(temp_dir),
+        ), patch.object(
+            run_prompt.AudioService,
+            "transcribe",
+            return_value=None,
+        ), redirect_stdout(stdout):
+            with self.assertRaises(SystemExit) as raised:
+                run_prompt.main()
+
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("TRANSCRIPTION_ERROR:", stdout.getvalue())
+
     def test_analysis_mode_streams_both_round_prompts(self):
         fake_client = _FakeLLMClient()
 

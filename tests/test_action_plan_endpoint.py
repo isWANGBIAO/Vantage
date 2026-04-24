@@ -262,6 +262,30 @@ class ActionPlanEndpointTests(unittest.TestCase):
             self.assertTrue(all(path.parent == Path(temp_dir) for path in temp_paths))
             self.assertFalse(any(path.exists() for path in temp_paths))
 
+    def test_transcribe_audio_returns_error_when_subprocess_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_abspath = server.os.path.abspath
+
+            def fake_abspath(path):
+                if path == server.__file__:
+                    return os.path.join(temp_dir, "src", "server.py")
+                return original_abspath(path)
+
+            fake_process = _FakeProcess(returncode=1, stderr_data=b"transcribe failed")
+            fake_process.communicate = AsyncMock(return_value=(b"TRANSCRIPTION_ERROR:missing api key\n", b"transcribe failed"))
+
+            with patch.object(server.os.path, "abspath", side_effect=fake_abspath), patch.object(
+                server.asyncio,
+                "create_subprocess_exec",
+                AsyncMock(return_value=fake_process),
+            ):
+                response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+
+            self.assertEqual(response.status_code, 500)
+            payload = json.loads(response.body.decode("utf-8"))
+            self.assertEqual(payload["error"], "Transcription failed")
+            self.assertIn("missing api key", payload["details"])
+
     def test_generate_action_plan_replace_today_deletes_older_today_files_after_success(self):
         today = datetime.now().strftime("%Y%m%d")
 

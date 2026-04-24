@@ -258,10 +258,10 @@ def main():
         # === TRANSCRIPT MODE ===
         if args.transcribe:
             text = AudioService.transcribe(args.transcribe)
-            if text:
-                print(f"TRANSCRIPTION_RESULT:{text}")
-            else:
-                print("TRANSCRIPTION_RESULT:")
+            if text is None:
+                print("TRANSCRIPTION_ERROR:Audio transcription failed")
+                raise SystemExit(1)
+            print(f"TRANSCRIPTION_RESULT:{text}")
             return
 
         context_mgr = ContextManager(context_file=args.context_file)
