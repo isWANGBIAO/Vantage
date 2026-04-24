@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getDisplayLanguageState: () => ipcRenderer.invoke('settings:get-display-language-state'),
     setDisplayLanguage: (displayLanguage) => ipcRenderer.invoke('settings:set-display-language', displayLanguage),
     getSystemLocale: () => ipcRenderer.invoke('settings:get-system-locale'),
+    setTitleBarTheme: (theme) => ipcRenderer.invoke('window:set-title-bar-theme', theme),
     onMessage: (channel, callback) => {
         const validChannels = ['update-available', 'backend-status'];
         if (validChannels.includes(channel)) {

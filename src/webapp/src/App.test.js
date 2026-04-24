@@ -56,3 +56,13 @@ test('App only reapplies onboarding language when the saved onboarding value cha
   assert.ok(appSource.includes('lastAppliedOnboardingLanguageRef.current === onboardingState.displayLanguage'));
   assert.ok(appSource.includes('lastAppliedOnboardingLanguageRef.current = onboardingState.displayLanguage'));
 });
+
+test('App header is configured as the draggable frameless window region', () => {
+  const appCss = readFileSync(new URL('./App.css', import.meta.url), 'utf8');
+
+  assert.ok(appSource.includes('app-layout--electron'));
+  assert.ok(appSource.includes('setTitleBarTheme'));
+  assert.match(appCss, /\.app-layout--electron \.app-header\s*{[\s\S]*-webkit-app-region:\s*drag;/);
+  assert.match(appCss, /\.app-layout--electron \.app-header-actions\s*{[\s\S]*-webkit-app-region:\s*no-drag;/);
+  assert.match(appCss, /\.app-layout--electron \.app-brand\s*{[\s\S]*-webkit-app-region:\s*drag;/);
+});

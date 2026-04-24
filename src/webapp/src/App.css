@@ -30,11 +30,21 @@
   box-shadow: 0 4px 30px rgba(0, 0, 0, 0.18);
 }
 
+.app-layout--electron .app-header {
+  padding-right: 154px;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
 .app-brand {
   display: flex;
   align-items: center;
   gap: 1rem;
   flex: 0 0 auto;
+}
+
+.app-layout--electron .app-brand {
+  -webkit-app-region: drag;
 }
 
 .app-header-actions {
@@ -44,6 +54,16 @@
   min-width: 0;
   flex: 1;
   justify-content: flex-end;
+}
+
+.app-layout--electron .app-header-actions {
+  -webkit-app-region: no-drag;
+}
+
+.app-layout--electron .app-header button,
+.app-layout--electron .app-header a,
+.app-layout--electron .app-header select {
+  -webkit-app-region: no-drag;
 }
 
 .app-language-control {
@@ -218,6 +238,23 @@
     radial-gradient(circle at top left, rgba(108, 92, 231, 0.18), transparent 32%),
     radial-gradient(circle at bottom right, rgba(0, 210, 211, 0.16), transparent 28%),
     var(--bg-glass);
+}
+
+.app-layout--electron .onboarding-shell,
+.app-layout--electron .onboarding-loading-card {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.app-layout--electron .onboarding-content-grid,
+.app-layout--electron .onboarding-actions,
+.app-layout--electron .onboarding-input,
+.app-layout--electron .onboarding-checkbox,
+.app-layout--electron .onboarding-inline-actions,
+.app-layout--electron .onboarding-shell button,
+.app-layout--electron .onboarding-shell input,
+.app-layout--electron .onboarding-shell select {
+  -webkit-app-region: no-drag;
 }
 
 .onboarding-loading-shell {
@@ -459,6 +496,10 @@
     align-items: stretch;
   }
 
+  .app-layout--electron .app-header {
+    padding-right: 154px;
+  }
+
   .app-header-actions {
     width: 100%;
     justify-content: space-between;
@@ -489,6 +530,10 @@
 
   .app-header {
     padding: 0.9rem 1rem;
+  }
+
+  .app-layout--electron .app-header {
+    padding-right: 154px;
   }
 
   .app-header-actions {

@@ -80,10 +80,15 @@ function AppShell() {
     migrationCompleted: false,
     legacyRoot: null,
   }));
+  const appLayoutClassName =
+    typeof window !== 'undefined' && window.electronAPI
+      ? 'app-layout app-layout--electron'
+      : 'app-layout';
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('theme', theme);
+    void window.electronAPI?.setTitleBarTheme?.(theme);
   }, [theme]);
 
   useEffect(() => {
@@ -169,7 +174,7 @@ function AppShell() {
 
   if (onboardingState.loading) {
     return (
-      <div className="app-layout">
+      <div className={appLayoutClassName}>
         <main className="app-container onboarding-loading-shell">
           <div className="glass-panel onboarding-loading-card">
             <div className="onboarding-eyebrow">{t('app.loading.eyebrow')}</div>
@@ -197,7 +202,7 @@ function AppShell() {
   }
 
   return (
-    <div className="app-layout">
+    <div className={appLayoutClassName}>
       <header
         className="app-header"
         style={{

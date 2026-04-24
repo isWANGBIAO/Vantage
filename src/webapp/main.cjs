@@ -56,6 +56,29 @@ let mainWindow = null;
 let tray = null;
 let bundledBackendProcess = null;
 
+function getTitleBarOverlayOptions(theme = 'dark') {
+    const isLight = theme === 'light';
+
+    return {
+        color: isLight ? '#ffffff' : '#050508',
+        symbolColor: isLight ? '#1a1a2e' : '#f7f7fb',
+        height: 64,
+    };
+}
+
+function getWindowChromeOptions() {
+    const options = {
+        autoHideMenuBar: true,
+    };
+
+    if (process.platform === 'win32') {
+        options.titleBarStyle = 'hidden';
+        options.titleBarOverlay = getTitleBarOverlayOptions();
+    }
+
+    return options;
+}
+
 function writeLog(level, message, error = null) {
     const timestamp = new Date().toISOString();
     let logEntry = `[${timestamp}] [${level}] ${message}`;
@@ -205,6 +228,16 @@ ipcMain.handle('settings:set-display-language', async (event, displayLanguage) =
 
 ipcMain.handle('settings:get-system-locale', async () => app.getLocale());
 
+ipcMain.handle('window:set-title-bar-theme', async (event, theme) => {
+    const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!sourceWindow || process.platform !== 'win32' || typeof sourceWindow.setTitleBarOverlay !== 'function') {
+        return { applied: false };
+    }
+
+    sourceWindow.setTitleBarOverlay(getTitleBarOverlayOptions(theme === 'light' ? 'light' : 'dark'));
+    return { applied: true };
+});
+
 ipcMain.handle('onboarding:complete', async (event, submission) => {
     const result = saveOnboardingCompletion({
         runtimePaths,
@@ -241,6 +274,7 @@ function createWindow() {
         title: 'Vantage',
         backgroundColor: '#050508',
         show: false,
+        ...getWindowChromeOptions(),
     });
 
     if (isDev) {
@@ -319,6 +353,7 @@ if (!gotTheLock) {
 
     app.whenReady().then(async () => {
         log.info('App ready, initializing...');
+        Menu.setApplicationMenu(null);
         syncLaunchAtLoginSetting();
 
         const shouldLaunchBundledBackend = runtimePaths.appMode === 'packaged' || app.isPackaged;

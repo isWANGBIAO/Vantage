@@ -55,6 +55,10 @@ export default function OnboardingShell({
   const [saveError, setSaveError] = useState('');
 
   const currentStep = STEP_ORDER[stepIndex];
+  const appLayoutClassName =
+    typeof window !== 'undefined' && window.electronAPI
+      ? 'app-layout app-layout--electron'
+      : 'app-layout';
 
   const stepContent = useMemo(() => ({
     welcome: {
@@ -159,7 +163,7 @@ export default function OnboardingShell({
   };
 
   return (
-    <div className="app-layout">
+    <div className={appLayoutClassName}>
       <main className="app-container onboarding-page">
         <section className="glass-panel onboarding-shell">
           <div className="onboarding-shell-header">

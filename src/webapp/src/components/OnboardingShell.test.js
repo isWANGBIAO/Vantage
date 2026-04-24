@@ -35,3 +35,8 @@ test('OnboardingShell collects provider fields and legacy import controls before
   assert.ok(onboardingShellSource.includes("t('onboarding.field.import_legacy')"));
   assert.ok(onboardingShellSource.includes("t('onboarding.button.choose_folder')"));
 });
+
+test('OnboardingShell keeps the first-run window draggable under hidden native chrome', () => {
+  assert.ok(onboardingShellSource.includes('app-layout--electron'));
+  assert.ok(onboardingShellSource.includes('window.electronAPI'));
+});
