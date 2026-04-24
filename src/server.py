@@ -549,6 +549,32 @@ def process_captured_face_photo(photo_path):
 
     return True
 
+
+def _safe_directory_size(directory):
+    total_size = 0
+    skipped_count = 0
+
+    def onerror(exc):
+        nonlocal skipped_count
+        skipped_count += 1
+        if skipped_count <= 3:
+            print(f"Storage size scan skipped directory: {exc}")
+
+    for root, dirs, files in os.walk(directory, onerror=onerror):
+        for filename in files:
+            file_path = os.path.join(root, filename)
+            try:
+                total_size += os.path.getsize(file_path)
+            except OSError as exc:
+                skipped_count += 1
+                if skipped_count <= 3:
+                    print(f"Storage size scan skipped file {file_path}: {exc}")
+
+    if skipped_count > 3:
+        print(f"Storage size scan skipped {skipped_count} entries under {directory}")
+    return total_size
+
+
 def update_legacy_storage_stats():
     """Background task to calculate legacy storage usage once to avoid blocking main loop"""
     print("Starting background legacy storage scan...")
@@ -596,8 +622,7 @@ def update_legacy_storage_stats():
             checked_paths.add(abs_cand)
             
             print(f"Scanning legacy path: {abs_cand}")
-            for root, dirs, files in os.walk(cand):
-                total_size += sum(os.path.getsize(os.path.join(root, f)) for f in files)
+            total_size += _safe_directory_size(cand)
         
         state.legacy_size = total_size
         print(f"Legacy storage scan complete: {state.legacy_size / (1024**2):.2f} MB")
@@ -611,14 +636,12 @@ def update_storage_stats():
         try:
             photos_size = 0
             if state.photos_path and os.path.exists(state.photos_path):
-                for root, dirs, files in os.walk(state.photos_path):
-                    photos_size += sum(os.path.getsize(os.path.join(root, f)) for f in files)
+                photos_size = _safe_directory_size(state.photos_path)
             state.photos_size = photos_size
 
             screenshots_size = 0
             if state.screenshots_path and os.path.exists(state.screenshots_path):
-                for root, dirs, files in os.walk(state.screenshots_path):
-                    screenshots_size += sum(os.path.getsize(os.path.join(root, f)) for f in files)
+                screenshots_size = _safe_directory_size(state.screenshots_path)
             state.screenshots_size = screenshots_size
         except Exception as e:
             print(f"Storage stats update error: {e}")
