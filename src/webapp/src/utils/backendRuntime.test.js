@@ -80,6 +80,35 @@ test('buildBundledBackendEnvironment maps selected onboarding provider into back
   assert.equal(env.CLIPROXYAPI_MODEL, 'gpt-5.4');
 });
 
+test('buildBundledBackendEnvironment maps a complete provider when selected provider is empty', () => {
+  const env = buildBundledBackendEnvironment({
+    runtimePaths,
+    env: {
+      PATH: 'C:\\Windows\\System32',
+    },
+    loadProviderConfigFn: () => ({
+      version: 1,
+      selected_provider: 'cliproxyapi',
+      providers: {
+        cliproxyapi: {
+          api_key: '',
+          base_url: '',
+          model: '',
+        },
+        custom: {
+          api_key: 'test-api-key',
+          base_url: 'http://127.0.0.1:8317/v1',
+          model: 'gpt-5.2',
+        },
+      },
+    }),
+  });
+
+  assert.equal(env.CLIPROXYAPI_API_KEY, 'test-api-key');
+  assert.equal(env.CLIPROXYAPI_BASE_URL, 'http://127.0.0.1:8317/v1');
+  assert.equal(env.CLIPROXYAPI_MODEL, 'gpt-5.2');
+});
+
 test('ensureBundledBackendReady spawns the bundled backend in packaged mode', async () => {
   let spawnCall = null;
   const fakeChild = {

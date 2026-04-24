@@ -181,3 +181,40 @@ def test_get_active_provider_config_returns_selected_complete_provider(tmp_path)
         "base_url": "https://example.invalid/v1",
         "model": "gpt-5.4",
     }
+
+
+def test_get_active_provider_config_falls_back_to_complete_provider_when_selected_is_empty(tmp_path):
+    user_config = _load_user_config_module()
+    providers_file = tmp_path / "config" / "providers.json"
+    providers_file.parent.mkdir(parents=True, exist_ok=True)
+    providers_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "selected_provider": "cliproxyapi",
+                "providers": {
+                    "cliproxyapi": {
+                        "api_key": "",
+                        "base_url": "",
+                        "model": "",
+                    },
+                    "custom": {
+                        "api_key": "sk-real",
+                        "base_url": "http://127.0.0.1:8317/v1",
+                        "model": "gpt-5.2",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    provider = user_config.get_active_provider_config(providers_file=providers_file)
+
+    assert provider == {
+        "route": "custom",
+        "api_key": "sk-real",
+        "base_url": "http://127.0.0.1:8317/v1",
+        "model": "gpt-5.2",
+    }

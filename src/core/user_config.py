@@ -160,6 +160,24 @@ def _sanitize_provider_config(payload: dict | None) -> dict:
     }
 
 
+def _build_complete_provider(route: str | None, provider: dict | None) -> dict | None:
+    if not route or not isinstance(provider, dict):
+        return None
+
+    api_key = _coerce_optional_str(provider, "api_key")
+    base_url = _coerce_optional_str(provider, "base_url")
+    model = _coerce_optional_str(provider, "model")
+    if not api_key or not base_url or not model:
+        return None
+
+    return {
+        "route": route,
+        "api_key": api_key,
+        "base_url": base_url,
+        "model": model,
+    }
+
+
 def _sanitize_migration_state(payload: dict | None) -> dict:
     return {
         "version": MIGRATION_STATE_VERSION,
@@ -200,29 +218,21 @@ def save_provider_config(payload: dict | None, providers_file: str | Path | None
 def get_active_provider_config(providers_file: str | Path | None = None) -> dict | None:
     provider_config = load_provider_config(providers_file=providers_file)
     route = _coerce_optional_str(provider_config, "selected_provider")
-    if not route:
-        return None
-
     providers = provider_config.get("providers")
     if not isinstance(providers, dict):
         return None
 
-    provider = providers.get(route)
-    if not isinstance(provider, dict):
-        return None
+    candidate_routes = []
+    if route:
+        candidate_routes.append(route)
+    candidate_routes.extend(candidate for candidate in providers if candidate not in candidate_routes)
 
-    api_key = _coerce_optional_str(provider, "api_key")
-    base_url = _coerce_optional_str(provider, "base_url")
-    model = _coerce_optional_str(provider, "model")
-    if not api_key or not base_url or not model:
-        return None
+    for candidate_route in candidate_routes:
+        active_provider = _build_complete_provider(candidate_route, providers.get(candidate_route))
+        if active_provider:
+            return active_provider
 
-    return {
-        "route": route,
-        "api_key": api_key,
-        "base_url": base_url,
-        "model": model,
-    }
+    return None
 
 
 def load_migration_state(migration_state_file: str | Path | None = None) -> dict:

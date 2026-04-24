@@ -48,9 +48,25 @@ const PATH_LABELS = [
   ['data', 'settings.paths.data'],
 ];
 
+function hasProviderRuntimeFields(provider) {
+  return Boolean(
+    provider?.api_key
+    && provider?.base_url
+    && provider?.model,
+  );
+}
+
 function getActiveProvider(providerConfig) {
-  const route = providerConfig?.selected_provider || 'cliproxyapi';
-  const provider = providerConfig?.providers?.[route] || {};
+  const selectedRoute = providerConfig?.selected_provider || null;
+  const providers = providerConfig?.providers && typeof providerConfig.providers === 'object'
+    ? providerConfig.providers
+    : {};
+  const route = (
+    selectedRoute && hasProviderRuntimeFields(providers[selectedRoute])
+      ? selectedRoute
+      : Object.keys(providers).find((candidate) => hasProviderRuntimeFields(providers[candidate]))
+  ) || selectedRoute || 'cliproxyapi';
+  const provider = providers[route] || {};
   return {
     route,
     baseUrl: provider.base_url || '',

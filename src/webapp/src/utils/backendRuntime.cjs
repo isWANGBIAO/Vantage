@@ -2,7 +2,7 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
-const { loadProviderConfig } = require('./onboardingConfig.cjs');
+const { loadProviderConfig, resolveActiveProviderConfig } = require('./onboardingConfig.cjs');
 
 function resolveBundledBackendExecutable({
   env = process.env,
@@ -18,13 +18,8 @@ function resolveBundledBackendExecutable({
 }
 
 function applySelectedProviderEnvironment(nextEnv, providerConfig) {
-  const selectedProviderKey = providerConfig?.selected_provider;
-  if (!selectedProviderKey) {
-    return nextEnv;
-  }
-
-  const selectedProvider = providerConfig?.providers?.[selectedProviderKey];
-  if (!selectedProvider || typeof selectedProvider !== 'object') {
+  const selectedProvider = resolveActiveProviderConfig(providerConfig);
+  if (!selectedProvider) {
     return nextEnv;
   }
 

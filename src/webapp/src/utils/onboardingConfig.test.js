@@ -122,6 +122,103 @@ test('saveSettingsPayload persists general settings and provider config', () => 
   });
 });
 
+test('buildSettingsState reports a complete provider when selected provider is empty', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-settings-provider-heal-'));
+  const runtimePaths = {
+    configDir: path.join(root, 'config'),
+    historyDir: path.join(root, 'history'),
+    logDir: path.join(root, 'logs'),
+    plotDir: path.join(root, 'plots'),
+    cacheDir: path.join(root, 'cache'),
+    runtimeDir: path.join(root, 'runtime'),
+    migrationDir: path.join(root, 'migration'),
+    dataDir: path.join(root, 'data'),
+  };
+  mkdirSync(runtimePaths.configDir, { recursive: true });
+  writeFileSync(
+    path.join(runtimePaths.configDir, 'providers.json'),
+    JSON.stringify({
+      version: 1,
+      selected_provider: 'cliproxyapi',
+      providers: {
+        cliproxyapi: {
+          api_key: '',
+          base_url: '',
+          model: '',
+        },
+        custom: {
+          api_key: 'sk-real',
+          base_url: 'http://127.0.0.1:8317/v1',
+          model: 'gpt-5.2',
+        },
+      },
+    }),
+    'utf8',
+  );
+
+  const state = buildSettingsState({
+    runtimePaths,
+    projectRoot: root,
+  });
+
+  assert.equal(state.provider.selected_provider, 'custom');
+  assert.equal(state.provider.providers.custom.api_key, '********');
+  assert.equal(state.provider.providers.custom.has_api_key, true);
+});
+
+test('saveSettingsPayload does not switch to an empty submitted provider', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-settings-save-provider-heal-'));
+  const runtimePaths = {
+    configDir: path.join(root, 'config'),
+    historyDir: path.join(root, 'history'),
+    logDir: path.join(root, 'logs'),
+    plotDir: path.join(root, 'plots'),
+    cacheDir: path.join(root, 'cache'),
+    runtimeDir: path.join(root, 'runtime'),
+    migrationDir: path.join(root, 'migration'),
+    dataDir: path.join(root, 'data'),
+  };
+  mkdirSync(runtimePaths.configDir, { recursive: true });
+  writeFileSync(
+    path.join(runtimePaths.configDir, 'providers.json'),
+    JSON.stringify({
+      version: 1,
+      selected_provider: 'custom',
+      providers: {
+        custom: {
+          api_key: 'sk-real',
+          base_url: 'http://127.0.0.1:8317/v1',
+          model: 'gpt-5.2',
+        },
+      },
+    }),
+    'utf8',
+  );
+
+  saveSettingsPayload({
+    runtimePaths,
+    payload: {
+      displayLanguage: 'zh-CN',
+      theme: 'light',
+      launchAtLogin: false,
+      backgroundMode: 'balanced',
+      provider: {
+        route: 'cliproxyapi',
+        apiKey: '',
+        baseUrl: '',
+        model: '',
+      },
+    },
+  });
+
+  const providers = JSON.parse(
+    readFileSync(path.join(runtimePaths.configDir, 'providers.json'), 'utf8'),
+  );
+
+  assert.equal(providers.selected_provider, 'custom');
+  assert.equal(providers.providers.custom.api_key, 'sk-real');
+});
+
 test('maskProviderConfig hides saved API keys in settings state', () => {
   const masked = maskProviderConfig({
     version: 1,
@@ -163,6 +260,8 @@ test('getOnboardingState reads onboarding flags from settings.json', () => {
       providers: {
         openai: {
           api_key: 'sk-demo',
+          base_url: 'https://example.invalid/v1',
+          model: 'gpt-5',
         },
       },
     }),

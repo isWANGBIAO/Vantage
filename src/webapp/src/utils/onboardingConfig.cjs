@@ -166,11 +166,60 @@ function loadMigrationState(runtimePaths) {
   return sanitizeMigrationState(readJsonFile(getMigrationStateFile(runtimePaths)));
 }
 
-function hasProviderConfig(providerConfig) {
-  if (!providerConfig.selected_provider) {
-    return false;
+function isCompleteProviderEntry(provider) {
+  return Boolean(
+    normalizeOptionalString(provider?.api_key)
+    && normalizeOptionalString(provider?.base_url)
+    && normalizeOptionalString(provider?.model),
+  );
+}
+
+function resolveActiveProviderConfig(providerConfig) {
+  const sanitized = sanitizeProviderConfig(providerConfig);
+  const providers = sanitized.providers || {};
+  const selectedProvider = normalizeOptionalString(sanitized.selected_provider);
+  const candidateRoutes = [];
+
+  if (selectedProvider) {
+    candidateRoutes.push(selectedProvider);
   }
-  return Boolean(providerConfig.providers[providerConfig.selected_provider]);
+  for (const route of Object.keys(providers)) {
+    if (!candidateRoutes.includes(route)) {
+      candidateRoutes.push(route);
+    }
+  }
+
+  for (const route of candidateRoutes) {
+    const provider = providers[route];
+    if (!isCompleteProviderEntry(provider)) {
+      continue;
+    }
+    return {
+      route,
+      api_key: normalizeOptionalString(provider.api_key),
+      base_url: normalizeOptionalString(provider.base_url),
+      model: normalizeOptionalString(provider.model),
+    };
+  }
+
+  return null;
+}
+
+function normalizeProviderSelection(providerConfig) {
+  const sanitized = sanitizeProviderConfig(providerConfig);
+  const activeProvider = resolveActiveProviderConfig(sanitized);
+  if (!activeProvider) {
+    return sanitized;
+  }
+
+  return {
+    ...sanitized,
+    selected_provider: activeProvider.route,
+  };
+}
+
+function hasProviderConfig(providerConfig) {
+  return Boolean(resolveActiveProviderConfig(providerConfig));
 }
 
 function maskApiKey(apiKey) {
@@ -178,7 +227,7 @@ function maskApiKey(apiKey) {
 }
 
 function maskProviderConfig(providerConfig) {
-  const sanitized = sanitizeProviderConfig(providerConfig);
+  const sanitized = normalizeProviderSelection(providerConfig);
   const providers = {};
   for (const [route, provider] of Object.entries(sanitized.providers)) {
     providers[route] = {
@@ -245,29 +294,37 @@ function buildSettingsState({
 
 function buildProviderConfigFromSettingsPayload(payload, currentProviderConfig) {
   const providerPayload = payload && typeof payload.provider === 'object' ? payload.provider : {};
+  const currentConfig = normalizeProviderSelection(currentProviderConfig);
+  const currentProviders = currentConfig.providers || {};
+  const submittedRoute = normalizeOptionalString(providerPayload.route);
+  const submittedApiKey = normalizeOptionalString(providerPayload.apiKey);
+  const submittedBaseUrl = normalizeOptionalString(providerPayload.baseUrl);
+  const submittedModel = normalizeOptionalString(providerPayload.model);
   const providerHasRuntimeFields = Boolean(
-    normalizeOptionalString(providerPayload.apiKey)
-    || normalizeOptionalString(providerPayload.baseUrl)
-    || normalizeOptionalString(providerPayload.model)
-    || normalizeOptionalString(currentProviderConfig.selected_provider),
+    submittedApiKey || submittedBaseUrl || submittedModel,
   );
+
   if (!providerHasRuntimeFields) {
-    return currentProviderConfig;
+    if (submittedRoute && isCompleteProviderEntry(currentProviders[submittedRoute])) {
+      return {
+        ...currentConfig,
+        selected_provider: submittedRoute,
+      };
+    }
+    return currentConfig;
   }
 
   const selectedProvider =
-    normalizeOptionalString(providerPayload.route)
-    || normalizeOptionalString(currentProviderConfig.selected_provider)
+    submittedRoute
+    || normalizeOptionalString(currentConfig.selected_provider)
     || 'cliproxyapi';
-  const currentProviders = currentProviderConfig.providers || {};
   const currentProvider = currentProviders[selectedProvider] || {};
-  const submittedApiKey = normalizeOptionalString(providerPayload.apiKey);
   const apiKey =
     submittedApiKey && submittedApiKey !== '********'
       ? submittedApiKey
       : (normalizeOptionalString(currentProvider.api_key) || '');
 
-  return {
+  return normalizeProviderSelection({
     version: 1,
     selected_provider: selectedProvider,
     providers: {
@@ -275,16 +332,16 @@ function buildProviderConfigFromSettingsPayload(payload, currentProviderConfig) 
       [selectedProvider]: {
         api_key: apiKey,
         base_url:
-          normalizeOptionalString(providerPayload.baseUrl)
+          submittedBaseUrl
           || normalizeOptionalString(currentProvider.base_url)
           || '',
         model:
-          normalizeOptionalString(providerPayload.model)
+          submittedModel
           || normalizeOptionalString(currentProvider.model)
           || '',
       },
     },
-  };
+  });
 }
 
 function saveSettingsPayload({
@@ -497,4 +554,5 @@ module.exports = {
   saveSettings,
   saveSettingsPayload,
   saveOnboardingCompletion,
+  resolveActiveProviderConfig,
 };
