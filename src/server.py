@@ -32,6 +32,7 @@ import glob
 import asyncio
 import math
 import calendar
+import tempfile
 from collections import deque
 from contextlib import suppress
 from contextlib import asynccontextmanager
@@ -2110,11 +2111,11 @@ async def transcribe_audio(file: UploadFile = File(...)):
     ext = os.path.splitext(original_filename)[1] or ".webm"
     
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    temp_filename = os.path.join(project_root, f"temp_audio_{int(time.time())}{ext}")
+    temp_fd, temp_filename = tempfile.mkstemp(prefix="temp_audio_", suffix=ext, dir=project_root)
     
     print(f"[Transcribe] Saving uploaded file to: {temp_filename}")
     
-    with open(temp_filename, "wb") as buffer:
+    with os.fdopen(temp_fd, "wb") as buffer:
         content = await file.read()
         buffer.write(content)
         print(f"[Transcribe] File size: {len(content)} bytes")

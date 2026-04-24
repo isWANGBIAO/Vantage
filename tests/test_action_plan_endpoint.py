@@ -231,6 +231,37 @@ class ActionPlanEndpointTests(unittest.TestCase):
 
             self.assertFalse(expected_temp_file.exists())
 
+    def test_transcribe_audio_uses_unique_temp_files_for_same_second_uploads(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_abspath = server.os.path.abspath
+            temp_paths = []
+
+            def fake_abspath(path):
+                if path == server.__file__:
+                    return os.path.join(temp_dir, "src", "server.py")
+                return original_abspath(path)
+
+            async def fake_create_subprocess_exec(*cmd, **kwargs):
+                temp_paths.append(Path(cmd[cmd.index("--transcribe") + 1]))
+                return _FakeProcess(returncode=0)
+
+            with patch.object(server.time, "time", return_value=1234567892), patch.object(
+                server.os.path,
+                "abspath",
+                side_effect=fake_abspath,
+            ), patch.object(
+                server.asyncio,
+                "create_subprocess_exec",
+                AsyncMock(side_effect=fake_create_subprocess_exec),
+            ):
+                asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+                asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+
+            self.assertEqual(len(temp_paths), 2)
+            self.assertEqual(len(set(temp_paths)), 2)
+            self.assertTrue(all(path.parent == Path(temp_dir) for path in temp_paths))
+            self.assertFalse(any(path.exists() for path in temp_paths))
+
     def test_generate_action_plan_replace_today_deletes_older_today_files_after_success(self):
         today = datetime.now().strftime("%Y%m%d")
 
