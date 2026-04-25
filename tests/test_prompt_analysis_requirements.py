@@ -11,6 +11,11 @@ def test_general_analysis_requires_summary_records_table():
     assert "Markdown 表格" in content
     assert "各力量训练动作" in content
     assert "历史最大训练重量" in content
+    assert "当前建议目标" in content
+    assert "身高" in content
+    assert "年龄" in content
+    assert "体重" in content
+    assert "体脂" in content
     assert "跑步历史最快配速" in content
     assert "无法确认" in content
 
