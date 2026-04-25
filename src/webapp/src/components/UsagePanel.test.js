@@ -17,9 +17,28 @@ function loadUsagePanelSortHelper() {
   const helperSource = usagePanelSource.slice(start, end);
   const sandbox = { Date, globalThis: {} };
 
-  vm.runInNewContext(`${helperSource}\nglobalThis.sortRowsByTimestamp = sortRowsByTimestamp;`, sandbox);
+  vm.runInNewContext(
+    `${helperSource}\nglobalThis.sortRowsByTimestamp = sortRowsByTimestamp;\nglobalThis.buildSpeedTrendOption = buildSpeedTrendOption;`,
+    sandbox,
+  );
 
   return sandbox.globalThis.sortRowsByTimestamp;
+}
+
+function loadUsagePanelChartHelper() {
+  loadUsagePanelSortHelper();
+
+  const start = usagePanelSource.indexOf('function toTimestamp');
+  const end = usagePanelSource.indexOf('function SummaryCard');
+  const helperSource = usagePanelSource.slice(start, end);
+  const sandbox = { Date, globalThis: {} };
+
+  vm.runInNewContext(
+    `${helperSource}\nglobalThis.buildSpeedTrendOption = buildSpeedTrendOption;`,
+    sandbox,
+  );
+
+  return sandbox.globalThis.buildSpeedTrendOption;
 }
 
 test('ActionPlanContainer exposes a dedicated usage sub-tab', () => {
@@ -74,6 +93,45 @@ test('UsagePanel renders speed trend from speed_series', () => {
   assert.ok(usagePanelSource.includes("t('usage.speed_trend.output_rate')"));
   assert.ok(usagePanelSource.includes("t('usage.speed_trend.total_rate')"));
   assert.ok(usagePanelSource.includes("t('usage.speed_trend.empty')"));
+});
+
+test('UsagePanel keeps total throughput hidden by default so output trend stays readable', () => {
+  const buildSpeedTrendOption = loadUsagePanelChartHelper();
+  const t = (key) => ({
+    'usage.speed_trend.output_rate': 'Completion tok/s',
+    'usage.speed_trend.total_rate': 'Total tok/s',
+    'usage.label.unknown': 'unknown',
+  }[key] || key);
+
+  const option = buildSpeedTrendOption(
+    [
+      {
+        call_id: 'fast-total',
+        created_at: '2026-04-25T12:00:00+08:00',
+        model: 'gpt-5.5',
+        output_tokens_per_second: 12,
+        average_tokens_per_second: 55000,
+      },
+      {
+        call_id: 'normal-output',
+        created_at: '2026-04-25T12:05:00+08:00',
+        model: 'gpt-5.5',
+        output_tokens_per_second: 14,
+        average_tokens_per_second: 60,
+      },
+    ],
+    t,
+  );
+
+  const totalSeriesNames = option.series
+    .filter((series) => series.data.some((point) => point.metricLabel === 'Total tok/s'))
+    .map((series) => series.name);
+
+  assert.ok(totalSeriesNames.length > 0);
+  totalSeriesNames.forEach((name) => {
+    assert.equal(option.legend.selected[name], false);
+  });
+  assert.ok(Array.isArray(option.dataZoom));
 });
 
 test('UsagePanel keeps explicit empty and error copy for missing history', () => {

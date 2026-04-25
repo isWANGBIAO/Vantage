@@ -136,6 +136,7 @@ function buildSpeedTrendOption(rows, t) {
   const outputLabel = t('usage.speed_trend.output_rate');
   const totalLabel = t('usage.speed_trend.total_rate');
   const rowsByModel = new Map();
+  const legendSelected = {};
 
   sortedRows.forEach((row) => {
     const modelLabel = getSpeedModelLabel(row, t);
@@ -146,6 +147,9 @@ function buildSpeedTrendOption(rows, t) {
 
   const series = Array.from(rowsByModel.entries()).flatMap(([modelLabel, modelRows], index) => {
     const color = SPEED_CHART_COLORS[index % SPEED_CHART_COLORS.length];
+    const outputSeriesName = `${modelLabel} - ${outputLabel}`;
+    const totalSeriesName = `${modelLabel} - ${totalLabel}`;
+    legendSelected[totalSeriesName] = false;
     const buildData = (metricKey, metricLabel) => modelRows.map((row) => ({
       value: [row.created_at, Number(row?.[metricKey] || 0)],
       metricLabel,
@@ -154,7 +158,7 @@ function buildSpeedTrendOption(rows, t) {
 
     return [
       {
-        name: modelLabel,
+        name: outputSeriesName,
         type: 'line',
         smooth: true,
         symbol: 'circle',
@@ -172,7 +176,7 @@ function buildSpeedTrendOption(rows, t) {
         data: buildData('output_tokens_per_second', outputLabel),
       },
       {
-        name: modelLabel,
+        name: totalSeriesName,
         type: 'line',
         smooth: true,
         symbol: 'none',
@@ -236,6 +240,7 @@ function buildSpeedTrendOption(rows, t) {
       top: 0,
       left: 0,
       right: 0,
+      selected: legendSelected,
       itemWidth: 18,
       itemHeight: 8,
       textStyle: {
@@ -250,9 +255,35 @@ function buildSpeedTrendOption(rows, t) {
     grid: {
       top: 52,
       right: 20,
-      bottom: 38,
+      bottom: 70,
       left: 56,
     },
+    dataZoom: [
+      {
+        type: 'inside',
+        xAxisIndex: 0,
+        filterMode: 'none',
+        start: 0,
+        end: 100,
+      },
+      {
+        type: 'slider',
+        xAxisIndex: 0,
+        filterMode: 'none',
+        height: 22,
+        bottom: 8,
+        start: 0,
+        end: 100,
+        borderColor: 'rgba(148, 163, 184, 0.28)',
+        fillerColor: 'rgba(20, 184, 166, 0.12)',
+        handleStyle: {
+          color: '#14b8a6',
+        },
+        textStyle: {
+          color: '#64748b',
+        },
+      },
+    ],
     xAxis: {
       type: 'time',
       axisLabel: {
