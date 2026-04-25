@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const actionPlanContainerSource = readFileSync(new URL('./ActionPlanContainer.jsx', import.meta.url), 'utf8');
 const usagePanelSource = readFileSync(new URL('./UsagePanel.jsx', import.meta.url), 'utf8');
+const displayCopySource = readFileSync(new URL('../utils/displayCopy.js', import.meta.url), 'utf8');
 
 function loadUsagePanelSortHelper() {
   const start = usagePanelSource.indexOf('function toTimestamp');
@@ -37,30 +38,75 @@ test('UsagePanel fetches backend usage aggregates and renders primary sections',
   assert.ok(usagePanelSource.includes("t('usage.summary.active_sources')"));
   assert.ok(usagePanelSource.includes("t('usage.latest_activity')"));
   assert.ok(usagePanelSource.includes("t('usage.by_source')"));
-  assert.ok(usagePanelSource.includes('Daily Usage'));
-  assert.ok(usagePanelSource.includes('Recent Sessions'));
-  assert.ok(usagePanelSource.includes('Recent Calls'));
+  assert.ok(usagePanelSource.includes("t('usage.speed_trend.title')"));
+  assert.ok(usagePanelSource.includes("t('usage.speed_trend.subtitle')"));
+  assert.ok(usagePanelSource.includes("t('usage.daily')"));
+  assert.ok(usagePanelSource.includes("t('usage.recent_sessions')"));
+  assert.ok(usagePanelSource.includes("t('usage.recent_calls')"));
+  assert.equal(usagePanelSource.includes('Daily Usage'), false);
+  assert.equal(usagePanelSource.includes('Recent Sessions'), false);
+  assert.equal(usagePanelSource.includes('Recent Calls'), false);
 });
 
 test('UsagePanel aligns token counts with completion and total throughput labels', () => {
   assert.ok(usagePanelSource.includes('output_tokens_per_second'));
   assert.ok(usagePanelSource.includes('average_tokens_per_second'));
-  assert.ok(usagePanelSource.includes("label: 'Prompt'"));
-  assert.ok(usagePanelSource.includes("label: 'Completion'"));
-  assert.ok(usagePanelSource.includes("label: 'Total'"));
-  assert.ok(usagePanelSource.includes("label: 'Completion tok/s'"));
-  assert.ok(usagePanelSource.includes("label: 'Total tok/s'"));
-  assert.ok(usagePanelSource.includes('Share'));
-  assert.ok(usagePanelSource.includes('Prompt Share'));
-  assert.ok(usagePanelSource.includes('Completion Share'));
+  assert.ok(usagePanelSource.includes("t('usage.label.prompt')"));
+  assert.ok(usagePanelSource.includes("t('usage.label.completion')"));
+  assert.ok(usagePanelSource.includes("t('usage.label.total')"));
+  assert.ok(usagePanelSource.includes("t('usage.label.completion_rate')"));
+  assert.ok(usagePanelSource.includes("t('usage.label.total_rate')"));
+  assert.ok(usagePanelSource.includes("t('usage.label.share')"));
+  assert.ok(usagePanelSource.includes("t('usage.label.prompt_share')"));
+  assert.ok(usagePanelSource.includes("t('usage.label.completion_share')"));
+  assert.equal(usagePanelSource.includes("label: 'Prompt'"), false);
+  assert.equal(usagePanelSource.includes("label: 'Completion'"), false);
+  assert.equal(usagePanelSource.includes("label: 'Total'"), false);
+  assert.equal(usagePanelSource.includes("label: 'Completion tok/s'"), false);
+  assert.equal(usagePanelSource.includes("label: 'Total tok/s'"), false);
   assert.equal(usagePanelSource.includes("label: 'Tokens'"), false);
   assert.equal(usagePanelSource.includes('Output Speed'), false);
+});
+
+test('UsagePanel renders speed trend from speed_series', () => {
+  assert.ok(usagePanelSource.includes('speed_series'));
+  assert.ok(usagePanelSource.includes('ReactECharts'));
+  assert.ok(usagePanelSource.includes("t('usage.speed_trend.output_rate')"));
+  assert.ok(usagePanelSource.includes("t('usage.speed_trend.total_rate')"));
+  assert.ok(usagePanelSource.includes("t('usage.speed_trend.empty')"));
 });
 
 test('UsagePanel keeps explicit empty and error copy for missing history', () => {
   assert.ok(usagePanelSource.includes("t('usage.empty')"));
   assert.ok(usagePanelSource.includes("t('usage.error.load')"));
   assert.ok(usagePanelSource.includes("t('usage.refresh')"));
+  assert.ok(usagePanelSource.includes("t('usage.daily.empty')"));
+  assert.ok(usagePanelSource.includes("t('usage.recent_sessions.empty')"));
+  assert.ok(usagePanelSource.includes("t('usage.recent_calls.empty')"));
+  assert.equal(usagePanelSource.includes('No daily usage yet.'), false);
+  assert.equal(usagePanelSource.includes('No recent sessions yet.'), false);
+  assert.equal(usagePanelSource.includes('No recent calls yet.'), false);
+});
+
+test('UsagePanel display copy includes completed usage i18n keys', () => {
+  [
+    'usage.speed_trend.title',
+    'usage.speed_trend.subtitle',
+    'usage.speed_trend.empty',
+    'usage.speed_trend.output_rate',
+    'usage.speed_trend.total_rate',
+    'usage.daily',
+    'usage.daily.empty',
+    'usage.recent_sessions',
+    'usage.recent_sessions.empty',
+    'usage.recent_calls',
+    'usage.recent_calls.empty',
+    'usage.label.duration',
+    'usage.label.started',
+    'usage.label.share',
+  ].forEach((key) => {
+    assert.ok(displayCopySource.includes(`'${key}'`), `expected display copy key ${key}`);
+  });
 });
 
 test('UsagePanel does not poll while hidden', () => {

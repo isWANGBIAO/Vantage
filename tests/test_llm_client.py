@@ -201,6 +201,101 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual([provider["route"] for provider in ordered], ["cloud", "local"])
 
+    def test_fallback_provider_uses_own_model_after_requested_provider_fails(self):
+        client = self._make_client()
+        client.providers = [
+            {
+                "route": "custom",
+                "base_url": "http://127.0.0.1:8317/v1",
+                "model": "gpt-5.5",
+                "models": ["gpt-5.5"],
+                "headers": {},
+            },
+            {
+                "route": "SJTU",
+                "base_url": "https://models.sjtu.edu.cn/api/v1",
+                "model": "qwen3vl",
+                "models": ["qwen3vl", "deepseek-chat"],
+                "headers": {},
+            },
+        ]
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+
+        with patch.object(
+            llm_client.requests,
+            "post",
+            side_effect=[llm_client.requests.HTTPError("temporary custom failure"), fake_response],
+        ) as mock_post:
+            response, used_model, used_route = client._post_with_failover(
+                {"messages": [{"role": "user", "content": "ping"}]},
+                stream=False,
+                timeout=12,
+                requested_model="gpt-5.5",
+                requested_provider_route="custom",
+            )
+
+        self.assertIs(response, fake_response)
+        self.assertEqual(used_model, "qwen3vl")
+        self.assertEqual(used_route, "SJTU")
+        self.assertEqual(
+            [call.kwargs["json"]["model"] for call in mock_post.call_args_list],
+            ["gpt-5.5", "qwen3vl"],
+        )
+
+    def test_retries_local_custom_provider_after_startup_connection_refused(self):
+        client = self._make_client()
+        client.providers = [
+            {
+                "route": "custom",
+                "base_url": "http://127.0.0.1:8317/v1",
+                "model": "gpt-5.5",
+                "models": ["gpt-5.5"],
+                "headers": {},
+            },
+            {
+                "route": "SJTU",
+                "base_url": "https://models.sjtu.edu.cn/api/v1",
+                "model": "qwen3vl",
+                "models": ["qwen3vl"],
+                "headers": {},
+            },
+        ]
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+
+        connection_error = llm_client.requests.ConnectionError(
+            "Failed to establish a new connection: [WinError 10061] connection refused"
+        )
+
+        with (
+            patch.object(
+                llm_client.requests,
+                "post",
+                side_effect=[connection_error, fake_response],
+            ) as mock_post,
+            patch.object(llm_client.time, "sleep", return_value=None) as mock_sleep,
+        ):
+            response, used_model, used_route = client._post_with_failover(
+                {"messages": [{"role": "user", "content": "ping"}]},
+                stream=False,
+                timeout=12,
+                requested_model="gpt-5.5",
+                requested_provider_route="custom",
+            )
+
+        self.assertIs(response, fake_response)
+        self.assertEqual(used_model, "gpt-5.5")
+        self.assertEqual(used_route, "custom")
+        self.assertEqual(
+            [call.args[0] for call in mock_post.call_args_list],
+            [
+                "http://127.0.0.1:8317/v1/chat/completions",
+                "http://127.0.0.1:8317/v1/chat/completions",
+            ],
+        )
+        mock_sleep.assert_called_once()
+
     def test_retries_next_primary_model_after_model_error(self):
         client = self._make_client(discovered_models=["gpt-5.2", "gpt-5.1", "gpt-5"])
         fake_response = Mock()

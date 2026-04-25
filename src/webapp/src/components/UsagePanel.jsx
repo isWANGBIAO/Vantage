@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { fetchBackendJson } from '../utils/backendRequest';
+import ReactECharts from '../utils/echarts.js';
 import './UsagePanel.css';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
@@ -23,6 +24,7 @@ const EMPTY_DASHBOARD = {
   by_day: [],
   sessions: [],
   recent_calls: [],
+  speed_series: [],
 };
 
 function formatCompactNumber(value) {
@@ -101,6 +103,189 @@ function sortRowsByTimestamp(rows, key) {
   });
 }
 
+function sortRowsByTimestampAscending(rows, key) {
+  return sortRowsByTimestamp(rows, key).reverse();
+}
+
+const SPEED_CHART_COLORS = [
+  '#10b981',
+  '#38bdf8',
+  '#f59e0b',
+  '#6366f1',
+  '#ec4899',
+  '#14b8a6',
+  '#f97316',
+  '#8b5cf6',
+];
+
+function getSpeedModelLabel(row, t) {
+  return row?.model || row?.default_model || t('usage.label.unknown');
+}
+
+function escapeTooltipValue(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function buildSpeedTrendOption(rows, t) {
+  const sortedRows = sortRowsByTimestampAscending(rows, 'created_at');
+  const outputLabel = t('usage.speed_trend.output_rate');
+  const totalLabel = t('usage.speed_trend.total_rate');
+  const rowsByModel = new Map();
+
+  sortedRows.forEach((row) => {
+    const modelLabel = getSpeedModelLabel(row, t);
+    const modelRows = rowsByModel.get(modelLabel) || [];
+    modelRows.push(row);
+    rowsByModel.set(modelLabel, modelRows);
+  });
+
+  const series = Array.from(rowsByModel.entries()).flatMap(([modelLabel, modelRows], index) => {
+    const color = SPEED_CHART_COLORS[index % SPEED_CHART_COLORS.length];
+    const buildData = (metricKey, metricLabel) => modelRows.map((row) => ({
+      value: [row.created_at, Number(row?.[metricKey] || 0)],
+      metricLabel,
+      row,
+    }));
+
+    return [
+      {
+        name: modelLabel,
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        lineStyle: {
+          width: 2.4,
+          color,
+        },
+        itemStyle: {
+          color,
+        },
+        emphasis: {
+          focus: 'series',
+        },
+        data: buildData('output_tokens_per_second', outputLabel),
+      },
+      {
+        name: modelLabel,
+        type: 'line',
+        smooth: true,
+        symbol: 'none',
+        lineStyle: {
+          width: 1.5,
+          type: 'dashed',
+          opacity: 0.42,
+          color,
+        },
+        itemStyle: {
+          color,
+          opacity: 0.42,
+        },
+        emphasis: {
+          focus: 'series',
+        },
+        data: buildData('average_tokens_per_second', totalLabel),
+      },
+    ];
+  });
+
+  return {
+    animationDuration: 260,
+    color: SPEED_CHART_COLORS,
+    tooltip: {
+      trigger: 'axis',
+      confine: true,
+      formatter: (params) => {
+        const items = Array.isArray(params) ? params : [params];
+        const firstRow = items.find((item) => item?.data?.row)?.data?.row;
+        const lines = [`<strong>${escapeTooltipValue(formatTimestamp(firstRow?.created_at))}</strong>`];
+
+        items.forEach((item) => {
+          const row = item?.data?.row;
+          if (!row) {
+            return;
+          }
+
+          const metricLabel = item.data?.metricLabel || outputLabel;
+          const value = Array.isArray(item.value) ? item.value[1] : item.value;
+          lines.push(
+            `${item.marker || ''}${escapeTooltipValue(getSpeedModelLabel(row, t))} ${escapeTooltipValue(metricLabel)}: <strong>${escapeTooltipValue(formatRatio(value))}</strong>`,
+          );
+        });
+
+        if (firstRow) {
+          lines.push(`${escapeTooltipValue(t('usage.speed_trend.tooltip_source'))}: ${escapeTooltipValue(firstRow.source || '-')}`);
+          lines.push(`${escapeTooltipValue(t('usage.speed_trend.tooltip_provider'))}: ${escapeTooltipValue(firstRow.provider_route || '-')}`);
+          lines.push(`${escapeTooltipValue(t('usage.speed_trend.tooltip_reasoning'))}: ${escapeTooltipValue(firstRow.reasoning_effort || '-')}`);
+          lines.push(`${escapeTooltipValue(t('usage.speed_trend.tooltip_duration'))}: ${escapeTooltipValue(formatDuration(firstRow.duration))}`);
+          lines.push(
+            `${escapeTooltipValue(t('usage.speed_trend.tooltip_tokens'))}: ${escapeTooltipValue(t('usage.label.prompt'))} ${escapeTooltipValue(formatCompactNumber(firstRow.prompt_tokens))} / ${escapeTooltipValue(t('usage.label.completion'))} ${escapeTooltipValue(formatCompactNumber(firstRow.completion_tokens))} / ${escapeTooltipValue(t('usage.label.total'))} ${escapeTooltipValue(formatCompactNumber(firstRow.total_tokens))}`,
+          );
+        }
+
+        return lines.join('<br/>');
+      },
+    },
+    legend: {
+      type: 'scroll',
+      top: 0,
+      left: 0,
+      right: 0,
+      itemWidth: 18,
+      itemHeight: 8,
+      textStyle: {
+        color: '#64748b',
+        fontSize: 11,
+      },
+      pageIconColor: '#64748b',
+      pageTextStyle: {
+        color: '#64748b',
+      },
+    },
+    grid: {
+      top: 52,
+      right: 20,
+      bottom: 38,
+      left: 56,
+    },
+    xAxis: {
+      type: 'time',
+      axisLabel: {
+        color: '#64748b',
+      },
+      axisLine: {
+        lineStyle: {
+          color: '#cbd5e1',
+        },
+      },
+      splitLine: {
+        show: false,
+      },
+    },
+    yAxis: {
+      type: 'value',
+      name: 'tok/s',
+      nameTextStyle: {
+        color: '#64748b',
+      },
+      axisLabel: {
+        color: '#64748b',
+      },
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(148, 163, 184, 0.18)',
+        },
+      },
+    },
+    series,
+  };
+}
+
 function SummaryCard({ label, value, subValue, accent = 'default' }) {
   return (
     <div className={`usage-summary-item usage-summary-item--${accent}`}>
@@ -141,6 +326,33 @@ function DataTable({ columns, rows, emptyMessage }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+function UsageSpeedTrendChart({ rows, t }) {
+  const option = useMemo(() => buildSpeedTrendOption(rows, t), [rows, t]);
+
+  return (
+    <section className="usage-speed-card">
+      <div className="usage-speed-header">
+        <div>
+          <h3>{t('usage.speed_trend.title')}</h3>
+          <div className="usage-secondary-text">{t('usage.speed_trend.subtitle')}</div>
+        </div>
+      </div>
+
+      {!rows.length ? (
+        <div className="usage-speed-empty">{t('usage.speed_trend.empty')}</div>
+      ) : (
+        <ReactECharts
+          className="usage-speed-chart"
+          option={option}
+          notMerge
+          lazyUpdate
+          style={{ height: 320 }}
+        />
+      )}
+    </section>
   );
 }
 
@@ -194,6 +406,10 @@ export default function UsagePanel({ isVisible = true } = {}) {
   const recentCallRows = useMemo(
     () => sortRowsByTimestamp(usageDashboard.recent_calls || [], 'created_at'),
     [usageDashboard.recent_calls],
+  );
+  const speedRows = useMemo(
+    () => sortRowsByTimestampAscending(usageDashboard.speed_series || [], 'created_at'),
+    [usageDashboard.speed_series],
   );
   const hasUsage = summary.session_count > 0 || summary.completed_call_count > 0 || summary.failed_call_count > 0;
   const totalTokens = Number(summary.total_tokens || 0);
@@ -306,6 +522,8 @@ export default function UsagePanel({ isVisible = true } = {}) {
           </div>
         </section>
 
+        <UsageSpeedTrendChart rows={speedRows} t={t} />
+
         <section className="usage-section">
           <h3>{t('usage.by_source')}</h3>
           {!sourceRows.length ? (
@@ -321,48 +539,50 @@ export default function UsagePanel({ isVisible = true } = {}) {
                     <div className="usage-source-primary">
                       <div className="usage-source-heading">
                         <ToneChip tone="neutral">{row.source}</ToneChip>
-                        <span className="usage-source-title">{formatCompactNumber(row.total_tokens)} total</span>
+                        <span className="usage-source-title">
+                          {t('usage.source.total', { value: formatCompactNumber(row.total_tokens) })}
+                        </span>
                       </div>
                       <div className="usage-source-subline">
-                        <span>{row.session_count} sessions</span>
-                        <span>{row.completed_call_count} completed</span>
-                        <span>{row.failed_call_count} failed</span>
-                        <span>Duration {formatDuration(row.total_duration)}</span>
+                        <span>{t('usage.source.sessions', { value: row.session_count })}</span>
+                        <span>{t('usage.source.completed', { value: row.completed_call_count })}</span>
+                        <span>{t('usage.source.failed', { value: row.failed_call_count })}</span>
+                        <span>{t('usage.source.duration', { value: formatDuration(row.total_duration) })}</span>
                       </div>
                     </div>
                     <div className="usage-source-analytics">
                       <div className="usage-metric-row">
                         <div className="usage-inline-metric">
-                          <span>Prompt</span>
+                          <span>{t('usage.label.prompt')}</span>
                           <strong>{formatCompactNumber(row.prompt_tokens)}</strong>
                         </div>
                         <div className="usage-inline-metric">
-                          <span>Completion</span>
+                          <span>{t('usage.label.completion')}</span>
                           <strong>{formatCompactNumber(row.completion_tokens)}</strong>
                         </div>
                         <div className="usage-inline-metric">
-                          <span>Total</span>
+                          <span>{t('usage.label.total')}</span>
                           <strong>{formatCompactNumber(row.total_tokens)}</strong>
                         </div>
                         <div className="usage-inline-metric">
-                          <span>Completion tok/s</span>
+                          <span>{t('usage.label.completion_rate')}</span>
                           <strong>{formatRatio(row.output_tokens_per_second)}</strong>
                         </div>
                         <div className="usage-inline-metric">
-                          <span>Total tok/s</span>
+                          <span>{t('usage.label.total_rate')}</span>
                           <strong>{formatRatio(row.average_tokens_per_second)}</strong>
                         </div>
                       </div>
                       <div className="usage-inline-metric">
-                        <span>Share</span>
+                        <span>{t('usage.label.share')}</span>
                         <strong>{formatPercent(share)}</strong>
                       </div>
                       <div className="usage-bar-track">
                         <div className="usage-bar-fill usage-bar-fill--source" style={{ width: `${clampPercent((Number(row.total_tokens || 0) / Math.max(peakSourceTokens, 1)) * 100)}%` }} />
                       </div>
                       <div className="usage-source-breakdown">
-                        <span>Prompt Share {formatPercent(promptMix)}</span>
-                        <span>Completion Share {formatPercent(completionMix)}</span>
+                        <span>{t('usage.label.prompt_share')} {formatPercent(promptMix)}</span>
+                        <span>{t('usage.label.completion_share')} {formatPercent(completionMix)}</span>
                         <span>{formatTimestamp(row.latest_call_at)}</span>
                       </div>
                     </div>
@@ -374,9 +594,9 @@ export default function UsagePanel({ isVisible = true } = {}) {
         </section>
 
         <section className="usage-section">
-          <h3>Daily Usage</h3>
+          <h3>{t('usage.daily')}</h3>
           {!dayRows.length ? (
-            <div className="usage-empty">No daily usage yet.</div>
+            <div className="usage-empty">{t('usage.daily.empty')}</div>
           ) : (
             <div className="usage-day-list">
               {dayRows.map((row) => (
@@ -384,7 +604,10 @@ export default function UsagePanel({ isVisible = true } = {}) {
                   <div className="usage-day-date">
                     <div className="usage-day-title">{row.date}</div>
                     <div className="usage-secondary-text">
-                      {row.completed_call_count} completed / {row.failed_call_count} failed
+                      {t('usage.daily.completed_failed', {
+                        completed: row.completed_call_count,
+                        failed: row.failed_call_count,
+                      })}
                     </div>
                   </div>
                   <div className="usage-day-bar-area">
@@ -394,27 +617,27 @@ export default function UsagePanel({ isVisible = true } = {}) {
                   </div>
                   <div className="usage-day-metrics">
                     <div className="usage-inline-metric">
-                      <span>Prompt</span>
+                      <span>{t('usage.label.prompt')}</span>
                       <strong>{formatCompactNumber(row.prompt_tokens)}</strong>
                     </div>
                     <div className="usage-inline-metric">
-                      <span>Completion</span>
+                      <span>{t('usage.label.completion')}</span>
                       <strong>{formatCompactNumber(row.completion_tokens)}</strong>
                     </div>
                     <div className="usage-inline-metric">
-                      <span>Total</span>
+                      <span>{t('usage.label.total')}</span>
                       <strong>{formatCompactNumber(row.total_tokens)}</strong>
                     </div>
                     <div className="usage-inline-metric">
-                      <span>Duration</span>
+                      <span>{t('usage.label.duration')}</span>
                       <strong>{formatDuration(row.total_duration)}</strong>
                     </div>
                     <div className="usage-inline-metric">
-                      <span>Completion tok/s</span>
+                      <span>{t('usage.label.completion_rate')}</span>
                       <strong>{formatRatio(row.output_tokens_per_second)}</strong>
                     </div>
                     <div className="usage-inline-metric">
-                      <span>Total tok/s</span>
+                      <span>{t('usage.label.total_rate')}</span>
                       <strong>{formatRatio(row.average_tokens_per_second)}</strong>
                     </div>
                   </div>
@@ -425,59 +648,59 @@ export default function UsagePanel({ isVisible = true } = {}) {
         </section>
 
         <section className="usage-section">
-          <h3>Recent Sessions</h3>
+          <h3>{t('usage.recent_sessions')}</h3>
           <DataTable
-            emptyMessage="No recent sessions yet."
+            emptyMessage={t('usage.recent_sessions.empty')}
             rows={sessionRows}
             columns={[
-              { key: 'session_id', label: 'Session', render: (row) => summarizeSessionId(row.session_id) },
-              { key: 'source', label: 'Source', render: (row) => <ToneChip tone="neutral">{row.source}</ToneChip> },
-              { key: 'completed_call_count', label: 'Completed' },
-              { key: 'failed_call_count', label: 'Failed' },
-              { key: 'prompt_tokens', label: 'Prompt', render: (row) => formatCompactNumber(row.prompt_tokens) },
-              { key: 'completion_tokens', label: 'Completion', render: (row) => formatCompactNumber(row.completion_tokens) },
-              { key: 'total_tokens', label: 'Total', render: (row) => formatCompactNumber(row.total_tokens) },
-              { key: 'output_tokens_per_second', label: 'Completion tok/s', render: (row) => formatRatio(row.output_tokens_per_second) },
-              { key: 'average_tokens_per_second', label: 'Total tok/s', render: (row) => formatRatio(row.average_tokens_per_second) },
+              { key: 'session_id', label: t('usage.label.session'), render: (row) => summarizeSessionId(row.session_id) },
+              { key: 'source', label: t('usage.label.source'), render: (row) => <ToneChip tone="neutral">{row.source}</ToneChip> },
+              { key: 'completed_call_count', label: t('usage.label.completed') },
+              { key: 'failed_call_count', label: t('usage.label.failed') },
+              { key: 'prompt_tokens', label: t('usage.label.prompt'), render: (row) => formatCompactNumber(row.prompt_tokens) },
+              { key: 'completion_tokens', label: t('usage.label.completion'), render: (row) => formatCompactNumber(row.completion_tokens) },
+              { key: 'total_tokens', label: t('usage.label.total'), render: (row) => formatCompactNumber(row.total_tokens) },
+              { key: 'output_tokens_per_second', label: t('usage.label.completion_rate'), render: (row) => formatRatio(row.output_tokens_per_second) },
+              { key: 'average_tokens_per_second', label: t('usage.label.total_rate'), render: (row) => formatRatio(row.average_tokens_per_second) },
               {
                 key: 'last_status',
-                label: 'Last Status',
+                label: t('usage.label.last_status'),
                 render: (row) => (
                   <ToneChip tone={row.last_status === 'failed' ? 'warning' : 'success'}>
-                    {row.last_status || 'unknown'}
+                    {row.last_status || t('usage.label.unknown')}
                   </ToneChip>
                 ),
               },
-              { key: 'last_call_at', label: 'Last Call', render: (row) => formatTimestamp(row.last_call_at) },
+              { key: 'last_call_at', label: t('usage.label.last_call'), render: (row) => formatTimestamp(row.last_call_at) },
             ]}
           />
         </section>
 
         <section className="usage-section">
-          <h3>Recent Calls</h3>
+          <h3>{t('usage.recent_calls')}</h3>
           <DataTable
-            emptyMessage="No recent calls yet."
+            emptyMessage={t('usage.recent_calls.empty')}
             rows={recentCallRows}
             columns={[
-              { key: 'call_id', label: 'Call', render: (row) => summarizeSessionId(row.call_id) },
-              { key: 'source', label: 'Source', render: (row) => <ToneChip tone="neutral">{row.source}</ToneChip> },
+              { key: 'call_id', label: t('usage.label.call'), render: (row) => summarizeSessionId(row.call_id) },
+              { key: 'source', label: t('usage.label.source'), render: (row) => <ToneChip tone="neutral">{row.source}</ToneChip> },
               {
                 key: 'status',
-                label: 'Status',
+                label: t('usage.label.status'),
                 render: (row) => (
                   <ToneChip tone={row.status === 'failed' ? 'warning' : 'success'}>
-                    {row.status}
+                    {row.status || t('usage.label.unknown')}
                   </ToneChip>
                 ),
               },
-              { key: 'model', label: 'Model' },
-              { key: 'prompt_tokens', label: 'Prompt', render: (row) => formatCompactNumber(row.prompt_tokens) },
-              { key: 'completion_tokens', label: 'Completion', render: (row) => formatCompactNumber(row.completion_tokens) },
-              { key: 'total_tokens', label: 'Total', render: (row) => formatCompactNumber(row.total_tokens) },
-              { key: 'output_tokens_per_second', label: 'Completion tok/s', render: (row) => formatRatio(row.output_tokens_per_second) },
-              { key: 'average_tokens_per_second', label: 'Total tok/s', render: (row) => formatRatio(row.average_tokens_per_second) },
-              { key: 'duration', label: 'Duration', render: (row) => formatDuration(row.duration) },
-              { key: 'created_at', label: 'Started', render: (row) => formatTimestamp(row.created_at) },
+              { key: 'model', label: t('usage.label.model') },
+              { key: 'prompt_tokens', label: t('usage.label.prompt'), render: (row) => formatCompactNumber(row.prompt_tokens) },
+              { key: 'completion_tokens', label: t('usage.label.completion'), render: (row) => formatCompactNumber(row.completion_tokens) },
+              { key: 'total_tokens', label: t('usage.label.total'), render: (row) => formatCompactNumber(row.total_tokens) },
+              { key: 'output_tokens_per_second', label: t('usage.label.completion_rate'), render: (row) => formatRatio(row.output_tokens_per_second) },
+              { key: 'average_tokens_per_second', label: t('usage.label.total_rate'), render: (row) => formatRatio(row.average_tokens_per_second) },
+              { key: 'duration', label: t('usage.label.duration'), render: (row) => formatDuration(row.duration) },
+              { key: 'created_at', label: t('usage.label.started'), render: (row) => formatTimestamp(row.created_at) },
             ]}
           />
         </section>

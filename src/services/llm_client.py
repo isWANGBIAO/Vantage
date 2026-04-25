@@ -14,6 +14,7 @@ from src.services.model_call_recorder import SessionRecorder
 SYNC_REQUEST_TIMEOUT_SECONDS = 120
 STREAM_REQUEST_TIMEOUT_SECONDS = 600
 PRIMARY_TRANSIENT_RETRY_COUNT = 5
+LOCAL_PROVIDER_RETRY_DELAY_SECONDS = 1.0
 
 
 class LLMClient:
@@ -424,8 +425,16 @@ class LLMClient:
             or "unsupported" in text
         )
 
-    def _is_retryable_primary_error(self, provider, details):
-        if provider.get("route") != "cliproxyapi_primary":
+    def _is_local_provider(self, provider):
+        base_url = str((provider or {}).get("base_url") or "").strip().lower()
+        return (
+            "://127.0.0.1" in base_url
+            or "://localhost" in base_url
+            or "://[::1]" in base_url
+        )
+
+    def _is_retryable_provider_error(self, provider, details):
+        if provider.get("route") != "cliproxyapi_primary" and not self._is_local_provider(provider):
             return False
 
         text = details.lower()
@@ -435,7 +444,30 @@ class LLMClient:
             or "remote end closed connection" in text
             or "connection aborted" in text
             or "read timed out" in text
+            or "failed to establish a new connection" in text
+            or "connection refused" in text
+            or "actively refused" in text
+            or "winerror 10061" in text
+            or "newconnectionerror" in text
+            or "max retries exceeded" in text
         )
+
+    def _retry_delay_seconds(self, provider, details):
+        if not self._is_local_provider(provider):
+            return 0
+
+        text = details.lower()
+        if (
+            "failed to establish a new connection" in text
+            or "connection refused" in text
+            or "actively refused" in text
+            or "winerror 10061" in text
+            or "newconnectionerror" in text
+            or "max retries exceeded" in text
+        ):
+            return LOCAL_PROVIDER_RETRY_DELAY_SECONDS
+
+        return 0
 
     def _provider_with_requested_model_first(self, provider, requested_model):
         provider_snapshot = dict(provider)
@@ -463,7 +495,7 @@ class LLMClient:
                 if provider.get("route") == requested_provider_route:
                     prioritized.append(self._provider_with_requested_model_first(provider, requested_model))
                 else:
-                    fallback.append(self._provider_with_requested_model_first(provider, requested_model))
+                    fallback.append(self._provider_with_requested_model_first(provider, None))
             return prioritized + fallback
 
         if not requested_model:
@@ -576,13 +608,16 @@ class LLMClient:
                             provider["base_url"],
                             details,
                         )
-                        if retry_count < PRIMARY_TRANSIENT_RETRY_COUNT and self._is_retryable_primary_error(provider, details):
+                        if retry_count < PRIMARY_TRANSIENT_RETRY_COUNT and self._is_retryable_provider_error(provider, details):
                             retry_count += 1
                             logging.info(
                                 "Retrying LLM route %s with model %s after transient upstream error",
                                 provider["route"],
                                 model,
                             )
+                            delay_seconds = self._retry_delay_seconds(provider, details)
+                            if delay_seconds > 0:
+                                time.sleep(delay_seconds)
                             continue
 
                         has_next_model = index + 1 < len(model_candidates)

@@ -182,7 +182,7 @@ def get_session_usage_summary(session_id, db_file=None):
     }
 
 
-def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10, call_limit=20):
+def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10, call_limit=20, speed_limit=120):
     resolved_db_file = Path(db_file) if db_file else _db_path(Config.get_history_dir())
     _ensure_db(resolved_db_file)
 
@@ -350,6 +350,40 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
             (int(call_limit),),
         ).fetchall()
 
+        speed_rows = conn.execute(
+            """
+            SELECT *
+            FROM (
+                SELECT
+                    mc.call_id,
+                    mc.session_id,
+                    s.source,
+                    s.entrypoint,
+                    s.default_model,
+                    mc.model,
+                    mc.provider_route,
+                    mc.reasoning_effort,
+                    mc.stream,
+                    mc.status,
+                    mc.duration,
+                    mc.prompt_tokens,
+                    mc.completion_tokens,
+                    mc.total_tokens,
+                    mc.created_at,
+                    mc.completed_at
+                FROM model_calls mc
+                JOIN sessions s
+                    ON s.session_id = mc.session_id
+                WHERE mc.status = 'completed'
+                    AND COALESCE(mc.duration, 0) > 0
+                ORDER BY mc.created_at DESC, mc.call_id DESC
+                LIMIT ?
+            ) AS recent_speed_calls
+            ORDER BY created_at ASC, call_id ASC
+            """,
+            (int(speed_limit),),
+        ).fetchall()
+
     completed_call_count = _as_int(summary_row["completed_call_count"] if summary_row else 0)
     completion_tokens = _as_int(summary_row["completion_tokens"] if summary_row else 0)
     total_tokens = _as_int(summary_row["total_tokens"] if summary_row else 0)
@@ -375,6 +409,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
         "by_day": [_build_usage_row(row) for row in day_rows],
         "sessions": [_build_usage_row(row) for row in session_rows],
         "recent_calls": [_build_usage_row(row) for row in recent_call_rows],
+        "speed_series": [_build_usage_row(row) for row in speed_rows],
     }
 
 

@@ -247,6 +247,114 @@ class SessionRecorderAggregationTests(unittest.TestCase):
         self.assertEqual(snapshot["recent_calls"][2]["call_id"], "plan-call-1")
         self.assertEqual(snapshot["recent_calls"][2]["source"], "action_plan")
 
+    def test_get_usage_dashboard_snapshot_returns_speed_series_for_completed_duration_calls(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            history_dir = Path(tmpdir) / "history"
+            recorder = SessionRecorder(
+                session_id="session-speed",
+                source="chat",
+                entrypoint="src/scripts/run_prompt.py",
+                history_dir=history_dir,
+                default_model="gpt-5.5",
+                provider_route="custom",
+                base_url="http://127.0.0.1:8317/v1",
+                created_at=datetime.fromisoformat("2026-04-17T08:00:00+08:00"),
+            )
+
+            def record_completed(call_id, created_at, duration, usage, *, model="gpt-5.5", reasoning_effort="high"):
+                with patch(
+                    "src.services.model_call_recorder._now",
+                    return_value=datetime.fromisoformat(created_at),
+                ):
+                    recorder.record_request_started(
+                        call_id=call_id,
+                        model=model,
+                        provider_route="custom",
+                        stream=False,
+                        reasoning_effort=reasoning_effort,
+                        messages=[{"role": "user", "content": call_id}],
+                    )
+                    recorder.record_request_completed(
+                        call_id=call_id,
+                        model=model,
+                        provider_route="custom",
+                        stream=False,
+                        reasoning_effort=reasoning_effort,
+                        content="done",
+                        thinking="",
+                        usage=usage,
+                        duration=duration,
+                    )
+
+            record_completed(
+                "old-call",
+                "2026-04-17T09:00:00+08:00",
+                10.0,
+                {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+            )
+            record_completed(
+                "middle-call",
+                "2026-04-18T09:00:00+08:00",
+                5.0,
+                {"prompt_tokens": 80, "completion_tokens": 40, "total_tokens": 120},
+                reasoning_effort="medium",
+            )
+            record_completed(
+                "new-call",
+                "2026-04-19T09:00:00+08:00",
+                4.0,
+                {"prompt_tokens": 50, "completion_tokens": 30, "total_tokens": 80},
+                model="gpt-5.4",
+            )
+            record_completed(
+                "zero-duration-call",
+                "2026-04-20T09:00:00+08:00",
+                0.0,
+                {"prompt_tokens": 25, "completion_tokens": 25, "total_tokens": 50},
+            )
+
+            with patch(
+                "src.services.model_call_recorder._now",
+                return_value=datetime.fromisoformat("2026-04-21T09:00:00+08:00"),
+            ):
+                recorder.record_request_started(
+                    call_id="failed-call",
+                    model="gpt-5.5",
+                    provider_route="custom",
+                    stream=True,
+                    reasoning_effort="high",
+                    messages=[{"role": "user", "content": "boom"}],
+                )
+                recorder.record_request_failed(
+                    call_id="failed-call",
+                    error=RuntimeError("boom"),
+                    model="gpt-5.5",
+                    provider_route="custom",
+                    stream=True,
+                    reasoning_effort="high",
+                    duration=2.5,
+                )
+
+            snapshot = get_usage_dashboard_snapshot(
+                db_file=history_dir / "state.db",
+                speed_limit=2,
+            )
+
+        self.assertEqual([row["call_id"] for row in snapshot["speed_series"]], ["middle-call", "new-call"])
+        self.assertEqual(snapshot["speed_series"][0]["model"], "gpt-5.5")
+        self.assertEqual(snapshot["speed_series"][0]["source"], "chat")
+        self.assertEqual(snapshot["speed_series"][0]["provider_route"], "custom")
+        self.assertEqual(snapshot["speed_series"][0]["reasoning_effort"], "medium")
+        self.assertEqual(snapshot["speed_series"][0]["duration"], 5.0)
+        self.assertEqual(snapshot["speed_series"][0]["prompt_tokens"], 80)
+        self.assertEqual(snapshot["speed_series"][0]["completion_tokens"], 40)
+        self.assertEqual(snapshot["speed_series"][0]["total_tokens"], 120)
+        self.assertAlmostEqual(snapshot["speed_series"][0]["output_tokens_per_second"], 8.0)
+        self.assertAlmostEqual(snapshot["speed_series"][0]["average_tokens_per_second"], 24.0)
+        self.assertEqual(snapshot["speed_series"][1]["model"], "gpt-5.4")
+        self.assertAlmostEqual(snapshot["speed_series"][1]["output_tokens_per_second"], 7.5)
+        self.assertAlmostEqual(snapshot["speed_series"][1]["average_tokens_per_second"], 20.0)
+
 
 if __name__ == "__main__":
     unittest.main()
