@@ -25,13 +25,13 @@ import {
   parseModelReasoningSupport,
 
 } from '../utils/modelReasoningSupport';
+import {
+  buildModelOptionsFromCatalog,
+  findModelOption,
+  persistPreferredModelOption,
+  resolvePreferredModelOption,
+} from '../utils/llmModelCatalog';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
-
-const PROVIDER_LABELS = {
-    cliproxyapi_primary: 'CLIProxyAPI',
-    cliproxyapi_secondary: 'CLIProxyAPI Secondary',
-    siliconflow_fallback: 'SiliconFlow',
-};
 
 function buildClientSentAt() {
     const now = new Date();
@@ -48,24 +48,6 @@ function buildClientSentAt() {
     const seconds = String(now.getSeconds()).padStart(2, '0');
 
     return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${sign}${offsetHours}:${offsetRemainderMinutes}`;
-}
-
-function buildModelProviderLabels(providers = []) {
-    const labels = {};
-
-    for (const provider of providers) {
-        const providerLabel = PROVIDER_LABELS[provider?.route] || provider?.route;
-        const models = Array.isArray(provider?.models) ? provider.models : [];
-
-        for (const model of models) {
-            if (!model || labels[model]) {
-                continue;
-            }
-            labels[model] = providerLabel;
-        }
-    }
-
-    return labels;
 }
 
 function renderChatMarkdownComponents(role) {
@@ -228,8 +210,6 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     const [modelReasoningSupport, setModelReasoningSupport] = useState({});
 
-    const [modelProviderLabels, setModelProviderLabels] = useState({});
-
     const [selectedModel, setSelectedModel] = useState('');
 
     const [isLoading, setIsLoading] = useState(false);
@@ -307,24 +287,25 @@ export default function ChatInterface({ embedded = false } = {}) {
 
         const applyModelCatalog = (data) => {
 
-            const modelList = Array.isArray(data?.models) ? data.models : [];
+            const modelList = buildModelOptionsFromCatalog(data);
 
             setAvailableModels(modelList);
 
             setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
-            setModelProviderLabels(buildModelProviderLabels(data?.providers));
-
-
-
-            const storageModel = localStorage.getItem('preferred_llm_model');
+            const defaultModel = data?.default_model;
+            const storedModelRef = localStorage.getItem('preferred_llm_model_ref');
+            const storedModel = localStorage.getItem('preferred_llm_model');
 
             if (modelList.length > 0) {
+                const nextOption = (
+                    findModelOption(modelList, storedModelRef)
+                    || findModelOption(modelList, storedModel)
+                    || resolvePreferredModelOption(modelList)
+                    || findModelOption(modelList, defaultModel)
+                    || modelList[0]
+                );
 
-                const defaultModel = data?.default_model;
-                const fallbackModel = modelList.includes(defaultModel) ? defaultModel : modelList[0];
-                const nextModel = modelList.includes(storageModel) ? storageModel : fallbackModel;
-
-                setSelectedModel(nextModel);
+                setSelectedModel(nextOption.id);
 
             }
 
@@ -446,7 +427,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
         setSelectedModel(nextModel);
 
-        localStorage.setItem('preferred_llm_model', nextModel);
+        persistPreferredModelOption(findModelOption(availableModels, nextModel));
 
     };
 
@@ -572,10 +553,15 @@ export default function ChatInterface({ embedded = false } = {}) {
                 reasoning_effort: loadStoredActionPlanReasoningEffort(),
             };
 
-            if (selectedModel) {
+            const selectedModelOption = findModelOption(availableModels, selectedModel);
 
-                payload.model = selectedModel;
+            if (selectedModelOption?.model) {
 
+                payload.model = selectedModelOption.model;
+
+            }
+            if (selectedModelOption?.provider_route) {
+                payload.provider_route = selectedModelOption.provider_route;
             }
 
 
@@ -749,8 +735,12 @@ export default function ChatInterface({ embedded = false } = {}) {
                             const chatPayload = { message: transcribedText };
                             chatPayload.client_sent_at = buildClientSentAt();
                             chatPayload.reasoning_effort = loadStoredActionPlanReasoningEffort();
-                            if (selectedModel) {
-                                chatPayload.model = selectedModel;
+                            const selectedModelOption = findModelOption(availableModels, selectedModel);
+                            if (selectedModelOption?.model) {
+                                chatPayload.model = selectedModelOption.model;
+                            }
+                            if (selectedModelOption?.provider_route) {
+                                chatPayload.provider_route = selectedModelOption.provider_route;
                             }
 
                             const chatRes = await fetchBackend("/api/chat", {
@@ -840,7 +830,8 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     const sendButtonLabel = 'SEND';
 
-    const providerLabel = selectedModel ? modelProviderLabels[selectedModel] : null;
+    const selectedModelOption = findModelOption(availableModels, selectedModel);
+    const providerLabel = selectedModelOption?.provider_label || null;
     const displayedDurationSeconds = computeDisplayedDurationSeconds(stats, {
         isActive: isLoading,
         nowMs: liveDurationNowMs,
@@ -1124,9 +1115,9 @@ export default function ChatInterface({ embedded = false } = {}) {
                                 }}
                             >
                                 {availableModels.length === 0 && <option value="">{t('chat.default_model')}</option>}
-                                {availableModels.map((model) => (
-                                    <option key={model} value={model}>
-                                        {`${model}${formatModelReasoningSupportLabel(model, modelReasoningSupport, t)}`}
+                                {availableModels.map((modelOption) => (
+                                    <option key={modelOption.id} value={modelOption.id}>
+                                        {`${modelOption.label}${formatModelReasoningSupportLabel(modelOption.model, modelReasoningSupport, t)}`}
                                     </option>
                                 ))}
                             </select>
@@ -1394,9 +1385,9 @@ export default function ChatInterface({ embedded = false } = {}) {
                             }}
                         >
                             {availableModels.length === 0 && <option value="">{t('chat.default_model')}</option>}
-                            {availableModels.map((model) => (
-                                <option key={model} value={model}>
-                                    {`${model}${formatModelReasoningSupportLabel(model, modelReasoningSupport, t)}`}
+                            {availableModels.map((modelOption) => (
+                                <option key={modelOption.id} value={modelOption.id}>
+                                    {`${modelOption.label}${formatModelReasoningSupportLabel(modelOption.model, modelReasoningSupport, t)}`}
                                 </option>
                             ))}
                         </select>

@@ -5,6 +5,7 @@ import {
   computeDisplayedDurationSeconds,
   formatPoweredByLabel,
   formatReasoningEffortLabel,
+  isFallbackExecution,
 } from './actionPlanStats.js';
 
 test('formatPoweredByLabel prefers model and provider display name', () => {
@@ -13,7 +14,7 @@ test('formatPoweredByLabel prefers model and provider display name', () => {
       model: 'gpt-5.2',
       provider_route: 'cliproxyapi_primary',
     }),
-    'gpt-5.2 · CLIProxyAPI',
+    'gpt-5.2 | CLIProxyAPI',
   );
 });
 
@@ -57,5 +58,37 @@ test('computeDisplayedDurationSeconds keeps the larger backend duration when it 
       },
     ),
     8.2,
+  );
+});
+
+test('isFallbackExecution does not flag a custom provider when requested route and model match', () => {
+  assert.equal(
+    isFallbackExecution(
+      {
+        requested_model: 'gpt-5.5',
+        requested_provider_route: 'custom',
+        model: 'gpt-5.5',
+        provider_route: 'custom',
+        fallback_used: false,
+      },
+      { model: 'gpt-5.5', providerRoute: 'custom' },
+    ),
+    false,
+  );
+});
+
+test('isFallbackExecution flags real provider fallback', () => {
+  assert.equal(
+    isFallbackExecution(
+      {
+        requested_model: 'gpt-5.5',
+        requested_provider_route: 'custom',
+        model: 'gpt-5.4',
+        provider_route: 'cloud',
+        fallback_used: true,
+      },
+      { model: 'gpt-5.5', providerRoute: 'custom' },
+    ),
+    true,
   );
 });

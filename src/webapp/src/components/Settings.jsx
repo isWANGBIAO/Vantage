@@ -7,7 +7,11 @@ import {
   FolderOpen,
   Info,
   MonitorCog,
+  Plus,
+  RefreshCw,
   Save,
+  Star,
+  Trash2,
 } from 'lucide-react';
 import { fetchBackendJson } from '../utils/backendRequest';
 import { loadSettingsState, openSettingsPath, saveSettingsState } from '../utils/settingsState';
@@ -48,47 +52,85 @@ const PATH_LABELS = [
   ['data', 'settings.paths.data'],
 ];
 
-function hasProviderRuntimeFields(provider) {
-  return Boolean(
-    provider?.api_key
-    && provider?.base_url
-    && provider?.model,
-  );
+function normalizeProviderModels(provider) {
+  const seen = new Set();
+  const models = [];
+  const pushModel = (value) => {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    models.push(normalized);
+  };
+
+  pushModel(provider?.model);
+  if (Array.isArray(provider?.models)) {
+    provider.models.forEach(pushModel);
+  }
+  return models;
 }
 
-function getActiveProvider(providerConfig) {
-  const selectedRoute = providerConfig?.selected_provider || null;
-  const providers = providerConfig?.providers && typeof providerConfig.providers === 'object'
-    ? providerConfig.providers
-    : {};
-  const route = (
-    selectedRoute && hasProviderRuntimeFields(providers[selectedRoute])
-      ? selectedRoute
-      : Object.keys(providers).find((candidate) => hasProviderRuntimeFields(providers[candidate]))
-  ) || selectedRoute || 'cliproxyapi';
-  const provider = providers[route] || {};
+function createProviderEntry(route, entry = {}) {
+  const normalizedRoute = typeof route === 'string' && route.trim() ? route.trim() : 'custom';
+  const model = typeof entry.model === 'string' ? entry.model.trim() : '';
   return {
-    route,
-    baseUrl: provider.base_url || '',
-    apiKey: provider.api_key || '',
-    model: provider.model || '',
+    route: normalizedRoute,
+    name: typeof entry.name === 'string' && entry.name.trim() ? entry.name.trim() : normalizedRoute,
+    type: entry.type === 'openai-compatible' ? entry.type : 'openai-compatible',
+    enabled: typeof entry.enabled === 'boolean' ? entry.enabled : true,
+    api_key: typeof entry.api_key === 'string' ? entry.api_key : '',
+    base_url: typeof entry.base_url === 'string' ? entry.base_url : '',
+    model,
+    models: normalizeProviderModels({ ...entry, model }),
+    last_refreshed_at: typeof entry.last_refreshed_at === 'string' ? entry.last_refreshed_at : null,
+    has_api_key: Boolean(entry.has_api_key),
   };
 }
 
-function buildModelOptions(currentModel, modelList) {
-  const options = [];
-  const seen = new Set();
+function normalizeProviderConfigForForm(providerConfig) {
+  const providers = {};
+  const rawProviders = providerConfig?.providers && typeof providerConfig.providers === 'object'
+    ? providerConfig.providers
+    : {};
 
-  for (const model of [currentModel, ...modelList]) {
-    const normalized = typeof model === 'string' ? model.trim() : '';
-    if (!normalized || seen.has(normalized)) {
+  for (const [route, entry] of Object.entries(rawProviders)) {
+    const normalizedRoute = typeof route === 'string' && route.trim() ? route.trim() : '';
+    if (!normalizedRoute) {
       continue;
     }
-    seen.add(normalized);
-    options.push(normalized);
+    providers[normalizedRoute] = createProviderEntry(normalizedRoute, entry);
   }
 
-  return options;
+  const providerRoutes = Object.keys(providers);
+  const selectedProvider = (
+    providerConfig?.selected_provider && providers[providerConfig.selected_provider]
+      ? providerConfig.selected_provider
+      : providerRoutes[0]
+  ) || 'custom';
+
+  if (providerRoutes.length === 0) {
+    providers.custom = createProviderEntry('custom');
+  }
+
+  return {
+    version: 2,
+    selected_provider: selectedProvider,
+    providers,
+  };
+}
+
+function buildProviderRoute(baseRoute, providers) {
+  const normalizedBase = baseRoute || 'custom';
+  if (!providers[normalizedBase]) {
+    return normalizedBase;
+  }
+
+  let index = 2;
+  while (providers[`${normalizedBase}_${index}`]) {
+    index += 1;
+  }
+  return `${normalizedBase}_${index}`;
 }
 
 function SettingsRow({ label, children }) {
@@ -103,22 +145,19 @@ function SettingsRow({ label, children }) {
 export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
   const { displayLanguage, setDisplayLanguage, t } = useDisplayLanguage();
   const [activeSection, setActiveSection] = useState('general');
+  const [activeProviderRoute, setActiveProviderRoute] = useState('custom');
+  const [providerRouteDraft, setProviderRouteDraft] = useState('custom');
   const [state, setState] = useState(null);
   const [form, setForm] = useState({
     displayLanguage,
     theme: currentTheme,
     launchAtLogin: false,
     backgroundMode: 'balanced',
-    provider: {
-      route: 'cliproxyapi',
-      baseUrl: '',
-      apiKey: '',
-      model: '',
-    },
+    providerConfig: normalizeProviderConfigForForm(null),
   });
-  const [availableModels, setAvailableModels] = useState([]);
   const [showApiKey, setShowApiKey] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [refreshingModels, setRefreshingModels] = useState(false);
   const [saveStatus, setSaveStatus] = useState('');
 
   useEffect(() => {
@@ -133,19 +172,24 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
         return;
       }
 
-      const provider = getActiveProvider(nextState.provider);
-      const modelList = Array.isArray(modelCatalog?.models) ? modelCatalog.models : [];
-      if (!provider.model && typeof modelCatalog?.default_model === 'string') {
-        provider.model = modelCatalog.default_model;
+      const providerConfig = normalizeProviderConfigForForm(nextState.provider);
+      const selectedProvider = providerConfig.providers[providerConfig.selected_provider];
+      if (!selectedProvider.model && typeof modelCatalog?.default_model === 'string') {
+        providerConfig.providers[providerConfig.selected_provider] = {
+          ...selectedProvider,
+          model: modelCatalog.default_model,
+          models: normalizeProviderModels({ ...selectedProvider, model: modelCatalog.default_model }),
+        };
       }
       setState(nextState);
-      setAvailableModels(buildModelOptions(provider.model, modelList));
+      setActiveProviderRoute(providerConfig.selected_provider);
+      setProviderRouteDraft(providerConfig.selected_provider);
       setForm({
         displayLanguage: nextState.settings.displayLanguage || displayLanguage,
         theme: nextState.settings.theme || currentTheme,
         launchAtLogin: Boolean(nextState.settings.launchAtLogin),
         backgroundMode: nextState.settings.backgroundMode || 'balanced',
-        provider,
+        providerConfig,
       });
     }
 
@@ -155,6 +199,12 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
       cancelled = true;
     };
   }, [currentTheme, displayLanguage]);
+
+  const providerRoutes = Object.keys(form.providerConfig.providers);
+  const currentProviderRoute = form.providerConfig.providers[activeProviderRoute]
+    ? activeProviderRoute
+    : form.providerConfig.selected_provider;
+  const currentProvider = form.providerConfig.providers[currentProviderRoute] || createProviderEntry(currentProviderRoute);
 
   const diagnosticsText = useMemo(() => {
     if (!state) {
@@ -169,17 +219,170 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
       `language=${form.displayLanguage}`,
       `theme=${form.theme}`,
       `backgroundMode=${form.backgroundMode}`,
+      `provider=${form.providerConfig.selected_provider || ''}`,
     ].join('\n');
-  }, [form.backgroundMode, form.displayLanguage, form.theme, state]);
+  }, [form.backgroundMode, form.displayLanguage, form.providerConfig.selected_provider, form.theme, state]);
 
-  const updateProvider = (key, value) => {
+  const updateProviderConfig = (updater) => {
     setForm((prev) => ({
       ...prev,
-      provider: {
-        ...prev.provider,
+      providerConfig: updater(prev.providerConfig),
+    }));
+  };
+
+  const updateProvider = (key, value) => {
+    updateProviderConfig((providerConfig) => {
+      const route = currentProviderRoute;
+      const provider = createProviderEntry(route, providerConfig.providers[route]);
+      const nextProvider = {
+        ...provider,
         [key]: value,
+      };
+      if (key === 'model') {
+        nextProvider.models = normalizeProviderModels(nextProvider);
+      }
+      return {
+        ...providerConfig,
+        providers: {
+          ...providerConfig.providers,
+          [route]: createProviderEntry(route, nextProvider),
+        },
+      };
+    });
+  };
+
+  const commitProviderRoute = () => {
+    const normalizedRoute = providerRouteDraft.trim();
+    if (!normalizedRoute || normalizedRoute === currentProviderRoute) {
+      setProviderRouteDraft(currentProviderRoute);
+      return;
+    }
+
+    const providers = { ...form.providerConfig.providers };
+    const current = createProviderEntry(currentProviderRoute, providers[currentProviderRoute]);
+    delete providers[currentProviderRoute];
+    const safeRoute = buildProviderRoute(normalizedRoute, providers);
+    providers[safeRoute] = createProviderEntry(safeRoute, {
+      ...current,
+      route: safeRoute,
+      name: current.name === currentProviderRoute ? safeRoute : current.name,
+    });
+    const nextProviderConfig = {
+      ...form.providerConfig,
+      selected_provider: form.providerConfig.selected_provider === currentProviderRoute
+        ? safeRoute
+        : form.providerConfig.selected_provider,
+      providers,
+    };
+    setForm((prev) => ({
+      ...prev,
+      providerConfig: nextProviderConfig,
+    }));
+    setActiveProviderRoute(safeRoute);
+    setProviderRouteDraft(safeRoute);
+  };
+
+  const addProvider = () => {
+    const route = buildProviderRoute('custom', form.providerConfig.providers);
+    const nextProviderConfig = {
+      ...form.providerConfig,
+      selected_provider: form.providerConfig.selected_provider || route,
+      providers: {
+        ...form.providerConfig.providers,
+        [route]: createProviderEntry(route),
+      },
+    };
+    setForm((prev) => ({
+      ...prev,
+      providerConfig: nextProviderConfig,
+    }));
+    setActiveProviderRoute(route);
+    setProviderRouteDraft(route);
+  };
+
+  const deleteProvider = (route) => {
+    const providers = { ...form.providerConfig.providers };
+    delete providers[route];
+    const routes = Object.keys(providers);
+    if (routes.length === 0) {
+      providers.custom = createProviderEntry('custom');
+      routes.push('custom');
+    }
+    const nextSelected = form.providerConfig.selected_provider === route
+      ? routes[0]
+      : form.providerConfig.selected_provider;
+    const nextActive = route === currentProviderRoute ? nextSelected : currentProviderRoute;
+    const nextProviderConfig = {
+      ...form.providerConfig,
+      selected_provider: nextSelected,
+      providers,
+    };
+    setForm((prev) => ({
+      ...prev,
+      providerConfig: nextProviderConfig,
+    }));
+    setActiveProviderRoute(nextActive);
+    setProviderRouteDraft(nextActive);
+  };
+
+  const setDefaultProvider = (route) => {
+    updateProviderConfig((providerConfig) => ({
+      ...providerConfig,
+      selected_provider: route,
+    }));
+  };
+
+  const toggleProviderEnabled = (route) => {
+    updateProviderConfig((providerConfig) => ({
+      ...providerConfig,
+      providers: {
+        ...providerConfig.providers,
+        [route]: createProviderEntry(route, {
+          ...providerConfig.providers[route],
+          enabled: providerConfig.providers[route]?.enabled === false,
+        }),
       },
     }));
+  };
+
+  const refreshProviderModels = async () => {
+    setRefreshingModels(true);
+    setSaveStatus('');
+    try {
+      const payload = await fetchBackendJson('/api/llm_models/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          route: currentProviderRoute,
+          base_url: currentProvider.base_url,
+          api_key: currentProvider.api_key,
+          type: currentProvider.type,
+        }),
+        retryPolicy: 'mutation',
+      });
+      const discoveredModels = Array.isArray(payload?.models) ? payload.models : [];
+      updateProviderConfig((providerConfig) => {
+        const provider = createProviderEntry(currentProviderRoute, providerConfig.providers[currentProviderRoute]);
+        const nextModel = provider.model || discoveredModels[0] || '';
+        return {
+          ...providerConfig,
+          providers: {
+            ...providerConfig.providers,
+            [currentProviderRoute]: createProviderEntry(currentProviderRoute, {
+              ...provider,
+              model: nextModel,
+              models: discoveredModels.length > 0 ? discoveredModels : provider.models,
+              last_refreshed_at: new Date().toISOString(),
+            }),
+          },
+        };
+      });
+      setSaveStatus(t('settings.provider.refresh_success', { count: discoveredModels.length }));
+    } catch (error) {
+      setSaveStatus(t('settings.provider.refresh_failed', { error: error.message || String(error) }));
+    } finally {
+      setRefreshingModels(false);
+    }
   };
 
   const updateTheme = (theme) => {
@@ -192,20 +395,28 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
     setSaveStatus('');
     try {
       const savedState = await saveSettingsState(form);
+      const providerConfig = normalizeProviderConfigForForm(savedState.provider);
       setState(savedState);
+      setActiveProviderRoute(providerConfig.selected_provider);
+      setProviderRouteDraft(providerConfig.selected_provider);
+      setForm((prev) => ({
+        ...prev,
+        displayLanguage: savedState.settings.displayLanguage,
+        theme: savedState.settings.theme,
+        launchAtLogin: Boolean(savedState.settings.launchAtLogin),
+        backgroundMode: savedState.settings.backgroundMode,
+        providerConfig,
+      }));
       await setDisplayLanguage(savedState.settings.displayLanguage);
       onSettingsApplied?.(savedState.settings);
       const modelCatalog = await fetchBackendJson('/api/llm_models', { retryPolicy: 'poll' }).catch(() => null);
-      const modelList = Array.isArray(modelCatalog?.models) ? modelCatalog.models : [];
-      setAvailableModels(buildModelOptions(savedState.provider?.providers?.[savedState.provider?.selected_provider]?.model, modelList));
-      if (form.provider.model) {
-        localStorage.setItem('preferred_llm_model', form.provider.model);
-      }
       window.dispatchEvent(new CustomEvent('vantage:llm-models-updated', {
         detail: modelCatalog || {
-          models: buildModelOptions(form.provider.model, []),
-          default_model: form.provider.model,
+          models: [],
+          default_model: providerConfig.providers[providerConfig.selected_provider]?.model || null,
+          default_provider_route: providerConfig.selected_provider,
           providers: [],
+          model_options: [],
         },
       }));
       setSaveStatus(t('settings.save.saved'));
@@ -272,55 +483,140 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
   );
 
   const renderProvider = () => (
-    <section className="settings-section">
-      <SettingsRow label={t('settings.provider.route')}>
-        <input
-          className="settings-input"
-          value={form.provider.route}
-          onChange={(event) => updateProvider('route', event.target.value)}
-        />
-      </SettingsRow>
-      <SettingsRow label={t('settings.provider.base_url')}>
-        <input
-          className="settings-input"
-          value={form.provider.baseUrl}
-          onChange={(event) => updateProvider('baseUrl', event.target.value)}
-        />
-      </SettingsRow>
-      <SettingsRow label={t('settings.provider.api_key')}>
-        <span className="settings-secret-input">
-          <input
-            className="settings-input"
-            type={showApiKey ? 'text' : 'password'}
-            value={form.provider.apiKey}
-            onChange={(event) => updateProvider('apiKey', event.target.value)}
-          />
-          <button
-            type="button"
-            className="settings-icon-button"
-            onClick={() => setShowApiKey((prev) => !prev)}
-            title={t(showApiKey ? 'settings.provider.hide_key' : 'settings.provider.show_key')}
-          >
-            {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-          </button>
-        </span>
-      </SettingsRow>
-      <SettingsRow label={t('settings.provider.model')}>
-        <select
-          className="settings-input settings-provider-model-select"
-          value={form.provider.model}
-          onChange={(event) => updateProvider('model', event.target.value)}
-        >
-          {availableModels.length === 0 ? (
-            <option value={form.provider.model}>{form.provider.model || '--'}</option>
-          ) : null}
-          {availableModels.map((model) => (
-            <option key={model} value={model}>
-              {model}
-            </option>
-          ))}
-        </select>
-      </SettingsRow>
+    <section className="settings-section settings-provider-section">
+      <div className="settings-provider-layout">
+        <div className="settings-provider-list">
+          <div className="settings-provider-list-header">
+            <span>{t('settings.provider.providers')}</span>
+            <button type="button" className="settings-icon-button" onClick={addProvider} title={t('settings.provider.add')}>
+              <Plus size={16} />
+            </button>
+          </div>
+          {providerRoutes.map((route) => {
+            const provider = form.providerConfig.providers[route];
+            return (
+              <button
+                key={route}
+                type="button"
+                className={`settings-provider-item${route === currentProviderRoute ? ' is-active' : ''}`}
+                onClick={() => {
+                  setActiveProviderRoute(route);
+                  setProviderRouteDraft(route);
+                }}
+              >
+                <span className="settings-provider-name">{provider.name || route}</span>
+                <span className="settings-provider-meta">
+                  {provider.enabled ? t('settings.provider.enabled') : t('settings.provider.disabled')}
+                  {form.providerConfig.selected_provider === route ? ` | ${t('settings.provider.default')}` : ''}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="settings-provider-editor">
+          <div className="settings-provider-editor-actions">
+            <button
+              type="button"
+              className="secondary-button settings-small-button"
+              onClick={() => setDefaultProvider(currentProviderRoute)}
+            >
+              <Star size={15} />
+              {t('settings.provider.set_default')}
+            </button>
+            <button
+              type="button"
+              className="secondary-button settings-small-button"
+              onClick={() => toggleProviderEnabled(currentProviderRoute)}
+            >
+              {currentProvider.enabled ? t('settings.provider.disable') : t('settings.provider.enable')}
+            </button>
+            <button
+              type="button"
+              className="secondary-button settings-small-button danger"
+              onClick={() => deleteProvider(currentProviderRoute)}
+            >
+              <Trash2 size={15} />
+              {t('settings.provider.delete')}
+            </button>
+          </div>
+          <SettingsRow label={t('settings.provider.name')}>
+            <input
+              className="settings-input"
+              value={currentProvider.name}
+              onChange={(event) => updateProvider('name', event.target.value)}
+            />
+          </SettingsRow>
+          <SettingsRow label={t('settings.provider.route')}>
+            <input
+              className="settings-input"
+              value={providerRouteDraft}
+              onChange={(event) => setProviderRouteDraft(event.target.value)}
+              onBlur={commitProviderRoute}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </SettingsRow>
+          <SettingsRow label={t('settings.provider.base_url')}>
+            <input
+              className="settings-input"
+              value={currentProvider.base_url}
+              onChange={(event) => updateProvider('base_url', event.target.value)}
+            />
+          </SettingsRow>
+          <SettingsRow label={t('settings.provider.api_key')}>
+            <span className="settings-secret-input">
+              <input
+                className="settings-input"
+                type={showApiKey ? 'text' : 'password'}
+                value={currentProvider.api_key}
+                onChange={(event) => updateProvider('api_key', event.target.value)}
+              />
+              <button
+                type="button"
+                className="settings-icon-button"
+                onClick={() => setShowApiKey((prev) => !prev)}
+                title={t(showApiKey ? 'settings.provider.hide_key' : 'settings.provider.show_key')}
+              >
+                {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </span>
+          </SettingsRow>
+          <SettingsRow label={t('settings.provider.model')}>
+            <span className="settings-secret-input">
+              <input
+                className="settings-input settings-provider-model-select"
+                list={`settings-models-${currentProviderRoute}`}
+                value={currentProvider.model}
+                onChange={(event) => updateProvider('model', event.target.value)}
+              />
+              <datalist id={`settings-models-${currentProviderRoute}`}>
+                {currentProvider.models.map((model) => (
+                  <option key={model} value={model} />
+                ))}
+              </datalist>
+              <button
+                type="button"
+                className="settings-icon-button"
+                onClick={refreshProviderModels}
+                disabled={refreshingModels}
+                title={t('settings.provider.refresh_models')}
+              >
+                <RefreshCw size={16} />
+              </button>
+            </span>
+          </SettingsRow>
+          <div className="settings-status-line">
+            <Info size={16} />
+            {currentProvider.last_refreshed_at
+              ? t('settings.provider.last_refreshed', { value: currentProvider.last_refreshed_at })
+              : t('settings.provider.not_refreshed')}
+          </div>
+        </div>
+      </div>
     </section>
   );
 

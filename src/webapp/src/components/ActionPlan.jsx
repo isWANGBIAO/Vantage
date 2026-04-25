@@ -19,7 +19,14 @@ import {
 import {
   computeDisplayedDurationSeconds,
   formatPoweredByLabel,
+  isFallbackExecution,
 } from '../utils/actionPlanStats';
+import {
+  buildModelOptionsFromCatalog,
+  findModelOption,
+  persistPreferredModelOption,
+  resolvePreferredModelOption,
+} from '../utils/llmModelCatalog';
 import {
   createNdjsonLineBuffer,
   createStreamRenderScheduler,
@@ -90,17 +97,6 @@ function buildPlanFullInput(systemPrompt, analysisPrompt, analysisReply, planPro
   ].join('\n');
 }
 
-function isFallbackExecution(stats, selectedModel) {
-  if (!stats) {
-    return false;
-  }
-
-  return Boolean(
-    (stats.provider_route && stats.provider_route !== 'cliproxyapi_primary')
-    || (stats.model && selectedModel && stats.model !== selectedModel)
-  );
-}
-
 export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const { t } = useDisplayLanguage();
   const [analysisContent, setAnalysisContent] = useState('');
@@ -118,6 +114,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const [availableModels, setAvailableModels] = useState([]);
   const [modelReasoningSupport, setModelReasoningSupport] = useState({});
   const [selectedModel, setSelectedModel] = useState('');
+  const selectedModelOption = findModelOption(availableModels, selectedModel);
   const [isGenerating, setIsGenerating] = useState(false);
   const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now());
 
@@ -131,12 +128,12 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const copyResetTimeoutRef = useRef(null);
   const visibilityRef = useRef(isVisible);
   const isGeneratingRef = useRef(isGenerating);
-  const selectedModelRef = useRef(selectedModel);
+  const selectedModelRef = useRef(selectedModelOption);
   const selectedReasoningEffortRef = useRef(selectedReasoningEffort);
 
   visibilityRef.current = isVisible;
   isGeneratingRef.current = isGenerating;
-  selectedModelRef.current = selectedModel;
+  selectedModelRef.current = selectedModelOption;
   selectedReasoningEffortRef.current = selectedReasoningEffort;
 
   const setAnalysisContentWithRef = useCallback((value) => {
@@ -341,7 +338,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const handleModelChange = (event) => {
     const nextModel = event.target.value;
     setSelectedModel(nextModel);
-    localStorage.setItem('preferred_llm_model', nextModel);
+    persistPreferredModelOption(findModelOption(availableModels, nextModel));
   };
 
   const refreshChatContextBase = useCallback(async () => {
@@ -401,7 +398,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
     let currentSection = 'analysis';
-    const effectiveModel = modelOverride || selectedModelRef.current;
+    const effectiveModelOption = modelOverride || selectedModelRef.current;
 
     try {
       const response = await fetchBackend('/api/action_plan', {
@@ -412,7 +409,8 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
         body: JSON.stringify(
           buildActionPlanGenerationPayload(effectiveReasoningEffort, {
             replaceToday,
-            model: effectiveModel,
+            model: effectiveModelOption?.model,
+            providerRoute: effectiveModelOption?.provider_route,
           }),
         ),
         signal,
@@ -622,16 +620,22 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
 
   useEffect(() => {
     const applyModelCatalog = (data) => {
-      const modelList = Array.isArray(data?.models) ? data.models : [];
+      const modelList = buildModelOptionsFromCatalog(data);
       setAvailableModels(modelList);
       setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
 
+      const storageModelRef = localStorage.getItem('preferred_llm_model_ref');
       const storageModel = localStorage.getItem('preferred_llm_model');
       if (modelList.length > 0) {
         const defaultModel = data?.default_model;
-        const fallbackModel = modelList.includes(defaultModel) ? defaultModel : modelList[0];
-        const nextModel = modelList.includes(storageModel) ? storageModel : fallbackModel;
-        setSelectedModel(nextModel);
+        const nextModel = (
+          findModelOption(modelList, storageModelRef)
+          || findModelOption(modelList, storageModel)
+          || resolvePreferredModelOption(modelList)
+          || findModelOption(modelList, defaultModel)
+          || modelList[0]
+        );
+        setSelectedModel(nextModel.id);
         return nextModel;
       }
 
@@ -703,9 +707,9 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     analysisContent,
     planPrompt,
   );
-  const modelReasoningSupportLabel = formatModelReasoningSupportLabel(selectedModel, modelReasoningSupport, t);
+  const modelReasoningSupportLabel = formatModelReasoningSupportLabel(selectedModelOption?.model, modelReasoningSupport, t);
   const actualExecutionLabel = formatPoweredByLabel(stats);
-  const fallbackExecutionActive = isFallbackExecution(stats, selectedModel);
+  const fallbackExecutionActive = isFallbackExecution(stats, selectedModelRef);
   const displayedDurationSeconds = computeDisplayedDurationSeconds(stats, {
     isActive: isGenerating,
     nowMs: liveDurationNowMs,
@@ -795,9 +799,9 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
                 opacity: isGenerating || availableModels.length === 0 ? 0.65 : 1,
               }}
             >
-              {availableModels.map((model) => (
-                <option key={model} value={model}>
-                  {model}
+              {availableModels.map((modelOption) => (
+                <option key={modelOption.id} value={modelOption.id}>
+                  {modelOption.label}
                 </option>
               ))}
             </select>

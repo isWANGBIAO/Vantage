@@ -5,5 +5,8 @@ def build_generation_metadata(*results: dict) -> dict:
     return {
         "model": latest_result.get("model"),
         "provider_route": latest_result.get("provider_route"),
+        "requested_model": latest_result.get("requested_model"),
+        "requested_provider_route": latest_result.get("requested_provider_route"),
+        "fallback_used": bool(latest_result.get("fallback_used")),
         "reasoning_effort": latest_result.get("reasoning_effort") or "medium",
     }

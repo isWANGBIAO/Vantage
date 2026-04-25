@@ -48,15 +48,16 @@ test('ActionPlan keeps thinking blocks collapsed until the user expands them', (
 
 test('ActionPlan shows actual execution metadata and flags fallback runs', () => {
   assert.ok(actionPlanSource.includes('formatPoweredByLabel(stats)'));
-  assert.ok(actionPlanSource.includes("stats.provider_route !== 'cliproxyapi_primary'"));
-  assert.ok(actionPlanSource.includes('stats.model !== selectedModel'));
+  assert.ok(actionPlanSource.includes('isFallbackExecution(stats, selectedModelRef)'));
   assert.ok(actionPlanSource.includes('action-plan-fallback-warning'));
   assert.ok(actionPlanSource.includes("t('action_plan.execution.fallback_label'"));
 });
 
-test('ActionPlan uses backend default model before falling back to the first model', () => {
+test('ActionPlan uses provider-aware model options before falling back to legacy models', () => {
   assert.ok(actionPlanSource.includes('const defaultModel = data?.default_model'));
-  assert.ok(actionPlanSource.includes('modelList.includes(defaultModel) ? defaultModel : modelList[0]'));
+  assert.ok(actionPlanSource.includes('buildModelOptionsFromCatalog(data)'));
+  assert.ok(actionPlanSource.includes('preferred_llm_model_ref'));
+  assert.ok(actionPlanSource.includes('provider_route'));
   assert.ok(actionPlanSource.includes("vantage:llm-models-updated"));
 });
 

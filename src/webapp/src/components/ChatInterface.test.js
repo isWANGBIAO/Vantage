@@ -78,9 +78,11 @@ test('ChatInterface copy uses readable labels for model and voice flow', () => {
   }
 });
 
-test('ChatInterface uses backend default model before falling back to the first model', () => {
+test('ChatInterface uses provider-aware model options before falling back to legacy models', () => {
   assert.ok(chatSource.includes('const defaultModel = data?.default_model'));
-  assert.ok(chatSource.includes('modelList.includes(defaultModel) ? defaultModel : modelList[0]'));
+  assert.ok(chatSource.includes('buildModelOptionsFromCatalog(data)'));
+  assert.ok(chatSource.includes('preferred_llm_model_ref'));
+  assert.ok(chatSource.includes('payload.provider_route'));
   assert.ok(chatSource.includes("vantage:llm-models-updated"));
 });
 

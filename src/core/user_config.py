@@ -9,7 +9,8 @@ PROVIDERS_FILE_NAME = "providers.json"
 MIGRATION_STATE_FILE_NAME = "migration-state.json"
 
 SETTINGS_VERSION = 1
-PROVIDERS_VERSION = 1
+PROVIDERS_VERSION = 2
+PROVIDER_TYPE_OPENAI_COMPATIBLE = "openai-compatible"
 MIGRATION_STATE_VERSION = 1
 
 DEFAULT_SETTINGS = {
@@ -99,9 +100,45 @@ def _coerce_optional_str(payload: dict | None, key: str) -> str | None:
     return normalized or None
 
 
+def _coerce_optional_str_value(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    normalized = value.strip()
+    return normalized or None
+
+
 def _coerce_dict(payload: dict | None, key: str) -> dict:
     value = payload.get(key) if isinstance(payload, dict) else None
     return deepcopy(value) if isinstance(value, dict) else {}
+
+
+def _coerce_provider_type(payload: dict | None, key: str = "type") -> str:
+    value = payload.get(key) if isinstance(payload, dict) else None
+    if value == PROVIDER_TYPE_OPENAI_COMPATIBLE:
+        return value
+    return PROVIDER_TYPE_OPENAI_COMPATIBLE
+
+
+def _coerce_provider_models(payload: dict | None, model: str | None) -> list[str]:
+    raw_models = payload.get("models") if isinstance(payload, dict) else None
+    models = []
+    seen = set()
+
+    if isinstance(model, str) and model.strip():
+        normalized_model = model.strip()
+        models.append(normalized_model)
+        seen.add(normalized_model)
+
+    if isinstance(raw_models, (list, tuple)):
+        for item in raw_models:
+            normalized_item = _coerce_optional_str_value(item)
+            if not normalized_item or normalized_item in seen:
+                continue
+            models.append(normalized_item)
+            seen.add(normalized_item)
+
+    return models
 
 
 def _coerce_display_language(payload: dict | None, key: str = "display_language") -> str:
@@ -125,11 +162,22 @@ def _coerce_background_mode(payload: dict | None, key: str = "background_mode") 
     return "balanced"
 
 
-def _sanitize_provider_entry(entry: dict | None) -> dict:
+def _sanitize_provider_entry(route: str, entry: dict | None) -> dict:
+    model = _coerce_optional_str(entry, "model") or ""
+    models = _coerce_provider_models(entry, model)
+    if not model and models:
+        model = models[0]
+
     return {
+        "route": route,
+        "name": _coerce_optional_str(entry, "name") or route,
+        "type": _coerce_provider_type(entry),
+        "enabled": _coerce_bool(entry, "enabled", True),
         "api_key": _coerce_optional_str(entry, "api_key") or "",
         "base_url": _coerce_optional_str(entry, "base_url") or "",
-        "model": _coerce_optional_str(entry, "model") or "",
+        "model": model,
+        "models": _coerce_provider_models(entry, model),
+        "last_refreshed_at": _coerce_optional_str(entry, "last_refreshed_at"),
     }
 
 
@@ -151,7 +199,10 @@ def _sanitize_provider_config(payload: dict | None) -> dict:
         normalized_key = str(key).strip() if isinstance(key, str) else ""
         if not normalized_key:
             continue
-        providers[normalized_key] = _sanitize_provider_entry(entry if isinstance(entry, dict) else None)
+        providers[normalized_key] = _sanitize_provider_entry(
+            normalized_key,
+            entry if isinstance(entry, dict) else None,
+        )
 
     return {
         "version": PROVIDERS_VERSION,
@@ -163,6 +214,8 @@ def _sanitize_provider_config(payload: dict | None) -> dict:
 def _build_complete_provider(route: str | None, provider: dict | None) -> dict | None:
     if not route or not isinstance(provider, dict):
         return None
+    if provider.get("enabled") is False:
+        return None
 
     api_key = _coerce_optional_str(provider, "api_key")
     base_url = _coerce_optional_str(provider, "base_url")
@@ -170,11 +223,17 @@ def _build_complete_provider(route: str | None, provider: dict | None) -> dict |
     if not api_key or not base_url or not model:
         return None
 
+    models = _coerce_provider_models(provider, model)
     return {
         "route": route,
+        "name": _coerce_optional_str(provider, "name") or route,
+        "type": _coerce_provider_type(provider),
+        "enabled": True,
         "api_key": api_key,
         "base_url": base_url,
         "model": model,
+        "models": models or [model],
+        "last_refreshed_at": _coerce_optional_str(provider, "last_refreshed_at"),
     }
 
 
@@ -215,22 +274,34 @@ def save_provider_config(payload: dict | None, providers_file: str | Path | None
     return _write_json_payload(resolved_providers_file, _sanitize_provider_config(payload))
 
 
-def get_active_provider_config(providers_file: str | Path | None = None) -> dict | None:
-    provider_config = load_provider_config(providers_file=providers_file)
+def _ordered_provider_routes(provider_config: dict, providers: dict) -> list[str]:
     route = _coerce_optional_str(provider_config, "selected_provider")
-    providers = provider_config.get("providers")
-    if not isinstance(providers, dict):
-        return None
-
     candidate_routes = []
     if route:
         candidate_routes.append(route)
     candidate_routes.extend(candidate for candidate in providers if candidate not in candidate_routes)
+    return candidate_routes
 
-    for candidate_route in candidate_routes:
+
+def get_provider_chain_config(providers_file: str | Path | None = None) -> list[dict]:
+    provider_config = load_provider_config(providers_file=providers_file)
+    providers = provider_config.get("providers")
+    if not isinstance(providers, dict):
+        return []
+
+    chain = []
+    for candidate_route in _ordered_provider_routes(provider_config, providers):
         active_provider = _build_complete_provider(candidate_route, providers.get(candidate_route))
         if active_provider:
-            return active_provider
+            chain.append(active_provider)
+
+    return chain
+
+
+def get_active_provider_config(providers_file: str | Path | None = None) -> dict | None:
+    chain = get_provider_chain_config(providers_file=providers_file)
+    if chain:
+        return chain[0]
 
     return None
 

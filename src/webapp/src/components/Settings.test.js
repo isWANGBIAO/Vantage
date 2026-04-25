@@ -28,15 +28,22 @@ test('Settings saves provider config and refreshes available LLM models', () => 
   assert.ok(settingsSource.includes('saveSettingsState'));
   assert.ok(settingsSource.includes('/api/llm_models'));
   assert.ok(settingsSource.includes("vantage:llm-models-updated"));
-  assert.ok(settingsSource.includes('availableModels'));
+  assert.ok(settingsSource.includes('providerConfig'));
   assert.ok(settingsSource.includes('default_model'));
-  assert.ok(settingsSource.includes('provider:'));
   assert.ok(settingsSource.includes('backgroundMode'));
 });
 
-test('Settings renders provider model as a catalog-backed selector', () => {
-  assert.ok(settingsSource.includes('buildModelOptions'));
+test('Settings renders multi-provider controls and discover refresh', () => {
+  assert.ok(settingsSource.includes('addProvider'));
+  assert.ok(settingsSource.includes('deleteProvider'));
+  assert.ok(settingsSource.includes('setDefaultProvider'));
+  assert.ok(settingsSource.includes('toggleProviderEnabled'));
+  assert.ok(settingsSource.includes('/api/llm_models/discover'));
+  assert.ok(settingsSource.includes('refreshProviderModels'));
   assert.ok(settingsSource.includes('settings-provider-model-select'));
-  assert.ok(settingsSource.includes('availableModels.map'));
+  assert.ok(settingsSource.includes('currentProvider.models'));
+  assert.ok(settingsSource.includes('providerRouteDraft'));
+  assert.ok(settingsSource.includes('commitProviderRoute'));
+  assert.equal(settingsSource.includes('updateProviderRoute'), false);
   assert.equal(settingsSource.includes("onChange={(event) => updateProvider('model', event.target.value)}\n        />"), false);
 });

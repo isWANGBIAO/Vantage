@@ -249,39 +249,65 @@ class LLMClient:
             for _, model_id, supported_parameters in candidates
         ]
 
+    @classmethod
+    def discover_models_for_config(cls, *, route, base_url, api_key, provider_type="openai-compatible"):
+        normalized_base_url = str(base_url or "").strip().rstrip("/")
+        normalized_api_key = str(api_key or "").strip()
+        normalized_route = str(route or "").strip() or "custom"
+        normalized_type = str(provider_type or "").strip() or "openai-compatible"
+        if normalized_type != "openai-compatible":
+            raise ValueError("Only OpenAI-compatible providers are supported in this version.")
+        if not normalized_base_url:
+            raise ValueError("Base URL is required for model discovery.")
+        if not normalized_api_key:
+            raise ValueError("API Key is required for model discovery.")
+
+        helper = cls.__new__(cls)
+        provider = {
+            "route": normalized_route,
+            "base_url": normalized_base_url,
+            "model": "",
+            "models": [],
+            "headers": helper._build_headers(normalized_api_key),
+        }
+        discovered = helper._discover_primary_models(provider)
+        return {
+            "models": [item["id"] for item in discovered],
+            "model_capabilities": {
+                item["id"]: sorted(item["supported_parameters"]) if isinstance(item.get("supported_parameters"), set) else item.get("supported_parameters")
+                for item in discovered
+            },
+            "error": None if discovered else "No models returned by provider.",
+        }
+
+    def _provider_from_user_config(self, user_provider):
+        model = user_provider["model"]
+        models = [str(item).strip() for item in (user_provider.get("models") or []) if str(item or "").strip()]
+        if model and model not in models:
+            models = [model, *models]
+        if not models:
+            models = [model]
+
+        return {
+            "route": user_provider["route"],
+            "name": user_provider.get("name") or user_provider["route"],
+            "type": user_provider.get("type") or "openai-compatible",
+            "base_url": user_provider["base_url"].rstrip("/"),
+            "model": model,
+            "models": models,
+            "headers": self._build_headers(user_provider["api_key"]),
+            "model_capabilities": {model_id: None for model_id in models},
+        }
+
     def _build_provider_chain(self):
-        user_provider = user_config.get_active_provider_config()
-        if user_provider:
-            provider = {
-                "route": user_provider["route"],
-                "base_url": user_provider["base_url"].rstrip("/"),
-                "model": user_provider["model"],
-                "models": [user_provider["model"]],
-                "headers": self._build_headers(user_provider["api_key"]),
-            }
-            discovered_models = self._discover_primary_models(provider)
-            if discovered_models:
-                provider["models"] = [model_info["id"] for model_info in discovered_models]
-                if provider["model"] not in provider["models"]:
-                    provider["models"] = [provider["model"], *provider["models"]]
-                provider["model_capabilities"] = {
-                    model_info["id"]: model_info.get("supported_parameters")
-                    for model_info in discovered_models
-                }
-                provider["model_capabilities"].setdefault(provider["model"], None)
-                logging.info(
-                    "Using user LLM provider route %s with configured model %s",
-                    provider["route"],
-                    provider["model"],
-                )
-            else:
-                provider["model_capabilities"] = {provider["model"]: None}
-                logging.info(
-                    "Using user LLM provider route %s with configured model %s",
-                    provider["route"],
-                    provider["model"],
-                )
-            return [provider]
+        user_providers = user_config.get_provider_chain_config()
+        if user_providers:
+            providers = [self._provider_from_user_config(provider) for provider in user_providers]
+            logging.info(
+                "Configured user LLM provider chain: %s",
+                " -> ".join(f"{provider['route']}({provider['model']})" for provider in providers),
+            )
+            return providers
 
         providers = []
 
@@ -354,10 +380,30 @@ class LLMClient:
         updated["model"] = model
         return updated
 
+    def _known_secret_values(self):
+        secrets = []
+        for provider in getattr(self, "providers", []) or []:
+            auth_header = provider.get("headers", {}).get("Authorization")
+            if isinstance(auth_header, str) and auth_header.startswith("Bearer "):
+                secret = auth_header[len("Bearer "):].strip()
+                if secret:
+                    secrets.append(secret)
+        return secrets
+
+    def _redact_secrets(self, text):
+        if not isinstance(text, str):
+            return text
+
+        redacted = text
+        for secret in self._known_secret_values():
+            redacted = redacted.replace(secret, "[REDACTED_API_KEY]")
+        redacted = re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-[REDACTED]", redacted)
+        return redacted
+
     def _describe_request_error(self, error):
         response = getattr(error, "response", None)
         if response is None:
-            return str(error)
+            return self._redact_secrets(str(error))
 
         details = ""
         try:
@@ -366,8 +412,8 @@ class LLMClient:
             details = ""
 
         if details:
-            return f"{error} | body={details[:500]}"
-        return str(error)
+            return self._redact_secrets(f"{error} | body={details[:500]}")
+        return self._redact_secrets(str(error))
 
     def _is_model_compatibility_error(self, details):
         text = details.lower()
@@ -391,8 +437,35 @@ class LLMClient:
             or "read timed out" in text
         )
 
-    def _ordered_providers(self, requested_model):
+    def _provider_with_requested_model_first(self, provider, requested_model):
+        provider_snapshot = dict(provider)
+        models = [str(model) for model in (provider.get("models") or [provider.get("model")]) if model]
         requested_model = (requested_model or "").strip()
+        if requested_model:
+            matched_model = next(
+                (candidate for candidate in models if self._models_match(candidate, requested_model)),
+                requested_model,
+            )
+            provider_snapshot["models"] = [matched_model] + [model for model in models if model != matched_model]
+            return provider_snapshot
+
+        provider_snapshot["models"] = models
+        return provider_snapshot
+
+    def _ordered_providers(self, requested_model, requested_provider_route=None):
+        requested_model = (requested_model or "").strip()
+        requested_provider_route = (requested_provider_route or "").strip()
+
+        if requested_provider_route:
+            prioritized = []
+            fallback = []
+            for provider in self.providers:
+                if provider.get("route") == requested_provider_route:
+                    prioritized.append(self._provider_with_requested_model_first(provider, requested_model))
+                else:
+                    fallback.append(self._provider_with_requested_model_first(provider, requested_model))
+            return prioritized + fallback
+
         if not requested_model:
             return self.providers
 
@@ -406,8 +479,7 @@ class LLMClient:
                 None,
             )
             if matched_model:
-                provider_snapshot = dict(provider)
-                provider_snapshot["models"] = [matched_model] + [model for model in models if model != matched_model]
+                provider_snapshot = self._provider_with_requested_model_first(provider, matched_model)
                 prioritized.append(provider_snapshot)
             else:
                 fallback.append(provider)
@@ -444,6 +516,8 @@ class LLMClient:
 
             catalog.append({
                 "route": provider["route"],
+                "name": provider.get("name") or provider["route"],
+                "type": provider.get("type") or "openai-compatible",
                 "model": provider["model"],
                 "models": normalized_models,
                 "base_url": provider["base_url"],
@@ -452,8 +526,8 @@ class LLMClient:
 
         return catalog
 
-    def _post_with_failover(self, payload, stream=False, timeout=120, requested_model=None):
-        provider_chain = self._ordered_providers(requested_model)
+    def _post_with_failover(self, payload, stream=False, timeout=120, requested_model=None, requested_provider_route=None):
+        provider_chain = self._ordered_providers(requested_model, requested_provider_route)
         errors = []
 
         for provider in provider_chain:
@@ -522,12 +596,31 @@ class LLMClient:
 
         raise requests.RequestException("All LLM providers failed: " + " | ".join(errors))
 
+    def _find_provider(self, route):
+        normalized_route = str(route or "").strip()
+        if not normalized_route:
+            return None
+        return next((provider for provider in self.providers if provider.get("route") == normalized_route), None)
+
+    def _resolve_requested_provider(self, provider_route=None):
+        provider = self._find_provider(provider_route)
+        if provider:
+            return provider
+        return self.providers[0] if self.providers else None
+
+    def _is_fallback_result(self, requested_model, requested_route, used_model, used_route):
+        return bool(
+            (requested_model and used_model and not self._models_match(requested_model, used_model))
+            or (requested_route and used_route and requested_route != used_route)
+        )
+
     def chat(
         self,
         messages,
         stream=True,
         print_callback=None,
         model=None,
+        provider_route=None,
         session_id=None,
         source="llm_client",
         entrypoint="src/services/llm_client.py",
@@ -561,9 +654,10 @@ class LLMClient:
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
 
-        requested_model = model or (self.providers[0]["model"] if self.providers else None)
-        requested_route = self.providers[0]["route"] if self.providers else None
-        requested_base_url = self.providers[0]["base_url"] if self.providers else None
+        requested_provider = self._resolve_requested_provider(provider_route)
+        requested_model = model or (requested_provider["model"] if requested_provider else None)
+        requested_route = requested_provider["route"] if requested_provider else None
+        requested_base_url = requested_provider["base_url"] if requested_provider else None
         call_id = str(uuid.uuid4())
         recorder = self._build_session_recorder(
             session_id=session_id,
@@ -706,6 +800,7 @@ class LLMClient:
                 stream=False,
                 timeout=SYNC_REQUEST_TIMEOUT_SECONDS,
                 requested_model=model,
+                requested_provider_route=requested_route,
             )
             data = response.json()
 
@@ -720,6 +815,9 @@ class LLMClient:
                 "duration": duration,
                 "model": used_model,
                 "provider_route": used_route,
+                "requested_model": requested_model,
+                "requested_provider_route": requested_route,
+                "fallback_used": self._is_fallback_result(requested_model, requested_route, used_model, used_route),
                 "reasoning_effort": reasoning_effort,
             }
             self._safe_record(
@@ -791,11 +889,15 @@ class LLMClient:
                 stream=True,
                 timeout=STREAM_REQUEST_TIMEOUT_SECONDS,
                 requested_model=model,
+                requested_provider_route=requested_route,
             )
 
             output("metadata", {
                 "model": used_model,
                 "provider_route": used_route,
+                "requested_model": requested_model,
+                "requested_provider_route": requested_route,
+                "fallback_used": self._is_fallback_result(requested_model, requested_route, used_model, used_route),
                 "reasoning_effort": reasoning_effort,
             })
 
@@ -859,6 +961,9 @@ class LLMClient:
             "duration": duration,
             "model": used_model,
             "provider_route": used_route,
+            "requested_model": requested_model,
+            "requested_provider_route": requested_route,
+            "fallback_used": self._is_fallback_result(requested_model, requested_route, used_model, used_route),
             "reasoning_effort": reasoning_effort,
         }
         self._safe_record(

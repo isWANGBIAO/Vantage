@@ -178,6 +178,29 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertIn(sent_at, cmd)
         self.assertEqual(mock_create.await_args.kwargs["env"]["AI_REASONING_EFFORT"], "high")
 
+    def test_chat_endpoint_passes_provider_route_to_subprocess(self):
+        fake_process = _FakeProcess(lines=[b'STREAM_CONTENT:"ok"\n'])
+
+        with patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=fake_process),
+        ) as mock_create:
+            response = asyncio.run(
+                server.chat_endpoint(
+                    server.ChatRequest(
+                        message="hello",
+                        model="gpt-5.5",
+                        provider_route="custom",
+                    ),
+                ),
+            )
+            asyncio.run(_read_first_stream_chunk(response))
+
+        cmd = list(mock_create.await_args.args)
+        self.assertIn("--provider_route", cmd)
+        self.assertIn("custom", cmd)
+
     def test_chat_endpoint_rejects_context_files_outside_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             history_dir = Path(temp_dir) / "history"
@@ -466,6 +489,76 @@ class ActionPlanEndpointTests(unittest.TestCase):
 
         self.assertIn('STREAM_ANALYSIS_CONTENT', chunk)
         self.assertEqual(mock_create.await_args.kwargs["env"]["AI_REASONING_EFFORT"], "high")
+
+    def test_generate_action_plan_passes_provider_route_to_subprocess(self):
+        fake_process = _FakeProcess()
+
+        with patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=fake_process),
+        ) as mock_create:
+            response = asyncio.run(
+                server.generate_action_plan(
+                    server.ActionPlanRequest(model="gpt-5.5", provider_route="custom"),
+                ),
+            )
+            asyncio.run(_read_first_stream_chunk(response))
+
+        cmd = list(mock_create.await_args.args)
+        self.assertIn("--provider_route=custom", cmd)
+
+    def test_list_llm_models_includes_provider_aware_options(self):
+        fake_client = unittest.mock.Mock()
+        fake_client.get_model_catalog.return_value = [
+            {
+                "route": "custom",
+                "name": "Custom",
+                "model": "gpt-5.5",
+                "models": ["gpt-5.5", "gpt-5.4"],
+                "base_url": "http://127.0.0.1:8317/v1",
+                "model_capabilities": {},
+            },
+            {
+                "route": "cloud",
+                "name": "Cloud",
+                "model": "gpt-5.5",
+                "models": ["gpt-5.5"],
+                "base_url": "https://cloud.invalid/v1",
+                "model_capabilities": {},
+            },
+        ]
+
+        with patch.object(server, "LLMClient", return_value=fake_client):
+            payload = asyncio.run(server.list_llm_models())
+
+        self.assertEqual(payload["models"], ["gpt-5.5", "gpt-5.4"])
+        self.assertEqual(payload["default_model"], "gpt-5.5")
+        self.assertEqual(
+            [option["id"] for option in payload["model_options"]],
+            ["custom::gpt-5.5", "custom::gpt-5.4", "cloud::gpt-5.5"],
+        )
+        self.assertEqual(payload["model_options"][0]["provider_route"], "custom")
+
+    def test_discover_llm_models_redacts_api_key_from_errors(self):
+        request = server.LLMModelDiscoverRequest(
+            route="custom",
+            base_url="http://127.0.0.1:8317/v1",
+            api_key="sk-test-secret-1234567890",
+            type="openai-compatible",
+        )
+
+        with patch.object(
+            server.LLMClient,
+            "discover_models_for_config",
+            side_effect=RuntimeError("bad key sk-test-secret-1234567890"),
+        ):
+            response = asyncio.run(server.discover_llm_models(request))
+
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("sk-test-secret-1234567890", payload["error"])
+        self.assertIn("[REDACTED_API_KEY]", payload["error"])
 
     def test_generate_action_plan_defaults_reasoning_effort_to_medium(self):
         fake_process = _FakeProcess()

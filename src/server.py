@@ -51,7 +51,7 @@ import requests
 import pandas as pd
 
 from src.core.config import Config
-from src.core.user_config import load_settings
+from src.core.user_config import load_provider_config, load_settings
 from src.core.media_storage import get_media_paths_settings_file, resolve_media_storage_paths
 from src.manager.manager_main import Monitor
 from src.services.face_analysis_pipeline import (
@@ -1973,6 +1973,7 @@ async def get_today_action_plan():
 class ChatRequest(BaseModel):
     message: str
     model: Optional[str] = None
+    provider_route: Optional[str] = None
     context_file: Optional[str] = None
     reasoning_effort: Optional[str] = None
     client_sent_at: Optional[str] = None
@@ -2183,7 +2184,15 @@ def _replace_today_action_plan_files(previous_files):
 class ActionPlanRequest(BaseModel):
     reasoning_effort: Optional[str] = None
     model: Optional[str] = None
+    provider_route: Optional[str] = None
     replace_today: bool = False
+
+
+class LLMModelDiscoverRequest(BaseModel):
+    route: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    type: Optional[str] = None
 
 
 @app.get("/api/chat/context")
@@ -2220,17 +2229,88 @@ async def list_llm_models():
     providers = client.get_model_catalog()
     seen = set()
     models = []
+    model_options = []
     for provider in providers:
+        provider_route = provider.get("route")
+        provider_label = provider.get("name") or provider_route
         for model in provider.get("models", []):
             if model and model not in seen:
                 seen.add(model)
                 models.append(model)
+            if model and provider_route:
+                model_options.append({
+                    "id": f"{provider_route}::{model}",
+                    "model": model,
+                    "provider_route": provider_route,
+                    "provider_label": provider_label,
+                    "label": f"{model} | {provider_label}",
+                    "is_default": (
+                        provider is providers[0]
+                        and model == provider.get("model")
+                    ),
+                })
 
     return {
         "models": models,
         "providers": providers,
         "default_model": providers[0]["model"] if providers else None,
+        "default_provider_route": providers[0]["route"] if providers else None,
+        "model_options": model_options,
     }
+
+
+def _resolve_discover_secret(request: LLMModelDiscoverRequest):
+    route = (request.route or "").strip()
+    api_key = (request.api_key or "").strip()
+    base_url = (request.base_url or "").strip()
+    provider_type = (request.type or "openai-compatible").strip()
+
+    if (not api_key or api_key == "********" or not base_url) and route:
+        saved_config = load_provider_config()
+        saved_provider = saved_config.get("providers", {}).get(route)
+        if isinstance(saved_provider, dict):
+            if not api_key or api_key == "********":
+                api_key = str(saved_provider.get("api_key") or "").strip()
+            if not base_url:
+                base_url = str(saved_provider.get("base_url") or "").strip()
+            provider_type = str(saved_provider.get("type") or provider_type).strip()
+
+    return {
+        "route": route or "custom",
+        "base_url": base_url,
+        "api_key": api_key,
+        "type": provider_type or "openai-compatible",
+    }
+
+
+def _redact_api_key_from_message(message: str, api_key: str | None = None) -> str:
+    redacted = str(message or "")
+    if api_key:
+        redacted = redacted.replace(api_key, "[REDACTED_API_KEY]")
+    return re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-[REDACTED]", redacted)
+
+
+@app.post("/api/llm_models/discover")
+async def discover_llm_models(request: LLMModelDiscoverRequest):
+    resolved = _resolve_discover_secret(request)
+    try:
+        payload = LLMClient.discover_models_for_config(
+            route=resolved["route"],
+            base_url=resolved["base_url"],
+            api_key=resolved["api_key"],
+            provider_type=resolved["type"],
+        )
+        return payload
+    except Exception as error:
+        error_message = _redact_api_key_from_message(str(error), resolved["api_key"])
+        return JSONResponse(
+            status_code=400,
+            content={
+                "models": [],
+                "model_capabilities": {},
+                "error": error_message,
+            },
+        )
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -2245,6 +2325,8 @@ async def chat_endpoint(request: ChatRequest):
     ]
     if request.model:
         run_prompt_args.extend(["--model", request.model])
+    if request.provider_route:
+        run_prompt_args.extend(["--provider_route", request.provider_route])
     if request.client_sent_at:
         run_prompt_args.extend(["--client_sent_at", request.client_sent_at])
     cmd, run_prompt_cwd = _build_run_prompt_subprocess(run_prompt_args)
@@ -2317,8 +2399,11 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
         request.reasoning_effort if request else None,
     )
     selected_model = request.model if request else None
+    selected_provider_route = request.provider_route if request else None
     if selected_model:
         run_prompt_args.append(f"--model={selected_model}")
+    if selected_provider_route:
+        run_prompt_args.append(f"--provider_route={selected_provider_route}")
     cmd, run_prompt_cwd = _build_run_prompt_subprocess(run_prompt_args)
     replace_today = request.replace_today if request else False
     previous_today_files = _list_today_action_plan_files() if replace_today else []

@@ -732,6 +732,101 @@
   color: var(--text-secondary);
 }
 
+.settings-provider-section {
+  max-width: 1200px;
+}
+
+.settings-provider-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.settings-provider-list,
+.settings-provider-editor {
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}
+
+.settings-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.65rem;
+}
+
+.settings-provider-list-header,
+.settings-provider-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.settings-provider-list-header {
+  padding: 0 0.15rem 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.settings-provider-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  padding: 0.65rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.settings-provider-item.is-active {
+  border-color: rgba(108, 92, 231, 0.45);
+  background: rgba(108, 92, 231, 0.12);
+}
+
+.settings-provider-name,
+.settings-provider-meta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-provider-name {
+  font-weight: 700;
+}
+
+.settings-provider-meta {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.settings-provider-editor {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.settings-provider-editor-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.settings-small-button.danger {
+  color: #ff6b6b;
+  border-color: rgba(255, 107, 107, 0.35);
+}
+
 .settings-about-grid {
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr);
@@ -801,6 +896,10 @@
   .settings-row {
     grid-template-columns: 1fr;
     gap: 0.45rem;
+  }
+
+  .settings-provider-layout {
+    grid-template-columns: 1fr;
   }
 }
 

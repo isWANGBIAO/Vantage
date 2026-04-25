@@ -94,6 +94,7 @@ def run_action_plan_round(
     messages,
     section,
     model_override,
+    provider_route,
     emit_start_before_first_attempt,
     max_empty_content_retries=ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT,
     session_id=None,
@@ -119,6 +120,7 @@ def run_action_plan_round(
             stream=True,
             print_callback=build_action_plan_stream_printer(section),
             model=model_override,
+            provider_route=provider_route,
             session_id=session_id,
             source=source,
             entrypoint=entrypoint,
@@ -179,6 +181,9 @@ def build_action_plan_payload(
             "generated_at": generated_at.isoformat(timespec="seconds"),
             "model": normalized_metadata.get("model"),
             "provider_route": normalized_metadata.get("provider_route"),
+            "requested_model": normalized_metadata.get("requested_model"),
+            "requested_provider_route": normalized_metadata.get("requested_provider_route"),
+            "fallback_used": bool(normalized_metadata.get("fallback_used")),
             "reasoning_effort": normalized_metadata.get("reasoning_effort") or "medium",
             "stats": normalized_stats,
         },
@@ -246,10 +251,12 @@ def main():
     parser.add_argument("--chat_message", help="User message for chat mode")
     parser.add_argument("--context_file", help="Path to load context from")
     parser.add_argument("--model", help="Model name override for this run")
+    parser.add_argument("--provider_route", help="Provider route override for this run")
     parser.add_argument("--client_sent_at", help="Client-side timestamp for the current chat message")
     
     args = parser.parse_args()
     model_override = args.model.strip() if args.model else None
+    provider_route = args.provider_route.strip() if args.provider_route else None
     
     try:
         Config.load_env()
@@ -314,6 +321,7 @@ def main():
                 messages_to_send,
                 stream=True,
                 model=model_override,
+                provider_route=provider_route,
                 session_id=chat_session_id,
                 source="chat",
                 entrypoint=RUN_PROMPT_ENTRYPOINT,
@@ -434,6 +442,7 @@ def main():
                 messages=analysis_messages,
                 section="analysis",
                 model_override=model_override,
+                provider_route=provider_route,
                 emit_start_before_first_attempt=False,
                 session_id=action_plan_session_id,
                 source="action_plan",
@@ -466,6 +475,7 @@ def main():
                     messages=analysis_messages,
                     section="plan",
                     model_override=model_override,
+                    provider_route=provider_route,
                     emit_start_before_first_attempt=True,
                     session_id=action_plan_session_id,
                     source="action_plan",

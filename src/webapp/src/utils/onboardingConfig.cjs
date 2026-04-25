@@ -10,8 +10,11 @@ const DEFAULT_SETTINGS = {
   background_mode: 'balanced',
 };
 
+const PROVIDER_CONFIG_VERSION = 2;
+const PROVIDER_TYPE_OPENAI_COMPATIBLE = 'openai-compatible';
+
 const DEFAULT_PROVIDER_CONFIG = {
-  version: 1,
+  version: PROVIDER_CONFIG_VERSION,
   selected_provider: null,
   providers: {},
 };
@@ -68,6 +71,12 @@ function normalizeOptionalString(value) {
   return normalized || null;
 }
 
+function normalizeProviderType(value) {
+  return value === PROVIDER_TYPE_OPENAI_COMPATIBLE
+    ? value
+    : PROVIDER_TYPE_OPENAI_COMPATIBLE;
+}
+
 function sanitizeDisplayLanguage(value) {
   return value === 'zh-CN' || value === 'en-US' || value === 'system'
     ? value
@@ -102,12 +111,41 @@ function sanitizeSettings(payload) {
   };
 }
 
-function sanitizeProviderEntry(entry) {
+function normalizeModels(models, model) {
+  const normalizedModels = [];
+  const seen = new Set();
+  const pushModel = (value) => {
+    const normalized = normalizeOptionalString(value);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    normalizedModels.push(normalized);
+  };
+
+  pushModel(model);
+  if (Array.isArray(models)) {
+    for (const item of models) {
+      pushModel(item);
+    }
+  }
+
+  return normalizedModels;
+}
+
+function sanitizeProviderEntry(route, entry) {
   const safeEntry = entry && typeof entry === 'object' ? entry : {};
+  const model = normalizeOptionalString(safeEntry.model) || normalizeModels(safeEntry.models, null)[0] || '';
   return {
+    route,
+    name: normalizeOptionalString(safeEntry.name) || route,
+    type: normalizeProviderType(safeEntry.type),
+    enabled: typeof safeEntry.enabled === 'boolean' ? safeEntry.enabled : true,
     api_key: normalizeOptionalString(safeEntry.api_key) || '',
     base_url: normalizeOptionalString(safeEntry.base_url) || '',
-    model: normalizeOptionalString(safeEntry.model) || '',
+    model,
+    models: normalizeModels(safeEntry.models, model),
+    last_refreshed_at: normalizeOptionalString(safeEntry.last_refreshed_at),
   };
 }
 
@@ -122,12 +160,12 @@ function sanitizeProviderConfig(payload) {
       if (!normalizedKey) {
         continue;
       }
-      providers[normalizedKey] = sanitizeProviderEntry(entry);
+      providers[normalizedKey] = sanitizeProviderEntry(normalizedKey, entry);
     }
   }
 
   return {
-    version: 1,
+    version: PROVIDER_CONFIG_VERSION,
     selected_provider: selectedProvider,
     providers,
   };
@@ -168,7 +206,8 @@ function loadMigrationState(runtimePaths) {
 
 function isCompleteProviderEntry(provider) {
   return Boolean(
-    normalizeOptionalString(provider?.api_key)
+    provider?.enabled !== false
+    && normalizeOptionalString(provider?.api_key)
     && normalizeOptionalString(provider?.base_url)
     && normalizeOptionalString(provider?.model),
   );
@@ -196,9 +235,12 @@ function resolveActiveProviderConfig(providerConfig) {
     }
     return {
       route,
+      name: normalizeOptionalString(provider.name) || route,
+      type: normalizeProviderType(provider.type),
       api_key: normalizeOptionalString(provider.api_key),
       base_url: normalizeOptionalString(provider.base_url),
       model: normalizeOptionalString(provider.model),
+      models: normalizeModels(provider.models, provider.model),
     };
   }
 
@@ -293,8 +335,31 @@ function buildSettingsState({
 }
 
 function buildProviderConfigFromSettingsPayload(payload, currentProviderConfig) {
-  const providerPayload = payload && typeof payload.provider === 'object' ? payload.provider : {};
   const currentConfig = normalizeProviderSelection(currentProviderConfig);
+  if (payload && typeof payload.providerConfig === 'object') {
+    const submittedConfig = sanitizeProviderConfig(payload.providerConfig);
+    const submittedProviders = {};
+    for (const [route, provider] of Object.entries(submittedConfig.providers)) {
+      const currentProvider = currentConfig.providers?.[route] || {};
+      const submittedApiKey = normalizeOptionalString(provider.api_key);
+      const apiKey =
+        submittedApiKey && submittedApiKey !== '********'
+          ? submittedApiKey
+          : (normalizeOptionalString(currentProvider.api_key) || '');
+      submittedProviders[route] = {
+        ...provider,
+        api_key: apiKey,
+      };
+    }
+
+    return normalizeProviderSelection({
+      version: PROVIDER_CONFIG_VERSION,
+      selected_provider: submittedConfig.selected_provider,
+      providers: submittedProviders,
+    });
+  }
+
+  const providerPayload = payload && typeof payload.provider === 'object' ? payload.provider : {};
   const currentProviders = currentConfig.providers || {};
   const submittedRoute = normalizeOptionalString(providerPayload.route);
   const submittedApiKey = normalizeOptionalString(providerPayload.apiKey);
@@ -325,11 +390,15 @@ function buildProviderConfigFromSettingsPayload(payload, currentProviderConfig) 
       : (normalizeOptionalString(currentProvider.api_key) || '');
 
   return normalizeProviderSelection({
-    version: 1,
+    version: PROVIDER_CONFIG_VERSION,
     selected_provider: selectedProvider,
     providers: {
       ...currentProviders,
       [selectedProvider]: {
+        route: selectedProvider,
+        name: normalizeOptionalString(currentProvider.name) || selectedProvider,
+        type: normalizeProviderType(currentProvider.type),
+        enabled: currentProvider.enabled !== false,
         api_key: apiKey,
         base_url:
           submittedBaseUrl
@@ -339,6 +408,8 @@ function buildProviderConfigFromSettingsPayload(payload, currentProviderConfig) 
           submittedModel
           || normalizeOptionalString(currentProvider.model)
           || '',
+        models: normalizeModels(currentProvider.models, submittedModel || currentProvider.model),
+        last_refreshed_at: normalizeOptionalString(currentProvider.last_refreshed_at),
       },
     },
   });
@@ -434,13 +505,19 @@ function buildProviderConfigFromSubmission(submission) {
 
   const selectedProvider = normalizeOptionalString(submission.selectedProvider) || 'openai';
   return {
-    version: 1,
+    version: PROVIDER_CONFIG_VERSION,
     selected_provider: selectedProvider,
     providers: {
       [selectedProvider]: {
+        route: selectedProvider,
+        name: selectedProvider,
+        type: PROVIDER_TYPE_OPENAI_COMPATIBLE,
+        enabled: true,
         api_key: normalizeOptionalString(submission.apiKey) || '',
         base_url: normalizeOptionalString(submission.baseUrl) || '',
         model: normalizeOptionalString(submission.model) || '',
+        models: normalizeModels([], submission.model),
+        last_refreshed_at: null,
       },
     },
   };

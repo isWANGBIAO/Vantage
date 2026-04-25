@@ -16,6 +16,21 @@ test('buildActionPlanGenerationPayload normalizes reasoning and can replace toda
   );
 });
 
+test('buildActionPlanGenerationPayload includes provider-aware model selection', () => {
+  assert.deepEqual(
+    buildActionPlanGenerationPayload('high', {
+      model: 'gpt-5.5',
+      providerRoute: 'custom',
+    }),
+    {
+      reasoning_effort: 'high',
+      replace_today: false,
+      model: 'gpt-5.5',
+      provider_route: 'custom',
+    },
+  );
+});
+
 test('shouldAutogenerateActionPlan only allows one startup run', () => {
   assert.equal(
     shouldAutogenerateActionPlan({

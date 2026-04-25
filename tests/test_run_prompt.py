@@ -463,6 +463,43 @@ class RunPromptTests(unittest.TestCase):
         self.assertTrue(kwargs["session_id"])
         self.assertTrue(str(kwargs["context_file"]).endswith("latest_context.json"))
 
+    def test_chat_mode_passes_provider_route_to_llm_client(self):
+        fake_client = _CapturingLLMClient(
+            [
+                {
+                    "content": "chat reply",
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+                    "duration": 0.8,
+                }
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_dir = Path(temp_dir) / "history"
+            history_dir.mkdir()
+
+            with patch.object(run_prompt.Config, "load_env"), patch.object(
+                run_prompt.Config,
+                "get_history_dir",
+                return_value=history_dir,
+            ), patch.object(
+                run_prompt,
+                "LLMClient",
+                return_value=fake_client,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_system_prompt_content",
+                return_value="system prompt",
+            ), patch.object(
+                sys,
+                "argv",
+                ["run_prompt.py", "--chat_message", "hello", "--model", "gpt-5.5", "--provider_route", "custom"],
+            ):
+                run_prompt.main()
+
+        self.assertEqual(fake_client.calls[0]["model"], "gpt-5.5")
+        self.assertEqual(fake_client.calls[0]["kwargs"]["provider_route"], "custom")
+
     def test_chat_mode_emits_historical_stats_from_session_summary(self):
         fake_client = _CapturingLLMClient(
             [

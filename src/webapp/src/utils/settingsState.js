@@ -7,7 +7,7 @@ const DEFAULT_SETTINGS_STATE = {
     backgroundMode: 'balanced',
   },
   provider: {
-    version: 1,
+    version: 2,
     selected_provider: null,
     providers: {},
   },

@@ -110,16 +110,106 @@ test('saveSettingsPayload persists general settings and provider config', () => 
     background_mode: 'power_saver',
   });
   assert.deepEqual(providers, {
-    version: 1,
+    version: 2,
     selected_provider: 'cliproxyapi',
     providers: {
       cliproxyapi: {
+        route: 'cliproxyapi',
+        name: 'cliproxyapi',
+        type: 'openai-compatible',
+        enabled: true,
         api_key: 'sk-demo-secret',
         base_url: 'https://example.invalid/v1',
         model: 'gpt-5.4',
+        models: ['gpt-5.4'],
+        last_refreshed_at: null,
       },
     },
   });
+});
+
+test('saveSettingsPayload persists multi provider settings without losing masked keys', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-settings-multi-provider-'));
+  const runtimePaths = {
+    configDir: path.join(root, 'config'),
+    historyDir: path.join(root, 'history'),
+    logDir: path.join(root, 'logs'),
+    plotDir: path.join(root, 'plots'),
+    cacheDir: path.join(root, 'cache'),
+    runtimeDir: path.join(root, 'runtime'),
+    migrationDir: path.join(root, 'migration'),
+    dataDir: path.join(root, 'data'),
+  };
+  mkdirSync(runtimePaths.configDir, { recursive: true });
+  writeFileSync(
+    path.join(runtimePaths.configDir, 'providers.json'),
+    JSON.stringify({
+      version: 2,
+      selected_provider: 'local',
+      providers: {
+        local: {
+          route: 'local',
+          name: 'Local Proxy',
+          type: 'openai-compatible',
+          enabled: true,
+          api_key: 'sk-local-real',
+          base_url: 'http://127.0.0.1:8317/v1',
+          model: 'gpt-5.5',
+          models: ['gpt-5.5'],
+          last_refreshed_at: '2026-04-25T00:00:00.000Z',
+        },
+      },
+    }),
+    'utf8',
+  );
+
+  saveSettingsPayload({
+    runtimePaths,
+    payload: {
+      displayLanguage: 'zh-CN',
+      theme: 'dark',
+      launchAtLogin: false,
+      backgroundMode: 'balanced',
+      providerConfig: {
+        version: 2,
+        selected_provider: 'cloud',
+        providers: {
+          local: {
+            route: 'local',
+            name: 'Local Proxy',
+            type: 'openai-compatible',
+            enabled: true,
+            api_key: '********',
+            base_url: 'http://127.0.0.1:8317/v1',
+            model: 'gpt-5.5',
+            models: ['gpt-5.5'],
+            last_refreshed_at: '2026-04-25T00:00:00.000Z',
+          },
+          cloud: {
+            route: 'cloud',
+            name: 'Cloud Proxy',
+            type: 'openai-compatible',
+            enabled: false,
+            api_key: 'sk-cloud',
+            base_url: 'https://cloud.invalid/v1',
+            model: 'gpt-5.4',
+            models: ['gpt-5.4', 'gpt-5.3'],
+            last_refreshed_at: null,
+          },
+        },
+      },
+    },
+  });
+
+  const providers = JSON.parse(
+    readFileSync(path.join(runtimePaths.configDir, 'providers.json'), 'utf8'),
+  );
+
+  assert.equal(providers.version, 2);
+  assert.equal(providers.providers.local.api_key, 'sk-local-real');
+  assert.equal(providers.providers.cloud.enabled, false);
+  assert.deepEqual(providers.providers.cloud.models, ['gpt-5.4', 'gpt-5.3']);
+  assert.equal(providers.selected_provider, 'local');
 });
 
 test('buildSettingsState reports a complete provider when selected provider is empty', () => {
@@ -234,6 +324,7 @@ test('maskProviderConfig hides saved API keys in settings state', () => {
 
   assert.equal(masked.providers.openai.api_key, '********');
   assert.equal(masked.providers.openai.has_api_key, true);
+  assert.equal(masked.version, 2);
 });
 
 test('getOnboardingState reads onboarding flags from settings.json', () => {
@@ -338,13 +429,19 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
     background_mode: 'balanced',
   });
   assert.deepEqual(providers, {
-    version: 1,
+    version: 2,
     selected_provider: 'openai',
     providers: {
       openai: {
+        route: 'openai',
+        name: 'openai',
+        type: 'openai-compatible',
+        enabled: true,
         api_key: 'sk-demo',
         base_url: 'https://example.invalid/v1',
         model: 'gpt-5',
+        models: ['gpt-5'],
+        last_refreshed_at: null,
       },
     },
   });

@@ -3,6 +3,7 @@ import { normalizeActionPlanReasoningEffort } from './actionPlanReasoning.js';
 export function buildActionPlanGenerationPayload(reasoningEffort, {
   replaceToday = false,
   model = null,
+  providerRoute = null,
 } = {}) {
   const payload = {
     reasoning_effort: normalizeActionPlanReasoningEffort(reasoningEffort),
@@ -11,6 +12,9 @@ export function buildActionPlanGenerationPayload(reasoningEffort, {
 
   if (model) {
     payload.model = model;
+  }
+  if (providerRoute) {
+    payload.provider_route = providerRoute;
   }
 
   return payload;
