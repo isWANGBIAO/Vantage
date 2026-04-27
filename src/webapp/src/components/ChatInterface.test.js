@@ -158,11 +158,10 @@ test('consumeChatStreamChunk parses stats payloads without affecting content', (
 
   const nextState = consumeChatStreamChunk(
     state,
-    '{"log":"STATS_JSON:{\\"total_tokens\\":128,\\"historical_total_tokens\\":512,\\"speed\\":\\"3.50 tokens/s\\"}"}\n',
+    '{"log":"STATS_JSON:{\\"total_tokens\\":128,\\"speed\\":\\"3.50 tokens/s\\"}"}\n',
   );
 
   assert.equal(nextState.stats.total_tokens, 128);
-  assert.equal(nextState.stats.historical_total_tokens, 512);
   assert.equal(nextState.stats.speed, '3.50 tokens/s');
   assert.equal(nextState.assistantContent, '');
   assert.equal(nextState.assistantThinking, '');
@@ -187,7 +186,8 @@ test('ChatInterface renders chat token stats and hydrates them from backend cont
   assert.ok(chatSource.includes("t('common.speed'"));
   assert.ok(chatSource.includes('computeDisplayedDurationSeconds'));
   assert.ok(chatSource.includes("t('common.tokens'"));
-  assert.ok(chatSource.includes("t('common.history'"));
+  assert.equal(chatSource.includes("t('common.history'"), false);
+  assert.equal(chatSource.includes('historical_total_tokens'), false);
 });
 
 test('ChatInterface keeps reasoning blocks collapsed until the user expands them', () => {

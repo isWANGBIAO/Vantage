@@ -423,6 +423,52 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertEqual(payload["plan"]["body"], "plan markdown")
         self.assertEqual(payload["filename"], latest_file.name)
 
+    def test_get_today_action_plan_hydrates_legacy_input_from_action_plan_context(self):
+        today = datetime.now().strftime("%Y%m%d")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_dir = Path(temp_dir) / "history"
+            history_dir.mkdir()
+            latest_file = history_dir / f"action_plan_{today}_112348.json"
+            latest_file.write_text(
+                json.dumps(
+                    {
+                        "id": f"{today}_112348",
+                        "date": "2026-04-14",
+                        "analysis": {"body": "analysis markdown"},
+                        "plan": {"body": "plan markdown"},
+                        "meta": {"generated_at": "2026-04-14T11:23:48+08:00"},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (history_dir / "latest_action_plan_context.json").write_text(
+                json.dumps(
+                    [
+                        {"role": "system", "content": "system prompt"},
+                        {"role": "user", "content": "analysis prompt"},
+                        {"role": "assistant", "content": "analysis markdown"},
+                        {"role": "user", "content": "plan prompt"},
+                        {"role": "assistant", "content": "plan markdown"},
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
+                payload = asyncio.run(server.get_today_action_plan())
+
+        self.assertEqual(
+            payload["meta"]["input"],
+            {
+                "system_prompt": "system prompt",
+                "analysis_prompt": "analysis prompt",
+                "plan_prompt": "plan prompt",
+            },
+        )
+
     def test_get_usage_dashboard_returns_aggregated_history_payload(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             history_dir = Path(temp_dir) / "history"

@@ -18,7 +18,10 @@ import {
 } from '../utils/modelReasoningSupport';
 import {
   computeDisplayedDurationSeconds,
+  formatActionPlanTokenBreakdown,
+  formatSecondsValue,
   formatPoweredByLabel,
+  getActionPlanRoundStats,
   isFallbackExecution,
 } from '../utils/actionPlanStats';
 import {
@@ -201,6 +204,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     const analysisBody = data.analysis?.body || '';
     const planBody = data.plan?.body || '';
     const savedStats = data.meta?.stats;
+    const savedInput = data.meta?.input || {};
 
     setAnalysisContentWithRef(
       analysisBody || buildMarkdownPlaceholder(
@@ -216,9 +220,9 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       ),
     );
     setPlanThinking('');
-    setSystemPrompt('');
-    setAnalysisPrompt('');
-    setPlanPrompt('');
+    setSystemPrompt(savedInput.system_prompt || '');
+    setAnalysisPrompt(savedInput.analysis_prompt || '');
+    setPlanPrompt(savedInput.plan_prompt || '');
     setAnalysisReplyReady(Boolean(analysisBody));
     setPlanReplyReady(Boolean(planBody));
     setCopiedKey('');
@@ -229,7 +233,6 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             speed: 'loaded',
             total_duration: 0,
             total_tokens: 0,
-            historical_total_tokens: undefined,
           },
     );
   }, [setAnalysisContentWithRef, setPlanContentWithRef, t]);
@@ -714,6 +717,8 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     isActive: isGenerating,
     nowMs: liveDurationNowMs,
   });
+  const analysisRoundStats = getActionPlanRoundStats(stats, 'analysis');
+  const planRoundStats = getActionPlanRoundStats(stats, 'plan');
 
   return (
     <div
@@ -759,18 +764,10 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           {stats && (
             <div className="action-plan-stats">
+              <span>{t('common.first_token', { value: formatDurationChipValue(stats.first_token_latency) })}</span>
               <span>{t('common.speed', { value: stats.speed })}</span>
               <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
-              <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
-              {stats.historical_total_tokens !== undefined && (
-                <span>
-                  {t('common.history', {
-                    value: stats.historical_total_tokens >= 1000000
-                      ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
-                      : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`,
-                  })}
-                </span>
-              )}
+              <span>{t('common.tokens_detail', { value: formatActionPlanTokenBreakdown(stats) })}</span>
             </div>
           )}
 
@@ -907,9 +904,12 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
               gap: '0.75rem',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
-              <Activity size={16} color="var(--secondary-color)" />
-              <h4 style={{ margin: 0, fontSize: '0.95rem' }}>{t('action_plan.panel.analysis')}</h4>
+            <div className="action-plan-panel-header-main">
+              <div className="action-plan-panel-title">
+                <Activity size={16} color="var(--secondary-color)" />
+                <h4 style={{ margin: 0, fontSize: '0.95rem' }}>{t('action_plan.panel.analysis')}</h4>
+              </div>
+              <ActionPlanRoundStats stats={analysisRoundStats} t={t} />
             </div>
             <ActionPlanCopyControls
               t={t}
@@ -958,9 +958,12 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
               gap: '0.75rem',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
-              <FileText size={16} color="var(--primary-color)" />
-              <h4 style={{ margin: 0, fontSize: '0.95rem' }}>{t('action_plan.panel.today_plan')}</h4>
+            <div className="action-plan-panel-header-main">
+              <div className="action-plan-panel-title">
+                <FileText size={16} color="var(--primary-color)" />
+                <h4 style={{ margin: 0, fontSize: '0.95rem' }}>{t('action_plan.panel.today_plan')}</h4>
+              </div>
+              <ActionPlanRoundStats stats={planRoundStats} t={t} />
             </div>
             <ActionPlanCopyControls
               t={t}
@@ -990,6 +993,34 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function formatDurationChipValue(value) {
+  const formatted = formatSecondsValue(value);
+  return formatted === '-' ? '-' : `${formatted}s`;
+}
+
+function formatRoundSpeedValue(stats) {
+  const value = Number(stats?.completion_tokens_per_second ?? stats?.output_tokens_per_second);
+  if (!Number.isFinite(value)) {
+    return '-';
+  }
+  return `${value.toFixed(2)} tokens/s`;
+}
+
+function ActionPlanRoundStats({ stats, t }) {
+  if (!stats) {
+    return null;
+  }
+
+  return (
+    <div className="action-plan-round-stats">
+      <span>{t('common.first_token', { value: formatDurationChipValue(stats.first_token_latency) })}</span>
+      <span>{t('common.time', { value: formatSecondsValue(stats.duration) })}</span>
+      <span>{t('common.tokens_detail', { value: formatActionPlanTokenBreakdown(stats) })}</span>
+      <span>{t('common.speed', { value: formatRoundSpeedValue(stats) })}</span>
     </div>
   );
 }

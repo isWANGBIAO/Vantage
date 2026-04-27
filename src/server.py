@@ -1950,6 +1950,7 @@ async def get_today_action_plan():
                 "date": today,
                 "error": f"Invalid action plan payload: {os.path.basename(latest_file)}",
             }
+        payload = _hydrate_action_plan_input(payload)
 
         return {
             "exists": True,
@@ -2142,6 +2143,39 @@ def _load_action_plan_payload(path: str):
         return None
 
     return payload if isinstance(payload, dict) else None
+
+
+def _hydrate_action_plan_input(payload):
+    if not isinstance(payload, dict):
+        return payload
+
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        return payload
+
+    existing_input = meta.get("input")
+    if isinstance(existing_input, dict) and any(existing_input.values()):
+        return payload
+
+    messages = _load_context_messages(_get_action_plan_context_file())
+    if len(messages) < 5:
+        return payload
+
+    expected_roles = ["system", "user", "assistant", "user", "assistant"]
+    if [message.get("role") for message in messages[:5]] != expected_roles:
+        return payload
+
+    analysis_body = (payload.get("analysis") or {}).get("body") or ""
+    plan_body = (payload.get("plan") or {}).get("body") or ""
+    if messages[2].get("content") != analysis_body or messages[4].get("content") != plan_body:
+        return payload
+
+    meta["input"] = {
+        "system_prompt": messages[0].get("content") or "",
+        "analysis_prompt": messages[1].get("content") or "",
+        "plan_prompt": messages[3].get("content") or "",
+    }
+    return payload
 
 
 def _get_latest_action_plan_file(target_date: Optional[str] = None):

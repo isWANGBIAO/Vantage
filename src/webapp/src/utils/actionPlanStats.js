@@ -83,3 +83,42 @@ export function computeDisplayedDurationSeconds(stats, { isActive = false, nowMs
   const liveElapsedSeconds = Math.max(0, (nowMs - startTime) / 1000);
   return Math.max(backendDuration, liveElapsedSeconds);
 }
+
+export function formatCompactTokenValue(value) {
+  const number = Number(value || 0);
+  if (number >= 1000000) {
+    return `${(number / 1000000).toFixed(2)}M`;
+  }
+  if (number >= 1000) {
+    return `${(number / 1000).toFixed(1)}k`;
+  }
+  return `${Math.round(number)}`;
+}
+
+export function formatSecondsValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return '-';
+  }
+  return number.toFixed(1);
+}
+
+export function formatActionPlanTokenBreakdown(stats) {
+  const totalTokens = Number(stats?.total_tokens || 0);
+  const promptTokens = Number(stats?.prompt_tokens || 0);
+  const completionTokens = Number(stats?.completion_tokens || 0);
+  const totalText = formatCompactTokenValue(totalTokens);
+
+  if (promptTokens <= 0 && completionTokens <= 0) {
+    return totalText;
+  }
+
+  return `${totalText} (P ${formatCompactTokenValue(promptTokens)} / C ${formatCompactTokenValue(completionTokens)})`;
+}
+
+export function getActionPlanRoundStats(stats, section) {
+  if (!Array.isArray(stats?.requests)) {
+    return null;
+  }
+  return stats.requests.find((request) => request?.section === section) || null;
+}

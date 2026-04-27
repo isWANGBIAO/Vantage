@@ -80,6 +80,7 @@ def _ensure_db(db_file):
                 reasoning_effort TEXT,
                 stream INTEGER NOT NULL,
                 duration REAL,
+                first_token_latency REAL,
                 prompt_tokens INTEGER,
                 completion_tokens INTEGER,
                 total_tokens INTEGER,
@@ -103,6 +104,12 @@ def _ensure_db(db_file):
             ON session_messages (session_id, call_id, message_index);
             """
         )
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(model_calls)").fetchall()
+        }
+        if "first_token_latency" not in columns:
+            conn.execute("ALTER TABLE model_calls ADD COLUMN first_token_latency REAL")
 
 
 def _normalize_usage(usage):
@@ -334,6 +341,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                 mc.stream,
                 mc.status,
                 mc.duration,
+                mc.first_token_latency,
                 mc.prompt_tokens,
                 mc.completion_tokens,
                 mc.total_tokens,
@@ -366,6 +374,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                     mc.stream,
                     mc.status,
                     mc.duration,
+                    mc.first_token_latency,
                     mc.prompt_tokens,
                     mc.completion_tokens,
                     mc.total_tokens,
@@ -559,16 +568,17 @@ class SessionRecorder:
                 """
                 INSERT INTO model_calls (
                     call_id, session_id, created_at, completed_at, status, model,
-                    provider_route, reasoning_effort, stream, duration,
+                    provider_route, reasoning_effort, stream, duration, first_token_latency,
                     prompt_tokens, completion_tokens, total_tokens, error_type, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(call_id) DO UPDATE SET
                     session_id=excluded.session_id,
                     model=excluded.model,
                     provider_route=excluded.provider_route,
                     reasoning_effort=excluded.reasoning_effort,
                     stream=excluded.stream,
-                    status=excluded.status
+                    status=excluded.status,
+                    first_token_latency=NULL
                 """,
                 (
                     call_id,
@@ -580,6 +590,7 @@ class SessionRecorder:
                     provider_route,
                     reasoning_effort,
                     1 if stream else 0,
+                    None,
                     None,
                     None,
                     None,
@@ -635,6 +646,7 @@ class SessionRecorder:
         thinking,
         usage,
         duration,
+        first_token_latency=None,
     ):
         normalized_usage = _normalize_usage(usage)
         completed_at = _isoformat()
@@ -651,6 +663,7 @@ class SessionRecorder:
                 "thinking": thinking,
                 "usage": normalized_usage,
                 "duration": duration,
+                "first_token_latency": first_token_latency,
                 "status": "completed",
             },
         )
@@ -659,8 +672,9 @@ class SessionRecorder:
                 """
                 UPDATE model_calls
                 SET completed_at = ?, status = ?, model = ?, provider_route = ?,
-                    reasoning_effort = ?, stream = ?, duration = ?, prompt_tokens = ?,
-                    completion_tokens = ?, total_tokens = ?, error_type = NULL, error_message = NULL
+                    reasoning_effort = ?, stream = ?, duration = ?, first_token_latency = ?,
+                    prompt_tokens = ?, completion_tokens = ?, total_tokens = ?,
+                    error_type = NULL, error_message = NULL
                 WHERE call_id = ?
                 """,
                 (
@@ -671,6 +685,7 @@ class SessionRecorder:
                     reasoning_effort,
                     1 if stream else 0,
                     duration,
+                    first_token_latency,
                     normalized_usage["prompt_tokens"],
                     normalized_usage["completion_tokens"],
                     normalized_usage["total_tokens"],

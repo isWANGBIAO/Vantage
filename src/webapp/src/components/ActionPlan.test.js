@@ -33,6 +33,20 @@ test('ActionPlan appends streamed system and prompt chunks instead of overwritin
 test('ActionPlan loads structured analysis and plan bodies from the backend response', () => {
   assert.ok(actionPlanSource.includes('data.analysis?.body'));
   assert.ok(actionPlanSource.includes('data.plan?.body'));
+  assert.ok(actionPlanSource.includes('data.meta?.input'));
+  assert.ok(actionPlanSource.includes('setSystemPrompt(savedInput.system_prompt'));
+  assert.ok(actionPlanSource.includes('setAnalysisPrompt(savedInput.analysis_prompt'));
+  assert.ok(actionPlanSource.includes('setPlanPrompt(savedInput.plan_prompt'));
+});
+
+test('ActionPlan renders per-round first token, duration, token, and speed stats', () => {
+  assert.ok(actionPlanSource.includes("getActionPlanRoundStats(stats, 'analysis')"));
+  assert.ok(actionPlanSource.includes("getActionPlanRoundStats(stats, 'plan')"));
+  assert.ok(actionPlanSource.includes("t('common.first_token'"));
+  assert.ok(actionPlanSource.includes("t('common.tokens_detail'"));
+  assert.ok(actionPlanSource.includes('formatActionPlanTokenBreakdown'));
+  assert.equal(actionPlanSource.includes("t('common.history'"), false);
+  assert.equal(actionPlanSource.includes('historical_total_tokens'), false);
 });
 
 test('ActionPlan no longer depends on delimiter parsing or thinking-as-reply fallback', () => {

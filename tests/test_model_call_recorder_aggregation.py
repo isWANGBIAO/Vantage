@@ -261,7 +261,7 @@ class SessionRecorderAggregationTests(unittest.TestCase):
                 created_at=datetime.fromisoformat("2026-04-17T08:00:00+08:00"),
             )
 
-            def record_completed(call_id, created_at, duration, usage, *, model="gpt-5.5", reasoning_effort="high"):
+            def record_completed(call_id, created_at, duration, usage, *, model="gpt-5.5", reasoning_effort="high", first_token_latency=None):
                 with patch(
                     "src.services.model_call_recorder._now",
                     return_value=datetime.fromisoformat(created_at),
@@ -284,6 +284,7 @@ class SessionRecorderAggregationTests(unittest.TestCase):
                         thinking="",
                         usage=usage,
                         duration=duration,
+                        first_token_latency=first_token_latency,
                     )
 
             record_completed(
@@ -298,6 +299,7 @@ class SessionRecorderAggregationTests(unittest.TestCase):
                 5.0,
                 {"prompt_tokens": 80, "completion_tokens": 40, "total_tokens": 120},
                 reasoning_effort="medium",
+                first_token_latency=0.75,
             )
             record_completed(
                 "new-call",
@@ -346,6 +348,7 @@ class SessionRecorderAggregationTests(unittest.TestCase):
         self.assertEqual(snapshot["speed_series"][0]["provider_route"], "custom")
         self.assertEqual(snapshot["speed_series"][0]["reasoning_effort"], "medium")
         self.assertEqual(snapshot["speed_series"][0]["duration"], 5.0)
+        self.assertEqual(snapshot["speed_series"][0]["first_token_latency"], 0.75)
         self.assertEqual(snapshot["speed_series"][0]["prompt_tokens"], 80)
         self.assertEqual(snapshot["speed_series"][0]["completion_tokens"], 40)
         self.assertEqual(snapshot["speed_series"][0]["total_tokens"], 120)

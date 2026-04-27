@@ -88,6 +88,54 @@ def _sum_usage_totals(*usage_payloads):
     return totals
 
 
+def _as_float_or_none(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_action_plan_request_stats(section, result):
+    payload = dict(result or {})
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    duration = float(payload.get("duration", 0) or 0)
+    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+    total_tokens = int(usage.get("total_tokens", 0) or 0)
+    completion_rate = completion_tokens / duration if duration > 0 else 0.0
+    total_rate = total_tokens / duration if duration > 0 else 0.0
+
+    return {
+        "section": section,
+        "duration": duration,
+        "first_token_latency": _as_float_or_none(payload.get("first_token_latency")),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "completion_tokens_per_second": completion_rate,
+        "total_tokens_per_second": total_rate,
+        "output_tokens_per_second": completion_rate,
+        "average_tokens_per_second": total_rate,
+        "model": payload.get("model"),
+        "provider_route": payload.get("provider_route"),
+        "requested_model": payload.get("requested_model"),
+        "requested_provider_route": payload.get("requested_provider_route"),
+        "fallback_used": bool(payload.get("fallback_used")),
+        "reasoning_effort": payload.get("reasoning_effort") or "medium",
+        "attempts": int(payload.get("attempts", 1) or 1),
+    }
+
+
+def _first_non_null(*values):
+    for value in values:
+        normalized = _as_float_or_none(value)
+        if normalized is not None:
+            return normalized
+    return None
+
+
 def run_action_plan_round(
     *,
     client,
@@ -163,6 +211,7 @@ def build_action_plan_payload(
     plan_body: str,
     stats: dict,
     metadata: dict,
+    input_payload: dict | None = None,
 ):
     timestamp_id = generated_at.strftime("%Y%m%d_%H%M%S")
     normalized_stats = dict(stats or {})
@@ -185,6 +234,7 @@ def build_action_plan_payload(
             "requested_provider_route": normalized_metadata.get("requested_provider_route"),
             "fallback_used": bool(normalized_metadata.get("fallback_used")),
             "reasoning_effort": normalized_metadata.get("reasoning_effort") or "medium",
+            "input": dict(input_payload or {}),
             "stats": normalized_stats,
         },
     }
@@ -298,7 +348,7 @@ def main():
                 "total_tokens": 0,
                 "total_duration": 0,
                 "speed": "0.00 tokens/s",
-                "historical_total_tokens": context_mgr.token_count
+                "first_token_latency": None,
             }
 
             print("Thinking...")
@@ -307,13 +357,7 @@ def main():
             # Send the full persisted chat history
             messages_to_send = context_mgr.get_messages()
             chat_session_id = _get_or_create_context_session_id(context_mgr.context_file, "chat")
-            existing_session_summary = _load_session_usage_summary(history_dir, chat_session_id)
 
-            initial_stats["historical_total_tokens"] = (
-                existing_session_summary.get("total_tokens", 0)
-                if existing_session_summary
-                else context_mgr.token_count
-            )
             print(f"STATS_JSON:{json.dumps(initial_stats)}")
              
             # Call API
@@ -343,8 +387,6 @@ def main():
             total_tokens = usage.get("total_tokens", 0)
             duration = result.get("duration", 0)
             
-            updated_session_summary = _load_session_usage_summary(history_dir, chat_session_id)
-
             stats_output = {
                 "turns": len(context_mgr.messages), 
                 "prompt_tokens": prompt_tokens,
@@ -352,11 +394,7 @@ def main():
                 "total_tokens": total_tokens,
                 "total_duration": duration,
                 "speed": f"{completion_tokens / duration:.2f} tokens/s" if duration > 0 else "0.00 tokens/s",
-                "historical_total_tokens": (
-                    updated_session_summary.get("total_tokens", total_tokens)
-                    if updated_session_summary
-                    else context_mgr.token_count
-                ),
+                "first_token_latency": _as_float_or_none(result.get("first_token_latency")),
             }
             stats_output.update(build_generation_metadata(result))
             print(f"STATS_JSON:{json.dumps(stats_output)}")
@@ -426,7 +464,8 @@ def main():
                 "total_tokens": 0,
                 "total_duration": 0,
                 "speed": "0.00 tokens/s",
-                "historical_total_tokens": 0
+                "first_token_latency": None,
+                "requests": [],
             }
 
             print(f"STATS_JSON:{json.dumps(initial_stats)}")
@@ -537,6 +576,10 @@ def main():
                         if session_summary
                         else total_duration
                     )
+                    request_stats = [
+                        build_action_plan_request_stats("analysis", result),
+                        build_action_plan_request_stats("plan", result_round_2),
+                    ]
 
                     stats_output = {
                         "turns": len(context_mgr.messages),
@@ -549,7 +592,11 @@ def main():
                             if summary_total_duration > 0
                             else "0.00 tokens/s"
                         ),
-                        "historical_total_tokens": summary_total_tokens,
+                        "first_token_latency": _first_non_null(
+                            request_stats[0].get("first_token_latency"),
+                            request_stats[1].get("first_token_latency"),
+                        ),
+                        "requests": request_stats,
                     }
                     metadata = build_generation_metadata(result, result_round_2)
                     stats_output.update(metadata)
@@ -561,6 +608,11 @@ def main():
                         plan_body=second_round_content,
                         stats=stats_output,
                         metadata=metadata,
+                        input_payload={
+                            "system_prompt": sys_content,
+                            "analysis_prompt": prompt_text,
+                            "plan_prompt": action_plan_msg,
+                        },
                     )
 
                     if args.output_file:

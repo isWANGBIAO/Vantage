@@ -117,6 +117,8 @@ const SPEED_CHART_COLORS = [
   '#f97316',
   '#8b5cf6',
 ];
+const HIGH_SPEED_AXIS_MIN_RATE = 1000;
+const HIGH_SPEED_AXIS_RATIO = 8;
 
 function getSpeedModelLabel(row, t) {
   return row?.model || row?.default_model || t('usage.label.unknown');
@@ -129,6 +131,53 @@ function escapeTooltipValue(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function getSpeedValue(row, metricKey) {
+  const value = Number(row?.[metricKey] || 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function detectHighSpeedModels(rowsByModel) {
+  const peaks = Array.from(rowsByModel.entries()).map(([modelLabel, modelRows]) => ({
+    modelLabel,
+    peak: Math.max(...modelRows.map((row) => getSpeedValue(row, 'output_tokens_per_second')), 0),
+  })).filter((item) => item.peak > 0);
+
+  if (peaks.length < 2) {
+    return new Set();
+  }
+
+  const baseline = Math.min(...peaks.map((item) => item.peak));
+  const threshold = Math.max(HIGH_SPEED_AXIS_MIN_RATE, baseline * HIGH_SPEED_AXIS_RATIO);
+  const highSpeedModels = new Set(
+    peaks
+      .filter((item) => item.peak >= threshold)
+      .map((item) => item.modelLabel),
+  );
+
+  return highSpeedModels.size === peaks.length ? new Set() : highSpeedModels;
+}
+
+function getRobustAxisMax(values) {
+  const positiveValues = values
+    .map((value) => Number(value || 0))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((left, right) => left - right);
+
+  if (!positiveValues.length) {
+    return undefined;
+  }
+
+  const peak = positiveValues[positiveValues.length - 1];
+  if (positiveValues.length < 4) {
+    return Math.max(10, peak * 1.15);
+  }
+
+  const p90Index = Math.floor((positiveValues.length - 1) * 0.9);
+  const robustPeak = positiveValues[p90Index];
+  const robustMax = Math.max(10, robustPeak * 1.25);
+  return peak > robustMax * 3 ? robustMax : Math.max(10, peak * 1.15);
 }
 
 function buildSpeedTrendOption(rows, t) {
@@ -144,22 +193,34 @@ function buildSpeedTrendOption(rows, t) {
     modelRows.push(row);
     rowsByModel.set(modelLabel, modelRows);
   });
+  const highSpeedModels = detectHighSpeedModels(rowsByModel);
+  const normalAxisValues = [];
+  const highAxisValues = [];
 
   const series = Array.from(rowsByModel.entries()).flatMap(([modelLabel, modelRows], index) => {
     const color = SPEED_CHART_COLORS[index % SPEED_CHART_COLORS.length];
     const outputSeriesName = `${modelLabel} - ${outputLabel}`;
     const totalSeriesName = `${modelLabel} - ${totalLabel}`;
+    const yAxisIndex = highSpeedModels.has(modelLabel) ? 1 : 0;
+    const axisValues = yAxisIndex === 1 ? highAxisValues : normalAxisValues;
     legendSelected[totalSeriesName] = false;
-    const buildData = (metricKey, metricLabel) => modelRows.map((row) => ({
-      value: [row.created_at, Number(row?.[metricKey] || 0)],
-      metricLabel,
-      row,
-    }));
+    const buildData = (metricKey, metricLabel, trackAxis = false) => modelRows.map((row) => {
+      const value = getSpeedValue(row, metricKey);
+      if (trackAxis) {
+        axisValues.push(value);
+      }
+      return {
+        value: [row.created_at, value],
+        metricLabel,
+        row,
+      };
+    });
 
     return [
       {
         name: outputSeriesName,
         type: 'line',
+        yAxisIndex,
         smooth: true,
         symbol: 'circle',
         symbolSize: 5,
@@ -173,11 +234,12 @@ function buildSpeedTrendOption(rows, t) {
         emphasis: {
           focus: 'series',
         },
-        data: buildData('output_tokens_per_second', outputLabel),
+        data: buildData('output_tokens_per_second', outputLabel, true),
       },
       {
         name: totalSeriesName,
         type: 'line',
+        yAxisIndex,
         smooth: true,
         symbol: 'none',
         lineStyle: {
@@ -254,7 +316,7 @@ function buildSpeedTrendOption(rows, t) {
     },
     grid: {
       top: 52,
-      right: 20,
+      right: highSpeedModels.size ? 68 : 20,
       bottom: 70,
       left: 56,
     },
@@ -298,21 +360,39 @@ function buildSpeedTrendOption(rows, t) {
         show: false,
       },
     },
-    yAxis: {
-      type: 'value',
-      name: 'tok/s',
-      nameTextStyle: {
-        color: '#64748b',
-      },
-      axisLabel: {
-        color: '#64748b',
-      },
-      splitLine: {
-        lineStyle: {
-          color: 'rgba(148, 163, 184, 0.18)',
+    yAxis: [
+      {
+        type: 'value',
+        name: 'tok/s',
+        max: getRobustAxisMax(normalAxisValues),
+        nameTextStyle: {
+          color: '#64748b',
+        },
+        axisLabel: {
+          color: '#64748b',
+        },
+        splitLine: {
+          lineStyle: {
+            color: 'rgba(148, 163, 184, 0.18)',
+          },
         },
       },
-    },
+      {
+        type: 'value',
+        name: t('usage.speed_trend.high_speed_axis'),
+        show: highSpeedModels.size > 0,
+        max: getRobustAxisMax(highAxisValues),
+        nameTextStyle: {
+          color: '#64748b',
+        },
+        axisLabel: {
+          color: '#64748b',
+        },
+        splitLine: {
+          show: false,
+        },
+      },
+    ],
     series,
   };
 }

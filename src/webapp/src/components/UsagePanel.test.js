@@ -134,6 +134,45 @@ test('UsagePanel keeps total throughput hidden by default so output trend stays 
   assert.ok(Array.isArray(option.dataZoom));
 });
 
+test('UsagePanel assigns unusually fast models to the high-speed axis', () => {
+  const buildSpeedTrendOption = loadUsagePanelChartHelper();
+  const t = (key) => ({
+    'usage.speed_trend.output_rate': 'Completion tok/s',
+    'usage.speed_trend.total_rate': 'Total tok/s',
+    'usage.speed_trend.high_speed_axis': 'High-speed tok/s',
+    'usage.label.unknown': 'unknown',
+  }[key] || key);
+
+  const option = buildSpeedTrendOption(
+    [
+      {
+        call_id: 'normal',
+        created_at: '2026-04-25T12:00:00+08:00',
+        model: 'gpt-5.5',
+        output_tokens_per_second: 45,
+        average_tokens_per_second: 80,
+      },
+      {
+        call_id: 'spark',
+        created_at: '2026-04-25T12:05:00+08:00',
+        model: 'gpt-5.3-codex-spark',
+        output_tokens_per_second: 5000,
+        average_tokens_per_second: 8000,
+      },
+    ],
+    t,
+  );
+
+  const sparkSeries = option.series.find((series) => series.name === 'gpt-5.3-codex-spark - Completion tok/s');
+  const normalSeries = option.series.find((series) => series.name === 'gpt-5.5 - Completion tok/s');
+
+  assert.equal(normalSeries.yAxisIndex, 0);
+  assert.equal(sparkSeries.yAxisIndex, 1);
+  assert.equal(option.yAxis.length, 2);
+  assert.equal(option.yAxis[1].show, true);
+  assert.equal(option.yAxis[1].name, 'High-speed tok/s');
+});
+
 test('UsagePanel keeps explicit empty and error copy for missing history', () => {
   assert.ok(usagePanelSource.includes("t('usage.empty')"));
   assert.ok(usagePanelSource.includes("t('usage.error.load')"));

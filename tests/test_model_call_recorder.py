@@ -91,6 +91,7 @@ class SessionRecorderTests(unittest.TestCase):
                     "total_tokens": 18,
                 },
                 duration=1.25,
+                first_token_latency=0.42,
             )
             recorder.record_token_count(
                 call_id="call-1",
@@ -113,13 +114,14 @@ class SessionRecorderTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(lines[3]["payload"]["content"], "world")
+            self.assertEqual(lines[3]["payload"]["first_token_latency"], 0.42)
             self.assertEqual(lines[4]["payload"]["last_token_usage"]["total_tokens"], 18)
 
             conn = sqlite3.connect(history_dir / "state.db")
             try:
                 call_row = conn.execute(
                     """
-                    SELECT status, model, provider_route, prompt_tokens, completion_tokens, total_tokens, duration
+                    SELECT status, model, provider_route, prompt_tokens, completion_tokens, total_tokens, duration, first_token_latency
                     FROM model_calls
                     WHERE call_id = ?
                     """,
@@ -139,7 +141,7 @@ class SessionRecorderTests(unittest.TestCase):
 
         self.assertEqual(
             call_row,
-            ("completed", "gpt-5.2", "cliproxyapi_primary", 11, 7, 18, 1.25),
+            ("completed", "gpt-5.2", "cliproxyapi_primary", 11, 7, 18, 1.25, 0.42),
         )
         self.assertEqual(len(message_rows), 1)
         self.assertEqual(message_rows[0][0], 0)

@@ -57,6 +57,7 @@ class _TrackedStream:
         self._content_parts = []
         self._usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         self._finished = False
+        self._first_token_latency = None
 
     def __iter__(self):
         return self
@@ -80,6 +81,8 @@ class _TrackedStream:
             delta = getattr(choices[0], "delta", None)
             content = getattr(delta, "content", "") if delta else ""
             if content:
+                if self._first_token_latency is None:
+                    self._first_token_latency = time.time() - self._start_time
                 self._content_parts.append(content)
 
         return chunk
@@ -109,6 +112,7 @@ class _TrackedStream:
             thinking="",
             usage=self._usage,
             duration=duration,
+            first_token_latency=self._first_token_latency,
         )
         self._safe_record(
             "record_token_count",
@@ -251,6 +255,7 @@ class TrackedOpenAIClient:
             thinking="",
             usage=usage,
             duration=time.time() - start_time,
+            first_token_latency=None,
         )
         self._safe_record(
             "record_token_count",

@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 
 import {
   computeDisplayedDurationSeconds,
+  formatActionPlanTokenBreakdown,
   formatPoweredByLabel,
   formatReasoningEffortLabel,
+  getActionPlanRoundStats,
   isFallbackExecution,
 } from './actionPlanStats.js';
 
@@ -90,5 +92,28 @@ test('isFallbackExecution flags real provider fallback', () => {
       { model: 'gpt-5.5', providerRoute: 'custom' },
     ),
     true,
+  );
+});
+
+test('getActionPlanRoundStats returns the matching request section', () => {
+  const stats = {
+    requests: [
+      { section: 'analysis', total_tokens: 15 },
+      { section: 'plan', total_tokens: 28 },
+    ],
+  };
+
+  assert.deepEqual(getActionPlanRoundStats(stats, 'plan'), { section: 'plan', total_tokens: 28 });
+  assert.equal(getActionPlanRoundStats(stats, 'missing'), null);
+});
+
+test('formatActionPlanTokenBreakdown includes total, prompt, and completion tokens', () => {
+  assert.equal(
+    formatActionPlanTokenBreakdown({
+      prompt_tokens: 180000,
+      completion_tokens: 57100,
+      total_tokens: 237100,
+    }),
+    '237.1k (P 180.0k / C 57.1k)',
   );
 });

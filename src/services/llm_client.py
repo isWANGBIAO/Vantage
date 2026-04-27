@@ -848,6 +848,7 @@ class LLMClient:
                 "thinking": message.get("reasoning_content") or "",
                 "usage": usage,
                 "duration": duration,
+                "first_token_latency": None,
                 "model": used_model,
                 "provider_route": used_route,
                 "requested_model": requested_model,
@@ -867,6 +868,7 @@ class LLMClient:
                 thinking=result["thinking"],
                 usage=result["usage"],
                 duration=result["duration"],
+                first_token_latency=result["first_token_latency"],
             )
             self._safe_record(
                 recorder,
@@ -906,6 +908,12 @@ class LLMClient:
         usage_data = {}
         used_model = requested_model
         used_route = requested_route
+        first_token_latency = None
+
+        def mark_first_token():
+            nonlocal first_token_latency
+            if first_token_latency is None:
+                first_token_latency = time.time() - start_time
 
         def output(tag, content):
             if print_callback:
@@ -958,11 +966,13 @@ class LLMClient:
 
                             reasoning = delta.get("reasoning_content", "")
                             if reasoning:
+                                mark_first_token()
                                 full_thinking += reasoning
                                 output("thinking", reasoning)
 
                             content = delta.get("content", "")
                             if content:
+                                mark_first_token()
                                 full_content += content
                                 output("content", content)
                     except json.JSONDecodeError:
@@ -994,6 +1004,7 @@ class LLMClient:
                 "total_tokens": usage_data.get("total_tokens", 0),
             },
             "duration": duration,
+            "first_token_latency": first_token_latency,
             "model": used_model,
             "provider_route": used_route,
             "requested_model": requested_model,
@@ -1013,6 +1024,7 @@ class LLMClient:
             thinking=result["thinking"],
             usage=result["usage"],
             duration=result["duration"],
+            first_token_latency=result["first_token_latency"],
         )
         self._safe_record(
             recorder,

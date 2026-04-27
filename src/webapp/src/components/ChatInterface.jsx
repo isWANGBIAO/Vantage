@@ -1080,15 +1080,6 @@ export default function ChatInterface({ embedded = false } = {}) {
                                 <span>{t('common.speed', { value: stats.speed })}</span>
                                 <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
                                 <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
-                                {stats.historical_total_tokens !== undefined && (
-                                    <span>
-                                        {t('common.history', {
-                                            value: stats.historical_total_tokens >= 1000000
-                                                ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
-                                                : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`,
-                                        })}
-                                    </span>
-                                )}
                             </div>
                         )}
                         <label
@@ -1350,15 +1341,6 @@ export default function ChatInterface({ embedded = false } = {}) {
                             <span>{t('common.speed', { value: stats.speed })}</span>
                             <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
                             <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
-                            {stats.historical_total_tokens !== undefined && (
-                                <span>
-                                    {t('common.history', {
-                                        value: stats.historical_total_tokens >= 1000000
-                                            ? `${(stats.historical_total_tokens / 1000000).toFixed(2)}M`
-                                            : `${(stats.historical_total_tokens / 1000).toFixed(1)}k`,
-                                    })}
-                                </span>
-                            )}
                         </div>
                     )}
                     <label

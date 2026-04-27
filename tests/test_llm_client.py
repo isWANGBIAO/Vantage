@@ -840,6 +840,8 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(completed_kwargs["usage"]["total_tokens"], 16)
         self.assertEqual(completed_kwargs["model"], "gpt-5.2")
         self.assertEqual(completed_kwargs["provider_route"], "cliproxyapi_primary")
+        self.assertIsNone(completed_kwargs["first_token_latency"])
+        self.assertIsNone(result["first_token_latency"])
 
     def test_streaming_chat_records_completed_call_with_session_recorder(self):
         fake_response = Mock()
@@ -880,6 +882,8 @@ class LLMClientTests(unittest.TestCase):
         completed_kwargs = recorder.record_request_completed.call_args.kwargs
         self.assertEqual(completed_kwargs["usage"]["total_tokens"], 10)
         self.assertEqual(completed_kwargs["content"], "A")
+        self.assertIsNotNone(completed_kwargs["first_token_latency"])
+        self.assertIsNotNone(result["first_token_latency"])
 
     def test_sync_chat_records_failed_call_with_session_recorder(self):
         recorder = Mock()

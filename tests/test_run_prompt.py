@@ -24,6 +24,7 @@ class _FakeLLMClient:
                 "content": "analysis reply",
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
                 "duration": 1.0,
+                "first_token_latency": 0.25,
             }
 
         if print_callback:
@@ -32,6 +33,7 @@ class _FakeLLMClient:
             "content": "plan reply",
             "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
             "duration": 1.5,
+            "first_token_latency": 0.4,
         }
 
 
@@ -49,6 +51,7 @@ class _RetryingFakeLLMClient:
                 "content": "analysis reply",
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
                 "duration": 1.0,
+                "first_token_latency": 0.25,
             }
 
         if self.call_count == 2:
@@ -58,6 +61,7 @@ class _RetryingFakeLLMClient:
                 "content": "",
                 "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
                 "duration": 1.5,
+                "first_token_latency": 0.6,
             }
 
         if print_callback:
@@ -66,6 +70,7 @@ class _RetryingFakeLLMClient:
             "content": "plan retry reply",
             "usage": {"prompt_tokens": 21, "completion_tokens": 9, "total_tokens": 30},
             "duration": 1.7,
+            "first_token_latency": 0.5,
         }
 
 
@@ -500,7 +505,7 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(fake_client.calls[0]["model"], "gpt-5.5")
         self.assertEqual(fake_client.calls[0]["kwargs"]["provider_route"], "custom")
 
-    def test_chat_mode_emits_historical_stats_from_session_summary(self):
+    def test_chat_mode_omits_historical_token_stats(self):
         fake_client = _CapturingLLMClient(
             [
                 {
@@ -568,8 +573,8 @@ class RunPromptTests(unittest.TestCase):
             if line.startswith("STATS_JSON:")
         ]
 
-        self.assertEqual(stats_lines[0]["historical_total_tokens"], 90)
-        self.assertEqual(stats_lines[-1]["historical_total_tokens"], 98)
+        self.assertNotIn("historical_total_tokens", stats_lines[0])
+        self.assertNotIn("historical_total_tokens", stats_lines[-1])
 
     def test_analysis_mode_reuses_same_session_id_for_both_rounds(self):
         fake_client = _CapturingLLMClient(
@@ -736,8 +741,18 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(saved_payload["meta"]["stats"]["prompt_tokens"], 42)
         self.assertEqual(saved_payload["meta"]["stats"]["completion_tokens"], 17)
         self.assertEqual(saved_payload["meta"]["stats"]["total_tokens"], 59)
-        self.assertEqual(saved_payload["meta"]["stats"]["historical_total_tokens"], 59)
+        self.assertNotIn("historical_total_tokens", saved_payload["meta"]["stats"])
         self.assertEqual(saved_payload["meta"]["stats"]["total_duration"], 3.5)
+        self.assertEqual(saved_payload["meta"]["input"]["system_prompt"], "system prompt")
+        self.assertEqual(saved_payload["meta"]["input"]["analysis_prompt"], "analysis prompt")
+        self.assertTrue(saved_payload["meta"]["input"]["plan_prompt"].startswith("Now "))
+        self.assertEqual(len(saved_payload["meta"]["stats"]["requests"]), 2)
+        self.assertEqual(saved_payload["meta"]["stats"]["requests"][0]["section"], "analysis")
+        self.assertEqual(saved_payload["meta"]["stats"]["requests"][0]["total_tokens"], 15)
+        self.assertEqual(saved_payload["meta"]["stats"]["requests"][0]["first_token_latency"], 0.25)
+        self.assertEqual(saved_payload["meta"]["stats"]["requests"][1]["section"], "plan")
+        self.assertEqual(saved_payload["meta"]["stats"]["requests"][1]["total_tokens"], 28)
+        self.assertEqual(saved_payload["meta"]["stats"]["requests"][1]["first_token_latency"], 0.4)
 
 
 if __name__ == "__main__":
