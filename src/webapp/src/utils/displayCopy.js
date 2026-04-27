@@ -365,6 +365,11 @@ const EN_US_COPY = {
   'usage.label.duration': 'Duration',
   'usage.label.started': 'Started',
   'usage.label.unknown': 'unknown',
+  'usage.status.completed': 'Completed',
+  'usage.status.failed': 'Failed',
+  'usage.status.ignored': 'No usage',
+  'usage.status.started': 'Started',
+  'usage.status.unknown': 'Unknown',
 
   'face_history.title': 'Face Dark Circles History',
   'face_history.subtitle': 'Live pulse uses camera scores. Historical charts use saved-photo samples.',
@@ -821,6 +826,11 @@ const ZH_CN_COPY = {
   'usage.label.duration': '耗时',
   'usage.label.started': '开始时间',
   'usage.label.unknown': '未知',
+  'usage.status.completed': '已完成',
+  'usage.status.failed': '失败',
+  'usage.status.ignored': '无用量',
+  'usage.status.started': '进行中',
+  'usage.status.unknown': '未知',
 
   'face_history.title': '黑眼圈历史',
   'face_history.subtitle': '实时脉冲使用摄像头分数，历史图表使用已保存照片样本。',

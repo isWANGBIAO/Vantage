@@ -397,6 +397,32 @@ function buildSpeedTrendOption(rows, t) {
   };
 }
 
+const USAGE_STATUS_COPY_KEYS = {
+  completed: 'usage.status.completed',
+  failed: 'usage.status.failed',
+  ignored: 'usage.status.ignored',
+  started: 'usage.status.started',
+};
+
+function formatUsageStatus(status, t) {
+  if (!status) {
+    return t('usage.status.unknown');
+  }
+
+  const copyKey = USAGE_STATUS_COPY_KEYS[status];
+  return copyKey ? t(copyKey) : status;
+}
+
+function usageStatusTone(status) {
+  if (status === 'failed') {
+    return 'warning';
+  }
+  if (status === 'completed') {
+    return 'success';
+  }
+  return 'neutral';
+}
+
 function SummaryCard({ label, value, subValue, accent = 'default' }) {
   return (
     <div className={`usage-summary-item usage-summary-item--${accent}`}>
@@ -777,8 +803,8 @@ export default function UsagePanel({ isVisible = true } = {}) {
                 key: 'last_status',
                 label: t('usage.label.last_status'),
                 render: (row) => (
-                  <ToneChip tone={row.last_status === 'failed' ? 'warning' : 'success'}>
-                    {row.last_status || t('usage.label.unknown')}
+                  <ToneChip tone={usageStatusTone(row.last_status)}>
+                    {formatUsageStatus(row.last_status, t)}
                   </ToneChip>
                 ),
               },
@@ -799,8 +825,8 @@ export default function UsagePanel({ isVisible = true } = {}) {
                 key: 'status',
                 label: t('usage.label.status'),
                 render: (row) => (
-                  <ToneChip tone={row.status === 'failed' ? 'warning' : 'success'}>
-                    {row.status || t('usage.label.unknown')}
+                  <ToneChip tone={usageStatusTone(row.status)}>
+                    {formatUsageStatus(row.status, t)}
                   </ToneChip>
                 ),
               },

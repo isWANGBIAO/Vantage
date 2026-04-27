@@ -185,6 +185,15 @@ test('UsagePanel keeps explicit empty and error copy for missing history', () =>
   assert.equal(usagePanelSource.includes('No recent calls yet.'), false);
 });
 
+test('UsagePanel translates recent call statuses including ignored usage rows', () => {
+  assert.ok(usagePanelSource.includes('function formatUsageStatus'));
+  assert.ok(usagePanelSource.includes('usageStatusTone(row.status)'));
+  assert.ok(usagePanelSource.includes('usageStatusTone(row.last_status)'));
+  assert.ok(usagePanelSource.includes("ignored: 'usage.status.ignored'"));
+  assert.equal(usagePanelSource.includes('{row.status ||'), false);
+  assert.equal(usagePanelSource.includes('{row.last_status ||'), false);
+});
+
 test('UsagePanel display copy includes completed usage i18n keys', () => {
   [
     'usage.speed_trend.title',
@@ -201,6 +210,11 @@ test('UsagePanel display copy includes completed usage i18n keys', () => {
     'usage.label.duration',
     'usage.label.started',
     'usage.label.share',
+    'usage.status.completed',
+    'usage.status.failed',
+    'usage.status.ignored',
+    'usage.status.started',
+    'usage.status.unknown',
   ].forEach((key) => {
     assert.ok(displayCopySource.includes(`'${key}'`), `expected display copy key ${key}`);
   });
