@@ -27,7 +27,9 @@ from src.core.backend_runtime_packaging import (
     collect_backend_runtime_resources,
     remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
+    validate_packaging_python_environment,
     validate_backend_runtime_bundle,
+    write_backend_runtime_size_report,
     write_backend_runtime_manifest,
     write_project_activity_snapshot,
 )
@@ -78,6 +80,10 @@ def main() -> int:
     args = parser.parse_args()
 
     layout = resolve_backend_runtime_layout(PROJECT_ROOT)
+    environment_error = validate_packaging_python_environment(PROJECT_ROOT)
+    if environment_error:
+        print(environment_error)
+        return 1
 
     if not args.keep_build_root:
         _clean_existing_build(layout)
@@ -101,6 +107,7 @@ def main() -> int:
 
     removed_runtime_dlls = remove_conflicting_runtime_libraries(layout["runtime_dir"])
     manifest = write_backend_runtime_manifest(layout=layout, resources=resources)
+    size_report = write_backend_runtime_size_report(layout)
     errors = validate_backend_runtime_bundle(layout, resources)
     if errors:
         for error in errors:
@@ -111,6 +118,15 @@ def main() -> int:
     print(f"Runtime manifest: {layout['manifest_path']}")
     print(f"Bundled resources: {len(manifest['resource_outputs'])}")
     print(f"Removed conflicting runtime DLLs: {len(removed_runtime_dlls)}")
+    print(f"Runtime size: {size_report['total_mb']} MB")
+    if size_report["top_directories"]:
+        print("Largest runtime directories:")
+        for entry in size_report["top_directories"][:10]:
+            print(f"  {entry['name']}: {entry['mb']} MB")
+    if size_report["forbidden_packages_present"]:
+        print("Forbidden runtime packages present: " + ", ".join(size_report["forbidden_packages_present"]))
+    else:
+        print("Forbidden runtime packages present: none")
     return 0
 
 

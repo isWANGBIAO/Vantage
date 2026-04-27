@@ -7,15 +7,18 @@ import pytest
 from src.core.backend_runtime_packaging import (
     APP_EXE_NAME,
     CONFLICTING_RUNTIME_DLL_NAMES,
+    FORBIDDEN_RUNTIME_PACKAGE_NAMES,
     PROJECT_ACTIVITY_SNAPSHOT_NAME,
     REQUIRED_ROOT_RESOURCE_NAMES,
     RUNTIME_NAME,
     build_backend_runtime_manifest,
     build_pyinstaller_arguments,
+    build_backend_runtime_size_report,
     build_project_activity_snapshot,
     collect_backend_runtime_resources,
     remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
+    validate_packaging_python_environment,
     write_project_activity_snapshot,
 )
 
@@ -95,6 +98,25 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         if value == "--exclude-module"
     }
     assert "mediapipe" in exclude_targets
+    assert {
+        "Cython",
+        "IPython",
+        "jax",
+        "jaxlib",
+        "jedi",
+        "notebook",
+        "polars",
+        "src.AI_Prediction",
+        "src.battery_monitor",
+        "src.face_analyzer_mediapipe",
+        "src.scripts.debug_single_face",
+        "src.scripts.install_requirements",
+        "src.scripts.test_gpu_inference",
+        "tensorrt",
+        "tensorrt_bindings",
+        "tkinter",
+        "torchaudio",
+    } <= exclude_targets
     assert str(layout["entry_script"]) == args[-1]
     assert f"{tmp_path / 'yolo26m.pt'};." in args
     assert (
@@ -153,6 +175,23 @@ def test_build_backend_runtime_manifest_records_relative_outputs(tmp_path):
     assert "src/scripts/models/face_parsing.farl.lapa.int8.onnx" in manifest["resource_outputs"]
 
 
+def test_validate_packaging_environment_requires_clean_runtime_venv(tmp_path):
+    dirty_python = tmp_path / "global" / "python.exe"
+    clean_python = tmp_path / ".venv-backend-runtime-gpu" / "Scripts" / "python.exe"
+
+    assert validate_packaging_python_environment(tmp_path, executable=clean_python, environ={}) is None
+    assert "clean packaging venv" in validate_packaging_python_environment(
+        tmp_path,
+        executable=dirty_python,
+        environ={},
+    )
+    assert validate_packaging_python_environment(
+        tmp_path,
+        executable=dirty_python,
+        environ={"VANTAGE_ALLOW_DIRTY_PACKAGING_ENV": "1"},
+    ) is None
+
+
 def test_build_project_activity_snapshot_parses_recent_git_log(tmp_path):
     def fake_run(command, **kwargs):
         assert command[:2] == ["git", "log"]
@@ -190,3 +229,20 @@ def test_write_project_activity_snapshot_returns_packaged_resource(tmp_path):
     assert resource.source == output_path
     assert resource.output_relative_path == Path(PROJECT_ACTIVITY_SNAPSHOT_NAME)
     assert output_path.exists()
+
+
+def test_backend_runtime_size_report_flags_forbidden_packages(tmp_path):
+    layout = resolve_backend_runtime_layout(tmp_path)
+    internal_root = layout["resource_dir"]
+    (internal_root / "torch").mkdir(parents=True)
+    (internal_root / "jaxlib").mkdir()
+    (internal_root / "_polars_runtime_32").mkdir()
+    (internal_root / "torch" / "tiny.bin").write_bytes(b"x" * 32)
+    (internal_root / "jaxlib" / "heavy.bin").write_bytes(b"x" * 64)
+
+    report = build_backend_runtime_size_report(layout, top_n=2)
+
+    assert set(report["forbidden_packages_present"]) == {"_polars_runtime_32", "jaxlib"}
+    assert report["top_directories"][0]["name"] == "jaxlib"
+    assert report["top_files"][0]["path"].endswith("jaxlib/heavy.bin")
+    assert "jaxlib" in FORBIDDEN_RUNTIME_PACKAGE_NAMES

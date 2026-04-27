@@ -43,8 +43,10 @@ def test_run_dev_bat_does_not_block_launch_on_camera_readiness():
 def test_run_bat_builds_and_silently_installs_latest_package():
     run_bat = Path("run.bat").read_text(encoding="utf-8")
 
-    assert "build_backend_runtime.py" in run_bat
-    assert "verify_backend_runtime.py --timeout-seconds 60" in run_bat
+    assert ".venv-backend-runtime-gpu" in run_bat
+    assert "requirements-backend-runtime-gpu.txt" in run_bat
+    assert '"%BACKEND_RUNTIME_PYTHON%" src\\scripts\\build_backend_runtime.py' in run_bat
+    assert '"%BACKEND_RUNTIME_PYTHON%" src\\scripts\\verify_backend_runtime.py --timeout-seconds 60' in run_bat
     assert "npm run electron:build" in run_bat
     assert "ArgumentList '/S'" in run_bat
     assert 'Filter \'Vantage Setup *.exe\'' in run_bat

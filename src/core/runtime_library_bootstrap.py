@@ -11,7 +11,6 @@ _RUNTIME_DLL_HANDLES = []
 _INTERNAL_RELATIVE_DIRS = (
     Path("torch") / "lib",
     Path("onnxruntime") / "capi",
-    Path("torchaudio") / "lib",
     Path("mediapipe"),
     Path("cv2"),
     Path("numpy.libs"),

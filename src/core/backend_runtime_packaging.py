@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
+import sys
 import cv2
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -38,7 +40,68 @@ CONFLICTING_RUNTIME_DLL_NAMES = (
     "vcruntime140_1.dll",
 )
 
-PYINSTALLER_EXCLUDES = ("PyQt5", "PyQt6", "PySide2", "PySide6", "mediapipe")
+BACKEND_RUNTIME_VENV_NAME = ".venv-backend-runtime-gpu"
+DIRTY_PACKAGING_ENV_BYPASS = "VANTAGE_ALLOW_DIRTY_PACKAGING_ENV"
+
+PYINSTALLER_EXCLUDES = (
+    "Cython",
+    "IPython",
+    "PyQt5",
+    "PyQt6",
+    "PySide2",
+    "PySide6",
+    "ipykernel",
+    "jedi",
+    "jupyter",
+    "jupyter_client",
+    "jupyter_core",
+    "jupyter_server",
+    "jax",
+    "jaxlib",
+    "mediapipe",
+    "nbclassic",
+    "nbclient",
+    "nbconvert",
+    "nbformat",
+    "notebook",
+    "polars",
+    "src.AI_Prediction",
+    "src.battery_monitor",
+    "src.face_analyzer_mediapipe",
+    "src.scripts.convert_icon",
+    "src.scripts.debug_single_face",
+    "src.scripts.install_requirements",
+    "src.scripts.render_face_pipeline_markdown",
+    "src.scripts.test_gpu_inference",
+    "tensorrt",
+    "tensorrt_bindings",
+    "tkinter",
+    "torchaudio",
+)
+
+FORBIDDEN_RUNTIME_PACKAGE_NAMES = (
+    "Cython",
+    "IPython",
+    "_polars_runtime_32",
+    "ipykernel",
+    "jax",
+    "jaxlib",
+    "jedi",
+    "jupyter",
+    "jupyter_client",
+    "jupyter_core",
+    "jupyter_server",
+    "nbclassic",
+    "nbclient",
+    "nbconvert",
+    "nbformat",
+    "notebook",
+    "polars",
+    "tensorrt",
+    "tensorrt_bindings",
+    "tkinter",
+    "torchaudio",
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +137,28 @@ def resolve_backend_runtime_layout(project_root: str | Path) -> dict[str, Path]:
         "runtime_hook": resolved_root / "src" / "scripts" / "pyinstaller_runtime_hook.py",
         "executable_path": runtime_dir / APP_EXE_NAME,
     }
+
+
+def validate_packaging_python_environment(
+    project_root: str | Path,
+    *,
+    executable: str | Path | None = None,
+    environ: dict[str, str] | None = None,
+) -> str | None:
+    resolved_environ = environ if environ is not None else os.environ
+    if resolved_environ.get(DIRTY_PACKAGING_ENV_BYPASS) == "1":
+        return None
+
+    expected_venv = Path(project_root).resolve() / BACKEND_RUNTIME_VENV_NAME
+    resolved_executable = Path(executable or sys.executable).resolve()
+    try:
+        resolved_executable.relative_to(expected_venv)
+    except ValueError:
+        return (
+            "Backend runtime must be built with the clean packaging venv: "
+            f"{expected_venv}. Set {DIRTY_PACKAGING_ENV_BYPASS}=1 only for emergency local debugging."
+        )
+    return None
 
 
 def _normalize_destination(relative_destination: str | Path) -> Path:
@@ -309,6 +394,91 @@ def load_backend_runtime_manifest(layout: dict[str, Path]) -> dict[str, object]:
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
 
+def _directory_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file():
+        return path.stat().st_size
+    return sum(file_path.stat().st_size for file_path in path.rglob("*") if file_path.is_file())
+
+
+def _relative_posix(path: Path, root: Path) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
+
+
+def build_backend_runtime_size_report(layout: dict[str, Path], *, top_n: int = 20) -> dict[str, object]:
+    resource_dir = layout["resource_dir"]
+    if not resource_dir.exists():
+        return {
+            "resource_root": str(resource_dir),
+            "total_bytes": 0,
+            "total_mb": 0.0,
+            "forbidden_packages_present": [],
+            "top_directories": [],
+            "top_files": [],
+        }
+
+    top_directories = []
+    for child in resource_dir.iterdir():
+        if not child.is_dir():
+            continue
+        size = _directory_size(child)
+        top_directories.append(
+            {
+                "name": child.name,
+                "bytes": size,
+                "mb": round(size / 1024 / 1024, 2),
+            }
+        )
+    top_directories.sort(key=lambda item: item["bytes"], reverse=True)
+
+    top_files = []
+    for file_path in resource_dir.rglob("*"):
+        if not file_path.is_file():
+            continue
+        size = file_path.stat().st_size
+        top_files.append(
+            {
+                "path": _relative_posix(file_path, resource_dir),
+                "bytes": size,
+                "mb": round(size / 1024 / 1024, 2),
+            }
+        )
+    top_files.sort(key=lambda item: item["bytes"], reverse=True)
+
+    total_bytes = _directory_size(resource_dir)
+    forbidden_lookup = {name.lower(): name for name in FORBIDDEN_RUNTIME_PACKAGE_NAMES}
+    forbidden_present = sorted(
+        forbidden_lookup[child.name.lower()]
+        for child in resource_dir.iterdir()
+        if child.name.lower() in forbidden_lookup
+    )
+
+    return {
+        "resource_root": str(resource_dir),
+        "total_bytes": total_bytes,
+        "total_mb": round(total_bytes / 1024 / 1024, 2),
+        "forbidden_packages_present": forbidden_present,
+        "top_directories": top_directories[:top_n],
+        "top_files": top_files[:top_n],
+    }
+
+
+def write_backend_runtime_size_report(
+    layout: dict[str, Path],
+    *,
+    top_n: int = 20,
+) -> dict[str, object]:
+    report = build_backend_runtime_size_report(layout, top_n=top_n)
+    report_path = layout["runtime_dir"] / "runtime-size-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    return report
+
+
 def remove_conflicting_runtime_libraries(runtime_dir: str | Path) -> list[Path]:
     resolved_runtime_dir = Path(runtime_dir).resolve()
     if not resolved_runtime_dir.exists():
@@ -342,5 +512,10 @@ def validate_backend_runtime_bundle(
         packaged_file = resource_dir / resource.output_relative_path
         if not packaged_file.exists():
             errors.append(f"Missing bundled resource: {packaged_file}")
+
+    if resource_dir.exists():
+        forbidden_present = build_backend_runtime_size_report(layout, top_n=1)["forbidden_packages_present"]
+        if forbidden_present:
+            errors.append("Forbidden runtime packages bundled: " + ", ".join(forbidden_present))
 
     return errors
