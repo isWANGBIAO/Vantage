@@ -536,6 +536,23 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertIn('STREAM_ANALYSIS_CONTENT', chunk)
         self.assertEqual(mock_create.await_args.kwargs["env"]["AI_REASONING_EFFORT"], "high")
 
+    def test_generate_action_plan_accepts_max_reasoning_effort(self):
+        fake_process = _FakeProcess()
+
+        with patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=fake_process),
+        ) as mock_create:
+            response = asyncio.run(
+                server.generate_action_plan(
+                    server.ActionPlanRequest(reasoning_effort="max"),
+                ),
+            )
+            asyncio.run(_read_first_stream_chunk(response))
+
+        self.assertEqual(mock_create.await_args.kwargs["env"]["AI_REASONING_EFFORT"], "max")
+
     def test_generate_action_plan_passes_provider_route_to_subprocess(self):
         fake_process = _FakeProcess()
 

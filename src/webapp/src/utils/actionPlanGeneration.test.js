@@ -31,6 +31,21 @@ test('buildActionPlanGenerationPayload includes provider-aware model selection',
   );
 });
 
+test('buildActionPlanGenerationPayload maps reasoning for DeepSeek V4 models', () => {
+  assert.deepEqual(
+    buildActionPlanGenerationPayload('xhigh', {
+      model: 'deepseek-v4-pro',
+      providerRoute: 'deepseek',
+    }),
+    {
+      reasoning_effort: 'max',
+      replace_today: false,
+      model: 'deepseek-v4-pro',
+      provider_route: 'deepseek',
+    },
+  );
+});
+
 test('shouldAutogenerateActionPlan only allows one startup run', () => {
   assert.equal(
     shouldAutogenerateActionPlan({

@@ -1,4 +1,4 @@
-import { normalizeActionPlanReasoningEffort } from './actionPlanReasoning.js';
+import { normalizeReasoningEffortForModel } from './actionPlanReasoning.js';
 
 export function buildActionPlanGenerationPayload(reasoningEffort, {
   replaceToday = false,
@@ -6,7 +6,7 @@ export function buildActionPlanGenerationPayload(reasoningEffort, {
   providerRoute = null,
 } = {}) {
   const payload = {
-    reasoning_effort: normalizeActionPlanReasoningEffort(reasoningEffort),
+    reasoning_effort: normalizeReasoningEffortForModel(reasoningEffort, model),
     replace_today: replaceToday,
   };
 

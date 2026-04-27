@@ -12,6 +12,10 @@ const EMPTY_DASHBOARD = {
     prompt_tokens: 0,
     completion_tokens: 0,
     total_tokens: 0,
+    prompt_cache_hit_tokens: 0,
+    prompt_cache_miss_tokens: 0,
+    prompt_cache_hit_rate: null,
+    completion_reasoning_tokens: 0,
     total_duration: 0,
     average_duration: 0,
     average_tokens_per_call: 0,
@@ -66,6 +70,18 @@ function formatPercent(value) {
 
 function formatRatio(value) {
   return `${Number(value || 0).toFixed(2)} tok/s`;
+}
+
+function hasRecordedValue(value) {
+  return value !== null && value !== undefined;
+}
+
+function formatOptionalCompactNumber(value, t) {
+  return hasRecordedValue(value) ? formatCompactNumber(value) : t('usage.label.not_recorded');
+}
+
+function formatOptionalPercent(value, t) {
+  return hasRecordedValue(value) ? formatPercent(value) : t('usage.label.not_recorded');
 }
 
 function clampPercent(value) {
@@ -291,6 +307,12 @@ function buildSpeedTrendOption(rows, t) {
           lines.push(`${escapeTooltipValue(t('usage.speed_trend.tooltip_duration'))}: ${escapeTooltipValue(formatDuration(firstRow.duration))}`);
           lines.push(
             `${escapeTooltipValue(t('usage.speed_trend.tooltip_tokens'))}: ${escapeTooltipValue(t('usage.label.prompt'))} ${escapeTooltipValue(formatCompactNumber(firstRow.prompt_tokens))} / ${escapeTooltipValue(t('usage.label.completion'))} ${escapeTooltipValue(formatCompactNumber(firstRow.completion_tokens))} / ${escapeTooltipValue(t('usage.label.total'))} ${escapeTooltipValue(formatCompactNumber(firstRow.total_tokens))}`,
+          );
+          lines.push(
+            `${escapeTooltipValue(t('usage.speed_trend.tooltip_cache'))}: ${escapeTooltipValue(t('usage.label.cache_hit'))} ${escapeTooltipValue(formatOptionalCompactNumber(firstRow.prompt_cache_hit_tokens, t))} / ${escapeTooltipValue(t('usage.label.cache_miss'))} ${escapeTooltipValue(formatOptionalCompactNumber(firstRow.prompt_cache_miss_tokens, t))} / ${escapeTooltipValue(t('usage.label.cache_hit_rate'))} ${escapeTooltipValue(formatOptionalPercent(firstRow.prompt_cache_hit_rate, t))}`,
+          );
+          lines.push(
+            `${escapeTooltipValue(t('usage.speed_trend.tooltip_reasoning_tokens'))}: ${escapeTooltipValue(formatOptionalCompactNumber(firstRow.completion_reasoning_tokens, t))}`,
           );
         }
 
@@ -591,6 +613,27 @@ export default function UsagePanel({ isVisible = true } = {}) {
       accent: 'success',
     },
     {
+      label: t('usage.summary.cache_hit'),
+      value: formatOptionalCompactNumber(summary.prompt_cache_hit_tokens, t),
+      subValue: t('usage.summary.cache_split', {
+        hit: formatOptionalCompactNumber(summary.prompt_cache_hit_tokens, t),
+        miss: formatOptionalCompactNumber(summary.prompt_cache_miss_tokens, t),
+      }),
+      accent: 'info',
+    },
+    {
+      label: t('usage.summary.cache_hit_rate'),
+      value: formatOptionalPercent(summary.prompt_cache_hit_rate, t),
+      subValue: t('usage.summary.cache_hit_rate_detail'),
+      accent: 'calm',
+    },
+    {
+      label: t('usage.summary.reasoning_tokens'),
+      value: formatOptionalCompactNumber(summary.completion_reasoning_tokens, t),
+      subValue: t('usage.summary.reasoning_tokens_detail'),
+      accent: 'warning',
+    },
+    {
       label: t('usage.summary.active_sources'),
       value: formatCompactNumber(activeSources.length),
       subValue: t('usage.summary.recorded_sessions', { value: formatCompactNumber(summary.session_count) }),
@@ -797,6 +840,10 @@ export default function UsagePanel({ isVisible = true } = {}) {
               { key: 'prompt_tokens', label: t('usage.label.prompt'), render: (row) => formatCompactNumber(row.prompt_tokens) },
               { key: 'completion_tokens', label: t('usage.label.completion'), render: (row) => formatCompactNumber(row.completion_tokens) },
               { key: 'total_tokens', label: t('usage.label.total'), render: (row) => formatCompactNumber(row.total_tokens) },
+              { key: 'prompt_cache_hit_tokens', label: t('usage.label.cache_hit'), render: (row) => formatOptionalCompactNumber(row.prompt_cache_hit_tokens, t) },
+              { key: 'prompt_cache_miss_tokens', label: t('usage.label.cache_miss'), render: (row) => formatOptionalCompactNumber(row.prompt_cache_miss_tokens, t) },
+              { key: 'prompt_cache_hit_rate', label: t('usage.label.cache_hit_rate'), render: (row) => formatOptionalPercent(row.prompt_cache_hit_rate, t) },
+              { key: 'completion_reasoning_tokens', label: t('usage.label.reasoning_tokens'), render: (row) => formatOptionalCompactNumber(row.completion_reasoning_tokens, t) },
               { key: 'output_tokens_per_second', label: t('usage.label.completion_rate'), render: (row) => formatRatio(row.output_tokens_per_second) },
               { key: 'average_tokens_per_second', label: t('usage.label.total_rate'), render: (row) => formatRatio(row.average_tokens_per_second) },
               {

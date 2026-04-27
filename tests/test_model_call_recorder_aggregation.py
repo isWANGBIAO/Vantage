@@ -137,7 +137,13 @@ class SessionRecorderAggregationTests(unittest.TestCase):
                     reasoning_effort="medium",
                     content="world",
                     thinking="",
-                    usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    usage={
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                        "prompt_tokens_details": {"cached_tokens": 4},
+                        "completion_tokens_details": {"reasoning_tokens": 2},
+                    },
                     duration=1.5,
                 )
 
@@ -183,7 +189,14 @@ class SessionRecorderAggregationTests(unittest.TestCase):
                     reasoning_effort="high",
                     content="done",
                     thinking="",
-                    usage={"prompt_tokens": 25, "completion_tokens": 15, "total_tokens": 40},
+                    usage={
+                        "prompt_tokens": 25,
+                        "completion_tokens": 15,
+                        "total_tokens": 40,
+                        "prompt_cache_hit_tokens": 10,
+                        "prompt_cache_miss_tokens": 15,
+                        "completion_tokens_details": {"reasoning_tokens": 6},
+                    },
                     duration=2.0,
                 )
 
@@ -200,6 +213,10 @@ class SessionRecorderAggregationTests(unittest.TestCase):
         self.assertEqual(snapshot["summary"]["prompt_tokens"], 35)
         self.assertEqual(snapshot["summary"]["completion_tokens"], 20)
         self.assertEqual(snapshot["summary"]["total_tokens"], 55)
+        self.assertEqual(snapshot["summary"]["prompt_cache_hit_tokens"], 14)
+        self.assertEqual(snapshot["summary"]["prompt_cache_miss_tokens"], 21)
+        self.assertEqual(snapshot["summary"]["completion_reasoning_tokens"], 8)
+        self.assertAlmostEqual(snapshot["summary"]["prompt_cache_hit_rate"], 40.0)
         self.assertAlmostEqual(snapshot["summary"]["total_duration"], 3.5)
         self.assertAlmostEqual(snapshot["summary"]["average_duration"], 1.75)
         self.assertAlmostEqual(snapshot["summary"]["output_tokens_per_second"], 20 / 3.5)
@@ -209,11 +226,17 @@ class SessionRecorderAggregationTests(unittest.TestCase):
         self.assertEqual(source_rows["chat"]["completed_call_count"], 1)
         self.assertEqual(source_rows["chat"]["failed_call_count"], 1)
         self.assertEqual(source_rows["chat"]["total_tokens"], 15)
+        self.assertEqual(source_rows["chat"]["prompt_cache_hit_tokens"], 4)
+        self.assertEqual(source_rows["chat"]["prompt_cache_miss_tokens"], 6)
+        self.assertAlmostEqual(source_rows["chat"]["prompt_cache_hit_rate"], 40.0)
         self.assertAlmostEqual(source_rows["chat"]["output_tokens_per_second"], 5 / 1.5)
         self.assertEqual(source_rows["action_plan"]["session_count"], 1)
         self.assertEqual(source_rows["action_plan"]["completed_call_count"], 1)
         self.assertEqual(source_rows["action_plan"]["failed_call_count"], 0)
         self.assertEqual(source_rows["action_plan"]["total_tokens"], 40)
+        self.assertEqual(source_rows["action_plan"]["prompt_cache_hit_tokens"], 10)
+        self.assertEqual(source_rows["action_plan"]["prompt_cache_miss_tokens"], 15)
+        self.assertAlmostEqual(source_rows["action_plan"]["prompt_cache_hit_rate"], 40.0)
         self.assertAlmostEqual(source_rows["action_plan"]["output_tokens_per_second"], 15 / 2.0)
 
         self.assertEqual(snapshot["by_day"][0]["date"], "2026-04-18")
@@ -243,6 +266,10 @@ class SessionRecorderAggregationTests(unittest.TestCase):
         self.assertEqual(snapshot["recent_calls"][1]["call_id"], "chat-call-1")
         self.assertEqual(snapshot["recent_calls"][1]["status"], "completed")
         self.assertEqual(snapshot["recent_calls"][1]["total_tokens"], 15)
+        self.assertEqual(snapshot["recent_calls"][1]["prompt_cache_hit_tokens"], 4)
+        self.assertEqual(snapshot["recent_calls"][1]["prompt_cache_miss_tokens"], 6)
+        self.assertEqual(snapshot["recent_calls"][1]["completion_reasoning_tokens"], 2)
+        self.assertAlmostEqual(snapshot["recent_calls"][1]["prompt_cache_hit_rate"], 40.0)
         self.assertAlmostEqual(snapshot["recent_calls"][1]["output_tokens_per_second"], 5 / 1.5)
         self.assertEqual(snapshot["recent_calls"][2]["call_id"], "plan-call-1")
         self.assertEqual(snapshot["recent_calls"][2]["source"], "action_plan")

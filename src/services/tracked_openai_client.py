@@ -5,25 +5,44 @@ import uuid
 from src.services.model_call_recorder import SessionRecorder
 
 
+def _json_safe(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if hasattr(value, "model_dump"):
+        try:
+            return _json_safe(value.model_dump())
+        except Exception:
+            pass
+    if hasattr(value, "dict"):
+        try:
+            return _json_safe(value.dict())
+        except Exception:
+            pass
+    if hasattr(value, "to_dict"):
+        try:
+            return _json_safe(value.to_dict())
+        except Exception:
+            pass
+    if hasattr(value, "__dict__"):
+        public_items = {
+            key: item
+            for key, item in vars(value).items()
+            if not str(key).startswith("_")
+        }
+        if public_items:
+            return _json_safe(public_items)
+    return str(value)
+
+
 def _usage_to_dict(usage):
-    if usage is None:
-        return {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        }
-
-    if isinstance(usage, dict):
-        return {
-            "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
-            "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
-            "total_tokens": int(usage.get("total_tokens", 0) or 0),
-        }
-
-    return {
-        "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
-        "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
-        "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+    return _json_safe(usage) or {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
     }
 
 
@@ -75,6 +94,11 @@ class _TrackedStream:
         usage = getattr(chunk, "usage", None)
         if usage is not None:
             self._usage = _usage_to_dict(usage)
+        self._safe_record(
+            "record_response_chunk",
+            call_id=self._call_id,
+            chunk=_json_safe(chunk),
+        )
 
         choices = getattr(chunk, "choices", None) or []
         if choices:
@@ -113,6 +137,7 @@ class _TrackedStream:
             usage=self._usage,
             duration=duration,
             first_token_latency=self._first_token_latency,
+            response=None,
         )
         self._safe_record(
             "record_token_count",
@@ -256,6 +281,7 @@ class TrackedOpenAIClient:
             usage=usage,
             duration=time.time() - start_time,
             first_token_latency=None,
+            response=_json_safe(response),
         )
         self._safe_record(
             "record_token_count",

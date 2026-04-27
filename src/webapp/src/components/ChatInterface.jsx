@@ -15,7 +15,10 @@ import {
   saveStoredChatMessages,
   storeChatContextBaseVersion,
 } from '../utils/chatContextState';
-import { loadStoredActionPlanReasoningEffort } from '../utils/actionPlanReasoning';
+import {
+    loadStoredActionPlanReasoningEffort,
+    normalizeReasoningEffortForModel,
+} from '../utils/actionPlanReasoning';
 import { computeDisplayedDurationSeconds } from '../utils/actionPlanStats';
 
 import {
@@ -550,10 +553,13 @@ export default function ChatInterface({ embedded = false } = {}) {
             const payload = {
                 message: userMsg,
                 client_sent_at: buildClientSentAt(),
-                reasoning_effort: loadStoredActionPlanReasoningEffort(),
             };
 
             const selectedModelOption = findModelOption(availableModels, selectedModel);
+            payload.reasoning_effort = normalizeReasoningEffortForModel(
+                loadStoredActionPlanReasoningEffort(),
+                selectedModelOption?.model,
+            );
 
             if (selectedModelOption?.model) {
 
@@ -734,8 +740,11 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                             const chatPayload = { message: transcribedText };
                             chatPayload.client_sent_at = buildClientSentAt();
-                            chatPayload.reasoning_effort = loadStoredActionPlanReasoningEffort();
                             const selectedModelOption = findModelOption(availableModels, selectedModel);
+                            chatPayload.reasoning_effort = normalizeReasoningEffortForModel(
+                                loadStoredActionPlanReasoningEffort(),
+                                selectedModelOption?.model,
+                            );
                             if (selectedModelOption?.model) {
                                 chatPayload.model = selectedModelOption.model;
                             }

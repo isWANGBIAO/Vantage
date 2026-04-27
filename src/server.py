@@ -1980,7 +1980,7 @@ class ChatRequest(BaseModel):
     client_sent_at: Optional[str] = None
 
 
-_VALID_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
+_VALID_REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 
 
 def _normalize_reasoning_effort(reasoning_effort: Optional[str]) -> str:

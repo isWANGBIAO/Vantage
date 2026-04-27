@@ -532,8 +532,85 @@ class LLMClientTests(unittest.TestCase):
             )
 
             used_request = mock_post.call_args.kwargs["json"]
-            self.assertEqual(used_request["reasoning_effort"], "xhigh")
-            self.assertEqual(result_payload[1], "gpt-5.2")
+        self.assertEqual(used_request["reasoning_effort"], "xhigh")
+        self.assertEqual(result_payload[1], "gpt-5.2")
+
+    def test_chat_maps_max_reasoning_to_xhigh_for_gpt_models(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.dict(
+                os.environ,
+                {
+                    **self._env(),
+                    "AI_REASONING_EFFORT": "max",
+                },
+                clear=True,
+            ),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response([
+                    {"id": "gpt-5.2", "supported_parameters": ["reasoning_effort", "max_tokens"]},
+                ]),
+            ),
+            patch.object(
+                llm_client.requests,
+                "post",
+                return_value=fake_response,
+            ) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            client.chat([{"role": "user", "content": "ping"}], stream=False)
+
+        used_request = mock_post.call_args.kwargs["json"]
+        self.assertEqual(used_request["reasoning_effort"], "xhigh")
+
+    def test_chat_maps_deepseek_v4_reasoning_to_official_thinking_payload(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done", "reasoning_content": "thought"}}],
+            "usage": {},
+        }
+        deepseek_provider = {
+            "route": "deepseek",
+            "name": "DeepSeek",
+            "type": "openai-compatible",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key": "deepseek-key",
+            "model": "deepseek-v4-pro",
+            "models": ["deepseek-v4-pro"],
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_provider_chain_config", return_value=[deepseek_provider], create=True),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.dict(
+                os.environ,
+                {
+                    **self._env(),
+                    "AI_REASONING_EFFORT": "xhigh",
+                },
+                clear=True,
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            result = client.chat([{"role": "user", "content": "ping"}], stream=False)
+
+        used_request = mock_post.call_args.kwargs["json"]
+        self.assertEqual(used_request["reasoning_effort"], "max")
+        self.assertEqual(used_request["thinking"], {"type": "enabled"})
+        self.assertEqual(result["reasoning_effort"], "max")
 
     def test_chat_maps_siliconflow_deepseek_reasoning_effort_to_thinking_controls(self):
         fake_response = Mock()
@@ -807,7 +884,15 @@ class LLMClientTests(unittest.TestCase):
         fake_response.raise_for_status.return_value = None
         fake_response.json.return_value = {
             "choices": [{"message": {"content": "done"}}],
-            "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 4,
+                "total_tokens": 16,
+                "prompt_tokens_details": {"cached_tokens": 5},
+                "completion_tokens_details": {"reasoning_tokens": 2},
+                "provider_extra": {"kept": True},
+            },
+            "system_fingerprint": "fp-sync",
         }
         recorder = Mock()
 
@@ -838,6 +923,8 @@ class LLMClientTests(unittest.TestCase):
         recorder.record_token_count.assert_called_once()
         completed_kwargs = recorder.record_request_completed.call_args.kwargs
         self.assertEqual(completed_kwargs["usage"]["total_tokens"], 16)
+        self.assertEqual(completed_kwargs["usage"]["prompt_tokens_details"]["cached_tokens"], 5)
+        self.assertEqual(completed_kwargs["response"]["system_fingerprint"], "fp-sync")
         self.assertEqual(completed_kwargs["model"], "gpt-5.2")
         self.assertEqual(completed_kwargs["provider_route"], "cliproxyapi_primary")
         self.assertIsNone(completed_kwargs["first_token_latency"])
@@ -847,8 +934,8 @@ class LLMClientTests(unittest.TestCase):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None
         fake_response.iter_lines.return_value = [
-            b'data: {"choices":[{"delta":{"content":"A"}}]}',
-            b'data: {"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}',
+            b'data: {"id":"chunk-1","choices":[{"delta":{"content":"A"}}],"system_fingerprint":"fp-stream"}',
+            b'data: {"id":"chunk-2","usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":1}}}',
             b'data: [DONE]',
         ]
         recorder = Mock()
@@ -879,8 +966,14 @@ class LLMClientTests(unittest.TestCase):
         recorder.record_message_snapshot.assert_called_once()
         recorder.record_request_completed.assert_called_once()
         recorder.record_token_count.assert_called_once()
+        recorder.record_response_chunk.assert_any_call(
+            call_id=recorder.record_request_completed.call_args.kwargs["call_id"],
+            chunk={"id": "chunk-1", "choices": [{"delta": {"content": "A"}}], "system_fingerprint": "fp-stream"},
+        )
         completed_kwargs = recorder.record_request_completed.call_args.kwargs
         self.assertEqual(completed_kwargs["usage"]["total_tokens"], 10)
+        self.assertEqual(completed_kwargs["usage"]["prompt_tokens_details"]["cached_tokens"], 3)
+        self.assertEqual(completed_kwargs["usage"]["completion_tokens_details"]["reasoning_tokens"], 1)
         self.assertEqual(completed_kwargs["content"], "A")
         self.assertIsNotNone(completed_kwargs["first_token_latency"])
         self.assertIsNotNone(result["first_token_latency"])

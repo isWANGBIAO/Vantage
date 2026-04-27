@@ -4,8 +4,9 @@ import remarkGfm from 'remark-gfm';
 import { RotateCcw, FileText, CheckSquare, Activity } from 'lucide-react';
 import { getActionPlanRenderState } from '../utils/actionPlanContent';
 import {
-  ACTION_PLAN_REASONING_OPTIONS,
+  getReasoningOptionsForModel,
   loadStoredActionPlanReasoningEffort,
+  normalizeReasoningEffortForModel,
   saveActionPlanReasoningEffort,
 } from '../utils/actionPlanReasoning';
 import {
@@ -137,7 +138,10 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   visibilityRef.current = isVisible;
   isGeneratingRef.current = isGenerating;
   selectedModelRef.current = selectedModelOption;
-  selectedReasoningEffortRef.current = selectedReasoningEffort;
+  selectedReasoningEffortRef.current = normalizeReasoningEffortForModel(
+    selectedReasoningEffort,
+    selectedModelOption?.model,
+  );
 
   const setAnalysisContentWithRef = useCallback((value) => {
     if (typeof value === 'function') {
@@ -334,7 +338,11 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   }, [setPlanContentWithRef, t]);
 
   const handleReasoningEffortChange = (event) => {
-    const nextValue = saveActionPlanReasoningEffort(event.target.value);
+    const nextValue = saveActionPlanReasoningEffort(
+      event.target.value,
+      globalThis.localStorage,
+      selectedModelOption?.model,
+    );
     setSelectedReasoningEffort(nextValue);
   };
 
@@ -388,7 +396,11 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       t('action_plan.placeholder.waiting_analysis.title'),
       t('action_plan.placeholder.waiting_analysis.body'),
     ));
-    const effectiveReasoningEffort = selectedReasoningEffortRef.current;
+    const effectiveModelOption = modelOverride || selectedModelRef.current;
+    const effectiveReasoningEffort = normalizeReasoningEffortForModel(
+      selectedReasoningEffortRef.current,
+      effectiveModelOption?.model,
+    );
 
     setStats({
       speed: '0 t/s',
@@ -401,7 +413,6 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
     let currentSection = 'analysis';
-    const effectiveModelOption = modelOverride || selectedModelRef.current;
 
     try {
       const response = await fetchBackend('/api/action_plan', {
@@ -719,6 +730,11 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   });
   const analysisRoundStats = getActionPlanRoundStats(stats, 'analysis');
   const planRoundStats = getActionPlanRoundStats(stats, 'plan');
+  const reasoningOptions = getReasoningOptionsForModel(selectedModelOption?.model);
+  const displayedReasoningEffort = normalizeReasoningEffortForModel(
+    selectedReasoningEffort,
+    selectedModelOption?.model,
+  );
 
   return (
     <div
@@ -836,7 +852,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
           >
             <span>{t('common.reasoning')}</span>
             <select
-              value={selectedReasoningEffort}
+              value={displayedReasoningEffort}
               onChange={handleReasoningEffortChange}
               disabled={isGenerating}
               style={{
@@ -850,7 +866,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
                 opacity: isGenerating ? 0.65 : 1,
               }}
             >
-              {ACTION_PLAN_REASONING_OPTIONS.map((option) => (
+              {reasoningOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {t(option.labelKey) || option.fallbackLabel}
                 </option>

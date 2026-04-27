@@ -166,12 +166,41 @@ class LLMClient:
         normalized_model = self._normalize_model_alias(model)
         return route == "siliconflow_fallback" and normalized_model == "deepseek-ai/deepseek-v3.2"
 
+    def _is_deepseek_v4_model(self, provider, model):
+        normalized_model = str(model or "").strip().lower()
+        provider_name = str((provider or {}).get("name") or "").strip().lower()
+        provider_route = str((provider or {}).get("route") or "").strip().lower()
+        return (
+            normalized_model in {"deepseek-v4-pro", "deepseek-v4-flash"}
+            or normalized_model.endswith("/deepseek-v4-pro")
+            or normalized_model.endswith("/deepseek-v4-flash")
+            or (
+                "deepseek" in provider_name
+                and normalized_model.startswith("deepseek-v4")
+            )
+            or (
+                "deepseek" in provider_route
+                and normalized_model.startswith("deepseek-v4")
+            )
+        )
+
+    def _normalize_reasoning_effort_for_model(self, provider, model, reasoning_effort):
+        normalized_effort = str(reasoning_effort or "").strip().lower()
+        if self._is_deepseek_v4_model(provider, model):
+            return "max" if normalized_effort in {"xhigh", "extra_high", "max"} else "high"
+        if normalized_effort == "max":
+            return "xhigh"
+        if normalized_effort in {"low", "medium", "high", "xhigh"}:
+            return normalized_effort
+        return "medium"
+
     def _map_reasoning_effort_to_thinking_budget(self, reasoning_effort):
         budgets = {
             "low": 1024,
             "medium": 2048,
             "high": 4096,
             "xhigh": 8192,
+            "max": 8192,
         }
         normalized_effort = str(reasoning_effort or "").strip().lower()
         return budgets.get(normalized_effort, budgets["medium"])
@@ -180,10 +209,38 @@ class LLMClient:
         if not isinstance(payload, dict):
             return payload
 
+        reasoning_effort = payload.get("reasoning_effort")
+        if reasoning_effort:
+            effective_effort = self._normalize_reasoning_effort_for_model(
+                provider,
+                model,
+                reasoning_effort,
+            )
+            if effective_effort != reasoning_effort:
+                payload = dict(payload)
+                payload["reasoning_effort"] = effective_effort
+                reasoning_effort = effective_effort
+
+        if self._is_deepseek_v4_model(provider, model):
+            adapted_payload = dict(payload)
+            adapted_payload["reasoning_effort"] = self._normalize_reasoning_effort_for_model(
+                provider,
+                model,
+                reasoning_effort,
+            )
+            adapted_payload["thinking"] = {"type": "enabled"}
+            logging.info(
+                "Adapted DeepSeek V4 thinking payload for model %s on route %s: reasoning_effort=%s thinking=%s",
+                model,
+                provider.get("route"),
+                adapted_payload["reasoning_effort"],
+                adapted_payload["thinking"],
+            )
+            return adapted_payload
+
         if not self._is_siliconflow_deepseek_v32(provider, model):
             return payload
 
-        reasoning_effort = payload.get("reasoning_effort")
         if not reasoning_effort:
             return payload
 
@@ -643,6 +700,10 @@ class LLMClient:
             return provider
         return self.providers[0] if self.providers else None
 
+    def _effective_reasoning_effort_for_result(self, provider_route, model, reasoning_effort):
+        provider = self._find_provider(provider_route) or {"route": provider_route}
+        return self._normalize_reasoning_effort_for_model(provider, model, reasoning_effort)
+
     def _is_fallback_result(self, requested_model, requested_route, used_model, used_route):
         return bool(
             (requested_model and used_model and not self._models_match(requested_model, used_model))
@@ -842,6 +903,11 @@ class LLMClient:
             message = data["choices"][0]["message"]
             usage = data.get("usage", {})
             duration = time.time() - start_time
+            effective_reasoning_effort = self._effective_reasoning_effort_for_result(
+                used_route,
+                used_model,
+                reasoning_effort,
+            )
 
             result = {
                 "content": self._extract_content(message),
@@ -854,7 +920,7 @@ class LLMClient:
                 "requested_model": requested_model,
                 "requested_provider_route": requested_route,
                 "fallback_used": self._is_fallback_result(requested_model, requested_route, used_model, used_route),
-                "reasoning_effort": reasoning_effort,
+                "reasoning_effort": effective_reasoning_effort,
             }
             self._safe_record(
                 recorder,
@@ -863,10 +929,11 @@ class LLMClient:
                 model=used_model,
                 provider_route=used_route,
                 stream=False,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=effective_reasoning_effort,
                 content=result["content"],
                 thinking=result["thinking"],
                 usage=result["usage"],
+                response=data,
                 duration=result["duration"],
                 first_token_latency=result["first_token_latency"],
             )
@@ -934,6 +1001,11 @@ class LLMClient:
                 requested_model=model,
                 requested_provider_route=requested_route,
             )
+            effective_reasoning_effort = self._effective_reasoning_effort_for_result(
+                used_route,
+                used_model,
+                reasoning_effort,
+            )
 
             output("metadata", {
                 "model": used_model,
@@ -941,7 +1013,7 @@ class LLMClient:
                 "requested_model": requested_model,
                 "requested_provider_route": requested_route,
                 "fallback_used": self._is_fallback_result(requested_model, requested_route, used_model, used_route),
-                "reasoning_effort": reasoning_effort,
+                "reasoning_effort": effective_reasoning_effort,
             })
 
             for line in response.iter_lines(chunk_size=1):
@@ -958,6 +1030,12 @@ class LLMClient:
 
                     try:
                         data = json.loads(data_str)
+                        self._safe_record(
+                            recorder,
+                            "record_response_chunk",
+                            call_id=call_id,
+                            chunk=data,
+                        )
                         if "usage" in data:
                             usage_data = data["usage"]
 
@@ -994,15 +1072,16 @@ class LLMClient:
             raise
 
         duration = time.time() - start_time
+        effective_reasoning_effort = self._effective_reasoning_effort_for_result(
+            used_route,
+            used_model,
+            reasoning_effort,
+        )
 
         result = {
             "content": full_content,
             "thinking": full_thinking,
-            "usage": {
-                "prompt_tokens": usage_data.get("prompt_tokens", 0),
-                "completion_tokens": usage_data.get("completion_tokens", 0),
-                "total_tokens": usage_data.get("total_tokens", 0),
-            },
+            "usage": usage_data or {},
             "duration": duration,
             "first_token_latency": first_token_latency,
             "model": used_model,
@@ -1010,7 +1089,7 @@ class LLMClient:
             "requested_model": requested_model,
             "requested_provider_route": requested_route,
             "fallback_used": self._is_fallback_result(requested_model, requested_route, used_model, used_route),
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": effective_reasoning_effort,
         }
         self._safe_record(
             recorder,
@@ -1019,7 +1098,7 @@ class LLMClient:
             model=used_model,
             provider_route=used_route,
             stream=True,
-            reasoning_effort=reasoning_effort,
+            reasoning_effort=effective_reasoning_effort,
             content=result["content"],
             thinking=result["thinking"],
             usage=result["usage"],

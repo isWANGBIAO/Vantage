@@ -178,6 +178,7 @@ test('ChatInterface sends chat timestamps and action-plan reasoning effort to ba
   assert.ok(chatSource.includes('client_sent_at'));
   assert.ok(chatSource.includes('reasoning_effort'));
   assert.ok(chatSource.includes('loadStoredActionPlanReasoningEffort'));
+  assert.ok(chatSource.includes('normalizeReasoningEffortForModel'));
 });
 
 test('ChatInterface renders chat token stats and hydrates them from backend context', () => {

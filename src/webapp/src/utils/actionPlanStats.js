@@ -11,6 +11,7 @@ const REASONING_EFFORT_LABELS = {
   high: 'High',
   xhigh: 'Extra High',
   extra_high: 'Extra High',
+  max: 'Max',
 };
 
 export function formatPoweredByLabel(stats) {

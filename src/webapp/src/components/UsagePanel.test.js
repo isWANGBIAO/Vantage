@@ -87,6 +87,25 @@ test('UsagePanel aligns token counts with completion and total throughput labels
   assert.equal(usagePanelSource.includes('Output Speed'), false);
 });
 
+test('UsagePanel renders cache and reasoning token metrics from usage rows', () => {
+  [
+    'prompt_cache_hit_tokens',
+    'prompt_cache_miss_tokens',
+    'prompt_cache_hit_rate',
+    'completion_reasoning_tokens',
+    "t('usage.summary.cache_hit')",
+    "t('usage.summary.cache_hit_rate')",
+    "t('usage.summary.reasoning_tokens')",
+    "t('usage.label.cache_hit')",
+    "t('usage.label.cache_miss')",
+    "t('usage.label.cache_hit_rate')",
+    "t('usage.label.reasoning_tokens')",
+    "t('usage.label.not_recorded')",
+  ].forEach((snippet) => {
+    assert.ok(usagePanelSource.includes(snippet), `expected UsagePanel to include ${snippet}`);
+  });
+});
+
 test('UsagePanel renders speed trend from speed_series', () => {
   assert.ok(usagePanelSource.includes('speed_series'));
   assert.ok(usagePanelSource.includes('ReactECharts'));
@@ -201,6 +220,8 @@ test('UsagePanel display copy includes completed usage i18n keys', () => {
     'usage.speed_trend.empty',
     'usage.speed_trend.output_rate',
     'usage.speed_trend.total_rate',
+    'usage.speed_trend.tooltip_cache',
+    'usage.speed_trend.tooltip_reasoning_tokens',
     'usage.daily',
     'usage.daily.empty',
     'usage.recent_sessions',
@@ -210,6 +231,14 @@ test('UsagePanel display copy includes completed usage i18n keys', () => {
     'usage.label.duration',
     'usage.label.started',
     'usage.label.share',
+    'usage.label.cache_hit',
+    'usage.label.cache_miss',
+    'usage.label.cache_hit_rate',
+    'usage.label.reasoning_tokens',
+    'usage.label.not_recorded',
+    'usage.summary.cache_hit',
+    'usage.summary.cache_hit_rate',
+    'usage.summary.reasoning_tokens',
     'usage.status.completed',
     'usage.status.failed',
     'usage.status.ignored',

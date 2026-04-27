@@ -75,6 +75,13 @@ test('ActionPlan uses provider-aware model options before falling back to legacy
   assert.ok(actionPlanSource.includes("vantage:llm-models-updated"));
 });
 
+test('ActionPlan uses model-aware reasoning options and payload mapping', () => {
+  assert.ok(actionPlanSource.includes('getReasoningOptionsForModel(selectedModelOption?.model)'));
+  assert.ok(actionPlanSource.includes('normalizeReasoningEffortForModel('));
+  assert.ok(actionPlanSource.includes('reasoningOptions.map((option)'));
+  assert.equal(actionPlanSource.includes('ACTION_PLAN_REASONING_OPTIONS.map((option)'), false);
+});
+
 test('ActionPlan shows live elapsed time while generation is active', () => {
   assert.ok(actionPlanSource.includes('computeDisplayedDurationSeconds'));
   assert.ok(actionPlanSource.includes('const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now())'));

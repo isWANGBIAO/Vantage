@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import {
   ACTION_PLAN_REASONING_OPTIONS,
   ACTION_PLAN_REASONING_STORAGE_KEY,
+  getReasoningOptionsForModel,
   loadStoredActionPlanReasoningEffort,
   normalizeActionPlanReasoningEffort,
+  normalizeReasoningEffortForModel,
   saveActionPlanReasoningEffort,
 } from './actionPlanReasoning.js';
 
@@ -67,4 +69,21 @@ test('ACTION_PLAN_REASONING_OPTIONS exposes UI labels in display order', () => {
       'xhigh:common.reasoning.xhigh:Extra High',
     ],
   );
+});
+
+test('getReasoningOptionsForModel exposes only High and Max for DeepSeek V4', () => {
+  assert.deepEqual(
+    getReasoningOptionsForModel('deepseek-v4-pro').map((option) => `${option.value}:${option.labelKey}:${option.fallbackLabel}`),
+    [
+      'high:common.reasoning.high:High',
+      'max:common.reasoning.max:Max',
+    ],
+  );
+});
+
+test('normalizeReasoningEffortForModel maps GPT and DeepSeek values safely', () => {
+  assert.equal(normalizeReasoningEffortForModel('xhigh', 'deepseek-v4-flash'), 'max');
+  assert.equal(normalizeReasoningEffortForModel('medium', 'deepseek-v4-pro'), 'high');
+  assert.equal(normalizeReasoningEffortForModel('max', 'gpt-5.5'), 'xhigh');
+  assert.equal(normalizeReasoningEffortForModel('low', 'gpt-5.5'), 'low');
 });
