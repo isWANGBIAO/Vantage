@@ -112,6 +112,53 @@ class RunPromptTests(unittest.TestCase):
 
         self.assertEqual(formatted, "What time is it?")
 
+    def test_build_chat_request_messages_keeps_action_plan_prefix_and_full_history(self):
+        action_plan_messages = [
+            {"role": "system", "content": "stable system"},
+            {"role": "user", "content": "analysis input"},
+            {"role": "assistant", "content": "analysis reply"},
+            {"role": "user", "content": "plan input"},
+            {"role": "assistant", "content": "plan reply"},
+        ]
+        full_history = [
+            {"role": "system", "content": "older standalone system"},
+            {"role": "user", "content": "older chat"},
+            {"role": "assistant", "content": "older reply"},
+            {"role": "user", "content": "current message"},
+        ]
+
+        messages = run_prompt.build_chat_request_messages(
+            full_history,
+            action_plan_messages=action_plan_messages,
+        )
+
+        self.assertEqual(messages[:5], action_plan_messages)
+        self.assertEqual(messages[5:], full_history)
+        self.assertEqual(messages[-1]["content"], "current message")
+        self.assertEqual(len(messages), len(action_plan_messages) + len(full_history))
+
+    def test_build_chat_request_messages_does_not_duplicate_existing_action_plan_prefix(self):
+        action_plan_messages = [
+            {"role": "system", "content": "stable system"},
+            {"role": "user", "content": "analysis input"},
+            {"role": "assistant", "content": "analysis reply"},
+            {"role": "user", "content": "plan input"},
+            {"role": "assistant", "content": "plan reply"},
+        ]
+        full_history = action_plan_messages + [
+            {"role": "user", "content": "older chat"},
+            {"role": "assistant", "content": "older reply"},
+            {"role": "user", "content": "current message"},
+        ]
+
+        messages = run_prompt.build_chat_request_messages(
+            full_history,
+            action_plan_messages=action_plan_messages,
+        )
+
+        self.assertEqual(messages, full_history)
+        self.assertEqual(messages[-1]["content"], "current message")
+
     def test_transcribe_mode_exits_nonzero_when_audio_service_fails(self):
         stdout = io.StringIO()
 
@@ -467,6 +514,74 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(kwargs["entrypoint"], "src/scripts/run_prompt.py")
         self.assertTrue(kwargs["session_id"])
         self.assertTrue(str(kwargs["context_file"]).endswith("latest_context.json"))
+
+    def test_chat_mode_sends_action_plan_prefix_before_full_context(self):
+        fake_client = _CapturingLLMClient(
+            [
+                {
+                    "content": "chat reply",
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+                    "duration": 0.8,
+                }
+            ]
+        )
+
+        action_plan_messages = [
+            {"role": "system", "content": "stable system"},
+            {"role": "user", "content": "analysis input"},
+            {"role": "assistant", "content": "analysis reply"},
+            {"role": "user", "content": "plan input"},
+            {"role": "assistant", "content": "plan reply"},
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_dir = Path(temp_dir) / "history"
+            history_dir.mkdir()
+            (history_dir / "latest_context.json").write_text(
+                json.dumps(
+                    [
+                        {"role": "user", "content": "older chat"},
+                        {"role": "assistant", "content": "older reply"},
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (history_dir / "latest_action_plan_context.json").write_text(
+                json.dumps(action_plan_messages, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            with patch.object(run_prompt.Config, "load_env"), patch.object(
+                run_prompt.Config,
+                "get_history_dir",
+                return_value=history_dir,
+            ), patch.object(
+                run_prompt,
+                "LLMClient",
+                return_value=fake_client,
+            ), patch.object(
+                sys,
+                "argv",
+                [
+                    "run_prompt.py",
+                    "--chat_message",
+                    "current",
+                    "--client_sent_at",
+                    "2026-04-28T01:02:03+08:00",
+                ],
+            ):
+                run_prompt.main()
+
+        sent_messages = fake_client.calls[0]["messages"]
+        self.assertEqual(sent_messages[:5], action_plan_messages)
+        self.assertEqual(sent_messages[5]["content"], "older chat")
+        self.assertEqual(sent_messages[6]["content"], "older reply")
+        self.assertTrue(sent_messages[-1]["content"].endswith("\ncurrent"))
+        self.assertIn("Message timestamp: 2026-04-28 01:02:03+08:00", sent_messages[-1]["content"])
+        self.assertEqual(fake_client.calls[0]["kwargs"]["metadata"]["full_context_message_count"], 3)
+        self.assertEqual(fake_client.calls[0]["kwargs"]["metadata"]["sent_context_message_count"], len(sent_messages))
+        self.assertEqual(fake_client.calls[0]["kwargs"]["metadata"]["context_strategy"], "action_plan_prefix_full_history")
 
     def test_chat_mode_passes_provider_route_to_llm_client(self):
         fake_client = _CapturingLLMClient(

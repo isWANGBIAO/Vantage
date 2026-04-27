@@ -192,6 +192,19 @@
 .usage-section h3 {
   margin: 0;
   font-size: 0.98rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.usage-section-scope {
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 .usage-speed-card {

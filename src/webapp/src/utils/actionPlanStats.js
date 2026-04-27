@@ -117,6 +117,24 @@ export function formatActionPlanTokenBreakdown(stats) {
   return `${totalText} (P ${formatCompactTokenValue(promptTokens)} / C ${formatCompactTokenValue(completionTokens)})`;
 }
 
+export function formatActionPlanCacheBreakdown(stats) {
+  const cacheHit = stats?.prompt_cache_hit_tokens;
+  const cacheMiss = stats?.prompt_cache_miss_tokens;
+
+  if (cacheHit === null && cacheMiss === null) {
+    return null;
+  }
+  if (cacheHit === undefined && cacheMiss === undefined) {
+    return null;
+  }
+
+  const hitValue = Number(cacheHit || 0);
+  const missValue = Number(cacheMiss || 0);
+  const rate = Number(stats?.prompt_cache_hit_rate);
+  const rateText = Number.isFinite(rate) ? ` / ${rate.toFixed(1)}%` : '';
+  return `H ${formatCompactTokenValue(hitValue)} / M ${formatCompactTokenValue(missValue)}${rateText}`;
+}
+
 export function getActionPlanRoundStats(stats, section) {
   if (!Array.isArray(stats?.requests)) {
     return null;

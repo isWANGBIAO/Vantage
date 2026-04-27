@@ -828,7 +828,10 @@ export default function UsagePanel({ isVisible = true } = {}) {
         </section>
 
         <section className="usage-section">
-          <h3>{t('usage.recent_sessions')}</h3>
+          <h3>
+            {t('usage.recent_sessions')}
+            <span className="usage-section-scope">{t('usage.cache_scope.session_total')}</span>
+          </h3>
           <DataTable
             emptyMessage={t('usage.recent_sessions.empty')}
             rows={sessionRows}
@@ -861,7 +864,10 @@ export default function UsagePanel({ isVisible = true } = {}) {
         </section>
 
         <section className="usage-section">
-          <h3>{t('usage.recent_calls')}</h3>
+          <h3>
+            {t('usage.recent_calls')}
+            <span className="usage-section-scope">{t('usage.cache_scope.single_request')}</span>
+          </h3>
           <DataTable
             emptyMessage={t('usage.recent_calls.empty')}
             rows={recentCallRows}
@@ -878,9 +884,14 @@ export default function UsagePanel({ isVisible = true } = {}) {
                 ),
               },
               { key: 'model', label: t('usage.label.model') },
+              { key: 'provider_route', label: t('usage.label.provider'), render: (row) => row.provider_route || '-' },
               { key: 'prompt_tokens', label: t('usage.label.prompt'), render: (row) => formatCompactNumber(row.prompt_tokens) },
               { key: 'completion_tokens', label: t('usage.label.completion'), render: (row) => formatCompactNumber(row.completion_tokens) },
               { key: 'total_tokens', label: t('usage.label.total'), render: (row) => formatCompactNumber(row.total_tokens) },
+              { key: 'prompt_cache_hit_tokens', label: t('usage.label.cache_hit'), render: (row) => formatOptionalCompactNumber(row.prompt_cache_hit_tokens, t) },
+              { key: 'prompt_cache_miss_tokens', label: t('usage.label.cache_miss'), render: (row) => formatOptionalCompactNumber(row.prompt_cache_miss_tokens, t) },
+              { key: 'prompt_cache_hit_rate', label: t('usage.label.cache_hit_rate'), render: (row) => formatOptionalPercent(row.prompt_cache_hit_rate, t) },
+              { key: 'completion_reasoning_tokens', label: t('usage.label.reasoning_tokens'), render: (row) => formatOptionalCompactNumber(row.completion_reasoning_tokens, t) },
               { key: 'output_tokens_per_second', label: t('usage.label.completion_rate'), render: (row) => formatRatio(row.output_tokens_per_second) },
               { key: 'average_tokens_per_second', label: t('usage.label.total_rate'), render: (row) => formatRatio(row.average_tokens_per_second) },
               { key: 'duration', label: t('usage.label.duration'), render: (row) => formatDuration(row.duration) },

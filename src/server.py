@@ -2106,15 +2106,44 @@ def _build_chat_display_messages(messages):
     return display_messages
 
 
+def _build_preferred_chat_model_fields(stats=None):
+    latest_payload = _read_context_session_payload(_get_latest_context_file()) or {}
+    action_plan_payload = _read_context_session_payload(_get_action_plan_context_file()) or {}
+    stats_payload = stats if isinstance(stats, dict) else {}
+
+    preferred_model = (
+        latest_payload.get("model")
+        or action_plan_payload.get("model")
+        or stats_payload.get("default_model")
+    )
+    preferred_provider_route = (
+        latest_payload.get("provider_route")
+        or action_plan_payload.get("provider_route")
+        or stats_payload.get("provider_route")
+    )
+    preferred_option_id = (
+        f"{preferred_provider_route}::{preferred_model}"
+        if preferred_model and preferred_provider_route
+        else preferred_model
+    )
+    return {
+        "preferred_model": preferred_model,
+        "preferred_provider_route": preferred_provider_route,
+        "preferred_model_option_id": preferred_option_id,
+    }
+
+
 def _build_chat_context_payload():
     action_plan_context_path = Path(_get_action_plan_context_file())
     stats = _load_context_session_stats(_get_latest_context_file())
+    preferred_fields = _build_preferred_chat_model_fields(stats)
     if not action_plan_context_path.exists():
         return {
             "base_context_version": "empty",
             "has_action_plan_context": False,
             "display_messages": [],
             "stats": stats,
+            **preferred_fields,
         }
 
     try:
@@ -2128,6 +2157,7 @@ def _build_chat_context_payload():
         "has_action_plan_context": True,
         "display_messages": _build_chat_display_messages(action_plan_messages),
         "stats": stats,
+        **preferred_fields,
     }
 
 

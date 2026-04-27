@@ -106,6 +106,14 @@ test('UsagePanel renders cache and reasoning token metrics from usage rows', () 
   });
 });
 
+test('UsagePanel labels session cache as cumulative and recent calls as single request', () => {
+  assert.ok(usagePanelSource.includes("t('usage.cache_scope.session_total')"));
+  assert.ok(usagePanelSource.includes("t('usage.cache_scope.single_request')"));
+  assert.ok(usagePanelSource.includes("t('usage.label.provider')"));
+  assert.ok(usagePanelSource.includes("{ key: 'prompt_cache_hit_tokens', label: t('usage.label.cache_hit')"));
+  assert.ok(usagePanelSource.includes("{ key: 'provider_route', label: t('usage.label.provider')"));
+});
+
 test('UsagePanel renders speed trend from speed_series', () => {
   assert.ok(usagePanelSource.includes('speed_series'));
   assert.ok(usagePanelSource.includes('ReactECharts'));

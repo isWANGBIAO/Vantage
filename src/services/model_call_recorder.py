@@ -89,6 +89,7 @@ def _ensure_db(db_file):
                 completion_reasoning_tokens INTEGER,
                 usage_json TEXT,
                 response_json TEXT,
+                request_metadata_json TEXT,
                 error_type TEXT,
                 error_message TEXT
             );
@@ -121,6 +122,7 @@ def _ensure_db(db_file):
             ("completion_reasoning_tokens", "INTEGER"),
             ("usage_json", "TEXT"),
             ("response_json", "TEXT"),
+            ("request_metadata_json", "TEXT"),
         ):
             if column_name not in columns:
                 conn.execute(f"ALTER TABLE model_calls ADD COLUMN {column_name} {column_type}")
@@ -164,6 +166,15 @@ def _json_dumps_or_none(value):
     if safe_value is None:
         return None
     return json.dumps(safe_value, ensure_ascii=False, sort_keys=True)
+
+
+def _json_loads_or_none(value):
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return None
 
 
 def _as_int_or_zero(value):
@@ -334,6 +345,8 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
     def _build_usage_row(row):
         keys = set(row.keys())
         payload = {key: row[key] for key in row.keys()}
+        if "request_metadata_json" in keys:
+            payload["request_metadata"] = _json_loads_or_none(payload.get("request_metadata_json"))
         completed = _as_int(payload["completed_call_count"]) if "completed_call_count" in keys else (1 if payload.get("status") == "completed" else 0)
         total_duration = _as_float(payload["total_duration"]) if "total_duration" in keys else _as_float(payload.get("duration"))
         total_tokens = _as_int(payload["total_tokens"])
@@ -524,6 +537,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                 mc.completion_reasoning_tokens,
                 mc.usage_json,
                 mc.response_json,
+                mc.request_metadata_json,
                 mc.error_type,
                 mc.error_message,
                 mc.created_at,
@@ -750,6 +764,7 @@ class SessionRecorder:
         metadata=None,
     ):
         created_at = _isoformat()
+        safe_metadata = _json_safe(metadata or {})
         self._append_event(
             "request_started",
             {
@@ -760,7 +775,7 @@ class SessionRecorder:
                 "stream": bool(stream),
                 "reasoning_effort": reasoning_effort,
                 "message_count": len(messages or []),
-                "metadata": metadata or {},
+                "metadata": safe_metadata,
             },
         )
         with _open_db(self.db_file) as conn:
@@ -769,8 +784,9 @@ class SessionRecorder:
                 INSERT INTO model_calls (
                     call_id, session_id, created_at, completed_at, status, model,
                     provider_route, reasoning_effort, stream, duration, first_token_latency,
-                    prompt_tokens, completion_tokens, total_tokens, error_type, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    prompt_tokens, completion_tokens, total_tokens, request_metadata_json,
+                    error_type, error_message
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(call_id) DO UPDATE SET
                     session_id=excluded.session_id,
                     model=excluded.model,
@@ -783,7 +799,8 @@ class SessionRecorder:
                     prompt_cache_miss_tokens=NULL,
                     completion_reasoning_tokens=NULL,
                     usage_json=NULL,
-                    response_json=NULL
+                    response_json=NULL,
+                    request_metadata_json=excluded.request_metadata_json
                 """,
                 (
                     call_id,
@@ -800,6 +817,7 @@ class SessionRecorder:
                     None,
                     None,
                     None,
+                    _json_dumps_or_none(safe_metadata),
                     None,
                     None,
                 ),

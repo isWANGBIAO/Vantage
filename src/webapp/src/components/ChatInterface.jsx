@@ -19,7 +19,10 @@ import {
     loadStoredActionPlanReasoningEffort,
     normalizeReasoningEffortForModel,
 } from '../utils/actionPlanReasoning';
-import { computeDisplayedDurationSeconds } from '../utils/actionPlanStats';
+import {
+    computeDisplayedDurationSeconds,
+    formatActionPlanCacheBreakdown,
+} from '../utils/actionPlanStats';
 
 import {
 
@@ -29,6 +32,7 @@ import {
 
 } from '../utils/modelReasoningSupport';
 import {
+  buildModelOptionId,
   buildModelOptionsFromCatalog,
   findModelOption,
   persistPreferredModelOption,
@@ -215,6 +219,8 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     const [selectedModel, setSelectedModel] = useState('');
 
+    const [contextPreferredModelId, setContextPreferredModelId] = useState('');
+
     const [isLoading, setIsLoading] = useState(false);
 
     const [isRecording, setIsRecording] = useState(false);
@@ -232,6 +238,14 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     const timerRef = useRef(null);
 
+    const contextPreferredModelRef = useRef('');
+
+    const availableModelsRef = useRef([]);
+
+    const selectedModelRef = useRef('');
+
+    const manualModelSelectionRef = useRef(false);
+
     const streamRef = useRef(null); // 存储 audio stream 避免作用域问题
 
 
@@ -241,6 +255,14 @@ export default function ChatInterface({ embedded = false } = {}) {
         endRef.current?.scrollIntoView({ behavior: 'smooth' });
 
     };
+
+
+
+    useEffect(() => {
+
+        selectedModelRef.current = selectedModel;
+
+    }, [selectedModel]);
 
 
 
@@ -277,6 +299,18 @@ export default function ChatInterface({ embedded = false } = {}) {
                 setBaseMessages(Array.isArray(data?.display_messages) ? data.display_messages : []);
                 setChatBaseVersion(syncedState.baseVersion);
                 setStats(data?.stats || null);
+                const preferredModelRef = (
+                    data?.preferred_model_option_id
+                    || buildModelOptionId(data?.preferred_provider_route, data?.preferred_model)
+                );
+                contextPreferredModelRef.current = preferredModelRef || '';
+                setContextPreferredModelId(preferredModelRef || '');
+                if (!manualModelSelectionRef.current && preferredModelRef && availableModelsRef.current.length > 0) {
+                    const inheritedOption = findModelOption(availableModelsRef.current, preferredModelRef);
+                    if (inheritedOption) {
+                        setSelectedModel(inheritedOption.id);
+                    }
+                }
 
             } catch (error) {
 
@@ -293,6 +327,7 @@ export default function ChatInterface({ embedded = false } = {}) {
             const modelList = buildModelOptionsFromCatalog(data);
 
             setAvailableModels(modelList);
+            availableModelsRef.current = modelList;
 
             setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
             const defaultModel = data?.default_model;
@@ -301,7 +336,9 @@ export default function ChatInterface({ embedded = false } = {}) {
 
             if (modelList.length > 0) {
                 const nextOption = (
-                    findModelOption(modelList, storedModelRef)
+                    (!manualModelSelectionRef.current && findModelOption(modelList, contextPreferredModelRef.current))
+                    || findModelOption(modelList, selectedModelRef.current)
+                    || findModelOption(modelList, storedModelRef)
                     || findModelOption(modelList, storedModel)
                     || resolvePreferredModelOption(modelList)
                     || findModelOption(modelList, defaultModel)
@@ -340,6 +377,21 @@ export default function ChatInterface({ embedded = false } = {}) {
         window.addEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
 
         const handleChatContextBaseUpdated = (event) => {
+            const preferredModelRef = (
+                event?.detail?.preferredModelOptionId
+                || buildModelOptionId(event?.detail?.preferredProviderRoute, event?.detail?.preferredModel)
+            );
+            if (preferredModelRef) {
+                manualModelSelectionRef.current = false;
+            }
+            contextPreferredModelRef.current = preferredModelRef || '';
+            setContextPreferredModelId(preferredModelRef || '');
+            if (!manualModelSelectionRef.current && preferredModelRef && availableModelsRef.current.length > 0) {
+                const inheritedOption = findModelOption(availableModelsRef.current, preferredModelRef);
+                if (inheritedOption) {
+                    setSelectedModel(inheritedOption.id);
+                }
+            }
             void syncChatContext({
                 baseVersionOverride: event?.detail?.baseContextVersion ?? null,
                 baseMessagesOverride: event?.detail?.displayMessages ?? [],
@@ -427,6 +479,8 @@ export default function ChatInterface({ embedded = false } = {}) {
     const handleModelChange = (event) => {
 
         const nextModel = event.target.value;
+
+        manualModelSelectionRef.current = true;
 
         setSelectedModel(nextModel);
 
@@ -841,6 +895,18 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     const selectedModelOption = findModelOption(availableModels, selectedModel);
     const providerLabel = selectedModelOption?.provider_label || null;
+    const chatCacheBreakdown = formatActionPlanCacheBreakdown(stats);
+    const hasCacheRouteWarning = Boolean(
+        contextPreferredModelId
+        && selectedModel
+        && selectedModel !== contextPreferredModelId
+        && findModelOption(availableModels, contextPreferredModelId)
+    );
+    const modelRouteNotice = hasCacheRouteWarning ? (
+        <span style={{ fontSize: '0.78rem', color: 'var(--warning-color, #f59e0b)' }}>
+            {t('chat.cache_route_warning')}
+        </span>
+    ) : null;
     const displayedDurationSeconds = computeDisplayedDurationSeconds(stats, {
         isActive: isLoading,
         nowMs: liveDurationNowMs,
@@ -1089,6 +1155,9 @@ export default function ChatInterface({ embedded = false } = {}) {
                                 <span>{t('common.speed', { value: stats.speed })}</span>
                                 <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
                                 <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
+                                {chatCacheBreakdown ? (
+                                    <span>{t(stats.cache_scope === 'request' ? 'common.cache_request' : 'common.cache_session', { value: chatCacheBreakdown })}</span>
+                                ) : null}
                             </div>
                         )}
                         <label
@@ -1125,6 +1194,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                         <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                             {providerLabel ? t('chat.powered_by', { provider: providerLabel }) : t('chat.provider_unavailable')}
                         </span>
+                        {modelRouteNotice}
 
                         {messages.length > 0 && (
 
@@ -1350,6 +1420,9 @@ export default function ChatInterface({ embedded = false } = {}) {
                             <span>{t('common.speed', { value: stats.speed })}</span>
                             <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
                             <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
+                            {chatCacheBreakdown ? (
+                                <span>{t(stats.cache_scope === 'request' ? 'common.cache_request' : 'common.cache_session', { value: chatCacheBreakdown })}</span>
+                            ) : null}
                         </div>
                     )}
                     <label
@@ -1386,6 +1459,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                         {providerLabel ? t('chat.powered_by', { provider: providerLabel }) : t('chat.provider_unavailable')}
                     </span>
+                    {modelRouteNotice}
 
                     {messages.length > 0 && (
 

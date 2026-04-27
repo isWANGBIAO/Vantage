@@ -856,6 +856,34 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertEqual(payload["stats"]["total_tokens"], 41)
         self.assertEqual(payload["stats"]["call_count"], 3)
 
+    def test_get_chat_context_reports_preferred_action_plan_model_route(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_dir = Path(temp_dir) / "history"
+            history_dir.mkdir()
+            (history_dir / "latest_action_plan_context.json").write_text(
+                json.dumps([{"role": "assistant", "content": "plan result"}], ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (history_dir / "latest_context_session.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "session-action-1",
+                        "source": "action_plan",
+                        "model": "deepseek-v4-flash",
+                        "provider_route": "deepseek",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
+                payload = asyncio.run(server.get_chat_context())
+
+        self.assertEqual(payload["preferred_model"], "deepseek-v4-flash")
+        self.assertEqual(payload["preferred_provider_route"], "deepseek")
+        self.assertEqual(payload["preferred_model_option_id"], "deepseek::deepseek-v4-flash")
+
     def test_reset_chat_context_restores_latest_action_plan_seed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             history_dir = Path(temp_dir) / "history"

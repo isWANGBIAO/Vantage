@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import logging
 import re
@@ -15,6 +16,34 @@ SYNC_REQUEST_TIMEOUT_SECONDS = 120
 STREAM_REQUEST_TIMEOUT_SECONDS = 600
 PRIMARY_TRANSIENT_RETRY_COUNT = 5
 LOCAL_PROVIDER_RETRY_DELAY_SECONDS = 1.0
+ACTIVE_CACHE_REQUEST_KEYS = {
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "cache_control",
+}
+
+
+def _hash_json_payload(value):
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _drop_active_cache_fields(value):
+    if isinstance(value, dict):
+        return {
+            key: _drop_active_cache_fields(item)
+            for key, item in value.items()
+            if key not in ACTIVE_CACHE_REQUEST_KEYS
+        }
+    if isinstance(value, list):
+        return [_drop_active_cache_fields(item) for item in value]
+    return value
 
 
 class LLMClient:
@@ -738,7 +767,14 @@ class LLMClient:
             raise TypeError("model override must be a string when provided")
 
         reasoning_effort = Config.get("AI_REASONING_EFFORT") or "medium"
-        payload = {
+        request_metadata = dict(metadata or {})
+        stable_prefix_messages = messages[:-1] if messages else []
+        request_metadata.setdefault("sent_context_message_count", len(messages))
+        request_metadata.setdefault("stable_prefix_message_count", len(stable_prefix_messages))
+        request_metadata["stable_prefix_hash"] = _hash_json_payload(stable_prefix_messages)
+        request_metadata["full_prompt_hash"] = _hash_json_payload(messages)
+
+        payload = _drop_active_cache_fields({
             "messages": messages,
             "stream": stream,
             "max_tokens": 4096,
@@ -746,7 +782,7 @@ class LLMClient:
             "top_p": 0.7,
             "frequency_penalty": 0.5,
             "n": 1,
-        }
+        })
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
 
@@ -754,6 +790,8 @@ class LLMClient:
         requested_model = model or (requested_provider["model"] if requested_provider else None)
         requested_route = requested_provider["route"] if requested_provider else None
         requested_base_url = requested_provider["base_url"] if requested_provider else None
+        request_metadata["requested_model"] = requested_model
+        request_metadata["requested_provider_route"] = requested_route
         call_id = str(uuid.uuid4())
         recorder = self._build_session_recorder(
             session_id=session_id,
@@ -774,7 +812,7 @@ class LLMClient:
             provider_route=requested_route,
             stream=stream,
             reasoning_effort=reasoning_effort,
-            metadata=metadata,
+            metadata=request_metadata,
         )
 
         start_time = time.time()

@@ -19,6 +19,7 @@ import {
 } from '../utils/modelReasoningSupport';
 import {
   computeDisplayedDurationSeconds,
+  formatActionPlanCacheBreakdown,
   formatActionPlanTokenBreakdown,
   formatSecondsValue,
   formatPoweredByLabel,
@@ -362,6 +363,9 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
         detail: {
           baseContextVersion: data?.base_context_version || 'empty',
           displayMessages: Array.isArray(data?.display_messages) ? data.display_messages : [],
+          preferredModel: data?.preferred_model || null,
+          preferredProviderRoute: data?.preferred_provider_route || null,
+          preferredModelOptionId: data?.preferred_model_option_id || null,
         },
       }));
     } catch (error) {
@@ -728,6 +732,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     isActive: isGenerating,
     nowMs: liveDurationNowMs,
   });
+  const cacheBreakdown = formatActionPlanCacheBreakdown(stats);
   const analysisRoundStats = getActionPlanRoundStats(stats, 'analysis');
   const planRoundStats = getActionPlanRoundStats(stats, 'plan');
   const reasoningOptions = getReasoningOptionsForModel(selectedModelOption?.model);
@@ -784,6 +789,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
               <span>{t('common.speed', { value: stats.speed })}</span>
               <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
               <span>{t('common.tokens_detail', { value: formatActionPlanTokenBreakdown(stats) })}</span>
+              {cacheBreakdown ? <span>{t('common.cache_session', { value: cacheBreakdown })}</span> : null}
             </div>
           )}
 
@@ -1031,11 +1037,14 @@ function ActionPlanRoundStats({ stats, t }) {
     return null;
   }
 
+  const cacheBreakdown = formatActionPlanCacheBreakdown(stats);
+
   return (
     <div className="action-plan-round-stats">
       <span>{t('common.first_token', { value: formatDurationChipValue(stats.first_token_latency) })}</span>
       <span>{t('common.time', { value: formatSecondsValue(stats.duration) })}</span>
       <span>{t('common.tokens_detail', { value: formatActionPlanTokenBreakdown(stats) })}</span>
+      {cacheBreakdown ? <span>{t('common.cache_request', { value: cacheBreakdown })}</span> : null}
       <span>{t('common.speed', { value: formatRoundSpeedValue(stats) })}</span>
     </div>
   );

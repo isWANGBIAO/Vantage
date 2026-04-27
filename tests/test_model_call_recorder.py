@@ -152,7 +152,7 @@ class SessionRecorderTests(unittest.TestCase):
                         status, model, provider_route, prompt_tokens, completion_tokens,
                         total_tokens, duration, first_token_latency,
                         prompt_cache_hit_tokens, prompt_cache_miss_tokens,
-                        completion_reasoning_tokens, usage_json, response_json
+                        completion_reasoning_tokens, usage_json, response_json, request_metadata_json
                     FROM model_calls
                     WHERE call_id = ?
                     """,
@@ -176,9 +176,11 @@ class SessionRecorderTests(unittest.TestCase):
         )
         usage_json = json.loads(call_row[11])
         response_json = json.loads(call_row[12])
+        request_metadata_json = json.loads(call_row[13])
         self.assertEqual(usage_json["prompt_tokens_details"]["cached_tokens"], 4)
         self.assertTrue(usage_json["custom_provider_field"]["kept"])
         self.assertEqual(response_json["provider_extra"]["kept"], "yes")
+        self.assertEqual(request_metadata_json["purpose"], "test")
         self.assertEqual(len(message_rows), 1)
         self.assertEqual(message_rows[0][0], 0)
         self.assertEqual(message_rows[0][1], "user")

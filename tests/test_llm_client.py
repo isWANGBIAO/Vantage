@@ -753,7 +753,7 @@ class LLMClientTests(unittest.TestCase):
                 "get",
                 return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
             ),
-            patch.object(llm_client.requests, "post", return_value=fake_response),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
         ):
             client = llm_client.LLMClient()
             result = client.chat(
@@ -865,7 +865,7 @@ class LLMClientTests(unittest.TestCase):
                 "get",
                 return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
             ),
-            patch.object(llm_client.requests, "post", return_value=fake_response),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
             redirect_stdout(stdout),
         ):
             client = llm_client.LLMClient()
@@ -905,7 +905,7 @@ class LLMClientTests(unittest.TestCase):
                 "get",
                 return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
             ),
-            patch.object(llm_client.requests, "post", return_value=fake_response),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
             patch.object(llm_client, "SessionRecorder", return_value=recorder),
         ):
             client = llm_client.LLMClient()
@@ -921,6 +921,11 @@ class LLMClientTests(unittest.TestCase):
         recorder.record_message_snapshot.assert_called_once()
         recorder.record_request_completed.assert_called_once()
         recorder.record_token_count.assert_called_once()
+        started_kwargs = recorder.record_request_started.call_args.kwargs
+        self.assertEqual(started_kwargs["metadata"]["sent_context_message_count"], 1)
+        self.assertEqual(started_kwargs["metadata"]["stable_prefix_message_count"], 0)
+        self.assertIn("full_prompt_hash", started_kwargs["metadata"])
+        self.assertIn("stable_prefix_hash", started_kwargs["metadata"])
         completed_kwargs = recorder.record_request_completed.call_args.kwargs
         self.assertEqual(completed_kwargs["usage"]["total_tokens"], 16)
         self.assertEqual(completed_kwargs["usage"]["prompt_tokens_details"]["cached_tokens"], 5)
@@ -929,6 +934,10 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(completed_kwargs["provider_route"], "cliproxyapi_primary")
         self.assertIsNone(completed_kwargs["first_token_latency"])
         self.assertIsNone(result["first_token_latency"])
+        sent_payload = mock_post.call_args.kwargs["json"]
+        self.assertNotIn("prompt_cache_key", sent_payload)
+        self.assertNotIn("prompt_cache_retention", sent_payload)
+        self.assertNotIn("cache_control", sent_payload)
 
     def test_streaming_chat_records_completed_call_with_session_recorder(self):
         fake_response = Mock()

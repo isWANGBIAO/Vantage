@@ -9,6 +9,7 @@ import {
 } from '../utils/chatContextState.js';
 
 const chatSource = readFileSync(new URL('./ChatInterface.jsx', import.meta.url), 'utf8');
+const displayCopySource = readFileSync(new URL('../utils/displayCopy.js', import.meta.url), 'utf8');
 
 function loadChatHelpers() {
   const start = chatSource.indexOf('function consumeChatStreamChunk');
@@ -84,6 +85,19 @@ test('ChatInterface uses provider-aware model options before falling back to leg
   assert.ok(chatSource.includes('preferred_llm_model_ref'));
   assert.ok(chatSource.includes('payload.provider_route'));
   assert.ok(chatSource.includes("vantage:llm-models-updated"));
+});
+
+test('ChatInterface defaults to the latest Action Plan provider-aware model route', () => {
+  assert.ok(chatSource.includes('contextPreferredModelRef'));
+  assert.ok(chatSource.includes('data?.preferred_model_option_id'));
+  assert.ok(chatSource.includes('buildModelOptionId(data?.preferred_provider_route, data?.preferred_model)'));
+  assert.ok(chatSource.includes('findModelOption(modelList, contextPreferredModelRef.current)'));
+});
+
+test('ChatInterface warns when the user switches away from the inherited cache route', () => {
+  assert.ok(chatSource.includes("t('chat.cache_route_warning')"));
+  assert.ok(chatSource.includes('hasCacheRouteWarning'));
+  assert.ok(displayCopySource.includes("'chat.cache_route_warning'"));
 });
 
 test('consumeChatStreamChunk reassembles split NDJSON lines without losing content', () => {

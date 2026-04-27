@@ -67,6 +67,35 @@ def format_chat_message_with_timestamp(message, raw_timestamp):
     return f"[Message timestamp: {timestamp_text}]\n{message}"
 
 
+def _load_context_messages_file(path):
+    context_path = Path(path)
+    if not context_path.exists():
+        return []
+
+    try:
+        payload = json.loads(context_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return []
+
+    return payload if isinstance(payload, list) else []
+
+
+def _message_prefix_matches(messages, prefix):
+    if not prefix or len(messages or []) < len(prefix):
+        return False
+    return list(messages[:len(prefix)]) == list(prefix)
+
+
+def build_chat_request_messages(full_history, *, action_plan_messages=None):
+    history_messages = list(full_history or [])
+    stable_prefix = list(action_plan_messages or [])
+    if not stable_prefix:
+        return history_messages
+    if _message_prefix_matches(history_messages, stable_prefix):
+        return history_messages
+    return stable_prefix + history_messages
+
+
 def get_action_plan_round_content(result):
     if not isinstance(result, dict):
         return ""
@@ -78,13 +107,38 @@ def _sum_usage_totals(*usage_payloads):
         "prompt_tokens": 0,
         "completion_tokens": 0,
         "total_tokens": 0,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 0,
+        "completion_reasoning_tokens": 0,
     }
     for usage in usage_payloads:
         if not isinstance(usage, dict):
             continue
+        normalized_cache_hit = usage.get("prompt_cache_hit_tokens")
+        if normalized_cache_hit is None:
+            prompt_details = usage.get("prompt_tokens_details")
+            if isinstance(prompt_details, dict):
+                normalized_cache_hit = prompt_details.get("cached_tokens")
+        normalized_cache_miss = usage.get("prompt_cache_miss_tokens")
+        if normalized_cache_miss is None and normalized_cache_hit is not None:
+            normalized_cache_miss = max(int(usage.get("prompt_tokens", 0) or 0) - int(normalized_cache_hit or 0), 0)
+        normalized_reasoning = usage.get("completion_reasoning_tokens")
+        if normalized_reasoning is None:
+            completion_details = usage.get("completion_tokens_details")
+            if isinstance(completion_details, dict):
+                normalized_reasoning = completion_details.get("reasoning_tokens")
+
+        usage_with_normalized_fields = {
+            **usage,
+            "prompt_cache_hit_tokens": normalized_cache_hit,
+            "prompt_cache_miss_tokens": normalized_cache_miss,
+            "completion_reasoning_tokens": normalized_reasoning,
+        }
         for key in totals:
-            value = usage.get(key, 0) or 0
-            totals[key] += int(value)
+            value = usage_with_normalized_fields.get(key)
+            if value is None:
+                continue
+            totals[key] += int(value or 0)
     return totals
 
 
@@ -104,6 +158,20 @@ def build_action_plan_request_stats(section, result):
     prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
     completion_tokens = int(usage.get("completion_tokens", 0) or 0)
     total_tokens = int(usage.get("total_tokens", 0) or 0)
+    prompt_cache_hit_tokens = usage.get("prompt_cache_hit_tokens")
+    if prompt_cache_hit_tokens is None:
+        prompt_details = usage.get("prompt_tokens_details")
+        if isinstance(prompt_details, dict):
+            prompt_cache_hit_tokens = prompt_details.get("cached_tokens")
+    prompt_cache_miss_tokens = usage.get("prompt_cache_miss_tokens")
+    if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None:
+        prompt_cache_miss_tokens = max(prompt_tokens - int(prompt_cache_hit_tokens or 0), 0)
+    completion_reasoning_tokens = usage.get("completion_reasoning_tokens")
+    if completion_reasoning_tokens is None:
+        completion_details = usage.get("completion_tokens_details")
+        if isinstance(completion_details, dict):
+            completion_reasoning_tokens = completion_details.get("reasoning_tokens")
+    cache_total = int(prompt_cache_hit_tokens or 0) + int(prompt_cache_miss_tokens or 0)
     completion_rate = completion_tokens / duration if duration > 0 else 0.0
     total_rate = total_tokens / duration if duration > 0 else 0.0
 
@@ -114,6 +182,10 @@ def build_action_plan_request_stats(section, result):
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
+        "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
+        "prompt_cache_miss_tokens": prompt_cache_miss_tokens,
+        "prompt_cache_hit_rate": (int(prompt_cache_hit_tokens or 0) / cache_total * 100) if cache_total else None,
+        "completion_reasoning_tokens": completion_reasoning_tokens,
         "completion_tokens_per_second": completion_rate,
         "total_tokens_per_second": total_rate,
         "output_tokens_per_second": completion_rate,
@@ -259,16 +331,20 @@ def _read_context_session_id(context_file):
     return str(session_id).strip() if session_id else None
 
 
-def _write_context_session_id(context_file, session_id, source):
+def _write_context_session_id(context_file, session_id, source, **metadata):
     session_path = _get_context_session_file(context_file)
     session_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "session_id": session_id,
+        "source": source,
+        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    for key, value in metadata.items():
+        if value is not None:
+            payload[key] = value
     session_path.write_text(
         json.dumps(
-            {
-                "session_id": session_id,
-                "source": source,
-                "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-            },
+            payload,
             ensure_ascii=False,
             indent=2,
         ),
@@ -346,17 +422,39 @@ def main():
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "total_tokens": 0,
+                "prompt_cache_hit_tokens": None,
+                "prompt_cache_miss_tokens": None,
+                "prompt_cache_hit_rate": None,
+                "completion_reasoning_tokens": None,
                 "total_duration": 0,
                 "speed": "0.00 tokens/s",
                 "first_token_latency": None,
+                "cache_scope": "request",
             }
 
             print("Thinking...")
             print("---CHAT_START---")
             
-            # Send the full persisted chat history
-            messages_to_send = context_mgr.get_messages()
+            full_history_messages = context_mgr.get_messages()
+            action_plan_context_file = context_mgr.context_file.parent / "latest_action_plan_context.json"
+            action_plan_messages = _load_context_messages_file(action_plan_context_file)
+            messages_to_send = build_chat_request_messages(
+                full_history_messages,
+                action_plan_messages=action_plan_messages,
+            )
             chat_session_id = _get_or_create_context_session_id(context_mgr.context_file, "chat")
+            chat_metadata = {
+                "context_strategy": (
+                    "action_plan_prefix_full_history"
+                    if action_plan_messages
+                    else "full_history"
+                ),
+                "full_context_message_count": len(full_history_messages),
+                "sent_context_message_count": len(messages_to_send),
+                "action_plan_context_message_count": len(action_plan_messages),
+                "summary_used": False,
+                "pruned": False,
+            }
 
             print(f"STATS_JSON:{json.dumps(initial_stats)}")
              
@@ -370,6 +468,7 @@ def main():
                 source="chat",
                 entrypoint=RUN_PROMPT_ENTRYPOINT,
                 context_file=str(context_mgr.context_file),
+                metadata=chat_metadata,
             )
             
             # Handle Result
@@ -385,6 +484,20 @@ def main():
             prompt_tokens = usage.get("prompt_tokens", 0)
             completion_tokens = usage.get("completion_tokens", 0)
             total_tokens = usage.get("total_tokens", 0)
+            prompt_cache_hit_tokens = usage.get("prompt_cache_hit_tokens")
+            if prompt_cache_hit_tokens is None:
+                prompt_details = usage.get("prompt_tokens_details")
+                if isinstance(prompt_details, dict):
+                    prompt_cache_hit_tokens = prompt_details.get("cached_tokens")
+            prompt_cache_miss_tokens = usage.get("prompt_cache_miss_tokens")
+            if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None:
+                prompt_cache_miss_tokens = max(int(prompt_tokens or 0) - int(prompt_cache_hit_tokens or 0), 0)
+            completion_reasoning_tokens = usage.get("completion_reasoning_tokens")
+            if completion_reasoning_tokens is None:
+                completion_details = usage.get("completion_tokens_details")
+                if isinstance(completion_details, dict):
+                    completion_reasoning_tokens = completion_details.get("reasoning_tokens")
+            cache_total = int(prompt_cache_hit_tokens or 0) + int(prompt_cache_miss_tokens or 0)
             duration = result.get("duration", 0)
             
             stats_output = {
@@ -392,9 +505,18 @@ def main():
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
+                "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
+                "prompt_cache_miss_tokens": prompt_cache_miss_tokens,
+                "prompt_cache_hit_rate": (
+                    int(prompt_cache_hit_tokens or 0) / cache_total * 100
+                    if cache_total
+                    else None
+                ),
+                "completion_reasoning_tokens": completion_reasoning_tokens,
                 "total_duration": duration,
                 "speed": f"{completion_tokens / duration:.2f} tokens/s" if duration > 0 else "0.00 tokens/s",
                 "first_token_latency": _as_float_or_none(result.get("first_token_latency")),
+                "cache_scope": "request",
             }
             stats_output.update(build_generation_metadata(result))
             print(f"STATS_JSON:{json.dumps(stats_output)}")
@@ -543,8 +665,31 @@ def main():
                         json.dumps(context_mgr.messages, ensure_ascii=False, indent=2),
                         encoding="utf-8",
                     )
-                    _write_context_session_id(context_mgr.context_file, action_plan_session_id, "action_plan")
-                    _write_context_session_id(action_plan_context_file, action_plan_session_id, "action_plan")
+                    action_plan_session_metadata = {
+                        "model": result_round_2.get("model") or result.get("model"),
+                        "provider_route": result_round_2.get("provider_route") or result.get("provider_route"),
+                        "requested_model": result_round_2.get("requested_model") or result.get("requested_model"),
+                        "requested_provider_route": (
+                            result_round_2.get("requested_provider_route")
+                            or result.get("requested_provider_route")
+                        ),
+                        "reasoning_effort": (
+                            result_round_2.get("reasoning_effort")
+                            or result.get("reasoning_effort")
+                        ),
+                    }
+                    _write_context_session_id(
+                        context_mgr.context_file,
+                        action_plan_session_id,
+                        "action_plan",
+                        **action_plan_session_metadata,
+                    )
+                    _write_context_session_id(
+                        action_plan_context_file,
+                        action_plan_session_id,
+                        "action_plan",
+                        **action_plan_session_metadata,
+                    )
 
                     # Print Stats
                     usage1 = result.get("usage", {})
@@ -554,6 +699,7 @@ def main():
                     total_completion_tokens = usage1.get("completion_tokens", 0) + usage2.get("completion_tokens", 0)
                     total_total_tokens = usage1.get("total_tokens", 0) + usage2.get("total_tokens", 0)
                     total_duration = result.get("duration", 0) + result_round_2.get("duration", 0)
+                    total_cache_usage = _sum_usage_totals(usage1, usage2)
                     session_summary = _load_session_usage_summary(history_dir, action_plan_session_id)
 
                     summary_prompt_tokens = (
@@ -576,17 +722,53 @@ def main():
                         if session_summary
                         else total_duration
                     )
+                    summary_cache_hit_tokens = (
+                        session_summary.get("prompt_cache_hit_tokens", total_cache_usage["prompt_cache_hit_tokens"])
+                        if session_summary
+                        else total_cache_usage["prompt_cache_hit_tokens"]
+                    )
+                    summary_cache_miss_tokens = (
+                        session_summary.get("prompt_cache_miss_tokens", total_cache_usage["prompt_cache_miss_tokens"])
+                        if session_summary
+                        else total_cache_usage["prompt_cache_miss_tokens"]
+                    )
+                    summary_reasoning_tokens = (
+                        session_summary.get("completion_reasoning_tokens", total_cache_usage["completion_reasoning_tokens"])
+                        if session_summary
+                        else total_cache_usage["completion_reasoning_tokens"]
+                    )
                     request_stats = [
                         build_action_plan_request_stats("analysis", result),
                         build_action_plan_request_stats("plan", result_round_2),
                     ]
+                    summary_cache_recorded = any(
+                        request.get("prompt_cache_hit_tokens") is not None
+                        or request.get("prompt_cache_miss_tokens") is not None
+                        for request in request_stats
+                    ) or (
+                        bool(session_summary)
+                        and session_summary.get("prompt_cache_hit_rate") is not None
+                    )
+                    if not summary_cache_recorded:
+                        summary_cache_hit_tokens = None
+                        summary_cache_miss_tokens = None
+                    summary_cache_total = int(summary_cache_hit_tokens or 0) + int(summary_cache_miss_tokens or 0)
 
                     stats_output = {
                         "turns": len(context_mgr.messages),
                         "prompt_tokens": summary_prompt_tokens,
                         "completion_tokens": summary_completion_tokens,
                         "total_tokens": summary_total_tokens,
+                        "prompt_cache_hit_tokens": summary_cache_hit_tokens,
+                        "prompt_cache_miss_tokens": summary_cache_miss_tokens,
+                        "prompt_cache_hit_rate": (
+                            int(summary_cache_hit_tokens or 0) / summary_cache_total * 100
+                            if summary_cache_total
+                            else None
+                        ),
+                        "completion_reasoning_tokens": summary_reasoning_tokens,
                         "total_duration": summary_total_duration,
+                        "cache_scope": "session",
                         "speed": (
                             f"{summary_completion_tokens / summary_total_duration:.2f} tokens/s"
                             if summary_total_duration > 0
