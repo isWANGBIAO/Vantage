@@ -22,6 +22,7 @@ import {
 import {
     computeDisplayedDurationSeconds,
     formatActionPlanCacheBreakdown,
+    formatThinkingTitleWithDuration,
 } from '../utils/actionPlanStats';
 
 import {
@@ -536,6 +537,9 @@ export default function ChatInterface({ embedded = false } = {}) {
                 if (lastMsg?.role === 'assistant') {
                     lastMsg.content = nextContent;
                     lastMsg.thinking = nextThinking;
+                    if (streamState.stats) {
+                        lastMsg.stats = streamState.stats;
+                    }
                 }
                 return newMessages;
             });
@@ -1402,7 +1406,14 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                                 {/* Thinking Process Display */}
 
-                                <ThinkingDisclosure title={t('chat.reasoning_title')} text={msg.thinking} />
+                                <ThinkingDisclosure
+                                    title={formatThinkingTitleWithDuration(
+                                        t('chat.reasoning_title'),
+                                        msg.stats?.total_duration ?? msg.stats?.duration,
+                                        msg.stats?.completion_reasoning_tokens,
+                                    )}
+                                    text={msg.thinking}
+                                />
 
 
 
@@ -1668,7 +1679,14 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                             {/* Thinking Process Display */}
 
-                            <ThinkingDisclosure title={t('chat.reasoning_title')} text={msg.thinking} />
+                            <ThinkingDisclosure
+                                title={formatThinkingTitleWithDuration(
+                                    t('chat.reasoning_title'),
+                                    msg.stats?.total_duration ?? msg.stats?.duration,
+                                    msg.stats?.completion_reasoning_tokens,
+                                )}
+                                text={msg.thinking}
+                            />
 
 
 

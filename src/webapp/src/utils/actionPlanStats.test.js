@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   computeDisplayedDurationSeconds,
   formatActionPlanTokenBreakdown,
+  formatThinkingTitleWithDuration,
   formatPoweredByLabel,
   formatReasoningEffortLabel,
   getActionPlanRoundStats,
@@ -116,4 +117,11 @@ test('formatActionPlanTokenBreakdown includes total, prompt, and completion toke
     }),
     '237.1k (P 180.0k / C 57.1k)',
   );
+});
+
+test('formatThinkingTitleWithDuration appends elapsed seconds and reasoning tokens', () => {
+  assert.equal(formatThinkingTitleWithDuration('推理过程', 12.34, 1280), '推理过程（12.3s，1.3k Token）');
+  assert.equal(formatThinkingTitleWithDuration('Reasoning', 12.34, 1280), 'Reasoning (12.3s, 1.3k tokens)');
+  assert.equal(formatThinkingTitleWithDuration('推理过程', 0, 1280), '推理过程（1.3k Token）');
+  assert.equal(formatThinkingTitleWithDuration('推理过程', 0, 0), '推理过程');
 });

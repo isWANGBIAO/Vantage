@@ -19,6 +19,7 @@ from src.core.backend_runtime_packaging import (
     build_backend_runtime_size_report,
     build_project_activity_snapshot,
     collect_backend_runtime_resources,
+    remove_conflicting_packaging_environment_libraries,
     remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
     validate_packaging_python_environment,
@@ -158,6 +159,26 @@ def test_remove_conflicting_runtime_libraries_deletes_known_vc_runtime_copies(tm
     assert {path.resolve() for path in removed} == {path.resolve() for path in removed_targets}
     assert all(not path.exists() for path in removed_targets)
     assert keep_file.exists()
+
+
+def test_remove_conflicting_packaging_environment_libraries_deletes_site_packages_vc_copies(tmp_path):
+    site_packages = tmp_path / ".venv-backend-runtime-gpu" / "Lib" / "site-packages"
+    pandas_runtime = site_packages / "pandas" / "_libs" / "window" / "MSVCP140.dll"
+    nested_runtime = site_packages / "somepkg" / "VCRUNTIME140.dll"
+    unrelated = site_packages / "somepkg" / "extension.dll"
+    for target in (pandas_runtime, nested_runtime, unrelated):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"dll")
+
+    removed = remove_conflicting_packaging_environment_libraries(tmp_path)
+
+    assert {path.resolve() for path in removed} == {
+        pandas_runtime.resolve(),
+        nested_runtime.resolve(),
+    }
+    assert not pandas_runtime.exists()
+    assert not nested_runtime.exists()
+    assert unrelated.exists()
 
 
 def test_build_backend_runtime_manifest_records_relative_outputs(tmp_path):

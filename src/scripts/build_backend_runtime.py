@@ -27,6 +27,7 @@ from src.core.backend_runtime_packaging import (
     build_backend_runtime_fingerprint,
     build_pyinstaller_arguments,
     collect_backend_runtime_resources,
+    remove_conflicting_packaging_environment_libraries,
     remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
     validate_packaging_python_environment,
@@ -131,6 +132,7 @@ def main() -> int:
     if not args.keep_build_root:
         _clean_existing_build(layout)
 
+    removed_packaging_dlls = remove_conflicting_packaging_environment_libraries(PROJECT_ROOT)
     layout["build_root"].mkdir(parents=True, exist_ok=True)
     project_activity_resource = write_project_activity_snapshot(
         PROJECT_ROOT,
@@ -164,6 +166,7 @@ def main() -> int:
     print(f"Built backend runtime: {layout['executable_path']}")
     print(f"Runtime manifest: {layout['manifest_path']}")
     print(f"Bundled resources: {len(manifest['resource_outputs'])}")
+    print(f"Removed conflicting packaging DLLs: {len(removed_packaging_dlls)}")
     print(f"Removed conflicting runtime DLLs: {len(removed_runtime_dlls)}")
     print(f"Runtime size: {size_report['total_mb']} MB")
     if size_report["top_directories"]:

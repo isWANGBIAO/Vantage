@@ -60,6 +60,14 @@ test('ActionPlan keeps thinking blocks collapsed until the user expands them', (
   assert.equal(actionPlanSource.includes('<details className="thinking-block" open>'), false);
 });
 
+test('ActionPlan annotates each reasoning block title with that round duration', () => {
+  assert.ok(actionPlanSource.includes('formatThinkingTitleWithDuration'));
+  assert.ok(actionPlanSource.includes('analysisRoundStats?.duration'));
+  assert.ok(actionPlanSource.includes('analysisRoundStats?.completion_reasoning_tokens'));
+  assert.ok(actionPlanSource.includes('planRoundStats?.duration'));
+  assert.ok(actionPlanSource.includes('planRoundStats?.completion_reasoning_tokens'));
+});
+
 test('ActionPlan shows actual execution metadata and flags fallback runs', () => {
   assert.ok(actionPlanSource.includes('formatPoweredByLabel(stats)'));
   assert.ok(actionPlanSource.includes('isFallbackExecution(stats, selectedModelRef)'));

@@ -27,6 +27,7 @@ from src.utils.generation_stats import build_generation_metadata
 
 ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT = 1
 RUN_PROMPT_ENTRYPOINT = "src/scripts/run_prompt.py"
+ACTION_PLAN_TIME_SERIES_START_DATE = "2024-01-01"
 
 
 def _load_session_usage_summary(history_dir, session_id):
@@ -543,7 +544,7 @@ def main():
                 prompt_text = DataLoader.construct_prompt(
                     DataLoader.resolve_data_path("Prompt_Personal_Info.md"),
                     DataLoader.resolve_data_path("Time.xlsx"),
-                    days=365
+                    start_date=ACTION_PLAN_TIME_SERIES_START_DATE,
                 )
             prompt_cache_metadata = DataLoader.build_prompt_cache_metadata(prompt_text)
             

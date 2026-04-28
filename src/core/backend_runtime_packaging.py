@@ -644,6 +644,24 @@ def remove_conflicting_runtime_libraries(runtime_dir: str | Path) -> list[Path]:
     return sorted(removed_files)
 
 
+def remove_conflicting_packaging_environment_libraries(
+    project_root: str | Path,
+) -> list[Path]:
+    expected_venv = Path(project_root).resolve() / BACKEND_RUNTIME_VENV_NAME
+    site_packages = expected_venv / "Lib" / "site-packages"
+    if not site_packages.exists():
+        return []
+
+    removed_files: list[Path] = []
+    conflicting_names = set(CONFLICTING_RUNTIME_DLL_NAMES)
+    for dll_path in site_packages.rglob("*.dll"):
+        if dll_path.name.lower() not in conflicting_names:
+            continue
+        dll_path.unlink()
+        removed_files.append(dll_path.resolve())
+    return sorted(removed_files)
+
+
 def validate_backend_runtime_bundle(
     layout: dict[str, Path],
     resources: list[BundledResource],

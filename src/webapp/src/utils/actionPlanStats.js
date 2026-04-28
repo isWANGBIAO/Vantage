@@ -104,6 +104,30 @@ export function formatSecondsValue(value) {
   return number.toFixed(1);
 }
 
+export function formatThinkingTitleWithDuration(title, durationSeconds, reasoningTokenCount = null) {
+  const baseTitle = String(title ?? '');
+  const duration = Number(durationSeconds);
+  const reasoningTokens = Number(reasoningTokenCount);
+  const hasReasoningTokens = Number.isFinite(reasoningTokens) && reasoningTokens > 0;
+  if ((!Number.isFinite(duration) || duration <= 0) && !hasReasoningTokens) {
+    return baseTitle;
+  }
+
+  const usesLocalizedParentheses = Array.from(baseTitle).some((character) => character.charCodeAt(0) > 127);
+  const details = [];
+  if (Number.isFinite(duration) && duration > 0) {
+    details.push(`${formatSecondsValue(duration)}s`);
+  }
+  if (hasReasoningTokens) {
+    details.push(usesLocalizedParentheses ? `${formatCompactTokenValue(reasoningTokens)} Token` : `${formatCompactTokenValue(reasoningTokens)} tokens`);
+  }
+  const separator = usesLocalizedParentheses ? '\uFF0C' : ', ';
+
+  return usesLocalizedParentheses
+    ? `${baseTitle}\uFF08${details.join(separator)}\uFF09`
+    : `${baseTitle} (${details.join(separator)})`;
+}
+
 export function formatActionPlanTokenBreakdown(stats) {
   const totalTokens = Number(stats?.total_tokens || 0);
   const promptTokens = Number(stats?.prompt_tokens || 0);

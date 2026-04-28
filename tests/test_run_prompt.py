@@ -264,7 +264,7 @@ class RunPromptTests(unittest.TestCase):
         plan_start_index = output_lines.index('STREAM_PLAN_START:""')
         self.assertLess(plan_prompt_index, plan_start_index)
 
-    def test_analysis_mode_uses_365_days_history_by_default(self):
+    def test_analysis_mode_uses_fixed_time_series_start_for_cache_stability(self):
         fake_client = _FakeLLMClient()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -327,7 +327,8 @@ class RunPromptTests(unittest.TestCase):
                 run_prompt.main()
 
         _, kwargs = mock_construct_prompt.call_args
-        self.assertEqual(kwargs["days"], 365)
+        self.assertEqual(kwargs["start_date"], "2024-01-01")
+        self.assertNotIn("days", kwargs)
 
     def test_analysis_mode_persists_structured_json_history(self):
         fake_client = _FakeLLMClient()

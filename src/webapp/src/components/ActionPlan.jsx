@@ -22,6 +22,7 @@ import {
   formatActionPlanCacheBreakdown,
   formatActionPlanTokenBreakdown,
   formatSecondsValue,
+  formatThinkingTitleWithDuration,
   formatPoweredByLabel,
   getActionPlanRoundStats,
   isFallbackExecution,
@@ -756,6 +757,16 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const cacheBreakdown = formatActionPlanCacheBreakdown(stats);
   const analysisRoundStats = getActionPlanRoundStats(stats, 'analysis');
   const planRoundStats = getActionPlanRoundStats(stats, 'plan');
+  const analysisThinkingTitle = formatThinkingTitleWithDuration(
+    t('action_plan.thinking_title'),
+    analysisRoundStats?.duration,
+    analysisRoundStats?.completion_reasoning_tokens,
+  );
+  const planThinkingTitle = formatThinkingTitleWithDuration(
+    t('action_plan.thinking_title'),
+    planRoundStats?.duration,
+    planRoundStats?.completion_reasoning_tokens,
+  );
   const reasoningOptions = getReasoningOptionsForModel(selectedModelOption?.model);
   const fastModeSupported = isFastModeSupportedForModel(selectedModelOption?.model);
   const displayedReasoningEffort = normalizeReasoningEffortForModel(
@@ -1000,7 +1011,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
               padding: '1rem',
             }}
           >
-            {analysisThinking && <ThinkingBlock text={analysisThinking} title={t('action_plan.thinking_title')} />}
+            {analysisThinking && <ThinkingBlock text={analysisThinking} title={analysisThinkingTitle} />}
             {renderMarkdownOrText(analysisRender, t)}
             <div ref={analysisEndRef} />
           </div>
@@ -1054,7 +1065,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
               padding: '1rem',
             }}
           >
-            {planThinking && <ThinkingBlock text={planThinking} title={t('action_plan.thinking_title')} />}
+            {planThinking && <ThinkingBlock text={planThinking} title={planThinkingTitle} />}
             {renderMarkdownOrText(planRender, t)}
             <div ref={planEndRef} />
           </div>

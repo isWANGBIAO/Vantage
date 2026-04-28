@@ -195,6 +195,61 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
             },
         )
 
+    def test_construct_prompt_can_use_fixed_start_date_for_append_only_cache_prefix(self):
+        today = datetime.now().date()
+        df = pd.DataFrame(
+            [
+                {
+                    "\u65e5\u671f": pd.Timestamp("2023-12-31"),
+                    "metric": "before fixed start",
+                },
+                {
+                    "\u65e5\u671f": pd.Timestamp("2024-01-01"),
+                    "metric": "stable first row",
+                },
+                {
+                    "\u65e5\u671f": pd.Timestamp(today),
+                    "metric": "latest row",
+                },
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            prompt_path = temp_path / "Prompt_Personal_Info.md"
+            excel_path = temp_path / "Time.xlsx"
+            prompt_path.write_text("personal info", encoding="utf-8")
+            excel_path.write_text("placeholder", encoding="utf-8")
+
+            def fake_resolve_data_path(filename, user_home=None, onedrive_env=None):
+                return temp_path / filename
+
+            with patch.object(DataLoader, "load_excel_data", return_value=df), patch.object(
+                DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                DataLoader,
+                "get_future_planned_rows",
+                return_value="## Future Planned Items\n\n- none\n",
+            ):
+                combined = DataLoader.construct_prompt(
+                    prompt_path,
+                    excel_path,
+                    days=1,
+                    start_date="2024-01-01",
+                )
+
+        marker = "## Time Series Data (JSON)\n\n```json\n"
+        start = combined.index(marker) + len(marker)
+        end = combined.index("\n```", start)
+        payload = json.loads(combined[start:end])
+
+        self.assertEqual(payload["date_range"]["start"], "2024-01-01")
+        self.assertEqual(payload["rows"][0], ["2024-01-01", "stable first row"])
+        self.assertEqual(payload["rows"][-1], [str(today), "latest row"])
+        self.assertNotIn("before fixed start", json.dumps(payload, ensure_ascii=False))
+
     def test_construct_prompt_places_time_json_rows_before_editable_prompts(self):
         today = datetime.now().date()
         df = pd.DataFrame(

@@ -334,7 +334,7 @@ class DataLoader:
             return "## Future Planned Items\n\n- 无法获取未来安排\n"
 
     @staticmethod
-    def construct_prompt(prompt_file_path, excel_file_path, days=90):
+    def construct_prompt(prompt_file_path, excel_file_path, days=90, start_date=None):
         prompt_file_path = Path(prompt_file_path)
         excel_file_path = Path(excel_file_path)
         project_mgmt_path = DataLoader.resolve_data_path("Prompt_Project_Management.md")
@@ -354,9 +354,16 @@ class DataLoader:
             raise KeyError(f"Excel 中缺少日期列: {excel_file_path}")
 
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
+        if start_date is None:
+            resolved_start_date = end_date - timedelta(days=days)
+            window_strategy = "rolling_days"
+            days_requested = int(days)
+        else:
+            resolved_start_date = pd.to_datetime(start_date).to_pydatetime()
+            window_strategy = "fixed_start"
+            days_requested = None
 
-        filtered_df = df[(df[date_column] >= start_date) & (df[date_column] <= end_date)]
+        filtered_df = df[(df[date_column] >= resolved_start_date) & (df[date_column] <= end_date)]
         filtered_df = filtered_df.sort_values(by=date_column)
 
         def clean_column_name(column_name):
@@ -455,12 +462,13 @@ class DataLoader:
             "columns": payload_columns,
             "rows": payload_rows,
             "column_meta": column_meta,
-            "days_requested": int(days),
+            "days_requested": days_requested,
             "date_range": {
-                "start": start_date.strftime("%Y-%m-%d"),
+                "start": resolved_start_date.strftime("%Y-%m-%d"),
                 "end": end_date.strftime("%Y-%m-%d"),
             },
-            "total_days": (end_date.date() - start_date.date()).days + 1,
+            "window_strategy": window_strategy,
+            "total_days": (end_date.date() - resolved_start_date.date()).days + 1,
             "days_with_data": len(payload_rows),
             "non_null_counts": non_null_counts,
             "latest_values": latest_values,

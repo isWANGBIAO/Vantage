@@ -218,6 +218,13 @@ test('ChatInterface keeps reasoning blocks collapsed until the user expands them
   assert.equal(chatSource.includes('<details className="thinking-block" open>'), false);
 });
 
+test('ChatInterface annotates reasoning titles with the assistant message duration when available', () => {
+  assert.ok(chatSource.includes('formatThinkingTitleWithDuration'));
+  assert.ok(chatSource.includes('lastMsg.stats = streamState.stats'));
+  assert.ok(chatSource.includes('msg.stats?.total_duration ?? msg.stats?.duration'));
+  assert.ok(chatSource.includes('msg.stats?.completion_reasoning_tokens'));
+});
+
 test('ChatInterface seeds live timing stats as soon as a request starts', () => {
   assert.ok(chatSource.includes('startTime: Date.now()'));
   assert.ok(chatSource.includes('const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now())'));
