@@ -16,6 +16,7 @@ set "BACKEND_RUNTIME_VENV=%PROJECT_ROOT%.venv-backend-runtime-gpu"
 set "BACKEND_RUNTIME_PYTHON=%BACKEND_RUNTIME_VENV%\Scripts\python.exe"
 set "BACKEND_RUNTIME_REQUIREMENTS=%PROJECT_ROOT%requirements-backend-runtime-gpu.txt"
 set "BACKEND_RUNTIME_REQUIREMENTS_STAMP=%BACKEND_RUNTIME_VENV%\.requirements-backend-runtime-gpu.sha256"
+if not defined VANTAGE_BUILD_WORKERS set "VANTAGE_BUILD_WORKERS=%NUMBER_OF_PROCESSORS%"
 
 call :CaptureSeconds RUN_START_SECONDS
 
@@ -76,7 +77,8 @@ if /I "!BACKEND_RUNTIME_REQUIREMENTS_HASH!"=="!BACKEND_RUNTIME_REQUIREMENTS_STOR
 call :StepDone "Backend packaging environment ready"
 
 call :StepStart "[3/7] Building frontend and backend runtime in parallel..."
-"%BACKEND_RUNTIME_PYTHON%" src\scripts\run_packaging_builds.py --backend-python "%BACKEND_RUNTIME_PYTHON%"
+echo       Build workers requested: %VANTAGE_BUILD_WORKERS%
+"%BACKEND_RUNTIME_PYTHON%" src\scripts\run_packaging_builds.py --backend-python "%BACKEND_RUNTIME_PYTHON%" --workers "%VANTAGE_BUILD_WORKERS%"
 if errorlevel 1 (
     echo       Parallel packaging build failed
     exit /b 1

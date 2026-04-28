@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -43,6 +44,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--project-root",
         default=str(PROJECT_ROOT),
         help="Repository root. Defaults to the root containing this script.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Requested parallel build workers. Capped by the number of independent build tasks.",
     )
     return parser
 
@@ -101,9 +108,33 @@ def _run_command(name: str, command: list[str], cwd: Path) -> int:
     return return_code
 
 
-def run_packaging_builds(commands: dict[str, dict[str, object]]) -> int:
+def resolve_build_worker_count(
+    requested_workers: int | None,
+    *,
+    command_count: int,
+    cpu_count: int | None = None,
+) -> int:
+    available_commands = max(1, command_count)
+    if requested_workers is None or requested_workers <= 0:
+        requested_workers = cpu_count if cpu_count is not None else os.cpu_count()
+    if requested_workers is None or requested_workers <= 0:
+        requested_workers = 1
+    return max(1, min(requested_workers, available_commands))
+
+
+def run_packaging_builds(
+    commands: dict[str, dict[str, object]],
+    *,
+    workers: int | None = None,
+) -> int:
     failures: list[str] = []
-    with ThreadPoolExecutor(max_workers=len(commands)) as executor:
+    worker_count = resolve_build_worker_count(workers, command_count=len(commands))
+    print(
+        f"Packaging build workers: {worker_count} active for "
+        f"{len(commands)} independent tasks",
+        flush=True,
+    )
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {
             executor.submit(
                 _run_command,
@@ -133,7 +164,7 @@ def main() -> int:
         args.project_root,
         backend_python=args.backend_python,
     )
-    return run_packaging_builds(commands)
+    return run_packaging_builds(commands, workers=args.workers)
 
 
 if __name__ == "__main__":

@@ -79,3 +79,13 @@ def test_packaging_build_orchestrator_runs_frontend_and_backend_builds_in_parall
     assert "npm" in source
     assert "run" in source
     assert "build" in source
+
+
+def test_run_bat_exposes_parallel_build_worker_control():
+    run_bat = Path("run.bat").read_text(encoding="utf-8")
+
+    assert "VANTAGE_BUILD_WORKERS" in run_bat
+    assert "--workers" in run_bat
+    assert "Build workers requested" in run_bat
+    assert "VANTAGE_INSTALLER_COMPRESSION" not in run_bat
+    assert "--config.compression" not in run_bat
