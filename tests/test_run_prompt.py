@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -213,6 +214,43 @@ class RunPromptTests(unittest.TestCase):
             "audio.webm",
             base_url="https://voice.example.invalid/v1",
             api_key="sk-voice",
+            model="sensevoice",
+        )
+        self.assertIn("TRANSCRIPTION_RESULT:hello", stdout.getvalue())
+
+    def test_transcribe_mode_reads_voice_api_key_from_environment(self):
+        stdout = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            sys,
+            "argv",
+            [
+                "run_prompt.py",
+                "--transcribe",
+                "audio.webm",
+                "--transcribe-base-url",
+                "https://voice.example.invalid/v1",
+                "--transcribe-model",
+                "sensevoice",
+            ],
+        ), patch.dict(os.environ, {"VANTAGE_TRANSCRIBE_API_KEY": "sk-env-voice"}), patch.object(
+            run_prompt.Config,
+            "load_env",
+        ), patch.object(
+            run_prompt.Config,
+            "get_history_dir",
+            return_value=Path(temp_dir),
+        ), patch.object(
+            run_prompt.AudioService,
+            "transcribe",
+            return_value="hello",
+        ) as mock_transcribe, redirect_stdout(stdout):
+            run_prompt.main()
+
+        mock_transcribe.assert_called_once_with(
+            "audio.webm",
+            base_url="https://voice.example.invalid/v1",
+            api_key="sk-env-voice",
             model="sensevoice",
         )
         self.assertIn("TRANSCRIPTION_RESULT:hello", stdout.getvalue())

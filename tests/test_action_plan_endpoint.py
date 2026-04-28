@@ -358,9 +358,11 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _FakeProcess(returncode=0)
         fake_process.communicate = AsyncMock(return_value=(b"TRANSCRIPTION_RESULT:hello\n", b""))
         created_args = []
+        created_env = {}
 
         async def fake_create_subprocess_exec(*cmd, **kwargs):
             created_args.extend(cmd)
+            created_env.update(kwargs.get("env") or {})
             return fake_process
 
         with patch.object(server, "load_settings", return_value=self._complete_voice_settings()), patch.object(
@@ -374,11 +376,38 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertEqual(response["voice_model"], "sensevoice")
         self.assertEqual(response["voice_base_url"], "https://voice.example.invalid/v1")
         self.assertIn("--transcribe-base-url", created_args)
-        self.assertIn("--transcribe-api-key", created_args)
         self.assertIn("--transcribe-model", created_args)
+        self.assertNotIn("--transcribe-api-key", created_args)
         self.assertEqual(created_args[created_args.index("--transcribe-base-url") + 1], "https://voice.example.invalid/v1")
-        self.assertEqual(created_args[created_args.index("--transcribe-api-key") + 1], "sk-voice")
         self.assertEqual(created_args[created_args.index("--transcribe-model") + 1], "sensevoice")
+        self.assertEqual(created_env["VANTAGE_TRANSCRIBE_API_KEY"], "sk-voice")
+
+    def test_transcribe_audio_redacts_voice_api_key_from_logs(self):
+        fake_process = _FakeProcess(returncode=0)
+        fake_process.communicate = AsyncMock(return_value=(b"TRANSCRIPTION_RESULT:hello\n", b""))
+        created_args = []
+        created_env = {}
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            created_args.extend(cmd)
+            created_env.update(kwargs.get("env") or {})
+            return fake_process
+
+        with patch.object(server, "load_settings", return_value=self._complete_voice_settings()), patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(side_effect=fake_create_subprocess_exec),
+        ), patch("builtins.print") as mock_print:
+            response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+
+        self.assertEqual(response["transcription"], "hello")
+        self.assertNotIn("--transcribe-api-key", created_args)
+        self.assertEqual(created_env["VANTAGE_TRANSCRIBE_API_KEY"], "sk-voice")
+        printed = "\n".join(" ".join(str(arg) for arg in call.args) for call in mock_print.call_args_list)
+        self.assertNotIn("sk-voice", printed)
+        self.assertNotIn("--transcribe-api-key", printed)
+        self.assertNotIn("TRANSCRIPTION_RESULT:hello", printed)
+        self.assertNotIn("Result: 'hello'", printed)
 
     def test_transcribe_audio_returns_error_when_subprocess_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -407,6 +436,22 @@ class ActionPlanEndpointTests(unittest.TestCase):
             payload = json.loads(response.body.decode("utf-8"))
             self.assertEqual(payload["error"], "Transcription failed")
             self.assertIn("missing api key", payload["details"])
+
+    def test_transcribe_audio_redacts_voice_api_key_from_error_details(self):
+        fake_process = _FakeProcess(returncode=1)
+        fake_process.communicate = AsyncMock(return_value=(b"TRANSCRIPTION_ERROR:bad key sk-voice\n", b""))
+
+        with patch.object(server, "load_settings", return_value=self._complete_voice_settings()), patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=fake_process),
+        ):
+            response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+
+        self.assertEqual(response.status_code, 500)
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertNotIn("sk-voice", payload["details"])
+        self.assertIn("[REDACTED_API_KEY]", payload["details"])
 
     def test_generate_action_plan_replace_today_deletes_older_today_files_after_success(self):
         today = datetime.now().strftime("%Y%m%d")

@@ -2364,6 +2364,26 @@ def _redact_api_key_from_message(message: str, api_key: str | None = None) -> st
     return re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-[REDACTED]", redacted)
 
 
+def _redact_subprocess_command_for_log(cmd, *, api_key: str | None = None) -> str:
+    redacted_parts = []
+    redact_next = False
+    sensitive_flags = {"--transcribe-api-key"}
+    for part in cmd:
+        text = str(part)
+        if redact_next:
+            redacted_parts.append("[REDACTED_API_KEY]")
+            redact_next = False
+            continue
+        if any(text.startswith(f"{flag}=") for flag in sensitive_flags):
+            flag, _separator, _value = text.partition("=")
+            redacted_parts.append(f"{flag}=[REDACTED_API_KEY]")
+            continue
+        redacted_parts.append(_redact_api_key_from_message(text, api_key))
+        if text in sensitive_flags:
+            redact_next = True
+    return " ".join(redacted_parts)
+
+
 @app.post("/api/llm_models/discover")
 async def discover_llm_models(request: LLMModelDiscoverRequest):
     resolved = _resolve_discover_secret(request)
@@ -2606,15 +2626,14 @@ async def transcribe_audio(file: UploadFile = File(...)):
         temp_filename,
         "--transcribe-base-url",
         voice_config["base_url"],
-        "--transcribe-api-key",
-        voice_config["api_key"],
         "--transcribe-model",
         voice_config["model"],
     ])
-    print(f"[Transcribe] Running command: {' '.join(cmd)}")
+    print(f"[Transcribe] Running command: {_redact_subprocess_command_for_log(cmd, api_key=voice_config['api_key'])}")
     
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    env["VANTAGE_TRANSCRIBE_API_KEY"] = voice_config["api_key"]
     
     proc = None
     try:
@@ -2639,11 +2658,12 @@ async def transcribe_audio(file: UploadFile = File(...)):
                 stderr_text = stderr.decode('utf-8')
             except:
                 stderr_text = stderr.decode('gbk', errors='replace')
+            stderr_text = _redact_api_key_from_message(stderr_text, voice_config["api_key"])
             print(f"[Transcribe] Stderr: {stderr_text}")
         else:
             stderr_text = ""
         
-        print(f"[Transcribe] Stdout: {output}")
+        print(f"[Transcribe] Stdout received: {len(output)} chars")
             
         transcription = ""
         transcription_error = ""
@@ -2655,7 +2675,10 @@ async def transcribe_audio(file: UploadFile = File(...)):
                 transcription_error = line.replace("TRANSCRIPTION_ERROR:", "").strip()
         
         if proc.returncode != 0:
-            details = transcription_error or stderr_text or output.strip()
+            details = _redact_api_key_from_message(
+                transcription_error or stderr_text or output.strip(),
+                voice_config["api_key"],
+            )
             return JSONResponse(
                 status_code=500,
                 content={
@@ -2668,7 +2691,10 @@ async def transcribe_audio(file: UploadFile = File(...)):
             )
         
         if not transcription:
-            details = transcription_error or stderr_text or output.strip() or "No transcription result returned"
+            details = _redact_api_key_from_message(
+                transcription_error or stderr_text or output.strip() or "No transcription result returned",
+                voice_config["api_key"],
+            )
             return JSONResponse(
                 status_code=500,
                 content={
@@ -2680,7 +2706,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
                 },
             )
         
-        print(f"[Transcribe] Result: '{transcription}'")
+        print(f"[Transcribe] Result length: {len(transcription)} chars")
                 
         return {
             "transcription": transcription,

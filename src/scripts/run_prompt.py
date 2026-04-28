@@ -3,6 +3,7 @@ import json
 import argparse
 import logging
 import uuid
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -407,7 +408,7 @@ def main():
                 text = AudioService.transcribe(
                     args.transcribe,
                     base_url=args.transcribe_base_url,
-                    api_key=args.transcribe_api_key,
+                    api_key=args.transcribe_api_key or os.environ.get("VANTAGE_TRANSCRIBE_API_KEY"),
                     model=args.transcribe_model,
                 )
             except AudioTranscriptionError as exc:
