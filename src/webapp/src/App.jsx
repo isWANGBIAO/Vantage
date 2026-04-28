@@ -227,6 +227,10 @@ function AppShell() {
         themeMode: nextTheme,
         launchAtLogin: Boolean(currentState.settings?.launchAtLogin),
         backgroundMode: currentState.settings?.backgroundMode || 'balanced',
+        actionPlanAutoGenerate: currentState.settings?.actionPlanAutoGenerate !== false,
+        voiceBaseUrl: currentState.settings?.voiceBaseUrl,
+        voiceApiKey: currentState.settings?.voiceApiKey,
+        voiceModel: currentState.settings?.voiceModel,
       });
       setSettingsState(savedState);
     } catch (error) {

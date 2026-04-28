@@ -28,6 +28,7 @@ def test_load_settings_creates_default_settings_file(tmp_path):
         "theme": "dark",
         "theme_mode": "dark",
         "background_mode": "balanced",
+        "action_plan_auto_generate": True,
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",
@@ -147,6 +148,7 @@ def test_save_settings_normalizes_partial_payload(tmp_path):
         "theme": "dark",
         "theme_mode": "dark",
         "background_mode": "balanced",
+        "action_plan_auto_generate": True,
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",
@@ -182,6 +184,7 @@ def test_load_settings_repairs_invalid_display_language(tmp_path):
         "theme": "dark",
         "theme_mode": "dark",
         "background_mode": "balanced",
+        "action_plan_auto_generate": True,
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",
@@ -217,6 +220,7 @@ def test_save_settings_accepts_auto_theme_and_voice_provider(tmp_path):
             "voice_base_url": "https://voice.example.invalid/v1",
             "voice_api_key": "sk-voice",
             "voice_model": "FunAudioLLM/SenseVoiceSmall",
+            "action_plan_auto_generate": False,
         },
         settings_file=settings_file,
     )
@@ -226,6 +230,7 @@ def test_save_settings_accepts_auto_theme_and_voice_provider(tmp_path):
     assert payload["voice_base_url"] == "https://voice.example.invalid/v1"
     assert payload["voice_api_key"] == "sk-voice"
     assert payload["voice_model"] == "FunAudioLLM/SenseVoiceSmall"
+    assert payload["action_plan_auto_generate"] is False
 
 
 def test_get_voice_provider_config_requires_base_url_key_and_model(tmp_path):

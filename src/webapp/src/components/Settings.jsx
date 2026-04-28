@@ -158,6 +158,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     themeMode: currentThemeMode,
     launchAtLogin: false,
     backgroundMode: 'balanced',
+    actionPlanAutoGenerate: true,
     voiceBaseUrl: '',
     voiceApiKey: '',
     voiceModel: DEFAULT_VOICE_MODEL,
@@ -200,6 +201,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         themeMode: nextState.settings.themeMode || nextState.settings.theme || currentThemeMode,
         launchAtLogin: Boolean(nextState.settings.launchAtLogin),
         backgroundMode: nextState.settings.backgroundMode || 'balanced',
+        actionPlanAutoGenerate: nextState.settings.actionPlanAutoGenerate !== false,
         voiceBaseUrl: nextState.settings.voiceBaseUrl || '',
         voiceApiKey: nextState.settings.voiceApiKey || '',
         voiceModel: nextState.settings.voiceModel || DEFAULT_VOICE_MODEL,
@@ -235,12 +237,14 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       `theme=${form.theme}`,
       `themeMode=${form.themeMode}`,
       `backgroundMode=${form.backgroundMode}`,
+      `actionPlanAutoGenerate=${form.actionPlanAutoGenerate}`,
       `voiceBaseUrl=${form.voiceBaseUrl || ''}`,
       `voiceModel=${form.voiceModel || ''}`,
       `provider=${form.providerConfig.selected_provider || ''}`,
     ].join('\n');
   }, [
     form.backgroundMode,
+    form.actionPlanAutoGenerate,
     form.displayLanguage,
     form.providerConfig.selected_provider,
     form.theme,
@@ -434,6 +438,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         themeMode: savedState.settings.themeMode,
         launchAtLogin: Boolean(savedState.settings.launchAtLogin),
         backgroundMode: savedState.settings.backgroundMode,
+        actionPlanAutoGenerate: savedState.settings.actionPlanAutoGenerate !== false,
         voiceBaseUrl: savedState.settings.voiceBaseUrl || '',
         voiceApiKey: savedState.settings.voiceApiKey || '',
         voiceModel: savedState.settings.voiceModel || DEFAULT_VOICE_MODEL,
@@ -751,6 +756,21 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           ))}
         </div>
       </SettingsRow>
+      <label className="settings-checkbox-row">
+        <input
+          type="checkbox"
+          checked={form.actionPlanAutoGenerate}
+          onChange={(event) => setForm((prev) => ({
+            ...prev,
+            actionPlanAutoGenerate: event.target.checked,
+          }))}
+        />
+        <span>{t('settings.performance.action_plan_auto_generate')}</span>
+      </label>
+      <div className="settings-status-line">
+        <Info size={16} />
+        {t('settings.performance.action_plan_auto_generate_hint')}
+      </div>
     </section>
   );
 

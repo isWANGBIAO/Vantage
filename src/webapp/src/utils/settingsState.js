@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS_STATE = {
     voiceApiKey: '',
     voiceHasApiKey: false,
     voiceModel: 'FunAudioLLM/SenseVoiceSmall',
+    actionPlanAutoGenerate: true,
   },
   provider: {
     version: 2,
@@ -80,6 +81,10 @@ function normalizeSettings(payload, mode) {
         typeof safeSettings.voiceModel === 'string' && safeSettings.voiceModel.trim()
           ? safeSettings.voiceModel
           : DEFAULT_SETTINGS_STATE.settings.voiceModel,
+      actionPlanAutoGenerate:
+        typeof safeSettings.actionPlanAutoGenerate === 'boolean'
+          ? safeSettings.actionPlanAutoGenerate
+          : DEFAULT_SETTINGS_STATE.settings.actionPlanAutoGenerate,
     },
     provider:
       safePayload.provider && typeof safePayload.provider === 'object'
@@ -134,6 +139,10 @@ export async function saveSettingsState(submission, electronAPI) {
           voiceApiKey: submission?.voiceApiKey,
           voiceHasApiKey: Boolean(submission?.voiceApiKey),
           voiceModel: submission?.voiceModel,
+          actionPlanAutoGenerate:
+            typeof submission?.actionPlanAutoGenerate === 'boolean'
+              ? submission.actionPlanAutoGenerate
+              : DEFAULT_SETTINGS_STATE.settings.actionPlanAutoGenerate,
         },
       },
       'browser',

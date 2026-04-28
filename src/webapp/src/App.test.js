@@ -38,6 +38,12 @@ test('App persists the header theme toggle through formal settings', () => {
   assert.ok(appSource.includes('themeMode: nextTheme'));
 });
 
+test('App preserves voice provider settings when saving the header theme toggle', () => {
+  assert.ok(appSource.includes('voiceBaseUrl: currentState.settings?.voiceBaseUrl'));
+  assert.ok(appSource.includes('voiceApiKey: currentState.settings?.voiceApiKey'));
+  assert.ok(appSource.includes('voiceModel: currentState.settings?.voiceModel'));
+});
+
 test('App renders the header theme toggle as a labelled pill instead of a blank circle', () => {
   assert.ok(appSource.includes('className="theme-toggle"'));
   assert.ok(appSource.includes("<span>{t(theme === 'dark' ? 'settings.general.theme_light' : 'settings.general.theme_dark')}</span>"));

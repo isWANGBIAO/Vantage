@@ -53,6 +53,7 @@ test('loadSettings defaults formal theme and background mode settings', () => {
   assert.equal(state.settings.theme, 'dark');
   assert.equal(state.settings.themeMode, 'dark');
   assert.equal(state.settings.backgroundMode, 'balanced');
+  assert.equal(state.settings.actionPlanAutoGenerate, true);
   assert.equal(state.settings.voiceBaseUrl, '');
   assert.equal(state.settings.voiceApiKey, '');
   assert.equal(state.settings.voiceModel, 'FunAudioLLM/SenseVoiceSmall');
@@ -82,6 +83,7 @@ test('saveSettingsPayload persists general settings and provider config', () => 
       themeMode: 'auto',
       launchAtLogin: true,
       backgroundMode: 'power_saver',
+      actionPlanAutoGenerate: false,
       voiceBaseUrl: 'https://voice.example.invalid/v1',
       voiceApiKey: 'sk-voice-secret',
       voiceModel: 'sensevoice',
@@ -109,6 +111,7 @@ test('saveSettingsPayload persists general settings and provider config', () => 
   assert.equal(state.settings.themeMode, 'auto');
   assert.equal(state.settings.launchAtLogin, true);
   assert.equal(state.settings.backgroundMode, 'power_saver');
+  assert.equal(state.settings.actionPlanAutoGenerate, false);
   assert.equal(state.settings.voiceBaseUrl, 'https://voice.example.invalid/v1');
   assert.equal(state.settings.voiceApiKey, '********');
   assert.equal(state.settings.voiceHasApiKey, true);
@@ -122,6 +125,7 @@ test('saveSettingsPayload persists general settings and provider config', () => 
     theme: 'light',
     theme_mode: 'auto',
     background_mode: 'power_saver',
+    action_plan_auto_generate: false,
     voice_base_url: 'https://voice.example.invalid/v1',
     voice_api_key: 'sk-voice-secret',
     voice_model: 'sensevoice',
@@ -445,6 +449,7 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
     theme: 'dark',
     theme_mode: 'dark',
     background_mode: 'balanced',
+    action_plan_auto_generate: true,
     voice_base_url: '',
     voice_api_key: '',
     voice_model: 'FunAudioLLM/SenseVoiceSmall',

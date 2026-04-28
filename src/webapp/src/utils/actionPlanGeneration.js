@@ -27,9 +27,10 @@ export function buildActionPlanGenerationPayload(reasoningEffort, {
 }
 
 export function shouldAutogenerateActionPlan({
+  autoGenerateEnabled = true,
   hasTriggered,
   isGenerating,
   isAborted,
 }) {
-  return !hasTriggered && !isGenerating && !isAborted;
+  return Boolean(autoGenerateEnabled) && !hasTriggered && !isGenerating && !isAborted;
 }

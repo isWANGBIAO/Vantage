@@ -47,6 +47,12 @@ test('Settings saves provider config and refreshes available LLM models', () => 
   assert.ok(settingsSource.includes('backgroundMode'));
 });
 
+test('Settings exposes Action Plan startup autogeneration as a performance setting', () => {
+  assert.ok(settingsSource.includes('actionPlanAutoGenerate'));
+  assert.ok(settingsSource.includes('settings.performance.action_plan_auto_generate'));
+  assert.ok(settingsSource.includes('settings.performance.action_plan_auto_generate_hint'));
+});
+
 test('Settings renders multi-provider controls and discover refresh', () => {
   assert.ok(settingsSource.includes('addProvider'));
   assert.ok(settingsSource.includes('deleteProvider'));

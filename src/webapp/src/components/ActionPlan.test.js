@@ -105,6 +105,14 @@ test('ActionPlan shows live elapsed time while generation is active', () => {
   assert.equal(actionPlanSource.includes('Time {(stats.total_duration || 0).toFixed(1)}s'), false);
 });
 
+test('ActionPlan uses the startup autogenerate setting instead of hard-blocking saved plans', () => {
+  assert.ok(actionPlanSource.includes('loadSettingsState'));
+  assert.ok(actionPlanSource.includes('actionPlanAutoGenerate'));
+  assert.ok(actionPlanSource.includes('autoGenerateEnabled'));
+  assert.equal(actionPlanSource.includes('const hasExistingPlan = await loadTodaysPlan(controller.signal);'), false);
+  assert.equal(actionPlanSource.includes('hasExistingPlan,'), false);
+});
+
 test('ActionPlan supports stacked reading mode without card-level scrolling', () => {
   assert.ok(actionPlanSource.includes("layoutMode = 'split'"));
   assert.ok(actionPlanSource.includes("'action-plan-stack'"));

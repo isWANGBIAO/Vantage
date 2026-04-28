@@ -758,8 +758,6 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     const startRecording = async () => {
 
-        console.log("[Voice] Starting recording...");
-
         try {
 
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -776,8 +774,6 @@ export default function ChatInterface({ embedded = false } = {}) {
 
             mediaRecorderRef.current.ondataavailable = (event) => {
 
-                console.log("[Voice] Data available:", event.data.size, "bytes");
-
                 if (event.data.size > 0) {
 
                     audioChunksRef.current.push(event.data);
@@ -789,10 +785,6 @@ export default function ChatInterface({ embedded = false } = {}) {
 
 
             mediaRecorderRef.current.onstop = async () => {
-
-                console.log("[Voice] Recording stopped, chunks:", audioChunksRef.current.length);
-
-
 
                 // 停止媒体轨道
 
@@ -822,10 +814,6 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                 const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
 
-                console.log("[Voice] Audio blob size:", audioBlob.size, "bytes");
-
-
-
                 const formData = new FormData();
 
                 formData.append('file', audioBlob, 'recording.webm');
@@ -838,8 +826,6 @@ export default function ChatInterface({ embedded = false } = {}) {
 
 
                 try {
-
-                    console.log("[Voice] Sending to /api/transcribe...");
 
                     const transcribeResponse = await fetchBackend('/api/transcribe', {
 
@@ -881,13 +867,8 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                     }
 
-                    console.log("[Voice] Transcribe result:", data);
-
-
-
                     if (data.transcription && data.transcription.trim()) {
                         const transcribedText = data.transcription.trim();
-                        console.log("[Voice] Transcribed text:", transcribedText);
                         setInput("");
                         setMessages(prev => [...prev, { role: "user", content: transcribedText }]);
 
@@ -960,7 +941,6 @@ export default function ChatInterface({ embedded = false } = {}) {
 
 
             mediaRecorderRef.current.start();
-            console.log("[Voice] MediaRecorder started");
             setIsRecording(true);
             setRecordingTime(0);
             timerRef.current = setInterval(() => {

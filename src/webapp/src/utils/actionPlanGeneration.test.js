@@ -77,9 +77,10 @@ test('buildActionPlanGenerationPayload maps reasoning for DeepSeek V4 models', (
   );
 });
 
-test('shouldAutogenerateActionPlan only allows one startup run', () => {
+test('shouldAutogenerateActionPlan only allows startup runs when the setting is enabled', () => {
   assert.equal(
     shouldAutogenerateActionPlan({
+      autoGenerateEnabled: true,
       hasTriggered: false,
       isGenerating: false,
       isAborted: false,
@@ -89,6 +90,17 @@ test('shouldAutogenerateActionPlan only allows one startup run', () => {
 
   assert.equal(
     shouldAutogenerateActionPlan({
+      autoGenerateEnabled: false,
+      hasTriggered: false,
+      isGenerating: false,
+      isAborted: false,
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldAutogenerateActionPlan({
+      autoGenerateEnabled: true,
       hasTriggered: true,
       isGenerating: false,
       isAborted: false,
@@ -98,6 +110,7 @@ test('shouldAutogenerateActionPlan only allows one startup run', () => {
 
   assert.equal(
     shouldAutogenerateActionPlan({
+      autoGenerateEnabled: true,
       hasTriggered: false,
       isGenerating: true,
       isAborted: false,
@@ -107,6 +120,7 @@ test('shouldAutogenerateActionPlan only allows one startup run', () => {
 
   assert.equal(
     shouldAutogenerateActionPlan({
+      autoGenerateEnabled: true,
       hasTriggered: false,
       isGenerating: false,
       isAborted: true,

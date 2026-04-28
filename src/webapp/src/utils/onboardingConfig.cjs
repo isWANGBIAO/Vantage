@@ -9,6 +9,7 @@ const DEFAULT_SETTINGS = {
   theme: 'dark',
   theme_mode: 'dark',
   background_mode: 'balanced',
+  action_plan_auto_generate: true,
   voice_base_url: '',
   voice_api_key: '',
   voice_model: 'FunAudioLLM/SenseVoiceSmall',
@@ -120,6 +121,10 @@ function sanitizeSettings(payload) {
     theme: sanitizeTheme(safePayload.theme),
     theme_mode: sanitizeThemeMode(safePayload.theme_mode, safePayload.theme),
     background_mode: sanitizeBackgroundMode(safePayload.background_mode),
+    action_plan_auto_generate:
+      typeof safePayload.action_plan_auto_generate === 'boolean'
+        ? safePayload.action_plan_auto_generate
+        : DEFAULT_SETTINGS.action_plan_auto_generate,
     voice_base_url: normalizeOptionalString(safePayload.voice_base_url) || '',
     voice_api_key: normalizeOptionalString(safePayload.voice_api_key) || '',
     voice_model: normalizeOptionalString(safePayload.voice_model) || DEFAULT_SETTINGS.voice_model,
@@ -332,6 +337,7 @@ function buildSettingsState({
       themeMode: settings.theme_mode,
       launchAtLogin: settings.launch_at_login,
       backgroundMode: settings.background_mode,
+      actionPlanAutoGenerate: settings.action_plan_auto_generate,
       voiceBaseUrl: settings.voice_base_url,
       voiceApiKey: maskApiKey(settings.voice_api_key),
       voiceHasApiKey: Boolean(normalizeOptionalString(settings.voice_api_key)),
@@ -468,6 +474,10 @@ function saveSettingsPayload({
         ? safePayload.launchAtLogin
         : currentSettings.launch_at_login,
     background_mode: sanitizeBackgroundMode(safePayload.backgroundMode),
+    action_plan_auto_generate:
+      typeof safePayload.actionPlanAutoGenerate === 'boolean'
+        ? safePayload.actionPlanAutoGenerate
+        : currentSettings.action_plan_auto_generate,
     voice_base_url: Object.prototype.hasOwnProperty.call(safePayload, 'voiceBaseUrl')
       ? (normalizeOptionalString(safePayload.voiceBaseUrl) || '')
       : currentSettings.voice_base_url,
@@ -634,6 +644,7 @@ function saveOnboardingCompletion({ runtimePaths, submission, projectRoot, now =
     theme: currentSettings.theme,
     theme_mode: currentSettings.theme_mode,
     background_mode: currentSettings.background_mode,
+    action_plan_auto_generate: currentSettings.action_plan_auto_generate,
     voice_base_url: currentSettings.voice_base_url,
     voice_api_key: currentSettings.voice_api_key,
     voice_model: currentSettings.voice_model,

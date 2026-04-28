@@ -13,6 +13,7 @@ test('loadSettingsState falls back to browser defaults without Electron', async 
   assert.equal(state.settings.voiceBaseUrl, '');
   assert.equal(state.settings.voiceApiKey, '');
   assert.equal(state.settings.voiceModel, 'FunAudioLLM/SenseVoiceSmall');
+  assert.equal(state.settings.actionPlanAutoGenerate, true);
   assert.equal(state.mode, 'browser');
 });
 
@@ -26,6 +27,7 @@ test('saveSettingsState forwards payload to Electron settings bridge', async () 
     voiceBaseUrl: 'https://voice.example.invalid/v1',
     voiceApiKey: 'sk-voice',
     voiceModel: 'sensevoice',
+    actionPlanAutoGenerate: false,
     provider: {
       route: 'cliproxyapi',
       baseUrl: 'https://example.invalid/v1',
@@ -48,6 +50,7 @@ test('saveSettingsState forwards payload to Electron settings bridge', async () 
           voiceBaseUrl: 'https://voice.example.invalid/v1',
           voiceApiKey: '********',
           voiceModel: 'sensevoice',
+          actionPlanAutoGenerate: false,
         },
       };
     },
@@ -58,6 +61,7 @@ test('saveSettingsState forwards payload to Electron settings bridge', async () 
   assert.equal(result.settings.themeMode, 'auto');
   assert.equal(result.settings.voiceApiKey, '********');
   assert.equal(result.settings.voiceModel, 'sensevoice');
+  assert.equal(result.settings.actionPlanAutoGenerate, false);
 });
 
 test('openSettingsPath returns false when no Electron bridge exists', async () => {

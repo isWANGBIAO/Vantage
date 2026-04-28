@@ -91,6 +91,14 @@ test('ChatInterface loads voice provider settings and surfaces transcription met
   assert.ok(chatSource.includes("vantage:settings-updated"));
 });
 
+test('ChatInterface does not log voice transcription payloads to the console', () => {
+  assert.ok(!chatSource.includes('Transcribe result'));
+  assert.ok(!chatSource.includes('Transcribed text'));
+  assert.ok(!chatSource.includes('Starting recording'));
+  assert.ok(!chatSource.includes('Audio blob size'));
+  assert.ok(!chatSource.includes('Data available'));
+});
+
 test('ChatInterface uses provider-aware model options before falling back to legacy models', () => {
   assert.ok(chatSource.includes('const defaultModel = data?.default_model'));
   assert.ok(chatSource.includes('buildModelOptionsFromCatalog(data)'));

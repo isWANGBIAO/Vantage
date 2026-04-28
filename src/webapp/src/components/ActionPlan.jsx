@@ -46,6 +46,7 @@ import {
 } from '../utils/actionPlanStream';
 import { CHAT_CONTEXT_BASE_UPDATED_EVENT } from '../utils/chatContextState';
 import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
+import { loadSettingsState } from '../utils/settingsState';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 const COPY_FEEDBACK_DURATION_MS = 1500;
@@ -639,9 +640,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       setPlanReplyReady(Boolean(planContentRef.current.trim()));
       await refreshChatContextBase();
     } catch (err) {
-      if (err.name === 'AbortError') {
-        console.log('Generation aborted');
-      } else {
+      if (err.name !== 'AbortError') {
         setPlanContentWithRef((prev) => `${prev}\n\n${t('common.error_prefix', { error: err.message })}`);
       }
     } finally {
@@ -706,11 +705,25 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     ));
     setPlanThinking('');
 
+    const loadStartupAutoGenerateEnabled = async () => {
+      try {
+        const settingsState = await loadSettingsState();
+        return settingsState.settings?.actionPlanAutoGenerate !== false;
+      } catch (error) {
+        console.warn('Failed to load Action Plan startup setting:', error);
+        return true;
+      }
+    };
+
     const initializeActionPlan = async () => {
-      const initialModel = await initializeModels();
+      const [initialModel, autoGenerateEnabled] = await Promise.all([
+        initializeModels(),
+        loadStartupAutoGenerateEnabled(),
+      ]);
       await loadTodaysPlan(controller.signal);
 
       if (!shouldAutogenerateActionPlan({
+        autoGenerateEnabled,
         hasTriggered: startupGenerationTriggeredRef.current,
         isGenerating: isGeneratingRef.current,
         isAborted: controller.signal.aborted,

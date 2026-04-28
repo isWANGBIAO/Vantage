@@ -25,7 +25,3 @@ contextBridge.exposeInMainWorld('electronAPI', {
         }
     },
 });
-
-window.addEventListener('DOMContentLoaded', () => {
-    console.log('Electron preload script loaded');
-});
