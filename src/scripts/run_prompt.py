@@ -28,7 +28,7 @@ from src.utils.generation_stats import build_generation_metadata
 
 ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT = 1
 RUN_PROMPT_ENTRYPOINT = "src/scripts/run_prompt.py"
-ACTION_PLAN_TIME_SERIES_START_DATE = "2024-01-01"
+ACTION_PLAN_TIME_SERIES_START_DATE = "earliest"
 
 
 def _load_session_usage_summary(history_dir, session_id):

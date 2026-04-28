@@ -334,6 +334,93 @@ class DataLoader:
             return "## Future Planned Items\n\n- 无法获取未来安排\n"
 
     @staticmethod
+    def _clean_prompt_column_name(column_name):
+        return str(column_name).replace("\n", " ")
+
+    @staticmethod
+    def _normalize_json_prompt_value(raw_value):
+        if pd.isna(raw_value):
+            return None
+
+        value = raw_value
+        if hasattr(value, "item"):
+            try:
+                value = value.item()
+            except Exception:
+                pass
+
+        if isinstance(value, pd.Timestamp):
+            return value.strftime("%Y-%m-%d")
+
+        return value
+
+    @staticmethod
+    def build_balance_sheet_prompt_payload(excel_file_path):
+        excel_file_path = Path(excel_file_path)
+        if not excel_file_path.exists():
+            return None
+
+        sheets = DataLoader.load_excel_sheets(excel_file_path)
+        payload_sheets = []
+
+        for sheet_name, df in sheets.items():
+            columns = [DataLoader._clean_prompt_column_name(col) for col in df.columns]
+            rows = []
+
+            for _, row in df.iterrows():
+                current_row = []
+                has_value = False
+
+                for col in df.columns:
+                    value = DataLoader._normalize_json_prompt_value(row[col])
+                    if value is None:
+                        current_row.append(None)
+                        continue
+
+                    current_row.append(value)
+                    has_value = True
+
+                if has_value:
+                    rows.append(current_row)
+
+            non_null_counts = {
+                DataLoader._clean_prompt_column_name(col): int(df[col].notna().sum())
+                for col in df.columns
+            }
+            payload_sheets.append(
+                {
+                    "name": str(sheet_name),
+                    "columns": columns,
+                    "rows": rows,
+                    "row_count": len(rows),
+                    "non_null_counts": non_null_counts,
+                }
+            )
+
+        return {
+            "file_name": excel_file_path.name,
+            "sheet_count": len(payload_sheets),
+            "total_rows": sum(sheet["row_count"] for sheet in payload_sheets),
+            "sheets": payload_sheets,
+        }
+
+    @staticmethod
+    def get_balance_sheet_data_summary(excel_file_path):
+        try:
+            payload = DataLoader.build_balance_sheet_prompt_payload(excel_file_path)
+        except Exception as e:
+            logging.error(f"Error getting balance sheet data: {e}")
+            return ""
+
+        if not payload:
+            return ""
+
+        data_summary = "## Balance Sheet Data (JSON)\n\n```json\n"
+        data_summary += json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        data_summary += "\n```"
+        return data_summary
+
+    @staticmethod
     def construct_prompt(prompt_file_path, excel_file_path, days=90, start_date=None):
         prompt_file_path = Path(prompt_file_path)
         excel_file_path = Path(excel_file_path)
@@ -358,6 +445,14 @@ class DataLoader:
             resolved_start_date = end_date - timedelta(days=days)
             window_strategy = "rolling_days"
             days_requested = int(days)
+        elif str(start_date).lower() in {"earliest", "all", "full_history"}:
+            earliest_date = df[date_column].dropna().min()
+            if pd.isna(earliest_date):
+                resolved_start_date = end_date
+            else:
+                resolved_start_date = pd.to_datetime(earliest_date).to_pydatetime()
+            window_strategy = "full_history"
+            days_requested = None
         else:
             resolved_start_date = pd.to_datetime(start_date).to_pydatetime()
             window_strategy = "fixed_start"
@@ -481,6 +576,9 @@ class DataLoader:
         data_summary += json.dumps(data_payload, ensure_ascii=False, separators=(",", ":"))
         data_summary += "\n```"
 
+        balance_sheet_summary = DataLoader.get_balance_sheet_data_summary(
+            DataLoader.resolve_data_path("Balance Sheet.xlsx")
+        )
         future_planned_rows = DataLoader.get_future_planned_rows(excel_file_path)
 
         prompt_sections = [prompt_content]
@@ -505,7 +603,12 @@ class DataLoader:
                  prompt_sections.append(f"{header}\n\n{content}")
 
         prompt_bundle = "\n\n".join(section for section in prompt_sections if section)
-        combined_content = f"{data_summary}\n\n{future_planned_rows}\n\n{prompt_bundle}"
+        data_sections = [data_summary]
+        if balance_sheet_summary:
+            data_sections.append(balance_sheet_summary)
+
+        combined_content = "\n\n".join(data_sections)
+        combined_content = f"{combined_content}\n\n{future_planned_rows}\n\n{prompt_bundle}"
 
         return combined_content
 
@@ -541,7 +644,22 @@ class DataLoader:
         metadata["time_json_row_count"] = len(rows)
         metadata["time_json_stable_row_count"] = len(stable_rows)
         metadata["time_json_column_count"] = len(time_payload.get("columns") or [])
-        metadata["prompt_bundle_hash"] = DataLoader._hash_text(prompt_text[end + len("\n```"):])
+        prompt_bundle_start = end + len("\n```")
+
+        balance_marker = "## Balance Sheet Data (JSON)\n\n```json\n"
+        try:
+            balance_start = prompt_text.index(balance_marker, prompt_bundle_start) + len(balance_marker)
+            balance_end = prompt_text.index("\n```", balance_start)
+            balance_payload = json.loads(prompt_text[balance_start:balance_end])
+            metadata["cache_layout"] = "system_time_json_balance_json_then_prompts"
+            metadata["balance_sheet_full_hash"] = DataLoader._hash_json_payload(balance_payload)
+            metadata["balance_sheet_sheet_count"] = int(balance_payload.get("sheet_count") or 0)
+            metadata["balance_sheet_row_count"] = int(balance_payload.get("total_rows") or 0)
+            prompt_bundle_start = balance_end + len("\n```")
+        except (ValueError, json.JSONDecodeError, TypeError):
+            pass
+
+        metadata["prompt_bundle_hash"] = DataLoader._hash_text(prompt_text[prompt_bundle_start:])
         return metadata
 
     @staticmethod

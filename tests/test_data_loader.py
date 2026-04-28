@@ -10,6 +10,13 @@ import pandas as pd
 from src.utils.data_loader import DataLoader
 
 
+def extract_json_block(content, heading):
+    marker = f"## {heading}\n\n```json\n"
+    start = content.index(marker) + len(marker)
+    end = content.index("\n```", start)
+    return json.loads(content[start:end])
+
+
 class DataLoaderFuturePlansTests(unittest.TestCase):
     def test_get_future_planned_rows_only_includes_future_non_empty_rows(self):
         today = datetime.now().date()
@@ -250,6 +257,50 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
         self.assertEqual(payload["rows"][-1], [str(today), "latest row"])
         self.assertNotIn("before fixed start", json.dumps(payload, ensure_ascii=False))
 
+    def test_construct_prompt_with_earliest_start_date_includes_full_history(self):
+        today = datetime.now().date()
+        df = pd.DataFrame(
+            [
+                {
+                    "\u65e5\u671f": pd.Timestamp("2020-05-03"),
+                    "metric": "first recorded row",
+                },
+                {
+                    "\u65e5\u671f": pd.Timestamp(today),
+                    "metric": "latest row",
+                },
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            prompt_path = temp_path / "Prompt_Personal_Info.md"
+            excel_path = temp_path / "Time.xlsx"
+            prompt_path.write_text("personal info", encoding="utf-8")
+            excel_path.write_text("placeholder", encoding="utf-8")
+
+            with patch.object(DataLoader, "load_excel_data", return_value=df), patch.object(
+                DataLoader,
+                "get_future_planned_rows",
+                return_value="## Future Planned Items\n\n- none\n",
+            ), patch.object(
+                DataLoader,
+                "get_balance_sheet_data_summary",
+                return_value="",
+            ):
+                combined = DataLoader.construct_prompt(
+                    prompt_path,
+                    excel_path,
+                    days=90,
+                    start_date="earliest",
+                )
+
+        payload = extract_json_block(combined, "Time Series Data (JSON)")
+        self.assertEqual(payload["window_strategy"], "full_history")
+        self.assertEqual(payload["date_range"]["start"], "2020-05-03")
+        self.assertEqual(payload["rows"][0], ["2020-05-03", "first recorded row"])
+        self.assertEqual(payload["rows"][-1], [str(today), "latest row"])
+
     def test_construct_prompt_places_time_json_rows_before_editable_prompts(self):
         today = datetime.now().date()
         df = pd.DataFrame(
@@ -296,6 +347,93 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
         first_key_order = list(json.loads(combined[json_start:json_end]).keys())[:2]
         self.assertEqual(first_key_order, ["columns", "rows"])
 
+    def test_construct_prompt_places_balance_sheet_json_after_time_json(self):
+        today = datetime.now().date()
+        time_df = pd.DataFrame(
+            [
+                {
+                    "\u65e5\u671f": pd.Timestamp(today),
+                    "metric": 1,
+                },
+            ]
+        )
+        balance_sheets = {
+            "Assets": pd.DataFrame(
+                [
+                    {"Account": "Cash", "Amount": 1000},
+                    {"Account": None, "Amount": None},
+                    {"Account": "Stock", "Amount": 2000},
+                ]
+            ),
+            "Budget": pd.DataFrame(
+                [
+                    {"Category": "Food", "Monthly": 1500},
+                    {"Category": "Transport", "Monthly": 300},
+                ]
+            ),
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            prompt_path = temp_path / "Prompt_Personal_Info.md"
+            excel_path = temp_path / "Time.xlsx"
+            balance_path = temp_path / "Balance Sheet.xlsx"
+            prompt_path.write_text("editable personal prompt", encoding="utf-8")
+            excel_path.write_text("placeholder", encoding="utf-8")
+            balance_path.write_text("placeholder", encoding="utf-8")
+
+            def fake_resolve_data_path(filename, user_home=None, onedrive_env=None):
+                return temp_path / filename
+
+            with patch.object(DataLoader, "load_excel_data", return_value=time_df), patch.object(
+                DataLoader,
+                "load_excel_sheets",
+                return_value=balance_sheets,
+            ), patch.object(
+                DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                DataLoader,
+                "get_future_planned_rows",
+                return_value="## Future Planned Items\n\n- none\n",
+            ):
+                combined = DataLoader.construct_prompt(prompt_path, excel_path, days=90)
+
+        self.assertLess(
+            combined.index("## Time Series Data (JSON)"),
+            combined.index("## Balance Sheet Data (JSON)"),
+        )
+        self.assertLess(
+            combined.index("## Balance Sheet Data (JSON)"),
+            combined.index("## Future Planned Items"),
+        )
+        self.assertLess(combined.index("## Balance Sheet Data (JSON)"), combined.index("editable personal prompt"))
+
+        payload = extract_json_block(combined, "Balance Sheet Data (JSON)")
+        self.assertEqual(payload["file_name"], "Balance Sheet.xlsx")
+        self.assertEqual(payload["sheet_count"], 2)
+        self.assertEqual(payload["total_rows"], 4)
+        self.assertEqual(
+            payload["sheets"],
+            [
+                {
+                    "name": "Assets",
+                    "columns": ["Account", "Amount"],
+                    "rows": [["Cash", 1000], ["Stock", 2000]],
+                    "row_count": 2,
+                    "non_null_counts": {"Account": 2, "Amount": 2},
+                },
+                {
+                    "name": "Budget",
+                    "columns": ["Category", "Monthly"],
+                    "rows": [["Food", 1500], ["Transport", 300]],
+                    "row_count": 2,
+                    "non_null_counts": {"Category": 2, "Monthly": 2},
+                },
+            ],
+        )
+
     def test_prompt_cache_metadata_ignores_editable_prompt_changes_for_time_rows(self):
         first_prompt = (
             "## Time Series Data (JSON)\n\n```json\n"
@@ -309,6 +447,25 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
 
         self.assertEqual(first_metadata["time_json_rows_hash"], second_metadata["time_json_rows_hash"])
         self.assertNotEqual(first_metadata["full_prompt_hash"], second_metadata["full_prompt_hash"])
+
+    def test_prompt_cache_metadata_records_balance_sheet_hash(self):
+        prompt = (
+            "## Time Series Data (JSON)\n\n```json\n"
+            '{"columns":["date","metric"],"rows":[["2026-04-26",1],["2026-04-27",2]]}\n'
+            "```\n\n"
+            "## Balance Sheet Data (JSON)\n\n```json\n"
+            '{"file_name":"Balance Sheet.xlsx","sheet_count":1,"total_rows":1,'
+            '"sheets":[{"name":"Assets","columns":["Account","Amount"],"rows":[["Cash",1000]],'
+            '"row_count":1,"non_null_counts":{"Account":1,"Amount":1}}]}\n'
+            "```\n\neditable prompt"
+        )
+
+        metadata = DataLoader.build_prompt_cache_metadata(prompt)
+
+        self.assertEqual(metadata["cache_layout"], "system_time_json_balance_json_then_prompts")
+        self.assertIn("balance_sheet_full_hash", metadata)
+        self.assertEqual(metadata["balance_sheet_sheet_count"], 1)
+        self.assertEqual(metadata["balance_sheet_row_count"], 1)
 
     def test_prompt_cache_metadata_treats_latest_row_as_dynamic_tail(self):
         first_prompt = (
