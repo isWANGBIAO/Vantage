@@ -115,6 +115,7 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         "src.face_analyzer_mediapipe",
         "src.scripts.debug_single_face",
         "src.scripts.install_requirements",
+        "src.scripts.run_packaging_builds",
         "src.scripts.test_gpu_inference",
         "tensorrt",
         "tensorrt_bindings",
@@ -258,6 +259,8 @@ def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(t
     backend_file = tmp_path / "src" / "server.py"
     backend_file.parent.mkdir(parents=True, exist_ok=True)
     backend_file.write_text("print('backend v1')\n", encoding="utf-8")
+    packaging_file = tmp_path / "src" / "scripts" / "run_packaging_builds.py"
+    packaging_file.write_text("print('packaging v1')\n", encoding="utf-8")
     frontend_file = tmp_path / "src" / "webapp" / "src" / "App.jsx"
     frontend_file.parent.mkdir(parents=True, exist_ok=True)
     frontend_file.write_text("export default function App() { return null }\n", encoding="utf-8")
@@ -267,13 +270,17 @@ def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(t
     original = build_backend_runtime_fingerprint(tmp_path, resources=resources)
     frontend_file.write_text("export default function App() { return 'changed' }\n", encoding="utf-8")
     after_frontend_change = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+    packaging_file.write_text("print('packaging v2')\n", encoding="utf-8")
+    after_packaging_change = build_backend_runtime_fingerprint(tmp_path, resources=resources)
     backend_file.write_text("print('backend v2')\n", encoding="utf-8")
     after_backend_change = build_backend_runtime_fingerprint(tmp_path, resources=resources)
 
     assert original["digest"] == after_frontend_change["digest"]
+    assert original["digest"] == after_packaging_change["digest"]
     assert original["digest"] != after_backend_change["digest"]
     assert any(entry["path"] == "requirements-backend-runtime-gpu.txt" for entry in original["inputs"])
     assert not any(entry["path"].startswith("src/webapp/") for entry in original["inputs"])
+    assert not any(entry["path"] == "src/scripts/run_packaging_builds.py" for entry in original["inputs"])
 
 
 def test_backend_runtime_cache_match_requires_existing_runtime_and_matching_fingerprint(tmp_path):

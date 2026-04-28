@@ -19,12 +19,12 @@ const ProjectProgress = () => {
             const result = await fetchBackendJson('/api/project_progress', { retryPolicy: 'load' });
             setData(result);
         } catch (error) {
-            setError(t('project_progress.error.body'));
+            setError('project_progress.error.body');
             console.error(error);
         } finally {
             setLoading(false);
         }
-    }, [t]);
+    }, []);
 
     useEffect(() => {
         fetchProgress();
@@ -44,7 +44,7 @@ const ProjectProgress = () => {
             <div className="progress-error">
                 <AlertCircle size={48} />
                 <h3>{t('project_progress.error.title')}</h3>
-                <p>{error}</p>
+                <p>{t(error)}</p>
                 <button className="retry-btn" onClick={fetchProgress}>{t('project_progress.retry')}</button>
             </div>
         );

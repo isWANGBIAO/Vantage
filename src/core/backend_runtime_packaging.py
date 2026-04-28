@@ -86,6 +86,7 @@ PYINSTALLER_EXCLUDES = (
     "src.scripts.debug_single_face",
     "src.scripts.install_requirements",
     "src.scripts.render_face_pipeline_markdown",
+    "src.scripts.run_packaging_builds",
     "src.scripts.test_gpu_inference",
     "tensorrt",
     "tensorrt_bindings",
@@ -359,11 +360,19 @@ def _fingerprint_entry(project_root: Path, source: Path, logical_path: str | Pat
 
 
 def _iter_backend_source_files(project_root: Path):
+    excluded_source_paths = {
+        Path(*module_name.split(".")).with_suffix(".py").as_posix()
+        for module_name in PYINSTALLER_EXCLUDES
+        if module_name.startswith("src.")
+    }
     for relative_input in BACKEND_RUNTIME_SOURCE_INPUTS:
         source_path = project_root / relative_input
         if not source_path.exists():
             continue
         if source_path.is_file():
+            source_relative_path = source_path.relative_to(project_root).as_posix()
+            if source_relative_path in excluded_source_paths:
+                continue
             yield source_path
             continue
         for child in source_path.rglob("*"):
@@ -372,6 +381,9 @@ def _iter_backend_source_files(project_root: Path):
             if child.suffix.lower() not in BACKEND_RUNTIME_SOURCE_SUFFIXES:
                 continue
             if "__pycache__" in child.parts:
+                continue
+            child_relative_path = child.relative_to(project_root).as_posix()
+            if child_relative_path in excluded_source_paths:
                 continue
             yield child
 
