@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Target, CheckCircle2, Circle, GitCommit, TrendingUp, RefreshCw, AlertCircle } from 'lucide-react';
@@ -12,7 +12,7 @@ const ProjectProgress = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
-    const fetchProgress = async () => {
+    const fetchProgress = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
@@ -24,11 +24,11 @@ const ProjectProgress = () => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [t]);
 
     useEffect(() => {
         fetchProgress();
-    }, []);
+    }, [fetchProgress]);
 
     if (loading) {
         return (
