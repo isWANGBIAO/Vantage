@@ -51,6 +51,39 @@ import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 const COPY_FEEDBACK_DURATION_MS = 1500;
 
+async function writeTextWithFallback(content) {
+  if (!content) {
+    return false;
+  }
+
+  if (
+    globalThis.navigator?.clipboard
+    && typeof globalThis.navigator.clipboard.writeText === 'function'
+  ) {
+    await globalThis.navigator.clipboard.writeText(content);
+    return true;
+  }
+
+  const documentRef = globalThis.document;
+  if (!documentRef?.createElement || !documentRef.body || typeof documentRef.execCommand !== 'function') {
+    return false;
+  }
+
+  const textarea = documentRef.createElement('textarea');
+  textarea.value = content;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  documentRef.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    return documentRef.execCommand('copy');
+  } finally {
+    documentRef.body.removeChild(textarea);
+  }
+}
+
 function buildMarkdownPlaceholder(title, body) {
   return [title, '', body].join('\n');
 }
@@ -254,16 +287,16 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   }, [setAnalysisContentWithRef, setPlanContentWithRef, t]);
 
   const copyActionPlanText = useCallback(async (content, key) => {
-    if (
-      !content ||
-      !globalThis.navigator?.clipboard ||
-      typeof globalThis.navigator.clipboard.writeText !== 'function'
-    ) {
+    if (!content) {
       return;
     }
 
     try {
-      await globalThis.navigator.clipboard.writeText(content);
+      const copied = await writeTextWithFallback(content);
+      if (!copied) {
+        console.warn('Action plan copy skipped because clipboard access is unavailable.');
+        return;
+      }
       setCopiedKey(key);
       if (copyResetTimeoutRef.current) {
         clearTimeout(copyResetTimeoutRef.current);
@@ -284,12 +317,12 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       });
 
       if (loadAbortControllerRef.current?.signal !== signal) {
-        return;
+        return { aborted: true };
       }
 
       if (data.exists) {
         applyLoadedActionPlan(data);
-        return;
+        return data;
       }
 
       setAnalysisContentWithRef(buildMarkdownPlaceholder(
@@ -309,9 +342,10 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       setPlanReplyReady(false);
       setCopiedKey('');
       setStats(null);
+      return data;
     } catch (err) {
       if (err.name === 'AbortError') {
-        return;
+        return { aborted: true };
       }
 
       console.error('Failed to load today plan:', err);
@@ -332,6 +366,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       setPlanReplyReady(false);
       setCopiedKey('');
       setStats(null);
+      return { exists: false, error: err };
     } finally {
       if (loadAbortControllerRef.current?.signal === signal) {
         loadAbortControllerRef.current = null;
@@ -720,13 +755,15 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
         initializeModels(),
         loadStartupAutoGenerateEnabled(),
       ]);
-      await loadTodaysPlan(controller.signal);
+      const loadResult = await loadTodaysPlan(controller.signal);
 
       if (!shouldAutogenerateActionPlan({
         autoGenerateEnabled,
         hasTriggered: startupGenerationTriggeredRef.current,
         isGenerating: isGeneratingRef.current,
         isAborted: controller.signal.aborted,
+        hasExistingPlan: loadResult?.exists === true,
+        loadFailed: Boolean(loadResult?.error),
       })) {
         return;
       }

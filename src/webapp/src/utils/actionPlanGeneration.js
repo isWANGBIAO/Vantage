@@ -31,6 +31,13 @@ export function shouldAutogenerateActionPlan({
   hasTriggered,
   isGenerating,
   isAborted,
+  hasExistingPlan = false,
+  loadFailed = false,
 }) {
-  return Boolean(autoGenerateEnabled) && !hasTriggered && !isGenerating && !isAborted;
+  return Boolean(autoGenerateEnabled)
+    && !hasTriggered
+    && !isGenerating
+    && !isAborted
+    && !hasExistingPlan
+    && !loadFailed;
 }

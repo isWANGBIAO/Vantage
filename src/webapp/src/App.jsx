@@ -94,6 +94,8 @@ function AppShell() {
   const theme = resolveEffectiveTheme(themeMode, systemTheme);
   const [settingsState, setSettingsState] = useState(null);
   const [backgroundTabsReady, setBackgroundTabsReady] = useState(false);
+  const backgroundMode = settingsState?.settings?.backgroundMode || 'balanced';
+  const shouldRenderBackgroundTabs = backgroundMode === 'prewarm' && backgroundTabsReady;
   const lastAppliedOnboardingLanguageRef = useRef(null);
   const [onboardingState, setOnboardingState] = useState(() => ({
     loading: true,
@@ -185,10 +187,22 @@ function AppShell() {
   useEffect(() => {
     let cancelled = false;
 
+    if (!settingsState) {
+      return undefined;
+    }
+
+    if (backgroundMode === 'power_saver') {
+      return undefined;
+    }
+
     const preloadTabs = async () => {
-      await Promise.all(BACKGROUND_TAB_COMPONENTS.map((Component) => Component.preload()));
+      const results = await Promise.allSettled(BACKGROUND_TAB_COMPONENTS.map((Component) => Component.preload()));
+      const failedPreloads = results.filter((result) => result.status === 'rejected');
+      if (failedPreloads.length > 0) {
+        console.warn('Some background tabs failed to preload.', failedPreloads);
+      }
       if (!cancelled) {
-        setBackgroundTabsReady(true);
+        setBackgroundTabsReady(backgroundMode === 'prewarm');
       }
     };
 
@@ -197,7 +211,7 @@ function AppShell() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [backgroundMode, settingsState]);
 
   useEffect(() => {
     if (onboardingState.loading || !onboardingState.displayLanguage) {
@@ -381,7 +395,7 @@ function AppShell() {
 
       <main className="app-container app-main">
         <Suspense fallback={null}>
-          {(activeTab === 'dashboard' || backgroundTabsReady) ? (
+          {(activeTab === 'dashboard' || shouldRenderBackgroundTabs) ? (
             <div style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}>
               <Dashboard isVisible={activeTab === 'dashboard'} />
             </div>
@@ -391,35 +405,35 @@ function AppShell() {
           <ActionPlanContainer isVisible={activeTab === 'action plan'} />
         </div>
         <Suspense fallback={null}>
-          {(activeTab === 'project progress' || backgroundTabsReady) ? (
+          {(activeTab === 'project progress' || shouldRenderBackgroundTabs) ? (
             <div style={{ display: activeTab === 'project progress' ? 'block' : 'none', height: '100%' }}>
               <ProjectProgress />
             </div>
           ) : null}
         </Suspense>
         <Suspense fallback={null}>
-          {(activeTab === 'expense sheet' || backgroundTabsReady) ? (
+          {(activeTab === 'expense sheet' || shouldRenderBackgroundTabs) ? (
             <div style={{ display: activeTab === 'expense sheet' ? 'block' : 'none' }}>
               <ExpenseSheet theme={theme} />
             </div>
           ) : null}
         </Suspense>
         <Suspense fallback={null}>
-          {(activeTab === 'plots' || backgroundTabsReady) ? (
+          {(activeTab === 'plots' || shouldRenderBackgroundTabs) ? (
             <div style={{ display: activeTab === 'plots' ? 'block' : 'none' }}>
               <Plots theme={theme} />
             </div>
           ) : null}
         </Suspense>
         <Suspense fallback={null}>
-          {(activeTab === 'system logs' || backgroundTabsReady) ? (
+          {(activeTab === 'system logs' || shouldRenderBackgroundTabs) ? (
             <div style={{ display: activeTab === 'system logs' ? 'block' : 'none' }}>
-              <SystemLogs />
+              <SystemLogs isVisible={activeTab === 'system logs'} />
             </div>
           ) : null}
         </Suspense>
         <Suspense fallback={null}>
-          {(activeTab === 'face history' || backgroundTabsReady) ? (
+          {(activeTab === 'face history' || shouldRenderBackgroundTabs) ? (
             <div style={{ display: activeTab === 'face history' ? 'block' : 'none' }}>
               <FaceHistory isVisible={activeTab === 'face history'} />
             </div>

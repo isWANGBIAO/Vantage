@@ -127,4 +127,26 @@ test('shouldAutogenerateActionPlan only allows startup runs when the setting is 
     }),
     false,
   );
+
+  assert.equal(
+    shouldAutogenerateActionPlan({
+      autoGenerateEnabled: true,
+      hasTriggered: false,
+      isGenerating: false,
+      isAborted: false,
+      hasExistingPlan: true,
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldAutogenerateActionPlan({
+      autoGenerateEnabled: true,
+      hasTriggered: false,
+      isGenerating: false,
+      isAborted: false,
+      loadFailed: true,
+    }),
+    false,
+  );
 });

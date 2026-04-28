@@ -32,47 +32,58 @@ const DEFAULT_SETTINGS_STATE = {
   systemLocale: 'en-US',
 };
 
+const BROWSER_SETTINGS_STORAGE_KEY = 'vantage.settingsState';
+
+function cloneSettingsState(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function resolveElectronAPI(electronAPI) {
   return electronAPI ?? globalThis.window?.electronAPI ?? globalThis.electronAPI;
 }
 
+function resolveBrowserStorage() {
+  return globalThis.window?.localStorage ?? globalThis.localStorage ?? null;
+}
+
 function normalizeSettings(payload, mode) {
+  const defaults = cloneSettingsState(DEFAULT_SETTINGS_STATE);
   const safePayload = payload && typeof payload === 'object' ? payload : {};
   const safeSettings = safePayload.settings && typeof safePayload.settings === 'object'
     ? safePayload.settings
     : {};
 
   return {
-    ...DEFAULT_SETTINGS_STATE,
+    ...defaults,
     ...safePayload,
     mode,
     settings: {
-      ...DEFAULT_SETTINGS_STATE.settings,
+      ...defaults.settings,
       displayLanguage:
         typeof safeSettings.displayLanguage === 'string'
           ? safeSettings.displayLanguage
-          : DEFAULT_SETTINGS_STATE.settings.displayLanguage,
-      theme: safeSettings.theme === 'light' ? 'light' : DEFAULT_SETTINGS_STATE.settings.theme,
+          : defaults.settings.displayLanguage,
+      theme: safeSettings.theme === 'light' ? 'light' : defaults.settings.theme,
       themeMode:
         ['auto', 'dark', 'light'].includes(safeSettings.themeMode)
           ? safeSettings.themeMode
-          : (safeSettings.theme === 'light' ? 'light' : DEFAULT_SETTINGS_STATE.settings.themeMode),
+          : (safeSettings.theme === 'light' ? 'light' : defaults.settings.themeMode),
       launchAtLogin:
         typeof safeSettings.launchAtLogin === 'boolean'
           ? safeSettings.launchAtLogin
-          : DEFAULT_SETTINGS_STATE.settings.launchAtLogin,
+          : defaults.settings.launchAtLogin,
       backgroundMode:
         ['balanced', 'prewarm', 'power_saver'].includes(safeSettings.backgroundMode)
           ? safeSettings.backgroundMode
-          : DEFAULT_SETTINGS_STATE.settings.backgroundMode,
+          : defaults.settings.backgroundMode,
       voiceBaseUrl:
         typeof safeSettings.voiceBaseUrl === 'string'
           ? safeSettings.voiceBaseUrl
-          : DEFAULT_SETTINGS_STATE.settings.voiceBaseUrl,
+          : defaults.settings.voiceBaseUrl,
       voiceApiKey:
         typeof safeSettings.voiceApiKey === 'string'
           ? safeSettings.voiceApiKey
-          : DEFAULT_SETTINGS_STATE.settings.voiceApiKey,
+          : defaults.settings.voiceApiKey,
       voiceHasApiKey:
         typeof safeSettings.voiceHasApiKey === 'boolean'
           ? safeSettings.voiceHasApiKey
@@ -80,39 +91,48 @@ function normalizeSettings(payload, mode) {
       voiceModel:
         typeof safeSettings.voiceModel === 'string' && safeSettings.voiceModel.trim()
           ? safeSettings.voiceModel
-          : DEFAULT_SETTINGS_STATE.settings.voiceModel,
+          : defaults.settings.voiceModel,
       actionPlanAutoGenerate:
         typeof safeSettings.actionPlanAutoGenerate === 'boolean'
           ? safeSettings.actionPlanAutoGenerate
-          : DEFAULT_SETTINGS_STATE.settings.actionPlanAutoGenerate,
+          : defaults.settings.actionPlanAutoGenerate,
     },
     provider:
       safePayload.provider && typeof safePayload.provider === 'object'
-        ? safePayload.provider
-        : DEFAULT_SETTINGS_STATE.provider,
+        ? cloneSettingsState(safePayload.provider)
+        : defaults.provider,
     runtimePaths:
       safePayload.runtimePaths && typeof safePayload.runtimePaths === 'object'
-        ? safePayload.runtimePaths
-        : DEFAULT_SETTINGS_STATE.runtimePaths,
+        ? cloneSettingsState(safePayload.runtimePaths)
+        : defaults.runtimePaths,
     migration:
       safePayload.migration && typeof safePayload.migration === 'object'
-        ? { ...DEFAULT_SETTINGS_STATE.migration, ...safePayload.migration }
-        : DEFAULT_SETTINGS_STATE.migration,
+        ? { ...defaults.migration, ...safePayload.migration }
+        : defaults.migration,
     app:
       safePayload.app && typeof safePayload.app === 'object'
-        ? { ...DEFAULT_SETTINGS_STATE.app, ...safePayload.app }
-        : DEFAULT_SETTINGS_STATE.app,
+        ? { ...defaults.app, ...safePayload.app }
+        : defaults.app,
     systemLocale:
       typeof safePayload.systemLocale === 'string'
         ? safePayload.systemLocale
-        : DEFAULT_SETTINGS_STATE.systemLocale,
+        : defaults.systemLocale,
   };
 }
 
 export async function loadSettingsState(electronAPI) {
   const resolvedElectronAPI = resolveElectronAPI(electronAPI);
   if (!resolvedElectronAPI?.getSettingsState) {
-    return { ...DEFAULT_SETTINGS_STATE };
+    const storage = resolveBrowserStorage();
+    const stored = storage?.getItem?.(BROWSER_SETTINGS_STORAGE_KEY);
+    if (stored) {
+      try {
+        return normalizeSettings(JSON.parse(stored), 'browser');
+      } catch (error) {
+        console.warn('Failed to parse browser settings state.', error);
+      }
+    }
+    return cloneSettingsState(DEFAULT_SETTINGS_STATE);
   }
 
   try {
@@ -120,14 +140,14 @@ export async function loadSettingsState(electronAPI) {
     return normalizeSettings(payload, 'electron');
   } catch (error) {
     console.warn('Failed to load settings state from Electron bridge.', error);
-    return { ...DEFAULT_SETTINGS_STATE };
+    return cloneSettingsState(DEFAULT_SETTINGS_STATE);
   }
 }
 
 export async function saveSettingsState(submission, electronAPI) {
   const resolvedElectronAPI = resolveElectronAPI(electronAPI);
   if (!resolvedElectronAPI?.saveSettings) {
-    return normalizeSettings(
+    const normalized = normalizeSettings(
       {
         settings: {
           displayLanguage: submission?.displayLanguage,
@@ -147,6 +167,9 @@ export async function saveSettingsState(submission, electronAPI) {
       },
       'browser',
     );
+    const storage = resolveBrowserStorage();
+    storage?.setItem?.(BROWSER_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+    return normalized;
   }
 
   const payload = await resolvedElectronAPI.saveSettings(submission);

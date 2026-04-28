@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import CameraFeed from './CameraFeed';
 import './Dashboard.css';
 import {
@@ -38,6 +38,15 @@ export default function Dashboard({ isVisible = false }) {
   const [storageEstimate, setStorageEstimate] = useState({ daysLeft: 0, groupSizeMB: 0 });
   const [aqi, setAqi] = useState(null);
   const [healthStats, setHealthStats] = useState(null);
+  const pollErrorLoggedRef = useRef({});
+
+  const logPollErrorOnce = useCallback((key, message, error) => {
+    if (pollErrorLoggedRef.current[key]) {
+      return;
+    }
+    pollErrorLoggedRef.current[key] = true;
+    console.error(message, error);
+  }, []);
 
   const estimateStorage = useCallback(async (photoUrl, screenUrl) => {
     try {
@@ -55,18 +64,18 @@ export default function Dashboard({ isVisible = false }) {
         groupSizeBytes,
       });
     } catch (err) {
-      console.error('Error estimating storage', err);
+      logPollErrorOnce('storageEstimate', 'Error estimating storage', err);
     }
-  }, []);
+  }, [logPollErrorOnce]);
 
   const fetchStats = useCallback(async () => {
     try {
       const data = await fetchBackendJson('/api/sys_stats', { retryPolicy: 'poll' });
       setStats(data);
     } catch (err) {
-      console.error('Failed to fetch stats', err);
+      logPollErrorOnce('stats', 'Failed to fetch stats', err);
     }
-  }, []);
+  }, [logPollErrorOnce]);
 
   const fetchLatestImages = useCallback(async () => {
     try {
@@ -86,9 +95,9 @@ export default function Dashboard({ isVisible = false }) {
         estimateStorage(data.photo, data.screenshot);
       }
     } catch (err) {
-      console.error('Failed to fetch latest images', err);
+      logPollErrorOnce('latestImages', 'Failed to fetch latest images', err);
     }
-  }, [estimateStorage]);
+  }, [estimateStorage, logPollErrorOnce]);
 
   const fetchAqiBackend = useCallback(async (lat, lon) => {
     try {
@@ -105,9 +114,9 @@ export default function Dashboard({ isVisible = false }) {
       const data = await res.json();
       setAqi(data);
     } catch (err) {
-      console.error('Failed to fetch AQI', err);
+      logPollErrorOnce('aqi', 'Failed to fetch AQI', err);
     }
-  }, []);
+  }, [logPollErrorOnce]);
 
   const fetchAqi = useCallback(async ({ allowPrompt = false } = {}) => {
     if (!navigator.geolocation) {
@@ -149,15 +158,18 @@ export default function Dashboard({ isVisible = false }) {
       const data = await res.json();
       setHealthStats(data);
     } catch (err) {
-      console.error('Failed to fetch health stats', err);
+      logPollErrorOnce('health', 'Failed to fetch health stats', err);
     }
-  }, []);
+  }, [logPollErrorOnce]);
 
   const openFolder = async (type) => {
     try {
       const res = await fetchBackend('/api/open_folder', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Vantage-Intent': 'open-folder',
+        },
         body: JSON.stringify({ type }),
         retryPolicy: 'mutation',
         allowHttpError: true,

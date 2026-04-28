@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 
 import ReactMarkdown from 'react-markdown';
 
@@ -270,8 +270,38 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     const manualModelSelectionRef = useRef(false);
 
-    const streamRef = useRef(null); // 存储 audio stream 避免作用域问题
+    const streamRef = useRef(null); // 存储 audio stream，避免作用域问题
 
+
+    const cleanupRecordingResources = useCallback(() => {
+        if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+        }
+
+        const recorder = mediaRecorderRef.current;
+        if (recorder) {
+            recorder.ondataavailable = null;
+            mediaRecorderRef.current.onstop = null;
+            try {
+                if (recorder.state && recorder.state !== 'inactive') {
+                    recorder.stop();
+                }
+            } catch (error) {
+                console.warn('[Voice] Failed to stop recorder during cleanup:', error);
+            }
+            mediaRecorderRef.current = null;
+        }
+
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach((track) => track.stop());
+            streamRef.current = null;
+        }
+    }, []);
+
+    useEffect(() => {
+        return cleanupRecordingResources;
+    }, [cleanupRecordingResources]);
 
     useEffect(() => {
 

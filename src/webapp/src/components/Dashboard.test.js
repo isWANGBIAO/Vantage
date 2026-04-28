@@ -14,3 +14,12 @@ test('Dashboard keeps startup prewarm polling active while delegating geolocatio
 test('Dashboard passes visibility into CameraFeed so hidden prewarm does not stream video', () => {
   assert.ok(dashboardSource.includes('<CameraFeed isVisible={isVisible} />'));
 });
+
+test('Dashboard sends an explicit local-app intent header for opening folders', () => {
+  assert.ok(dashboardSource.includes("'X-Vantage-Intent': 'open-folder'"));
+});
+
+test('Dashboard throttles repeated backend polling errors', () => {
+  assert.ok(dashboardSource.includes('pollErrorLoggedRef'));
+  assert.ok(dashboardSource.includes('logPollErrorOnce'));
+});

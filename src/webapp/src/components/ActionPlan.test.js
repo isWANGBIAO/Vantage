@@ -14,6 +14,7 @@ test('ActionPlan exposes copy controls for both round prompts and replies', () =
   assert.ok(actionPlanSource.includes("t('action_plan.copy.reply')"));
   assert.ok(actionPlanSource.includes("t('action_plan.copy.full_input')"));
   assert.ok(actionPlanSource.includes('navigator.clipboard.writeText'));
+  assert.ok(actionPlanSource.includes('writeTextWithFallback'));
   assert.ok(actionPlanSource.includes('systemPrompt'));
   assert.ok(actionPlanSource.includes('analysisReplyReady'));
   assert.ok(actionPlanSource.includes('planReplyReady'));
@@ -105,12 +106,13 @@ test('ActionPlan shows live elapsed time while generation is active', () => {
   assert.equal(actionPlanSource.includes('Time {(stats.total_duration || 0).toFixed(1)}s'), false);
 });
 
-test('ActionPlan uses the startup autogenerate setting instead of hard-blocking saved plans', () => {
+test('ActionPlan uses the startup autogenerate setting but does not replace an existing plan on startup', () => {
   assert.ok(actionPlanSource.includes('loadSettingsState'));
   assert.ok(actionPlanSource.includes('actionPlanAutoGenerate'));
   assert.ok(actionPlanSource.includes('autoGenerateEnabled'));
-  assert.equal(actionPlanSource.includes('const hasExistingPlan = await loadTodaysPlan(controller.signal);'), false);
-  assert.equal(actionPlanSource.includes('hasExistingPlan,'), false);
+  assert.ok(actionPlanSource.includes('const loadResult = await loadTodaysPlan(controller.signal);'));
+  assert.ok(actionPlanSource.includes('hasExistingPlan: loadResult?.exists === true'));
+  assert.ok(actionPlanSource.includes('loadFailed: Boolean(loadResult?.error)'));
 });
 
 test('ActionPlan supports stacked reading mode without card-level scrolling', () => {

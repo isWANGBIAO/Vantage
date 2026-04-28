@@ -3,7 +3,7 @@ import { fetchBackendJson } from '../utils/backendRequest';
 import { resolveSystemLogColor } from './systemLogSeverity.js';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
-export default function SystemLogs() {
+export default function SystemLogs({ isVisible = false }) {
     const { t } = useDisplayLanguage();
     const [logs, setLogs] = useState([]);
     const logEndRef = useRef(null);
@@ -11,6 +11,10 @@ export default function SystemLogs() {
     // In a real scenario, we might use WebSockets or SSE for real-time logs.
     // For now, let's simulate or provide a placeholder.
     useEffect(() => {
+        if (!isVisible) {
+            return undefined;
+        }
+
         const fetchLogs = async () => {
             try {
                 const data = await fetchBackendJson('/api/system_logs', { retryPolicy: 'poll' });
@@ -29,7 +33,7 @@ export default function SystemLogs() {
         const interval = setInterval(fetchLogs, 2000);
 
         return () => clearInterval(interval);
-    }, []);
+    }, [isVisible]);
 
     useEffect(() => {
         logEndRef.current?.scrollIntoView({ behavior: 'smooth' });

@@ -3,6 +3,21 @@ import assert from 'node:assert/strict';
 
 import { loadSettingsState, openSettingsPath, saveSettingsState } from './settingsState.js';
 
+function createMemoryStorage() {
+  const store = new Map();
+  return {
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(key, String(value));
+    },
+    removeItem(key) {
+      store.delete(key);
+    },
+  };
+}
+
 test('loadSettingsState falls back to browser defaults without Electron', async () => {
   const state = await loadSettingsState(undefined);
 
@@ -66,4 +81,43 @@ test('saveSettingsState forwards payload to Electron settings bridge', async () 
 
 test('openSettingsPath returns false when no Electron bridge exists', async () => {
   assert.equal(await openSettingsPath('logs', undefined), false);
+});
+
+test('browser settings fallback persists to localStorage and returns deep copies', async () => {
+  const originalWindow = globalThis.window;
+  const originalLocalStorage = globalThis.localStorage;
+  const storage = createMemoryStorage();
+
+  globalThis.window = { localStorage: storage };
+  globalThis.localStorage = storage;
+
+  try {
+    const saved = await saveSettingsState({
+      displayLanguage: 'zh-CN',
+      theme: 'light',
+      themeMode: 'auto',
+      launchAtLogin: true,
+      backgroundMode: 'power_saver',
+      voiceBaseUrl: 'https://voice.example.invalid/v1',
+      voiceApiKey: 'sk-voice',
+      voiceModel: 'sensevoice',
+      actionPlanAutoGenerate: false,
+    }, undefined);
+
+    assert.equal(saved.settings.backgroundMode, 'power_saver');
+
+    const loaded = await loadSettingsState(undefined);
+    assert.equal(loaded.settings.displayLanguage, 'zh-CN');
+    assert.equal(loaded.settings.themeMode, 'auto');
+    assert.equal(loaded.settings.backgroundMode, 'power_saver');
+    assert.equal(loaded.settings.voiceModel, 'sensevoice');
+    assert.equal(loaded.settings.actionPlanAutoGenerate, false);
+
+    loaded.settings.backgroundMode = 'prewarm';
+    const loadedAgain = await loadSettingsState(undefined);
+    assert.equal(loadedAgain.settings.backgroundMode, 'power_saver');
+  } finally {
+    globalThis.window = originalWindow;
+    globalThis.localStorage = originalLocalStorage;
+  }
 });

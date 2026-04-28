@@ -129,14 +129,11 @@ def _tail_text_file(path: Path, max_lines: int = 40) -> str:
 
 
 def _status_matches_runtime_layout(status_payload: dict[str, object], layout: dict[str, Path]) -> bool:
-    cwd = status_payload.get("cwd")
-    if not isinstance(cwd, str) or not cwd.strip():
+    runtime = status_payload.get("runtime")
+    if not isinstance(runtime, dict):
         return False
-
-    try:
-        return Path(cwd).resolve() == layout["resource_dir"].resolve()
-    except OSError:
-        return False
+    cwd_name = runtime.get("cwd_name")
+    return isinstance(cwd_name, str) and cwd_name == layout["resource_dir"].name
 
 
 def _find_runtime_blockers(log_text: str) -> list[str]:
@@ -239,8 +236,8 @@ def main() -> int:
     _terminate_process_tree(process.pid)
     if not status_matches_runtime:
         print(
-            "Packaged backend status returned an unexpected cwd: "
-            f"{status_payload.get('cwd')} (expected {layout['resource_dir']})"
+            "Packaged backend status returned an unexpected runtime marker: "
+            f"{status_payload.get('runtime')} (expected cwd_name={layout['resource_dir'].name})"
         )
         if runtime_log_path:
             print("--- runtime log tail ---")

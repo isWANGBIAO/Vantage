@@ -9,11 +9,14 @@ test('App passes the current theme into chart-heavy screens', () => {
   assert.ok(appSource.includes('<Plots theme={theme} />'));
 });
 
-test('App code-splits non-default tabs but still preloads them after startup', () => {
+test('App code-splits non-default tabs and honors the configured background mode', () => {
   assert.ok(appSource.includes('function lazyWithPreload'));
   assert.ok(appSource.includes('lazyWithPreload(() => import('));
   assert.ok(appSource.includes('backgroundTabsReady'));
-  assert.ok(appSource.includes('Promise.all(BACKGROUND_TAB_COMPONENTS.map('));
+  assert.ok(appSource.includes('settingsState?.settings?.backgroundMode'));
+  assert.ok(appSource.includes("backgroundMode === 'prewarm'"));
+  assert.ok(appSource.includes("backgroundMode === 'power_saver'"));
+  assert.ok(appSource.includes('Promise.allSettled(BACKGROUND_TAB_COMPONENTS.map('));
   assert.ok(appSource.includes('.preload()'));
   assert.ok(appSource.includes('<Suspense fallback={null}>'));
   assert.equal(appSource.includes("import Dashboard from './components/Dashboard'"), false);
@@ -63,6 +66,10 @@ test('App keeps the global footer off full-height tabs including system logs', (
 
 test('App keeps dashboard prewarm mounted but passes visibility into Dashboard', () => {
   assert.ok(appSource.includes("<Dashboard isVisible={activeTab === 'dashboard'} />"));
+});
+
+test('App passes visibility into SystemLogs so hidden panels do not poll logs', () => {
+  assert.ok(appSource.includes("<SystemLogs isVisible={activeTab === 'system logs'} />"));
 });
 
 test('App keeps face-history prewarm mounted but passes visibility into FaceHistory', () => {

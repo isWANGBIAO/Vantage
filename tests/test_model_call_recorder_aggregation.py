@@ -271,6 +271,9 @@ class SessionRecorderAggregationTests(unittest.TestCase):
         self.assertEqual(snapshot["recent_calls"][1]["completion_reasoning_tokens"], 2)
         self.assertAlmostEqual(snapshot["recent_calls"][1]["prompt_cache_hit_rate"], 40.0)
         self.assertAlmostEqual(snapshot["recent_calls"][1]["output_tokens_per_second"], 5 / 1.5)
+        self.assertNotIn("usage_json", snapshot["recent_calls"][1])
+        self.assertNotIn("response_json", snapshot["recent_calls"][1])
+        self.assertNotIn("request_metadata_json", snapshot["recent_calls"][1])
         self.assertEqual(snapshot["recent_calls"][2]["call_id"], "plan-call-1")
         self.assertEqual(snapshot["recent_calls"][2]["source"], "action_plan")
 
@@ -341,6 +344,12 @@ class SessionRecorderAggregationTests(unittest.TestCase):
                 0.0,
                 {"prompt_tokens": 25, "completion_tokens": 25, "total_tokens": 50},
             )
+            record_completed(
+                "empty-usage-call",
+                "2026-04-20T10:00:00+08:00",
+                3.0,
+                {},
+            )
 
             with patch(
                 "src.services.model_call_recorder._now",
@@ -370,6 +379,7 @@ class SessionRecorderAggregationTests(unittest.TestCase):
             )
 
         self.assertEqual([row["call_id"] for row in snapshot["speed_series"]], ["middle-call", "new-call"])
+        self.assertNotIn("empty-usage-call", [row["call_id"] for row in snapshot["speed_series"]])
         self.assertEqual(snapshot["speed_series"][0]["model"], "gpt-5.5")
         self.assertEqual(snapshot["speed_series"][0]["source"], "chat")
         self.assertEqual(snapshot["speed_series"][0]["provider_route"], "custom")

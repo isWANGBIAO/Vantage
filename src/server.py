@@ -78,6 +78,12 @@ from src.utils.data_loader import DataLoader
 app = FastAPI()
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
+DEFAULT_BACKEND_BIND_HOST = "127.0.0.1"
+TRANSCRIBE_TIMEOUT_SECONDS = 60
+STORAGE_SCAN_MAX_SECONDS = 3.0
+STORAGE_SCAN_MAX_ENTRIES = 20000
+LATEST_MEDIA_SCAN_MAX_SECONDS = 3.0
+LATEST_MEDIA_SCAN_MAX_ENTRIES = 30000
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
 
 FACE_ANALYSIS_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsing.farl.lapa.int8.onnx")
@@ -319,6 +325,49 @@ def _log_subprocess_stderr_line(channel, line):
         logging.info(prefixed_message)
 
 
+def _get_backend_bind_host(env=None):
+    source = env if env is not None else os.environ
+    host = (source.get("VANTAGE_BACKEND_HOST") or "").strip()
+    return host or DEFAULT_BACKEND_BIND_HOST
+
+
+def _normalize_host_value(value):
+    if not value:
+        return ""
+    return str(value).strip().strip("[]").split(":", 1)[0].lower()
+
+
+def _is_loopback_host(value):
+    host = _normalize_host_value(value)
+    return host in {"", "127.0.0.1", "localhost", "::1", "testclient", "testserver"}
+
+
+def _has_local_action_intent(headers, expected_intent):
+    try:
+        actual = headers.get("x-vantage-intent")
+    except AttributeError:
+        actual = None
+    return actual == expected_intent
+
+
+def _build_status_payload():
+    return {
+        "camera_online": state.camera.isOpened() if state.camera else False,
+        "show_person_box": state.show_person_box,
+        "paths": {
+            "photo": bool(state.paths.get("photo")),
+            "screenshot": bool(state.paths.get("screenshot")),
+        },
+        "media_roots_ready": {
+            "photos": bool(state.photos_path and os.path.exists(state.photos_path)),
+            "screenshots": bool(state.screenshots_path and os.path.exists(state.screenshots_path)),
+        },
+        "runtime": {
+            "cwd_name": Path(os.getcwd()).name,
+        },
+    }
+
+
 async def _drain_subprocess_stderr(stderr, channel, collected_lines):
     while True:
         line = await stderr.readline()
@@ -340,6 +389,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def enforce_loopback_backend_access(request: Request, call_next):
+    client_host = getattr(request.client, "host", "")
+    host_header = request.headers.get("host", "")
+    if not _is_loopback_host(client_host) or not _is_loopback_host(host_header):
+        return JSONResponse(status_code=403, content={"error": "Local backend access only"})
+    return await call_next(request)
 
 # Global State
 class SystemState:
@@ -364,6 +422,7 @@ class SystemState:
         self.legacy_size = 0 # Cache for legacy storage size
         self.photos_size = 0  # Cache for photos storage size
         self.screenshots_size = 0  # Cache for screenshots storage size
+        self.storage_scan_truncated = False
         self.show_person_box = True
         self.person_boxes = []
         self.video_stream_client_count = 0
@@ -590,9 +649,12 @@ def process_captured_face_photo(photo_path):
     return True
 
 
-def _safe_directory_size(directory):
+def _safe_directory_size(directory, *, max_seconds=STORAGE_SCAN_MAX_SECONDS, max_entries=STORAGE_SCAN_MAX_ENTRIES):
     total_size = 0
     skipped_count = 0
+    visited_count = 0
+    truncated = False
+    deadline = time.monotonic() + max_seconds if max_seconds else None
 
     def onerror(exc):
         nonlocal skipped_count
@@ -601,7 +663,16 @@ def _safe_directory_size(directory):
             print(f"Storage size scan skipped directory: {exc}")
 
     for root, dirs, files in os.walk(directory, onerror=onerror):
+        dirs.sort(reverse=True)
+        files.sort(reverse=True)
         for filename in files:
+            visited_count += 1
+            if max_entries and visited_count > max_entries:
+                truncated = True
+                break
+            if deadline and time.monotonic() > deadline:
+                truncated = True
+                break
             file_path = os.path.join(root, filename)
             try:
                 total_size += os.path.getsize(file_path)
@@ -609,9 +680,17 @@ def _safe_directory_size(directory):
                 skipped_count += 1
                 if skipped_count <= 3:
                     print(f"Storage size scan skipped file {file_path}: {exc}")
+        if truncated:
+            break
 
     if skipped_count > 3:
         print(f"Storage size scan skipped {skipped_count} entries under {directory}")
+    if truncated:
+        print(
+            "Storage size scan budget reached under "
+            f"{directory}; returning partial size after {visited_count} files"
+        )
+    _safe_directory_size.last_truncated = truncated
     return total_size
 
 
@@ -674,15 +753,19 @@ def update_storage_stats():
     """Background thread to periodically update photos/screenshots storage size cache."""
     while state.is_running:
         try:
+            scan_truncated = False
             photos_size = 0
             if state.photos_path and os.path.exists(state.photos_path):
                 photos_size = _safe_directory_size(state.photos_path)
+                scan_truncated = scan_truncated or bool(getattr(_safe_directory_size, "last_truncated", False))
             state.photos_size = photos_size
 
             screenshots_size = 0
             if state.screenshots_path and os.path.exists(state.screenshots_path):
                 screenshots_size = _safe_directory_size(state.screenshots_path)
+                scan_truncated = scan_truncated or bool(getattr(_safe_directory_size, "last_truncated", False))
             state.screenshots_size = screenshots_size
+            state.storage_scan_truncated = scan_truncated
         except Exception as e:
             print(f"Storage stats update error: {e}")
         time.sleep(60)  # Update every 60 seconds
@@ -1206,11 +1289,28 @@ def identify_logs_folder(
         onedrive_consumer_env=onedrive_consumer_env,
     )
 
-def find_latest_file_recursive(directory, extensions={'.jpg', '.png'}):
+def find_latest_file_recursive(
+    directory,
+    extensions={'.jpg', '.png'},
+    *,
+    max_seconds=LATEST_MEDIA_SCAN_MAX_SECONDS,
+    max_entries=LATEST_MEDIA_SCAN_MAX_ENTRIES,
+):
     latest_file = None
     latest_time = 0
+    visited_count = 0
+    deadline = time.monotonic() + max_seconds if max_seconds else None
     for root, dirs, files in os.walk(directory):
+        dirs.sort(reverse=True)
+        files.sort(reverse=True)
         for f in files:
+            visited_count += 1
+            if max_entries and visited_count > max_entries:
+                print(f"Latest media scan budget reached under {directory}; returning best match so far")
+                return latest_file
+            if deadline and time.monotonic() > deadline:
+                print(f"Latest media scan time budget reached under {directory}; returning best match so far")
+                return latest_file
             if os.path.splitext(f)[1].lower() in extensions:
                 full_path = os.path.join(root, f)
                 try:
@@ -1542,14 +1642,7 @@ async def video_feed():
 
 @app.get("/api/status")
 async def get_status():
-    return {
-        "camera_online": state.camera.isOpened() if state.camera else False,
-        "show_person_box": state.show_person_box,
-        "paths": state.paths,
-        "photos_path": state.photos_path,
-        "screenshots_path": state.screenshots_path,
-        "cwd": os.getcwd()
-    }
+    return _build_status_payload()
 
 @app.post("/api/toggle_detection")
 async def toggle_detection():
@@ -1578,13 +1671,17 @@ async def get_sys_stats():
             "memory_total_gb": round(memory.total / (1024**3), 2),
             "memory_percent": memory.percent,
             "disk_free_gb": round(free / (1024**3), 2),
-            "storage_used_mb": round((photos_size + screenshots_size + legacy_size) / (1024**2), 2)
+            "storage_used_mb": round((photos_size + screenshots_size + legacy_size) / (1024**2), 2),
+            "storage_scan_truncated": state.storage_scan_truncated,
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/api/open_folder")
 async def open_folder(request: Request):
+    if not _has_local_action_intent(request.headers, "open-folder"):
+        return JSONResponse(status_code=403, content={"error": "Missing local action intent"})
+
     data = await request.json()
     folder_type = data.get("type")
     
@@ -2645,7 +2742,29 @@ async def transcribe_audio(file: UploadFile = File(...)):
             env=env
         )
         
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=TRANSCRIBE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                with suppress(Exception):
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+            return JSONResponse(
+                status_code=504,
+                content={
+                    "error": "Transcription timed out",
+                    "details": f"Voice transcription exceeded {TRANSCRIBE_TIMEOUT_SECONDS} seconds.",
+                    "voice_model": voice_config["model"],
+                    "voice_base_url": voice_config["base_url"],
+                    "configuration_error": False,
+                },
+            )
         
         output = ""
         try:
@@ -3073,7 +3192,7 @@ async def get_project_progress():
 
 def main():
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=_get_backend_bind_host(), port=8000)
 
 
 if __name__ == "__main__":

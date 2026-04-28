@@ -99,6 +99,13 @@ test('ChatInterface does not log voice transcription payloads to the console', (
   assert.ok(!chatSource.includes('Data available'));
 });
 
+test('ChatInterface cleans up recording stream and timer when unmounted', () => {
+  assert.ok(chatSource.includes('cleanupRecordingResources'));
+  assert.ok(chatSource.includes('mediaRecorderRef.current.onstop = null'));
+  assert.ok(chatSource.includes('streamRef.current.getTracks().forEach((track) => track.stop())'));
+  assert.ok(chatSource.includes('return cleanupRecordingResources;'));
+});
+
 test('ChatInterface uses provider-aware model options before falling back to legacy models', () => {
   assert.ok(chatSource.includes('const defaultModel = data?.default_model'));
   assert.ok(chatSource.includes('buildModelOptionsFromCatalog(data)'));

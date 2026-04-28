@@ -389,6 +389,8 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
         payload["output_tokens_per_second"] = (completion_tokens / total_duration) if total_duration else 0.0
         if "stream" in payload:
             payload["stream"] = bool(payload["stream"]) if payload["stream"] is not None else None
+        for raw_key in ("usage_json", "response_json", "request_metadata_json", "request_metadata"):
+            payload.pop(raw_key, None)
         return payload
 
     with _open_db(resolved_db_file) as conn:
@@ -586,6 +588,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                     ON s.session_id = mc.session_id
                 WHERE mc.status = 'completed'
                     AND COALESCE(mc.duration, 0) > 0
+                    AND COALESCE(mc.total_tokens, 0) > 0
                 ORDER BY mc.created_at DESC, mc.call_id DESC
                 LIMIT ?
             ) AS recent_speed_calls

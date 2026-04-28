@@ -294,6 +294,35 @@ class ActionPlanEndpointTests(unittest.TestCase):
 
             self.assertFalse(expected_temp_file.exists())
 
+    def test_transcribe_audio_times_out_and_kills_subprocess(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_abspath = server.os.path.abspath
+
+            def fake_abspath(path):
+                if path == server.__file__:
+                    return os.path.join(temp_dir, "src", "server.py")
+                return original_abspath(path)
+
+            fake_process = _FakeProcess()
+            fake_process.returncode = None
+            fake_process.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+
+            with patch.object(server.os.path, "abspath", side_effect=fake_abspath), patch.object(
+                server,
+                "load_settings",
+                return_value=self._complete_voice_settings(),
+            ), patch.object(
+                server.asyncio,
+                "create_subprocess_exec",
+                AsyncMock(return_value=fake_process),
+            ):
+                response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+
+        self.assertEqual(response.status_code, 504)
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(payload["error"], "Transcription timed out")
+        self.assertEqual(fake_process.returncode, -9)
+
     def test_transcribe_audio_uses_unique_temp_files_for_same_second_uploads(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             original_abspath = server.os.path.abspath

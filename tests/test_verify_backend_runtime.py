@@ -41,13 +41,13 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
 
             self.assertTrue(
                 verify_backend_runtime._status_matches_runtime_layout(
-                    {"cwd": str(layout["resource_dir"])},
+                    {"runtime": {"cwd_name": "_internal"}},
                     layout,
                 )
             )
             self.assertFalse(
                 verify_backend_runtime._status_matches_runtime_layout(
-                    {"cwd": str(tmp_path / "other-runtime")},
+                    {"runtime": {"cwd_name": "other-runtime"}},
                     layout,
                 )
             )

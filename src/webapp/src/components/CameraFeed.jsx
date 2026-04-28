@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { buildBackendUrl, fetchBackendJson } from '../utils/backendRequest';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
@@ -6,6 +6,7 @@ export default function CameraFeed({ isVisible = false }) {
     const { t } = useDisplayLanguage();
     const [status, setStatus] = useState({ online: false, show_person_box: true });
     const [toggling, setToggling] = useState(false);
+    const statusErrorLoggedRef = useRef(false);
 
     useEffect(() => {
         const checkStatus = async () => {
@@ -13,7 +14,10 @@ export default function CameraFeed({ isVisible = false }) {
                 const data = await fetchBackendJson('/api/status', { retryPolicy: 'poll' });
                 setStatus({ online: data.camera_online, show_person_box: data.show_person_box });
             } catch (err) {
-                console.error("Failed to fetch camera status", err);
+                if (!statusErrorLoggedRef.current) {
+                    statusErrorLoggedRef.current = true;
+                    console.error("Failed to fetch camera status", err);
+                }
                 setStatus(prev => ({ ...prev, online: false }));
             }
         };
