@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import hashlib
 import pandas as pd
 import subprocess
 import tempfile
@@ -22,6 +23,15 @@ class DataLoader:
         hours = int(match.group(1) or 0)
         minutes = int(match.group(2) or 0)
         return round(hours + minutes / 60.0, 2)
+
+    @staticmethod
+    def _hash_json_payload(payload):
+        normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _hash_text(value):
+        return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
     @staticmethod
     def resolve_data_root(user_home=None, onedrive_env=None):
@@ -442,6 +452,9 @@ class DataLoader:
             }
 
         data_payload = {
+            "columns": payload_columns,
+            "rows": payload_rows,
+            "column_meta": column_meta,
             "days_requested": int(days),
             "date_range": {
                 "start": start_date.strftime("%Y-%m-%d"),
@@ -449,11 +462,12 @@ class DataLoader:
             },
             "total_days": (end_date.date() - start_date.date()).days + 1,
             "days_with_data": len(payload_rows),
-            "column_meta": column_meta,
-            "columns": payload_columns,
-            "rows": payload_rows,
             "non_null_counts": non_null_counts,
             "latest_values": latest_values,
+            "runtime_context": {
+                "current_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "calendar": DataLoader._build_calendar_info(),
+            },
         }
         data_summary = "## Time Series Data (JSON)\n\n```json\n"
         data_summary += json.dumps(data_payload, ensure_ascii=False, separators=(",", ":"))
@@ -461,11 +475,11 @@ class DataLoader:
 
         future_planned_rows = DataLoader.get_future_planned_rows(excel_file_path)
 
-        combined_content = f"{prompt_content}\n\n{data_summary}\n\n{future_planned_rows}"
+        prompt_sections = [prompt_content]
 
         if project_mgmt_path.exists():
             pm_content = project_mgmt_path.read_text(encoding="utf-8")
-            combined_content += f"\n\n# Project Management Context\n\n{pm_content}"
+            prompt_sections.append(f"# Project Management Context\n\n{pm_content}")
         
         # Load other markdown files context (Same as original)
         additional_files = {
@@ -480,9 +494,47 @@ class DataLoader:
             file_path = DataLoader.resolve_data_path(filename)
             if file_path.exists():
                  content = file_path.read_text(encoding="utf-8")
-                 combined_content += f"\n\n{header}\n\n{content}"
+                 prompt_sections.append(f"{header}\n\n{content}")
+
+        prompt_bundle = "\n\n".join(section for section in prompt_sections if section)
+        combined_content = f"{data_summary}\n\n{future_planned_rows}\n\n{prompt_bundle}"
 
         return combined_content
+
+    @staticmethod
+    def build_prompt_cache_metadata(prompt_text):
+        metadata = {
+            "cache_layout": "system_time_json_then_prompts",
+            "full_prompt_hash": DataLoader._hash_text(prompt_text),
+        }
+
+        marker = "## Time Series Data (JSON)\n\n```json\n"
+        try:
+            start = prompt_text.index(marker) + len(marker)
+            end = prompt_text.index("\n```", start)
+            time_json_text = prompt_text[start:end]
+            time_payload = json.loads(time_json_text)
+        except (ValueError, json.JSONDecodeError, TypeError):
+            return metadata
+
+        rows = list(time_payload.get("rows") or [])
+        stable_rows = rows[:-1] if len(rows) > 1 else rows
+        stable_rows_payload = {
+            "columns": time_payload.get("columns", []),
+            "rows": stable_rows,
+        }
+        all_rows_payload = {
+            "columns": time_payload.get("columns", []),
+            "rows": rows,
+        }
+        metadata["time_json_rows_hash"] = DataLoader._hash_json_payload(stable_rows_payload)
+        metadata["time_json_all_rows_hash"] = DataLoader._hash_json_payload(all_rows_payload)
+        metadata["time_json_full_hash"] = DataLoader._hash_json_payload(time_payload)
+        metadata["time_json_row_count"] = len(rows)
+        metadata["time_json_stable_row_count"] = len(stable_rows)
+        metadata["time_json_column_count"] = len(time_payload.get("columns") or [])
+        metadata["prompt_bundle_hash"] = DataLoader._hash_text(prompt_text[end + len("\n```"):])
+        return metadata
 
     @staticmethod
     def _build_calendar_info():

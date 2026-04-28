@@ -195,6 +195,80 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
             },
         )
 
+    def test_construct_prompt_places_time_json_rows_before_editable_prompts(self):
+        today = datetime.now().date()
+        df = pd.DataFrame(
+            [
+                {
+                    "\u65e5\u671f": pd.Timestamp(today - timedelta(days=2)),
+                    "metric": 1,
+                },
+                {
+                    "\u65e5\u671f": pd.Timestamp(today - timedelta(days=1)),
+                    "metric": 2,
+                },
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            prompt_path = temp_path / "Prompt_Personal_Info.md"
+            excel_path = temp_path / "Time.xlsx"
+            prompt_path.write_text("editable personal prompt", encoding="utf-8")
+            excel_path.write_text("placeholder", encoding="utf-8")
+            (temp_path / "Prompt_Project_Management.md").write_text("editable project prompt", encoding="utf-8")
+
+            def fake_resolve_data_path(filename, user_home=None, onedrive_env=None):
+                return temp_path / filename
+
+            with patch.object(DataLoader, "load_excel_data", return_value=df), patch.object(
+                DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                DataLoader,
+                "get_future_planned_rows",
+                return_value="## Future Planned Items\n\n- none\n",
+            ):
+                combined = DataLoader.construct_prompt(prompt_path, excel_path, days=90)
+
+        time_marker = "## Time Series Data (JSON)"
+        self.assertLess(combined.index(time_marker), combined.index("editable personal prompt"))
+        self.assertLess(combined.index(time_marker), combined.index("editable project prompt"))
+
+        json_start = combined.index("```json\n", combined.index(time_marker)) + len("```json\n")
+        json_end = combined.index("\n```", json_start)
+        first_key_order = list(json.loads(combined[json_start:json_end]).keys())[:2]
+        self.assertEqual(first_key_order, ["columns", "rows"])
+
+    def test_prompt_cache_metadata_ignores_editable_prompt_changes_for_time_rows(self):
+        first_prompt = (
+            "## Time Series Data (JSON)\n\n```json\n"
+            '{"columns":["date","metric"],"rows":[["2026-04-26",1],["2026-04-27",2]],"latest_values":{"metric":2}}\n'
+            "```\n\neditable prompt A"
+        )
+        second_prompt = first_prompt.replace("editable prompt A", "editable prompt B")
+
+        first_metadata = DataLoader.build_prompt_cache_metadata(first_prompt)
+        second_metadata = DataLoader.build_prompt_cache_metadata(second_prompt)
+
+        self.assertEqual(first_metadata["time_json_rows_hash"], second_metadata["time_json_rows_hash"])
+        self.assertNotEqual(first_metadata["full_prompt_hash"], second_metadata["full_prompt_hash"])
+
+    def test_prompt_cache_metadata_treats_latest_row_as_dynamic_tail(self):
+        first_prompt = (
+            "## Time Series Data (JSON)\n\n```json\n"
+            '{"columns":["date","metric"],"rows":[["2026-04-26",1],["2026-04-27",2]],"latest_values":{"metric":2}}\n'
+            "```\n\neditable prompt"
+        )
+        second_prompt = first_prompt.replace('["2026-04-27",2]', '["2026-04-27",3]')
+
+        first_metadata = DataLoader.build_prompt_cache_metadata(first_prompt)
+        second_metadata = DataLoader.build_prompt_cache_metadata(second_prompt)
+
+        self.assertEqual(first_metadata["time_json_rows_hash"], second_metadata["time_json_rows_hash"])
+        self.assertNotEqual(first_metadata["time_json_all_rows_hash"], second_metadata["time_json_all_rows_hash"])
+
     def test_construct_prompt_normalizes_sleep_and_screen_time_to_hour_floats(self):
         today = datetime.now().date()
         df = pd.DataFrame(

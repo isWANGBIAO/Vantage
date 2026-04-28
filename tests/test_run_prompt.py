@@ -774,6 +774,90 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(first_kwargs["session_id"], second_kwargs["session_id"])
         self.assertTrue(first_kwargs["session_id"])
 
+    def test_analysis_mode_passes_time_json_cache_metadata_to_llm_client(self):
+        fake_client = _CapturingLLMClient(
+            [
+                {
+                    "content": "analysis reply",
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    "duration": 1.0,
+                },
+                {
+                    "content": "plan reply",
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
+                    "duration": 1.5,
+                },
+            ]
+        )
+        analysis_prompt = (
+            "## Time Series Data (JSON)\n\n```json\n"
+            '{"columns":["date","metric"],"rows":[["2026-04-26",1],["2026-04-27",2]],"latest_values":{"metric":2}}\n'
+            "```\n\neditable prompt"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history_dir = temp_path / "history"
+            history_dir.mkdir()
+            (temp_path / "Prompt_Action_Plan.md").write_text("plan prompt", encoding="utf-8")
+            (temp_path / "Prompt_Personal_Info.md").write_text("personal info", encoding="utf-8")
+            (temp_path / "Time.xlsx").write_text("placeholder", encoding="utf-8")
+
+            def fake_resolve_data_path(filename):
+                return temp_path / filename
+
+            with patch.object(run_prompt.Config, "load_env"), patch.object(
+                run_prompt.Config,
+                "get_history_dir",
+                return_value=history_dir,
+            ), patch.object(
+                run_prompt,
+                "LLMClient",
+                return_value=fake_client,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "construct_prompt",
+                return_value=analysis_prompt,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_system_prompt_content",
+                return_value="system prompt",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_past_seven_days_rows",
+                return_value="past seven rows",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_today_data_row",
+                return_value="today row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_yesterday_data_row",
+                return_value="yesterday row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_future_planned_rows",
+                return_value="future rows",
+            ), patch.object(
+                sys,
+                "argv",
+                ["run_prompt.py"],
+            ):
+                run_prompt.main()
+
+        first_metadata = fake_client.calls[0]["kwargs"]["metadata"]
+        second_metadata = fake_client.calls[1]["kwargs"]["metadata"]
+        self.assertEqual(first_metadata["cache_layout"], "system_time_json_then_prompts")
+        self.assertIn("time_json_rows_hash", first_metadata)
+        self.assertIn("time_json_full_hash", first_metadata)
+        self.assertIn("prompt_bundle_hash", first_metadata)
+        self.assertEqual(second_metadata["time_json_rows_hash"], first_metadata["time_json_rows_hash"])
+        self.assertEqual(second_metadata["cache_section"], "plan")
+
     def test_analysis_mode_uses_session_summary_for_saved_stats(self):
         fake_client = _FakeLLMClient()
 

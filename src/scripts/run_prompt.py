@@ -221,6 +221,7 @@ def run_action_plan_round(
     source="action_plan",
     entrypoint=RUN_PROMPT_ENTRYPOINT,
     context_file=None,
+    metadata=None,
 ):
     total_attempts = max_empty_content_retries + 1
     total_usage = {
@@ -245,6 +246,7 @@ def run_action_plan_round(
             source=source,
             entrypoint=entrypoint,
             context_file=context_file,
+            metadata=metadata,
         )
         last_result = dict(result or {})
         total_usage = _sum_usage_totals(total_usage, last_result.get("usage"))
@@ -535,6 +537,7 @@ def main():
                     DataLoader.resolve_data_path("Time.xlsx"),
                     days=365
                 )
+            prompt_cache_metadata = DataLoader.build_prompt_cache_metadata(prompt_text)
             
             # [User Request] Repeat the prompt content twice to emphasize it
             # Handled in llm_client now
@@ -609,6 +612,10 @@ def main():
                 source="action_plan",
                 entrypoint=RUN_PROMPT_ENTRYPOINT,
                 context_file=str(context_mgr.context_file),
+                metadata={
+                    **prompt_cache_metadata,
+                    "cache_section": "analysis",
+                },
             )
             if first_round_content:
                 # We do NOT save the full history context yet, or maybe we do?
@@ -642,6 +649,10 @@ def main():
                     source="action_plan",
                     entrypoint=RUN_PROMPT_ENTRYPOINT,
                     context_file=str(context_mgr.context_file),
+                    metadata={
+                        **prompt_cache_metadata,
+                        "cache_section": "plan",
+                    },
                 )
                 
                 if first_round_content and second_round_content:
