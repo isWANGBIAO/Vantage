@@ -339,6 +339,43 @@ def test_get_active_provider_config_falls_back_to_complete_provider_when_selecte
     }
 
 
+def test_get_active_provider_config_accepts_local_proxy_api_key_without_repo_env(tmp_path):
+    user_config = _load_user_config_module()
+    providers_file = tmp_path / "config" / "providers.json"
+    providers_file.parent.mkdir(parents=True, exist_ok=True)
+    providers_file.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "selected_provider": "custom",
+                "providers": {
+                    "custom": {
+                        "api_key": "local-proxy-key",
+                        "base_url": "",
+                        "model": "",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    provider = user_config.get_active_provider_config(providers_file=providers_file)
+
+    assert provider == {
+        "route": "custom",
+        "name": "custom",
+        "type": "openai-compatible",
+        "enabled": True,
+        "api_key": "local-proxy-key",
+        "base_url": "http://127.0.0.1:8317/v1",
+        "model": "",
+        "models": [],
+        "last_refreshed_at": None,
+    }
+
+
 def test_get_provider_chain_config_orders_selected_and_skips_disabled(tmp_path):
     user_config = _load_user_config_module()
     providers_file = tmp_path / "config" / "providers.json"

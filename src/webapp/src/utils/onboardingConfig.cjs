@@ -17,6 +17,14 @@ const DEFAULT_SETTINGS = {
 
 const PROVIDER_CONFIG_VERSION = 2;
 const PROVIDER_TYPE_OPENAI_COMPATIBLE = 'openai-compatible';
+const DEFAULT_LOCAL_PROXY_BASE_URL = 'http://127.0.0.1:8317/v1';
+const LOCAL_PROXY_PROVIDER_ROUTES = new Set([
+  'custom',
+  'cliproxyapi',
+  'cliproxyapi_primary',
+  'local',
+  'local_proxy',
+]);
 
 const DEFAULT_PROVIDER_CONFIG = {
   version: PROVIDER_CONFIG_VERSION,
@@ -153,6 +161,13 @@ function normalizeModels(models, model) {
   return normalizedModels;
 }
 
+function defaultBaseUrlForProvider(route) {
+  const normalizedRoute = normalizeOptionalString(route)?.toLowerCase() || '';
+  return LOCAL_PROXY_PROVIDER_ROUTES.has(normalizedRoute)
+    ? DEFAULT_LOCAL_PROXY_BASE_URL
+    : null;
+}
+
 function sanitizeProviderEntry(route, entry) {
   const safeEntry = entry && typeof entry === 'object' ? entry : {};
   const model = normalizeOptionalString(safeEntry.model) || normalizeModels(safeEntry.models, null)[0] || '';
@@ -225,11 +240,12 @@ function loadMigrationState(runtimePaths) {
 }
 
 function isCompleteProviderEntry(provider) {
+  const route = normalizeOptionalString(provider?.route);
+  const baseUrl = normalizeOptionalString(provider?.base_url) || defaultBaseUrlForProvider(route);
   return Boolean(
     provider?.enabled !== false
     && normalizeOptionalString(provider?.api_key)
-    && normalizeOptionalString(provider?.base_url)
-    && normalizeOptionalString(provider?.model),
+    && baseUrl,
   );
 }
 
@@ -258,8 +274,8 @@ function resolveActiveProviderConfig(providerConfig) {
       name: normalizeOptionalString(provider.name) || route,
       type: normalizeProviderType(provider.type),
       api_key: normalizeOptionalString(provider.api_key),
-      base_url: normalizeOptionalString(provider.base_url),
-      model: normalizeOptionalString(provider.model),
+      base_url: normalizeOptionalString(provider.base_url) || defaultBaseUrlForProvider(route),
+      model: normalizeOptionalString(provider.model) || '',
       models: normalizeModels(provider.models, provider.model),
     };
   }

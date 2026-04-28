@@ -13,6 +13,14 @@ PROVIDERS_VERSION = 2
 PROVIDER_TYPE_OPENAI_COMPATIBLE = "openai-compatible"
 MIGRATION_STATE_VERSION = 1
 DEFAULT_VOICE_MODEL = "FunAudioLLM/SenseVoiceSmall"
+DEFAULT_LOCAL_PROXY_BASE_URL = "http://127.0.0.1:8317/v1"
+LOCAL_PROXY_PROVIDER_ROUTES = {
+    "custom",
+    "cliproxyapi",
+    "cliproxyapi_primary",
+    "local",
+    "local_proxy",
+}
 
 DEFAULT_SETTINGS = {
     "version": SETTINGS_VERSION,
@@ -147,6 +155,13 @@ def _coerce_provider_models(payload: dict | None, model: str | None) -> list[str
     return models
 
 
+def _default_base_url_for_provider(route: str | None) -> str | None:
+    normalized_route = str(route or "").strip().lower()
+    if normalized_route in LOCAL_PROXY_PROVIDER_ROUTES:
+        return DEFAULT_LOCAL_PROXY_BASE_URL
+    return None
+
+
 def _coerce_display_language(payload: dict | None, key: str = "display_language") -> str:
     value = payload.get(key) if isinstance(payload, dict) else None
     if value in {"system", "zh-CN", "en-US"}:
@@ -237,12 +252,14 @@ def _build_complete_provider(route: str | None, provider: dict | None) -> dict |
         return None
 
     api_key = _coerce_optional_str(provider, "api_key")
-    base_url = _coerce_optional_str(provider, "base_url")
+    base_url = _coerce_optional_str(provider, "base_url") or _default_base_url_for_provider(route)
     model = _coerce_optional_str(provider, "model")
-    if not api_key or not base_url or not model:
+    if not api_key or not base_url:
         return None
 
     models = _coerce_provider_models(provider, model)
+    if not model and models:
+        model = models[0]
     return {
         "route": route,
         "name": _coerce_optional_str(provider, "name") or route,
@@ -250,8 +267,8 @@ def _build_complete_provider(route: str | None, provider: dict | None) -> dict |
         "enabled": True,
         "api_key": api_key,
         "base_url": base_url,
-        "model": model,
-        "models": models or [model],
+        "model": model or "",
+        "models": models,
         "last_refreshed_at": _coerce_optional_str(provider, "last_refreshed_at"),
     }
 

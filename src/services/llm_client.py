@@ -54,7 +54,16 @@ class LLMClient:
         Config.load_env()
         self.providers = self._build_provider_chain()
 
-    def _provider_from_env(self, *, route, base_url_key, api_key_key, model_key, default_base_url=None):
+    def _provider_from_env(
+        self,
+        *,
+        route,
+        base_url_key,
+        api_key_key,
+        model_key,
+        default_base_url=None,
+        require_model=True,
+    ):
         base_url = Config.get(base_url_key, default_base_url)
         api_key = Config.get(api_key_key)
         model = Config.get(model_key)
@@ -63,16 +72,17 @@ class LLMClient:
             return None
         if not api_key:
             raise ValueError(f"Missing environment variable: {api_key_key}")
-        if not model:
+        if not model and require_model:
             raise ValueError(f"Missing environment variable: {model_key}")
         if not base_url:
             raise ValueError(f"Missing environment variable: {base_url_key}")
 
+        models = [model] if model else []
         return {
             "route": route,
             "base_url": base_url.rstrip("/"),
-            "model": model,
-            "models": [model],
+            "model": model or "",
+            "models": models,
             "headers": self._build_headers(api_key),
         }
 
@@ -419,14 +429,14 @@ class LLMClient:
         }
 
     def _provider_from_user_config(self, user_provider):
-        model = user_provider["model"]
+        model = str(user_provider.get("model") or "").strip()
         models = [str(item).strip() for item in (user_provider.get("models") or []) if str(item or "").strip()]
         if model and model not in models:
             models = [model, *models]
-        if not models:
-            models = [model]
+        if not model and models:
+            model = models[0]
 
-        return {
+        provider = {
             "route": user_provider["route"],
             "name": user_provider.get("name") or user_provider["route"],
             "type": user_provider.get("type") or "openai-compatible",
@@ -436,6 +446,36 @@ class LLMClient:
             "headers": self._build_headers(user_provider["api_key"]),
             "model_capabilities": {model_id: None for model_id in models},
         }
+        if not provider["model"]:
+            discovered_models = self._discover_primary_models(provider)
+            if discovered_models:
+                provider["model"] = discovered_models[0]["id"]
+                provider["models"] = [model_info["id"] for model_info in discovered_models]
+                provider["model_capabilities"] = {
+                    model_info["id"]: model_info.get("supported_parameters")
+                    for model_info in discovered_models
+                }
+                logging.info(
+                    "Auto-selected user provider model %s for route %s from candidates: %s",
+                    provider["model"],
+                    provider["route"],
+                    ", ".join(model_info["id"] for model_info in discovered_models),
+                )
+
+        if not provider["model"]:
+            raise ValueError(
+                f"Provider {provider['route']} has no configured model and model discovery returned no models. "
+                "Configure a model in Settings."
+            )
+
+        if not provider["models"]:
+            provider["models"] = [provider["model"]]
+            provider["model_capabilities"] = {provider["model"]: None}
+        elif provider["model"] not in provider["models"]:
+            provider["models"] = [provider["model"], *provider["models"]]
+            provider["model_capabilities"].setdefault(provider["model"], None)
+
+        return provider
 
     def _build_provider_chain(self):
         user_providers = user_config.get_provider_chain_config()
@@ -455,6 +495,7 @@ class LLMClient:
             api_key_key="CLIPROXYAPI_API_KEY",
             model_key="CLIPROXYAPI_MODEL",
             default_base_url="http://127.0.0.1:8317/v1",
+            require_model=False,
         )
         if not primary:
             raise ValueError("Missing environment variables: CLIPROXYAPI_API_KEY and CLIPROXYAPI_MODEL")
@@ -472,6 +513,11 @@ class LLMClient:
                 ", ".join(model_info["id"] for model_info in discovered_models),
             )
         else:
+            if not primary["model"]:
+                raise ValueError(
+                    "Missing CLIPROXYAPI_MODEL and CLIProxyAPI model discovery returned no models. "
+                    "Configure a model in Settings or set CLIPROXYAPI_MODEL."
+                )
             logging.info(
                 "CLIProxyAPI model discovery unavailable; using configured primary model %s",
                 primary["model"],

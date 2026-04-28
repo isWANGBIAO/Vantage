@@ -175,6 +175,59 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(client.providers[0]["models"][:2], ["gpt-5.5", "gpt-5.4"])
         self.assertEqual(client.providers[1]["model"], "gpt-5.4")
 
+    def test_user_provider_without_model_discovers_model_without_repo_env(self):
+        user_provider = {
+            "route": "custom",
+            "name": "custom",
+            "type": "openai-compatible",
+            "base_url": "http://127.0.0.1:8317/v1",
+            "api_key": "local-proxy-key",
+            "model": "",
+            "models": [],
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(llm_client.user_config, "get_provider_chain_config", return_value=[user_provider], create=True),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=user_provider),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]),
+            ) as mock_get,
+        ):
+            client = llm_client.LLMClient()
+
+        self.assertEqual(client.providers[0]["route"], "custom")
+        self.assertEqual(client.providers[0]["model"], "gpt-5.5")
+        self.assertEqual(client.providers[0]["models"][:2], ["gpt-5.5", "gpt-5.4"])
+        self.assertEqual(mock_get.call_args.args[0], "http://127.0.0.1:8317/v1/models")
+
+    def test_primary_environment_provider_without_model_uses_model_discovery(self):
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(
+                os.environ,
+                {
+                    "CLIPROXYAPI_BASE_URL": "http://127.0.0.1:8317/v1",
+                    "CLIPROXYAPI_API_KEY": "local-proxy-key",
+                },
+                clear=True,
+            ),
+            patch.object(llm_client.user_config, "get_provider_chain_config", return_value=[], create=True),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.5", "gpt-5.4"]),
+            ),
+        ):
+            client = llm_client.LLMClient()
+
+        self.assertEqual(client.providers[0]["route"], "cliproxyapi_primary")
+        self.assertEqual(client.providers[0]["model"], "gpt-5.5")
+
     def test_ordered_providers_prioritizes_requested_provider_route_when_models_overlap(self):
         client = self._make_client()
         client.providers = [

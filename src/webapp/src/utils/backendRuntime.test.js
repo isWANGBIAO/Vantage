@@ -80,6 +80,30 @@ test('buildBundledBackendEnvironment maps selected onboarding provider into back
   assert.equal(env.CLIPROXYAPI_MODEL, 'gpt-5.4');
 });
 
+test('buildBundledBackendEnvironment maps local proxy provider without a configured model', () => {
+  const env = buildBundledBackendEnvironment({
+    runtimePaths,
+    env: {
+      PATH: 'C:\\Windows\\System32',
+    },
+    loadProviderConfigFn: () => ({
+      version: 2,
+      selected_provider: 'custom',
+      providers: {
+        custom: {
+          api_key: 'test-api-key',
+          base_url: '',
+          model: '',
+        },
+      },
+    }),
+  });
+
+  assert.equal(env.CLIPROXYAPI_API_KEY, 'test-api-key');
+  assert.equal(env.CLIPROXYAPI_BASE_URL, 'http://127.0.0.1:8317/v1');
+  assert.equal('CLIPROXYAPI_MODEL' in env, false);
+});
+
 test('buildBundledBackendEnvironment maps a complete provider when selected provider is empty', () => {
   const env = buildBundledBackendEnvironment({
     runtimePaths,
