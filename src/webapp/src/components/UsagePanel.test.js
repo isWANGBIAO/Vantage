@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const actionPlanContainerSource = readFileSync(new URL('./ActionPlanContainer.jsx', import.meta.url), 'utf8');
 const usagePanelSource = readFileSync(new URL('./UsagePanel.jsx', import.meta.url), 'utf8');
+const usagePanelStyleSource = readFileSync(new URL('./UsagePanel.css', import.meta.url), 'utf8');
 const displayCopySource = readFileSync(new URL('../utils/displayCopy.js', import.meta.url), 'utf8');
 
 function loadUsagePanelSortHelper() {
@@ -104,6 +105,12 @@ test('UsagePanel renders cache and reasoning token metrics from usage rows', () 
   ].forEach((snippet) => {
     assert.ok(usagePanelSource.includes(snippet), `expected UsagePanel to include ${snippet}`);
   });
+});
+
+test('UsagePanel overview keeps the summary compact on desktop', () => {
+  assert.match(usagePanelStyleSource, /\.usage-overview\s*\{[^}]*align-items:\s*start/s);
+  assert.match(usagePanelStyleSource, /\.usage-summary-grid\s*\{[^}]*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
+  assert.match(usagePanelStyleSource, /\.usage-summary-item\s*\{[^}]*min-height:\s*76px/s);
 });
 
 test('UsagePanel labels session cache as cumulative and recent calls as single request', () => {
