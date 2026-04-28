@@ -48,7 +48,6 @@ def llm_classify(text):
             messages=[
                 {'role': 'user', 'content': prompt},
             ],
-            max_tokens=512,
             temperature=0.2
         )
         reply = completion.choices[0].message.content.strip()
@@ -91,7 +90,6 @@ def llm_extract_meals(text):
         completion = tracked_client.create_chat_completion(
             model=golbal_model,
             messages=[{'role': 'user', 'content': prompt}],
-            max_tokens=512,
             temperature=0.2
         )
         reply = completion.choices[0].message.content.strip()
@@ -131,7 +129,6 @@ def llm_extract_diarrhea_info(text):
         completion = tracked_client.create_chat_completion(
             model=golbal_model,
             messages=[{'role': 'user', 'content': prompt}],
-            max_tokens=512,
             temperature=0.2
         )
         reply = completion.choices[0].message.content.strip()

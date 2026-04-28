@@ -62,8 +62,8 @@ class TrackedOpenAIClientTests(unittest.TestCase):
         with patch("src.services.tracked_openai_client.SessionRecorder", return_value=recorder):
             client = TrackedOpenAIClient(
                 client=raw_client,
-                source="cursor",
-                entrypoint="src/cursor/code_modifier.py",
+                source="chat",
+                entrypoint="src/scripts/run_prompt.py",
             )
             stream = client.create_chat_completion(
                 model="gpt-5.2",

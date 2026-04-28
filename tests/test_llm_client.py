@@ -612,6 +612,34 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(used_request["thinking"], {"type": "enabled"})
         self.assertEqual(result["reasoning_effort"], "max")
 
+    def test_chat_does_not_send_default_output_token_limit(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response([
+                    {"id": "gpt-5.2", "supported_parameters": ["reasoning_effort", "max_tokens"]},
+                ]),
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            client.chat([{"role": "user", "content": "ping"}], stream=False)
+
+        used_request = mock_post.call_args.kwargs["json"]
+        self.assertNotIn("max_tokens", used_request)
+        self.assertNotIn("max_completion_tokens", used_request)
+
     def test_chat_maps_siliconflow_deepseek_reasoning_effort_to_thinking_controls(self):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None

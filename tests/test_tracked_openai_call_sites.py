@@ -5,11 +5,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from src.cursor import code_adder
-from src.cursor import code_modifier
-from src.cursor import error_handler
-
-
 def _load_analyzer_module():
     fake_modules = {
         "jieba": types.ModuleType("jieba"),
@@ -31,68 +26,6 @@ def _stream_chunk(content):
     return SimpleNamespace(
         choices=[SimpleNamespace(delta=SimpleNamespace(content=content))],
     )
-
-
-class CursorTrackedOpenAICallSiteTests(unittest.TestCase):
-    def test_code_adder_uses_tracked_openai_client(self):
-        raw_client = Mock()
-        tracked_client = Mock()
-        tracked_client.create_chat_completion.return_value = [
-            _stream_chunk("```python\nprint('hello')\n```"),
-        ]
-
-        with patch.object(code_adder, "TrackedOpenAIClient", return_value=tracked_client) as tracked_client_cls:
-            result = code_adder.add_function_code_with_ai("print('hello')", "Python", raw_client, "gpt-5.2")
-
-        tracked_client_cls.assert_called_once_with(
-            client=raw_client,
-            source="cursor",
-            entrypoint="src/cursor/code_adder.py",
-        )
-        tracked_client.create_chat_completion.assert_called_once()
-        self.assertEqual(result, "print('hello')")
-
-    def test_code_modifier_uses_tracked_openai_client(self):
-        raw_client = Mock()
-        tracked_client = Mock()
-        tracked_client.create_chat_completion.return_value = [
-            _stream_chunk("```python\nprint('fixed')\n```"),
-        ]
-
-        with patch.object(code_modifier, "TrackedOpenAIClient", return_value=tracked_client) as tracked_client_cls:
-            result = code_modifier.modify_code_with_ai("print('fixed')", "Python", raw_client, "gpt-5.2")
-
-        tracked_client_cls.assert_called_once_with(
-            client=raw_client,
-            source="cursor",
-            entrypoint="src/cursor/code_modifier.py",
-        )
-        tracked_client.create_chat_completion.assert_called_once()
-        self.assertEqual(result, "print('fixed')")
-
-    def test_error_handler_uses_tracked_openai_client(self):
-        raw_client = Mock()
-        tracked_client = Mock()
-        tracked_client.create_chat_completion.return_value = [
-            _stream_chunk("```python\nprint('recovered')\n```"),
-        ]
-
-        with patch.object(error_handler, "TrackedOpenAIClient", return_value=tracked_client) as tracked_client_cls:
-            result = error_handler.analyze_error_with_ai(
-                "print('recovered')",
-                "NameError: name 'x' is not defined",
-                "Python",
-                raw_client,
-                "gpt-5.2",
-            )
-
-        tracked_client_cls.assert_called_once_with(
-            client=raw_client,
-            source="cursor",
-            entrypoint="src/cursor/error_handler.py",
-        )
-        tracked_client.create_chat_completion.assert_called_once()
-        self.assertEqual(result, "print('recovered')")
 
 
 class AnalyzerTrackedOpenAICallSiteTests(unittest.TestCase):

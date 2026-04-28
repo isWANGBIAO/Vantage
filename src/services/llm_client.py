@@ -777,7 +777,6 @@ class LLMClient:
         payload = _drop_active_cache_fields({
             "messages": messages,
             "stream": stream,
-            "max_tokens": 4096,
             "temperature": float(Config.get("AI_TEMPERATURE", 0.6)),
             "top_p": 0.7,
             "frequency_penalty": 0.5,
