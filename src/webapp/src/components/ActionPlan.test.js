@@ -82,6 +82,15 @@ test('ActionPlan uses model-aware reasoning options and payload mapping', () => 
   assert.equal(actionPlanSource.includes('ACTION_PLAN_REASONING_OPTIONS.map((option)'), false);
 });
 
+test('ActionPlan exposes fast mode only through service tier payload for supported proxy models', () => {
+  assert.ok(actionPlanSource.includes('loadStoredFastModeEnabled'));
+  assert.ok(actionPlanSource.includes('saveFastModeEnabled'));
+  assert.ok(actionPlanSource.includes('isFastModeSupportedForModel'));
+  assert.ok(actionPlanSource.includes('fastModeEnabled'));
+  assert.ok(actionPlanSource.includes("t('common.fast_mode')"));
+  assert.ok(actionPlanSource.includes('service_tier'));
+});
+
 test('ActionPlan shows live elapsed time while generation is active', () => {
   assert.ok(actionPlanSource.includes('computeDisplayedDurationSeconds'));
   assert.ok(actionPlanSource.includes('const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now())'));

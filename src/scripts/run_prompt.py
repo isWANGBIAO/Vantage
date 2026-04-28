@@ -196,6 +196,7 @@ def build_action_plan_request_stats(section, result):
         "requested_provider_route": payload.get("requested_provider_route"),
         "fallback_used": bool(payload.get("fallback_used")),
         "reasoning_effort": payload.get("reasoning_effort") or "medium",
+        "service_tier": payload.get("service_tier"),
         "attempts": int(payload.get("attempts", 1) or 1),
     }
 
@@ -215,6 +216,7 @@ def run_action_plan_round(
     section,
     model_override,
     provider_route,
+    service_tier,
     emit_start_before_first_attempt,
     max_empty_content_retries=ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT,
     session_id=None,
@@ -242,6 +244,7 @@ def run_action_plan_round(
             print_callback=build_action_plan_stream_printer(section),
             model=model_override,
             provider_route=provider_route,
+            service_tier=service_tier,
             session_id=session_id,
             source=source,
             entrypoint=entrypoint,
@@ -380,14 +383,18 @@ def main():
     parser.add_argument("--context_file", help="Path to load context from")
     parser.add_argument("--model", help="Model name override for this run")
     parser.add_argument("--provider_route", help="Provider route override for this run")
+    parser.add_argument("--service_tier", help="Service tier override for this run")
     parser.add_argument("--client_sent_at", help="Client-side timestamp for the current chat message")
     
     args = parser.parse_args()
     model_override = args.model.strip() if args.model else None
     provider_route = args.provider_route.strip() if args.provider_route else None
+    service_tier = args.service_tier.strip() if args.service_tier else None
     
     try:
         Config.load_env()
+        if not service_tier:
+            service_tier = (Config.get("AI_SERVICE_TIER") or "").strip() or None
         history_dir = Path(Config.get_history_dir())
         
         # === TRANSCRIPT MODE ===
@@ -466,6 +473,7 @@ def main():
                 stream=True,
                 model=model_override,
                 provider_route=provider_route,
+                service_tier=service_tier,
                 session_id=chat_session_id,
                 source="chat",
                 entrypoint=RUN_PROMPT_ENTRYPOINT,
@@ -607,6 +615,7 @@ def main():
                 section="analysis",
                 model_override=model_override,
                 provider_route=provider_route,
+                service_tier=service_tier,
                 emit_start_before_first_attempt=False,
                 session_id=action_plan_session_id,
                 source="action_plan",
@@ -615,6 +624,7 @@ def main():
                 metadata={
                     **prompt_cache_metadata,
                     "cache_section": "analysis",
+                    "service_tier": service_tier,
                 },
             )
             if first_round_content:
@@ -644,6 +654,7 @@ def main():
                     section="plan",
                     model_override=model_override,
                     provider_route=provider_route,
+                    service_tier=service_tier,
                     emit_start_before_first_attempt=True,
                     session_id=action_plan_session_id,
                     source="action_plan",
@@ -652,6 +663,7 @@ def main():
                     metadata={
                         **prompt_cache_metadata,
                         "cache_section": "plan",
+                        "service_tier": service_tier,
                     },
                 )
                 
@@ -687,6 +699,10 @@ def main():
                         "reasoning_effort": (
                             result_round_2.get("reasoning_effort")
                             or result.get("reasoning_effort")
+                        ),
+                        "service_tier": (
+                            result_round_2.get("service_tier")
+                            or result.get("service_tier")
                         ),
                     }
                     _write_context_session_id(

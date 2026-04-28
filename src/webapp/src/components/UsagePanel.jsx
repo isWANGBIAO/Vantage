@@ -84,6 +84,10 @@ function formatOptionalPercent(value, t) {
   return hasRecordedValue(value) ? formatPercent(value) : t('usage.label.not_recorded');
 }
 
+function formatServiceTier(value, t) {
+  return value ? String(value) : t('usage.label.not_recorded');
+}
+
 function clampPercent(value) {
   return Math.max(0, Math.min(100, Number(value || 0)));
 }
@@ -304,6 +308,7 @@ function buildSpeedTrendOption(rows, t) {
           lines.push(`${escapeTooltipValue(t('usage.speed_trend.tooltip_source'))}: ${escapeTooltipValue(firstRow.source || '-')}`);
           lines.push(`${escapeTooltipValue(t('usage.speed_trend.tooltip_provider'))}: ${escapeTooltipValue(firstRow.provider_route || '-')}`);
           lines.push(`${escapeTooltipValue(t('usage.speed_trend.tooltip_reasoning'))}: ${escapeTooltipValue(firstRow.reasoning_effort || '-')}`);
+          lines.push(`${escapeTooltipValue(t('usage.speed_trend.tooltip_service_tier'))}: ${escapeTooltipValue(formatServiceTier(firstRow.service_tier, t))}`);
           lines.push(`${escapeTooltipValue(t('usage.speed_trend.tooltip_duration'))}: ${escapeTooltipValue(formatDuration(firstRow.duration))}`);
           lines.push(
             `${escapeTooltipValue(t('usage.speed_trend.tooltip_tokens'))}: ${escapeTooltipValue(t('usage.label.prompt'))} ${escapeTooltipValue(formatCompactNumber(firstRow.prompt_tokens))} / ${escapeTooltipValue(t('usage.label.completion'))} ${escapeTooltipValue(formatCompactNumber(firstRow.completion_tokens))} / ${escapeTooltipValue(t('usage.label.total'))} ${escapeTooltipValue(formatCompactNumber(firstRow.total_tokens))}`,
@@ -885,6 +890,7 @@ export default function UsagePanel({ isVisible = true } = {}) {
               },
               { key: 'model', label: t('usage.label.model') },
               { key: 'provider_route', label: t('usage.label.provider'), render: (row) => row.provider_route || '-' },
+              { key: 'service_tier', label: t('usage.label.service_tier'), render: (row) => formatServiceTier(row.service_tier, t) },
               { key: 'prompt_tokens', label: t('usage.label.prompt'), render: (row) => formatCompactNumber(row.prompt_tokens) },
               { key: 'completion_tokens', label: t('usage.label.completion'), render: (row) => formatCompactNumber(row.completion_tokens) },
               { key: 'total_tokens', label: t('usage.label.total'), render: (row) => formatCompactNumber(row.total_tokens) },

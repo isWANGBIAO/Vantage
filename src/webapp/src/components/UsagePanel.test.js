@@ -94,6 +94,7 @@ test('UsagePanel renders cache and reasoning token metrics from usage rows', () 
     'prompt_cache_miss_tokens',
     'prompt_cache_hit_rate',
     'completion_reasoning_tokens',
+    'service_tier',
     "t('usage.summary.cache_hit')",
     "t('usage.summary.cache_hit_rate')",
     "t('usage.summary.reasoning_tokens')",
@@ -101,6 +102,7 @@ test('UsagePanel renders cache and reasoning token metrics from usage rows', () 
     "t('usage.label.cache_miss')",
     "t('usage.label.cache_hit_rate')",
     "t('usage.label.reasoning_tokens')",
+    "t('usage.label.service_tier')",
     "t('usage.label.not_recorded')",
   ].forEach((snippet) => {
     assert.ok(usagePanelSource.includes(snippet), `expected UsagePanel to include ${snippet}`);
@@ -250,6 +252,7 @@ test('UsagePanel display copy includes completed usage i18n keys', () => {
     'usage.label.cache_miss',
     'usage.label.cache_hit_rate',
     'usage.label.reasoning_tokens',
+    'usage.label.service_tier',
     'usage.label.not_recorded',
     'usage.summary.cache_hit',
     'usage.summary.cache_hit_rate',

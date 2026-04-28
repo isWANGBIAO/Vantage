@@ -1,9 +1,11 @@
 import { normalizeReasoningEffortForModel } from './actionPlanReasoning.js';
+import { resolveFastServiceTier } from './modelServiceTier.js';
 
 export function buildActionPlanGenerationPayload(reasoningEffort, {
   replaceToday = false,
   model = null,
   providerRoute = null,
+  fastModeEnabled = false,
 } = {}) {
   const payload = {
     reasoning_effort: normalizeReasoningEffortForModel(reasoningEffort, model),
@@ -15,6 +17,10 @@ export function buildActionPlanGenerationPayload(reasoningEffort, {
   }
   if (providerRoute) {
     payload.provider_route = providerRoute;
+  }
+  const serviceTier = resolveFastServiceTier({ fastModeEnabled, model });
+  if (serviceTier) {
+    payload.service_tier = serviceTier;
   }
 
   return payload;

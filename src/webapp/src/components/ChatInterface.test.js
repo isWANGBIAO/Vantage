@@ -87,6 +87,13 @@ test('ChatInterface uses provider-aware model options before falling back to leg
   assert.ok(chatSource.includes("vantage:llm-models-updated"));
 });
 
+test('ChatInterface sends fast priority service tier only through supported proxy model helper', () => {
+  assert.ok(chatSource.includes('loadStoredFastModeEnabled'));
+  assert.ok(chatSource.includes('isFastModeSupportedForModel'));
+  assert.ok(chatSource.includes('service_tier'));
+  assert.ok(chatSource.includes("t('common.fast_mode')"));
+});
+
 test('ChatInterface defaults to the latest Action Plan provider-aware model route', () => {
   assert.ok(chatSource.includes('contextPreferredModelRef'));
   assert.ok(chatSource.includes('data?.preferred_model_option_id'));

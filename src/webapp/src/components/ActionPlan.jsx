@@ -33,6 +33,12 @@ import {
   resolvePreferredModelOption,
 } from '../utils/llmModelCatalog';
 import {
+  isFastModeSupportedForModel,
+  loadStoredFastModeEnabled,
+  resolveFastServiceTier,
+  saveFastModeEnabled,
+} from '../utils/modelServiceTier';
+import {
   createNdjsonLineBuffer,
   createStreamRenderScheduler,
   parseActionPlanStreamLog,
@@ -115,6 +121,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const [planReplyReady, setPlanReplyReady] = useState(false);
   const [copiedKey, setCopiedKey] = useState('');
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState(() => loadStoredActionPlanReasoningEffort());
+  const [fastModeEnabled, setFastModeEnabled] = useState(() => loadStoredFastModeEnabled());
   const [stats, setStats] = useState(null);
   const [availableModels, setAvailableModels] = useState([]);
   const [modelReasoningSupport, setModelReasoningSupport] = useState({});
@@ -135,6 +142,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const isGeneratingRef = useRef(isGenerating);
   const selectedModelRef = useRef(selectedModelOption);
   const selectedReasoningEffortRef = useRef(selectedReasoningEffort);
+  const fastModeEnabledRef = useRef(fastModeEnabled);
 
   visibilityRef.current = isVisible;
   isGeneratingRef.current = isGenerating;
@@ -143,6 +151,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     selectedReasoningEffort,
     selectedModelOption?.model,
   );
+  fastModeEnabledRef.current = fastModeEnabled;
 
   const setAnalysisContentWithRef = useCallback((value) => {
     if (typeof value === 'function') {
@@ -353,6 +362,10 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     persistPreferredModelOption(findModelOption(availableModels, nextModel));
   };
 
+  const handleFastModeChange = (event) => {
+    setFastModeEnabled(saveFastModeEnabled(event.target.checked));
+  };
+
   const refreshChatContextBase = useCallback(async () => {
     try {
       const data = await fetchBackendJson('/api/chat/context', {
@@ -405,6 +418,12 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       selectedReasoningEffortRef.current,
       effectiveModelOption?.model,
     );
+    const effectiveFastModeEnabled = fastModeEnabledRef.current
+      && isFastModeSupportedForModel(effectiveModelOption?.model);
+    const effectiveServiceTier = resolveFastServiceTier({
+      fastModeEnabled: effectiveFastModeEnabled,
+      model: effectiveModelOption?.model,
+    });
 
     setStats({
       speed: '0 t/s',
@@ -412,6 +431,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       total_tokens: 0,
       startTime: Date.now(),
       reasoning_effort: effectiveReasoningEffort,
+      service_tier: effectiveServiceTier,
     });
 
     abortControllerRef.current = new AbortController();
@@ -429,6 +449,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             replaceToday,
             model: effectiveModelOption?.model,
             providerRoute: effectiveModelOption?.provider_route,
+            fastModeEnabled: effectiveFastModeEnabled,
           }),
         ),
         signal,
@@ -736,6 +757,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const analysisRoundStats = getActionPlanRoundStats(stats, 'analysis');
   const planRoundStats = getActionPlanRoundStats(stats, 'plan');
   const reasoningOptions = getReasoningOptionsForModel(selectedModelOption?.model);
+  const fastModeSupported = isFastModeSupportedForModel(selectedModelOption?.model);
   const displayedReasoningEffort = normalizeReasoningEffortForModel(
     selectedReasoningEffort,
     selectedModelOption?.model,
@@ -879,6 +901,29 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
               ))}
             </select>
           </label>
+
+          {fastModeSupported && (
+            <label
+              title={t('common.fast_mode_tooltip')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                color: 'var(--text-secondary)',
+                fontSize: '0.9rem',
+                cursor: isGenerating ? 'not-allowed' : 'pointer',
+                opacity: isGenerating ? 0.65 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={fastModeEnabled}
+                onChange={handleFastModeChange}
+                disabled={isGenerating}
+              />
+              <span>{t('common.fast_mode')}</span>
+            </label>
+          )}
 
           <button
             onClick={isGenerating ? stopGeneration : startGeneration}

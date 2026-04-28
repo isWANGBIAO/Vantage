@@ -21,6 +21,9 @@ ACTIVE_CACHE_REQUEST_KEYS = {
     "prompt_cache_retention",
     "cache_control",
 }
+FAST_SERVICE_TIER_VALUE = "priority"
+FAST_SERVICE_TIER_ALIASES = {"priority", "fast"}
+FAST_SERVICE_TIER_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 
 
 def _hash_json_payload(value):
@@ -163,6 +166,11 @@ class LLMClient:
             for parameter in supported_parameters
         )
 
+    def _supports_service_tier_parameter(self, supported_parameters):
+        if supported_parameters is None:
+            return True
+        return "service_tier" in supported_parameters
+
     def _can_model_use_reasoning(self, provider, model):
         model_capabilities = provider.get("model_capabilities")
         if not isinstance(model_capabilities, dict):
@@ -174,20 +182,63 @@ class LLMClient:
 
         return self._supports_reasoning_parameter(supported_parameters)
 
+    def _can_model_use_service_tier(self, provider, model):
+        model_capabilities = provider.get("model_capabilities")
+        if not isinstance(model_capabilities, dict):
+            return True
+
+        supported_parameters = model_capabilities.get(model)
+        if supported_parameters is None:
+            return True
+
+        return self._supports_service_tier_parameter(supported_parameters)
+
+    def _is_fast_service_tier_model(self, model):
+        return self._normalize_model_alias(model) in FAST_SERVICE_TIER_MODELS
+
+    def _normalize_service_tier_for_model(self, provider, model, service_tier):
+        normalized_tier = str(service_tier or "").strip().lower()
+        if normalized_tier not in FAST_SERVICE_TIER_ALIASES:
+            return None
+        if not self._is_fast_service_tier_model(model):
+            return None
+        if not self._can_model_use_service_tier(provider or {}, model):
+            return None
+        return FAST_SERVICE_TIER_VALUE
+
     def _apply_model_capabilities_to_payload(self, payload, provider, model):
-        if not isinstance(payload, dict) or "reasoning_effort" not in payload:
+        if not isinstance(payload, dict):
             return payload
 
-        if self._can_model_use_reasoning(provider, model):
-            return payload
+        filtered_payload = payload
+        if "reasoning_effort" in filtered_payload and not self._can_model_use_reasoning(provider, model):
+            filtered_payload = dict(filtered_payload)
+            filtered_payload.pop("reasoning_effort", None)
+            logging.info(
+                "Model %s does not advertise reasoning_effort support on route %s, omitting parameter",
+                model,
+                provider.get("route"),
+            )
 
-        filtered_payload = dict(payload)
-        filtered_payload.pop("reasoning_effort", None)
-        logging.info(
-            "Model %s does not advertise reasoning_effort support on route %s, omitting parameter",
-            model,
-            provider.get("route"),
-        )
+        if "service_tier" in filtered_payload:
+            effective_service_tier = self._normalize_service_tier_for_model(
+                provider,
+                model,
+                filtered_payload.get("service_tier"),
+            )
+            if effective_service_tier:
+                if effective_service_tier != filtered_payload.get("service_tier"):
+                    filtered_payload = dict(filtered_payload)
+                    filtered_payload["service_tier"] = effective_service_tier
+            else:
+                filtered_payload = dict(filtered_payload)
+                filtered_payload.pop("service_tier", None)
+                logging.info(
+                    "Model %s on route %s does not use fast service tier, omitting parameter",
+                    model,
+                    provider.get("route"),
+                )
+
         return filtered_payload
 
     def _is_siliconflow_deepseek_v32(self, provider, model):
@@ -733,6 +784,10 @@ class LLMClient:
         provider = self._find_provider(provider_route) or {"route": provider_route}
         return self._normalize_reasoning_effort_for_model(provider, model, reasoning_effort)
 
+    def _effective_service_tier_for_result(self, provider_route, model, service_tier):
+        provider = self._find_provider(provider_route) or {"route": provider_route}
+        return self._normalize_service_tier_for_model(provider, model, service_tier)
+
     def _is_fallback_result(self, requested_model, requested_route, used_model, used_route):
         return bool(
             (requested_model and used_model and not self._models_match(requested_model, used_model))
@@ -752,6 +807,7 @@ class LLMClient:
         context_file=None,
         history_dir=None,
         metadata=None,
+        service_tier=None,
     ):
         """
         Send chat request to LLM.
@@ -774,6 +830,20 @@ class LLMClient:
         request_metadata["stable_prefix_hash"] = _hash_json_payload(stable_prefix_messages)
         request_metadata["full_prompt_hash"] = _hash_json_payload(messages)
 
+        requested_provider = self._resolve_requested_provider(provider_route)
+        requested_model = model or (requested_provider["model"] if requested_provider else None)
+        requested_route = requested_provider["route"] if requested_provider else None
+        requested_base_url = requested_provider["base_url"] if requested_provider else None
+        effective_service_tier = self._normalize_service_tier_for_model(
+            requested_provider or {},
+            requested_model,
+            service_tier,
+        )
+        request_metadata["requested_model"] = requested_model
+        request_metadata["requested_provider_route"] = requested_route
+        request_metadata["requested_service_tier"] = str(service_tier).strip().lower() if service_tier else None
+        request_metadata["service_tier"] = effective_service_tier
+
         payload = _drop_active_cache_fields({
             "messages": messages,
             "stream": stream,
@@ -784,13 +854,8 @@ class LLMClient:
         })
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
-
-        requested_provider = self._resolve_requested_provider(provider_route)
-        requested_model = model or (requested_provider["model"] if requested_provider else None)
-        requested_route = requested_provider["route"] if requested_provider else None
-        requested_base_url = requested_provider["base_url"] if requested_provider else None
-        request_metadata["requested_model"] = requested_model
-        request_metadata["requested_provider_route"] = requested_route
+        if effective_service_tier:
+            payload["service_tier"] = effective_service_tier
         call_id = str(uuid.uuid4())
         recorder = self._build_session_recorder(
             session_id=session_id,
@@ -811,6 +876,7 @@ class LLMClient:
             provider_route=requested_route,
             stream=stream,
             reasoning_effort=reasoning_effort,
+            service_tier=effective_service_tier,
             metadata=request_metadata,
         )
 
@@ -827,6 +893,7 @@ class LLMClient:
                 call_id,
                 requested_model,
                 requested_route,
+                service_tier,
             )
         return self._handle_sync(
             payload,
@@ -837,6 +904,7 @@ class LLMClient:
             call_id,
             requested_model,
             requested_route,
+            service_tier,
         )
 
     def _build_session_recorder(
@@ -884,6 +952,7 @@ class LLMClient:
         provider_route,
         stream,
         reasoning_effort,
+        service_tier,
         metadata,
     ):
         self._safe_record(
@@ -894,6 +963,7 @@ class LLMClient:
             provider_route=provider_route,
             stream=stream,
             reasoning_effort=reasoning_effort,
+            service_tier=service_tier,
             messages=None,
             metadata=metadata,
         )
@@ -926,6 +996,7 @@ class LLMClient:
         call_id=None,
         requested_model=None,
         requested_route=None,
+        service_tier=None,
     ):
         try:
             response, used_model, used_route = self._post_with_failover(
@@ -945,6 +1016,11 @@ class LLMClient:
                 used_model,
                 reasoning_effort,
             )
+            effective_service_tier = self._effective_service_tier_for_result(
+                used_route,
+                used_model,
+                service_tier,
+            )
 
             result = {
                 "content": self._extract_content(message),
@@ -958,6 +1034,7 @@ class LLMClient:
                 "requested_provider_route": requested_route,
                 "fallback_used": self._is_fallback_result(requested_model, requested_route, used_model, used_route),
                 "reasoning_effort": effective_reasoning_effort,
+                "service_tier": effective_service_tier,
             }
             self._safe_record(
                 recorder,
@@ -967,6 +1044,7 @@ class LLMClient:
                 provider_route=used_route,
                 stream=False,
                 reasoning_effort=effective_reasoning_effort,
+                service_tier=effective_service_tier,
                 content=result["content"],
                 thinking=result["thinking"],
                 usage=result["usage"],
@@ -991,6 +1069,7 @@ class LLMClient:
                 provider_route=requested_route,
                 stream=False,
                 reasoning_effort=reasoning_effort,
+                service_tier=self._effective_service_tier_for_result(requested_route, requested_model, service_tier),
                 duration=time.time() - start_time,
             )
             raise
@@ -1006,6 +1085,7 @@ class LLMClient:
         call_id=None,
         requested_model=None,
         requested_route=None,
+        service_tier=None,
     ):
         full_content = ""
         full_thinking = ""
@@ -1043,15 +1123,23 @@ class LLMClient:
                 used_model,
                 reasoning_effort,
             )
+            effective_service_tier = self._effective_service_tier_for_result(
+                used_route,
+                used_model,
+                service_tier,
+            )
 
-            output("metadata", {
+            metadata_event = {
                 "model": used_model,
                 "provider_route": used_route,
                 "requested_model": requested_model,
                 "requested_provider_route": requested_route,
                 "fallback_used": self._is_fallback_result(requested_model, requested_route, used_model, used_route),
                 "reasoning_effort": effective_reasoning_effort,
-            })
+            }
+            if effective_service_tier:
+                metadata_event["service_tier"] = effective_service_tier
+            output("metadata", metadata_event)
 
             for line in response.iter_lines(chunk_size=1):
                 if not line:
@@ -1103,6 +1191,7 @@ class LLMClient:
                 provider_route=used_route,
                 stream=True,
                 reasoning_effort=reasoning_effort,
+                service_tier=self._effective_service_tier_for_result(used_route, used_model, service_tier),
                 duration=time.time() - start_time,
             )
             output("error", str(error))
@@ -1113,6 +1202,11 @@ class LLMClient:
             used_route,
             used_model,
             reasoning_effort,
+        )
+        effective_service_tier = self._effective_service_tier_for_result(
+            used_route,
+            used_model,
+            service_tier,
         )
 
         result = {
@@ -1127,6 +1221,7 @@ class LLMClient:
             "requested_provider_route": requested_route,
             "fallback_used": self._is_fallback_result(requested_model, requested_route, used_model, used_route),
             "reasoning_effort": effective_reasoning_effort,
+            "service_tier": effective_service_tier,
         }
         self._safe_record(
             recorder,
@@ -1136,6 +1231,7 @@ class LLMClient:
             provider_route=used_route,
             stream=True,
             reasoning_effort=effective_reasoning_effort,
+            service_tier=effective_service_tier,
             content=result["content"],
             thinking=result["thinking"],
             usage=result["usage"],

@@ -31,6 +31,37 @@ test('buildActionPlanGenerationPayload includes provider-aware model selection',
   );
 });
 
+test('buildActionPlanGenerationPayload includes fast priority tier only for supported GPT proxy models', () => {
+  assert.deepEqual(
+    buildActionPlanGenerationPayload('high', {
+      model: 'gpt-5.5',
+      providerRoute: 'custom',
+      fastModeEnabled: true,
+    }),
+    {
+      reasoning_effort: 'high',
+      replace_today: false,
+      model: 'gpt-5.5',
+      provider_route: 'custom',
+      service_tier: 'priority',
+    },
+  );
+
+  assert.deepEqual(
+    buildActionPlanGenerationPayload('high', {
+      model: 'deepseek-v4-pro',
+      providerRoute: 'deepseek',
+      fastModeEnabled: true,
+    }),
+    {
+      reasoning_effort: 'high',
+      replace_today: false,
+      model: 'deepseek-v4-pro',
+      provider_route: 'deepseek',
+    },
+  );
+});
+
 test('buildActionPlanGenerationPayload maps reasoning for DeepSeek V4 models', () => {
   assert.deepEqual(
     buildActionPlanGenerationPayload('xhigh', {

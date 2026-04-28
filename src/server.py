@@ -1977,16 +1977,25 @@ class ChatRequest(BaseModel):
     provider_route: Optional[str] = None
     context_file: Optional[str] = None
     reasoning_effort: Optional[str] = None
+    service_tier: Optional[str] = None
     client_sent_at: Optional[str] = None
 
 
 _VALID_REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+_VALID_SERVICE_TIERS = {"priority", "fast"}
 
 
 def _normalize_reasoning_effort(reasoning_effort: Optional[str]) -> str:
     if reasoning_effort in _VALID_REASONING_EFFORTS:
         return reasoning_effort
     return "medium"
+
+
+def _normalize_service_tier(service_tier: Optional[str]) -> Optional[str]:
+    normalized = str(service_tier or "").strip().lower()
+    if normalized in _VALID_SERVICE_TIERS:
+        return "priority"
+    return None
 
 
 def _get_history_dir() -> str:
@@ -2247,6 +2256,7 @@ def _replace_today_action_plan_files(previous_files):
 
 class ActionPlanRequest(BaseModel):
     reasoning_effort: Optional[str] = None
+    service_tier: Optional[str] = None
     model: Optional[str] = None
     provider_route: Optional[str] = None
     replace_today: bool = False
@@ -2391,6 +2401,9 @@ async def chat_endpoint(request: ChatRequest):
         run_prompt_args.extend(["--model", request.model])
     if request.provider_route:
         run_prompt_args.extend(["--provider_route", request.provider_route])
+    service_tier = _normalize_service_tier(request.service_tier)
+    if service_tier:
+        run_prompt_args.extend(["--service_tier", service_tier])
     if request.client_sent_at:
         run_prompt_args.extend(["--client_sent_at", request.client_sent_at])
     cmd, run_prompt_cwd = _build_run_prompt_subprocess(run_prompt_args)
@@ -2398,6 +2411,8 @@ async def chat_endpoint(request: ChatRequest):
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["AI_REASONING_EFFORT"] = _normalize_reasoning_effort(request.reasoning_effort)
+    if service_tier:
+        env["AI_SERVICE_TIER"] = service_tier
 
     async def process_chat_stream():
         proc = None
@@ -2464,10 +2479,14 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
     )
     selected_model = request.model if request else None
     selected_provider_route = request.provider_route if request else None
+    selected_service_tier = _normalize_service_tier(request.service_tier if request else None)
     if selected_model:
         run_prompt_args.append(f"--model={selected_model}")
     if selected_provider_route:
         run_prompt_args.append(f"--provider_route={selected_provider_route}")
+    if selected_service_tier:
+        run_prompt_args.append(f"--service_tier={selected_service_tier}")
+        env["AI_SERVICE_TIER"] = selected_service_tier
     cmd, run_prompt_cwd = _build_run_prompt_subprocess(run_prompt_args)
     replace_today = request.replace_today if request else False
     previous_today_files = _list_today_action_plan_files() if replace_today else []
@@ -2483,9 +2502,10 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
             env=env
         )
         logging.info(
-            "Action plan subprocess started: model=%s reasoning_effort=%s replace_today=%s",
+            "Action plan subprocess started: model=%s reasoning_effort=%s service_tier=%s replace_today=%s",
             selected_model or "<auto>",
             env["AI_REASONING_EFFORT"],
+            selected_service_tier or "<none>",
             replace_today,
         )
         stderr_task = asyncio.create_task(

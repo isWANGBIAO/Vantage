@@ -571,6 +571,29 @@ class ActionPlanEndpointTests(unittest.TestCase):
         cmd = list(mock_create.await_args.args)
         self.assertIn("--provider_route=custom", cmd)
 
+    def test_generate_action_plan_passes_priority_service_tier_to_subprocess(self):
+        fake_process = _FakeProcess()
+
+        with patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=fake_process),
+        ) as mock_create:
+            response = asyncio.run(
+                server.generate_action_plan(
+                    server.ActionPlanRequest(
+                        model="gpt-5.5",
+                        provider_route="custom",
+                        service_tier="priority",
+                    ),
+                ),
+            )
+            asyncio.run(_read_first_stream_chunk(response))
+
+        cmd = list(mock_create.await_args.args)
+        self.assertIn("--service_tier=priority", cmd)
+        self.assertEqual(mock_create.await_args.kwargs["env"]["AI_SERVICE_TIER"], "priority")
+
     def test_list_llm_models_includes_provider_aware_options(self):
         fake_client = unittest.mock.Mock()
         fake_client.get_model_catalog.return_value = [

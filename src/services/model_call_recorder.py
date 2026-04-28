@@ -78,6 +78,7 @@ def _ensure_db(db_file):
                 model TEXT,
                 provider_route TEXT,
                 reasoning_effort TEXT,
+                service_tier TEXT,
                 stream INTEGER NOT NULL,
                 duration REAL,
                 first_token_latency REAL,
@@ -123,6 +124,7 @@ def _ensure_db(db_file):
             ("usage_json", "TEXT"),
             ("response_json", "TEXT"),
             ("request_metadata_json", "TEXT"),
+            ("service_tier", "TEXT"),
         ):
             if column_name not in columns:
                 conn.execute(f"ALTER TABLE model_calls ADD COLUMN {column_name} {column_type}")
@@ -525,6 +527,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                 mc.model,
                 mc.provider_route,
                 mc.reasoning_effort,
+                mc.service_tier,
                 mc.stream,
                 mc.status,
                 mc.duration,
@@ -564,6 +567,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                     mc.model,
                     mc.provider_route,
                     mc.reasoning_effort,
+                    mc.service_tier,
                     mc.stream,
                     mc.status,
                     mc.duration,
@@ -760,6 +764,7 @@ class SessionRecorder:
         provider_route,
         stream,
         reasoning_effort,
+        service_tier=None,
         messages=None,
         metadata=None,
     ):
@@ -774,6 +779,7 @@ class SessionRecorder:
                 "provider_route": provider_route,
                 "stream": bool(stream),
                 "reasoning_effort": reasoning_effort,
+                "service_tier": service_tier,
                 "message_count": len(messages or []),
                 "metadata": safe_metadata,
             },
@@ -783,15 +789,16 @@ class SessionRecorder:
                 """
                 INSERT INTO model_calls (
                     call_id, session_id, created_at, completed_at, status, model,
-                    provider_route, reasoning_effort, stream, duration, first_token_latency,
+                    provider_route, reasoning_effort, service_tier, stream, duration, first_token_latency,
                     prompt_tokens, completion_tokens, total_tokens, request_metadata_json,
                     error_type, error_message
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(call_id) DO UPDATE SET
                     session_id=excluded.session_id,
                     model=excluded.model,
                     provider_route=excluded.provider_route,
                     reasoning_effort=excluded.reasoning_effort,
+                    service_tier=excluded.service_tier,
                     stream=excluded.stream,
                     status=excluded.status,
                     first_token_latency=NULL,
@@ -811,6 +818,7 @@ class SessionRecorder:
                     model,
                     provider_route,
                     reasoning_effort,
+                    service_tier,
                     1 if stream else 0,
                     None,
                     None,
@@ -876,6 +884,7 @@ class SessionRecorder:
         provider_route,
         stream,
         reasoning_effort,
+        service_tier=None,
         content,
         thinking,
         usage,
@@ -897,6 +906,7 @@ class SessionRecorder:
                 "provider_route": provider_route,
                 "stream": bool(stream),
                 "reasoning_effort": reasoning_effort,
+                "service_tier": service_tier,
                 "content": content,
                 "thinking": thinking,
                 "usage": usage_payload,
@@ -912,7 +922,7 @@ class SessionRecorder:
                 """
                 UPDATE model_calls
                 SET completed_at = ?, status = ?, model = ?, provider_route = ?,
-                    reasoning_effort = ?, stream = ?, duration = ?, first_token_latency = ?,
+                    reasoning_effort = ?, service_tier = ?, stream = ?, duration = ?, first_token_latency = ?,
                     prompt_tokens = ?, completion_tokens = ?, total_tokens = ?,
                     prompt_cache_hit_tokens = ?, prompt_cache_miss_tokens = ?,
                     completion_reasoning_tokens = ?, usage_json = ?, response_json = ?,
@@ -925,6 +935,7 @@ class SessionRecorder:
                     model,
                     provider_route,
                     reasoning_effort,
+                    service_tier,
                     1 if stream else 0,
                     duration,
                     first_token_latency,
@@ -966,6 +977,7 @@ class SessionRecorder:
         provider_route,
         stream,
         reasoning_effort,
+        service_tier=None,
         duration,
     ):
         completed_at = _isoformat()
@@ -980,6 +992,7 @@ class SessionRecorder:
                 "provider_route": provider_route,
                 "stream": bool(stream),
                 "reasoning_effort": reasoning_effort,
+                "service_tier": service_tier,
                 "duration": duration,
                 "error_type": error_type,
                 "error_message": error_message,
@@ -991,7 +1004,7 @@ class SessionRecorder:
                 """
                 UPDATE model_calls
                 SET completed_at = ?, status = ?, model = ?, provider_route = ?,
-                    reasoning_effort = ?, stream = ?, duration = ?, error_type = ?, error_message = ?
+                    reasoning_effort = ?, service_tier = ?, stream = ?, duration = ?, error_type = ?, error_message = ?
                 WHERE call_id = ?
                 """,
                 (
@@ -1000,6 +1013,7 @@ class SessionRecorder:
                     model,
                     provider_route,
                     reasoning_effort,
+                    service_tier,
                     1 if stream else 0,
                     duration,
                     error_type,

@@ -38,6 +38,12 @@ import {
   persistPreferredModelOption,
   resolvePreferredModelOption,
 } from '../utils/llmModelCatalog';
+import {
+    isFastModeSupportedForModel,
+    loadStoredFastModeEnabled,
+    resolveFastServiceTier,
+    saveFastModeEnabled,
+} from '../utils/modelServiceTier';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 function buildClientSentAt() {
@@ -218,6 +224,8 @@ export default function ChatInterface({ embedded = false } = {}) {
     const [modelReasoningSupport, setModelReasoningSupport] = useState({});
 
     const [selectedModel, setSelectedModel] = useState('');
+
+    const [fastModeEnabled, setFastModeEnabled] = useState(() => loadStoredFastModeEnabled());
 
     const [contextPreferredModelId, setContextPreferredModelId] = useState('');
 
@@ -488,6 +496,12 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     };
 
+    const handleFastModeChange = (event) => {
+
+        setFastModeEnabled(saveFastModeEnabled(event.target.checked));
+
+    };
+
 
 
     // Shared stream processing function to avoid code duplication
@@ -622,6 +636,13 @@ export default function ChatInterface({ embedded = false } = {}) {
             }
             if (selectedModelOption?.provider_route) {
                 payload.provider_route = selectedModelOption.provider_route;
+            }
+            const serviceTier = resolveFastServiceTier({
+                fastModeEnabled,
+                model: selectedModelOption?.model,
+            });
+            if (serviceTier) {
+                payload.service_tier = serviceTier;
             }
 
 
@@ -805,6 +826,13 @@ export default function ChatInterface({ embedded = false } = {}) {
                             if (selectedModelOption?.provider_route) {
                                 chatPayload.provider_route = selectedModelOption.provider_route;
                             }
+                            const serviceTier = resolveFastServiceTier({
+                                fastModeEnabled,
+                                model: selectedModelOption?.model,
+                            });
+                            if (serviceTier) {
+                                chatPayload.service_tier = serviceTier;
+                            }
 
                             const chatRes = await fetchBackend("/api/chat", {
                                 method: "POST",
@@ -894,6 +922,7 @@ export default function ChatInterface({ embedded = false } = {}) {
     const sendButtonLabel = 'SEND';
 
     const selectedModelOption = findModelOption(availableModels, selectedModel);
+    const fastModeSupported = isFastModeSupportedForModel(selectedModelOption?.model);
     const providerLabel = selectedModelOption?.provider_label || null;
     const chatCacheBreakdown = formatActionPlanCacheBreakdown(stats);
     const hasCacheRouteWarning = Boolean(
@@ -922,6 +951,28 @@ export default function ChatInterface({ embedded = false } = {}) {
         flexDirection: 'column',
         overflow: embedded ? 'visible' : 'hidden',
     };
+    const fastModeControl = fastModeSupported ? (
+        <label
+            title={t('common.fast_mode_tooltip')}
+            style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                color: 'var(--text-secondary)',
+                fontSize: '0.8rem',
+                cursor: isLoading ? 'not-allowed' : 'pointer',
+                opacity: isLoading ? 0.65 : 1,
+            }}
+        >
+            <input
+                type="checkbox"
+                checked={fastModeEnabled}
+                onChange={handleFastModeChange}
+                disabled={isLoading}
+            />
+            <span>{t('common.fast_mode')}</span>
+        </label>
+    ) : null;
     const composerControls = (
         <div style={{
 
@@ -1191,6 +1242,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                                 ))}
                             </select>
                         </label>
+                        {fastModeControl}
                         <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                             {providerLabel ? t('chat.powered_by', { provider: providerLabel }) : t('chat.provider_unavailable')}
                         </span>
@@ -1456,6 +1508,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                             ))}
                         </select>
                     </label>
+                    {fastModeControl}
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                         {providerLabel ? t('chat.powered_by', { provider: providerLabel }) : t('chat.provider_unavailable')}
                     </span>

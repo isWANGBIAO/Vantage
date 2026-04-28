@@ -9,4 +9,5 @@ def build_generation_metadata(*results: dict) -> dict:
         "requested_provider_route": latest_result.get("requested_provider_route"),
         "fallback_used": bool(latest_result.get("fallback_used")),
         "reasoning_effort": latest_result.get("reasoning_effort") or "medium",
+        "service_tier": latest_result.get("service_tier"),
     }

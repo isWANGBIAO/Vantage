@@ -443,6 +443,87 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(mock_post.call_args.kwargs["json"]["reasoning_effort"], "xhigh")
 
+    def test_chat_includes_priority_service_tier_for_supported_gpt_proxy_model(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+        user_provider = {
+            "route": "custom",
+            "name": "Local GPT Proxy",
+            "type": "openai-compatible",
+            "base_url": "http://127.0.0.1:8317/v1",
+            "api_key": "custom-key",
+            "model": "gpt-5.5",
+            "models": ["gpt-5.5", "gpt-5.4", "deepseek-v4-pro"],
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_provider_chain_config", return_value=[user_provider], create=True),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=user_provider),
+            patch.dict(
+                os.environ,
+                {
+                    **self._env(),
+                    "AI_REASONING_EFFORT": "xhigh",
+                },
+                clear=True,
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            result = client.chat(
+                [{"role": "user", "content": "ping"}],
+                stream=False,
+                model="gpt-5.5",
+                provider_route="custom",
+                service_tier="priority",
+            )
+
+        used_request = mock_post.call_args.kwargs["json"]
+        self.assertEqual(used_request["service_tier"], "priority")
+        self.assertEqual(result["service_tier"], "priority")
+
+    def test_chat_omits_priority_service_tier_for_unsupported_model(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+        user_provider = {
+            "route": "deepseek",
+            "name": "DeepSeek",
+            "type": "openai-compatible",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key": "deepseek-key",
+            "model": "deepseek-v4-pro",
+            "models": ["deepseek-v4-pro"],
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_provider_chain_config", return_value=[user_provider], create=True),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=user_provider),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            result = client.chat(
+                [{"role": "user", "content": "ping"}],
+                stream=False,
+                model="deepseek-v4-pro",
+                provider_route="deepseek",
+                service_tier="priority",
+            )
+
+        used_request = mock_post.call_args.kwargs["json"]
+        self.assertNotIn("service_tier", used_request)
+        self.assertIsNone(result["service_tier"])
+
     def test_chat_omits_reasoning_effort_when_model_lacks_support(self):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None

@@ -74,6 +74,7 @@ class SessionRecorderTests(unittest.TestCase):
                 provider_route="cliproxyapi_primary",
                 stream=False,
                 reasoning_effort="medium",
+                service_tier="priority",
                 messages=messages,
                 metadata={"purpose": "test"},
             )
@@ -83,6 +84,7 @@ class SessionRecorderTests(unittest.TestCase):
                 provider_route="cliproxyapi_primary",
                 stream=False,
                 reasoning_effort="medium",
+                service_tier="priority",
                 content="world",
                 thinking="analysis",
                 usage={
@@ -152,7 +154,8 @@ class SessionRecorderTests(unittest.TestCase):
                         status, model, provider_route, prompt_tokens, completion_tokens,
                         total_tokens, duration, first_token_latency,
                         prompt_cache_hit_tokens, prompt_cache_miss_tokens,
-                        completion_reasoning_tokens, usage_json, response_json, request_metadata_json
+                        completion_reasoning_tokens, service_tier,
+                        usage_json, response_json, request_metadata_json
                     FROM model_calls
                     WHERE call_id = ?
                     """,
@@ -174,9 +177,12 @@ class SessionRecorderTests(unittest.TestCase):
             call_row[:11],
             ("completed", "gpt-5.2", "cliproxyapi_primary", 11, 7, 18, 1.25, 0.42, 4, 7, 3),
         )
-        usage_json = json.loads(call_row[11])
-        response_json = json.loads(call_row[12])
-        request_metadata_json = json.loads(call_row[13])
+        self.assertEqual(call_row[11], "priority")
+        usage_json = json.loads(call_row[12])
+        response_json = json.loads(call_row[13])
+        request_metadata_json = json.loads(call_row[14])
+        self.assertEqual(lines[1]["payload"]["service_tier"], "priority")
+        self.assertEqual(lines[3]["payload"]["service_tier"], "priority")
         self.assertEqual(usage_json["prompt_tokens_details"]["cached_tokens"], 4)
         self.assertTrue(usage_json["custom_provider_field"]["kept"])
         self.assertEqual(response_json["provider_extra"]["kept"], "yes")
