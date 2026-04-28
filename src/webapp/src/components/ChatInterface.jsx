@@ -211,6 +211,36 @@ function getVisibleMessages({ embedded, messages, baseMessages }) {
         : messages;
 }
 
+function isTextChatModelOption(modelOption) {
+    const modelName = String(modelOption?.model || modelOption?.id || '').toLowerCase();
+    if (!modelName) {
+        return false;
+    }
+    return !/(^|[-_/])(image|audio|tts|whisper|embedding|vision)([-_/]|$)/i.test(modelName);
+}
+
+function formatChatSpeed(currentStats) {
+    if (typeof currentStats?.speed === 'string' && currentStats.speed.trim()) {
+        return currentStats.speed;
+    }
+    const outputRate = Number(currentStats?.output_tokens_per_second);
+    if (Number.isFinite(outputRate) && outputRate > 0) {
+        return `${outputRate.toFixed(2)} tokens/s`;
+    }
+    return '-';
+}
+
+function formatOptionalSeconds(value) {
+    const numberValue = Number(value);
+    return Number.isFinite(numberValue) && numberValue > 0 ? `${numberValue.toFixed(1)}s` : '-';
+}
+
+function getMessageKey(message, index) {
+    const timestamp = message.created_at || message.client_sent_at || message.id || '';
+    const snippet = typeof message.content === 'string' ? message.content.slice(0, 48) : '';
+    return `${message.role || 'message'}-${timestamp}-${snippet}-${index}`;
+}
+
 
 export default function ChatInterface({ embedded = false } = {}) {
     const { t } = useDisplayLanguage();
@@ -244,6 +274,7 @@ export default function ChatInterface({ embedded = false } = {}) {
     const [contextPreferredModelId, setContextPreferredModelId] = useState('');
 
     const [voiceConfig, setVoiceConfig] = useState(() => normalizeVoiceConfig(null));
+    const [voiceError, setVoiceError] = useState('');
 
     const [isLoading, setIsLoading] = useState(false);
 
@@ -270,7 +301,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     const manualModelSelectionRef = useRef(false);
 
-    const streamRef = useRef(null); // 存储 audio stream，避免作用域问题
+    const streamRef = useRef(null);
 
 
     const cleanupRecordingResources = useCallback(() => {
@@ -417,7 +448,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
         const applyModelCatalog = (data) => {
 
-            const modelList = buildModelOptionsFromCatalog(data);
+            const modelList = buildModelOptionsFromCatalog(data).filter(isTextChatModelOption);
 
             setAvailableModels(modelList);
             availableModelsRef.current = modelList;
@@ -539,7 +570,11 @@ export default function ChatInterface({ embedded = false } = {}) {
 
         if (isLoading) return;
 
-                        try {
+        if (typeof window.confirm === 'function' && !window.confirm(t('chat.clear_confirm'))) {
+            return;
+        }
+
+        try {
 
             const data = await fetchBackendJson('/api/chat/context', {
                 method: 'DELETE',
@@ -789,10 +824,11 @@ export default function ChatInterface({ embedded = false } = {}) {
     const startRecording = async () => {
 
         try {
+            setVoiceError('');
 
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            streamRef.current = stream; // 存储 stream 引用
+            streamRef.current = stream;
 
 
 
@@ -883,13 +919,17 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                         if (data.configuration_error) {
 
-                            setInput(t('chat.voice_config_error', { model: failedModel }));
+                            const message = t('chat.voice_config_error', { model: failedModel });
+                            setInput(message);
+                            setVoiceError(message);
 
                         } else {
 
-                            setInput(t('chat.transcription_error', {
+                            const message = t('chat.transcription_error', {
                                 error: `${failedContext}: ${details}`,
-                            }));
+                            });
+                            setInput(message);
+                            setVoiceError(message);
 
                         }
 
@@ -951,14 +991,17 @@ export default function ChatInterface({ embedded = false } = {}) {
                     } else {
                         console.warn("[Voice] Transcription empty or failed");
                         setInput(t('chat.transcription_failed'));
+                        setVoiceError(t('chat.transcription_failed'));
                     }
                 } catch (err) {
 
                     console.error("[Voice] Transcription error:", err);
 
-                    setInput(t('chat.transcription_error', {
+                    const message = t('chat.transcription_error', {
                         error: `${voiceConfig.model || DEFAULT_VOICE_MODEL}: ${err.message}`,
-                    }));
+                    });
+                    setInput(message);
+                    setVoiceError(message);
 
                 } finally {
 
@@ -979,7 +1022,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
         } catch (err) {
             console.error("[Voice] Error accessing microphone:", err);
-            alert(t('chat.microphone_error', { error: err.message }));
+            setVoiceError(t('chat.microphone_error', { error: err.message }));
         }
 
     };
@@ -1015,11 +1058,11 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     };
 
-    const roleBadgeLabel = (role) => (role === 'user' ? 'ME' : 'AI');
+    const roleBadgeLabel = (role) => (role === 'user' ? t('chat.role.user') : t('chat.role.assistant'));
 
-    const recordButtonLabel = isRecording ? 'STOP' : 'REC';
+    const recordButtonLabel = isRecording ? t('chat.record.short_stop') : t('chat.record.short_start');
 
-    const sendButtonLabel = 'SEND';
+    const sendButtonLabel = t('chat.send_short');
 
     const selectedModelOption = findModelOption(availableModels, selectedModel);
     const fastModeSupported = isFastModeSupportedForModel(selectedModelOption?.model);
@@ -1040,6 +1083,17 @@ export default function ChatInterface({ embedded = false } = {}) {
         isActive: isLoading,
         nowMs: liveDurationNowMs,
     });
+    const chatStatsBar = stats ? (
+        <div className="action-plan-stats">
+            <span>{t('common.first_token', { value: formatOptionalSeconds(stats.first_token_latency) })}</span>
+            <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
+            <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
+            <span>{t('common.speed', { value: formatChatSpeed(stats) })}</span>
+            {chatCacheBreakdown ? (
+                <span>{t(stats.cache_scope === 'request' ? 'common.cache_request' : 'common.cache_session', { value: chatCacheBreakdown })}</span>
+            ) : null}
+        </div>
+    ) : null;
     const visibleMessages = getVisibleMessages({
         embedded,
         messages,
@@ -1205,7 +1259,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                         minHeight: '24px',
 
-                        maxHeight: '100px'
+                        maxHeight: '180px'
 
                     }}
 
@@ -1260,6 +1314,12 @@ export default function ChatInterface({ embedded = false } = {}) {
                 {sendButtonLabel}
 
             </button>
+
+            {voiceError ? (
+                <span style={{ alignSelf: 'center', color: 'var(--warning-color, #f59e0b)', fontSize: '0.78rem' }}>
+                    {voiceError}
+                </span>
+            ) : null}
 
         </div>
     );
@@ -1316,16 +1376,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                     </h3>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        {stats && (
-                            <div className="action-plan-stats">
-                                <span>{t('common.speed', { value: stats.speed })}</span>
-                                <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
-                                <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
-                                {chatCacheBreakdown ? (
-                                    <span>{t(stats.cache_scope === 'request' ? 'common.cache_request' : 'common.cache_session', { value: chatCacheBreakdown })}</span>
-                                ) : null}
-                            </div>
-                        )}
+                        {chatStatsBar}
                         <label
                             style={{
                                 display: 'flex',
@@ -1447,7 +1498,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                     {visibleMessages.map((msg, i) => (
 
-                        <div key={i} style={{
+                        <div key={getMessageKey(msg, i)} style={{
 
                             alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
 
@@ -1511,7 +1562,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                                 border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)',
 
-                                minWidth: '200px'
+                                minWidth: 0
 
                             }}>
 
@@ -1589,16 +1640,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                 </h3>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    {stats && (
-                        <div className="action-plan-stats">
-                            <span>{t('common.speed', { value: stats.speed })}</span>
-                            <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
-                            <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
-                            {chatCacheBreakdown ? (
-                                <span>{t(stats.cache_scope === 'request' ? 'common.cache_request' : 'common.cache_session', { value: chatCacheBreakdown })}</span>
-                            ) : null}
-                        </div>
-                    )}
+                    {chatStatsBar}
                     <label
                         style={{
                             display: 'flex',
@@ -1720,7 +1762,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                 {visibleMessages.map((msg, i) => (
 
-                    <div key={i} style={{
+                    <div key={getMessageKey(msg, i)} style={{
 
                         alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
 
@@ -1784,7 +1826,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                             border: msg.role === 'user' ? 'none' : '1px solid var(--border-color)',
 
-                            minWidth: '200px'
+                            minWidth: 0
 
                         }}>
 

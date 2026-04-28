@@ -1,8 +1,8 @@
 .project-progress-container {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 120px);
-  gap: 1.5rem;
+  min-height: calc(100vh - 140px);
+  gap: 1rem;
   color: var(--text-primary);
 }
 
@@ -20,7 +20,7 @@
 }
 
 .icon-target {
-  color: var(--text-accent);
+  color: var(--accent-color);
 }
 
 .refresh-btn {
@@ -38,14 +38,14 @@
 }
 
 .refresh-btn:hover {
-  background: var(--bg-hover);
+  background: var(--bg-surface-hover);
   color: var(--text-primary);
 }
 
 .progress-dashboard {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
   flex: 1;
   min-height: 0;
 }
@@ -53,11 +53,12 @@
 .progress-section {
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 1.5rem;
+  border-radius: 8px;
+  padding: 1.15rem;
   display: flex;
   flex-direction: column;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  min-height: 420px;
 }
 
 .progress-section h3 {
@@ -123,7 +124,7 @@
 .task-item {
   display: flex;
   gap: 0.75rem;
-  background: var(--bg-body);
+  background: var(--bg-surface-hover);
   padding: 0.75rem 1rem;
   border-radius: 8px;
   border: 1px solid var(--border-color);
@@ -132,7 +133,7 @@
 }
 
 .task-item:hover {
-  transform: translateY(-2px);
+  transform: none;
   box-shadow: 0 4px 12px rgba(0,0,0,0.1);
   border-color: rgba(243, 156, 18, 0.4);
 }
@@ -203,7 +204,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  background: var(--bg-body);
+  background: var(--bg-surface-hover);
   padding: 1.25rem;
   border-radius: 8px;
   border: 1px solid var(--border-color);
@@ -289,7 +290,7 @@
 }
 
 .timeline-content {
-  background: var(--bg-body);
+  background: var(--bg-surface-hover);
   padding: 0.75rem;
   border-radius: 6px;
   border: 1px solid var(--border-color);
@@ -360,6 +361,6 @@
 @media (max-width: 1100px) {
     .progress-dashboard {
         grid-template-columns: 1fr;
-        grid-auto-rows: minmax(auto, 600px);
+        grid-auto-rows: auto;
     }
 }

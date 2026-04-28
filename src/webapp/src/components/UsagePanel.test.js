@@ -111,7 +111,7 @@ test('UsagePanel renders cache and reasoning token metrics from usage rows', () 
 
 test('UsagePanel overview keeps the summary compact on desktop', () => {
   assert.match(usagePanelStyleSource, /\.usage-overview\s*\{[^}]*align-items:\s*start/s);
-  assert.match(usagePanelStyleSource, /\.usage-summary-grid\s*\{[^}]*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
+  assert.match(usagePanelStyleSource, /\.usage-summary-grid\s*\{[^}]*repeat\(auto-fit,\s*minmax\(180px,\s*1fr\)\)/s);
   assert.match(usagePanelStyleSource, /\.usage-summary-item\s*\{[^}]*min-height:\s*76px/s);
 });
 

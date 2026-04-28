@@ -38,6 +38,8 @@ export default function Dashboard({ isVisible = false }) {
   const [storageEstimate, setStorageEstimate] = useState({ daysLeft: 0, groupSizeMB: 0 });
   const [aqi, setAqi] = useState(null);
   const [healthStats, setHealthStats] = useState(null);
+  const [mediaPrivacyRevealed, setMediaPrivacyRevealed] = useState(false);
+  const [folderStatus, setFolderStatus] = useState('');
   const pollErrorLoggedRef = useRef({});
 
   const logPollErrorOnce = useCallback((key, message, error) => {
@@ -177,11 +179,11 @@ export default function Dashboard({ isVisible = false }) {
       const data = await res.json();
 
       if (!res.ok) {
-        alert(t('dashboard.alert.open_folder_failed', { error: data.error || 'Unknown error' }));
+        setFolderStatus(t('dashboard.alert.open_folder_failed', { error: data.error || 'Unknown error' }));
       }
     } catch (err) {
       console.error('Failed to open folder', err);
-      alert(t('dashboard.alert.network_error'));
+      setFolderStatus(t('dashboard.alert.network_error'));
     }
   };
 
@@ -269,6 +271,11 @@ export default function Dashboard({ isVisible = false }) {
               {t('dashboard.open_screenshots')}
             </button>
           </div>
+          {folderStatus ? (
+            <div style={{ marginTop: '0.5rem', color: 'var(--warning-color, #f59e0b)', fontSize: '0.85rem' }}>
+              {folderStatus}
+            </div>
+          ) : null}
         </div>
 
         <div className="dashboard-clock-group">
@@ -326,8 +333,8 @@ export default function Dashboard({ isVisible = false }) {
             {t('dashboard.latest_photo')}
           </div>
           <div style={{ flex: 1, background: '#000', position: 'relative' }}>
-            {latestImages.photo ? (
-              <img src={latestImages.photo} alt="Latest" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            {latestImages.photo && mediaPrivacyRevealed ? (
+              <img src={latestImages.photo} alt={t('dashboard.latest_photo_alt')} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             ) : (
               <div
                 style={{
@@ -337,30 +344,24 @@ export default function Dashboard({ isVisible = false }) {
                   alignItems: 'center',
                   justifyContent: 'center',
                   color: '#666',
+                  flexDirection: 'column',
+                  gap: '0.6rem',
+                  textAlign: 'center',
+                  padding: '1rem',
                 }}
               >
-                {t('dashboard.no_data')}
+                <span>{latestImages.photo ? t('dashboard.media.hidden') : t('dashboard.no_data')}</span>
+                {latestImages.photo ? <small>{t('dashboard.media.hidden_detail')}</small> : null}
               </div>
             )}
           </div>
-          {latestImages.photo_name && (
-            <div
-              style={{
-                fontSize: '0.75rem',
-                color: 'rgba(255,255,255,0.7)',
-                position: 'absolute',
-                bottom: '4px',
-                right: '8px',
-                zIndex: 10,
-                fontFamily: 'monospace',
-                background: 'rgba(0,0,0,0.5)',
-                padding: '2px 4px',
-                borderRadius: '4px',
-              }}
-            >
-              {latestImages.photo_name}
-            </div>
-          )}
+          <button
+            type="button"
+            className="dashboard-media-privacy"
+            onClick={() => setMediaPrivacyRevealed((prev) => !prev)}
+          >
+            {mediaPrivacyRevealed ? t('dashboard.media.hide') : t('dashboard.media.show')}
+          </button>
         </div>
 
         <div
@@ -398,7 +399,7 @@ export default function Dashboard({ isVisible = false }) {
             {t('dashboard.camera_feed')}
           </div>
           <div style={{ flex: 1, position: 'relative' }}>
-            <CameraFeed isVisible={isVisible} />
+            <CameraFeed isVisible={isVisible} privacyRevealed={mediaPrivacyRevealed} />
           </div>
         </div>
 
@@ -435,8 +436,8 @@ export default function Dashboard({ isVisible = false }) {
             {t('dashboard.latest_screenshot')}
           </div>
           <div style={{ flex: 1, background: '#000', position: 'relative' }}>
-            {latestImages.screenshot ? (
-              <img src={latestImages.screenshot} alt="Screenshot" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            {latestImages.screenshot && mediaPrivacyRevealed ? (
+              <img src={latestImages.screenshot} alt={t('dashboard.latest_screenshot_alt')} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             ) : (
               <div
                 style={{
@@ -446,30 +447,24 @@ export default function Dashboard({ isVisible = false }) {
                   alignItems: 'center',
                   justifyContent: 'center',
                   color: '#666',
+                  flexDirection: 'column',
+                  gap: '0.6rem',
+                  textAlign: 'center',
+                  padding: '1rem',
                 }}
               >
-                {t('dashboard.no_data')}
+                <span>{latestImages.screenshot ? t('dashboard.media.hidden') : t('dashboard.no_data')}</span>
+                {latestImages.screenshot ? <small>{t('dashboard.media.hidden_detail')}</small> : null}
               </div>
             )}
           </div>
-          {latestImages.screenshot_name && (
-            <div
-              style={{
-                fontSize: '0.75rem',
-                color: 'rgba(255,255,255,0.7)',
-                position: 'absolute',
-                bottom: '4px',
-                right: '8px',
-                zIndex: 10,
-                fontFamily: 'monospace',
-                background: 'rgba(0,0,0,0.5)',
-                padding: '2px 4px',
-                borderRadius: '4px',
-              }}
-            >
-              {latestImages.screenshot_name}
-            </div>
-          )}
+          <button
+            type="button"
+            className="dashboard-media-privacy"
+            onClick={() => setMediaPrivacyRevealed((prev) => !prev)}
+          >
+            {mediaPrivacyRevealed ? t('dashboard.media.hide') : t('dashboard.media.show')}
+          </button>
         </div>
       </div>
 

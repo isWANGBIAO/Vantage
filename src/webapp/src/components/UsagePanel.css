@@ -52,7 +52,7 @@
 
 .usage-summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0.65rem;
   align-items: stretch;
 }
@@ -216,6 +216,7 @@
 }
 
 .usage-speed-card {
+  order: 2;
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 1rem;
@@ -239,7 +240,7 @@
 
 .usage-speed-chart {
   width: 100%;
-  min-height: 320px;
+  min-height: 300px;
 }
 
 .usage-speed-empty {
@@ -414,6 +415,7 @@
 }
 
 .usage-table-wrap {
+  max-width: 100%;
   overflow-x: auto;
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -460,7 +462,7 @@
   }
 
   .usage-summary-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   }
 
   .usage-source-row,
@@ -480,7 +482,7 @@
   }
 
   .usage-summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   }
 
   .usage-panel-content {

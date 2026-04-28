@@ -292,7 +292,7 @@ function TrendCard({ title, accent, points }) {
   );
 }
 
-function ExtremeCard({ title, date, score, imageUrl, accent }) {
+function ExtremeCard({ title, date, score, imageUrl, accent, privacyRevealed }) {
   const { t } = useDisplayLanguage();
   return (
     <div
@@ -306,12 +306,16 @@ function ExtremeCard({ title, date, score, imageUrl, accent }) {
       <h3 style={{ color: accent, marginBottom: '0.5rem' }}>{title}</h3>
       <p style={{ opacity: 0.7, marginBottom: '1rem' }}>{date || '--'}</p>
       <div style={{ borderRadius: '12px', overflow: 'hidden', aspectRatio: '16/9', background: 'rgba(0,0,0,0.15)' }}>
-        {imageUrl ? (
+        {imageUrl && privacyRevealed ? (
           <img
             src={buildBackendUrl(imageUrl)}
             alt={title}
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
+        ) : imageUrl ? (
+          <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', color: 'var(--text-muted)', padding: '1rem', textAlign: 'center' }}>
+            {t('dashboard.media.hidden')}
+          </div>
         ) : (
           <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', color: 'var(--text-muted)' }}>
             {t('face_history.no_image')}
@@ -331,6 +335,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
   const [liveData, setLiveData] = useState(initialLiveData);
   const [error, setError] = useState(null);
   const [reportStatus, setReportStatus] = useState('loading');
+  const [privacyRevealed, setPrivacyRevealed] = useState(false);
 
   const fetchReport = useCallback(async ({ showLoading = false } = {}) => {
     const controller = new AbortController();
@@ -446,13 +451,15 @@ export default function FaceHistory({ isVisible = true } = {}) {
 
   const handleExport = async () => {
     try {
+      setError(null);
       const res = await fetchBackend('/api/face/export_excel', {
         retryPolicy: 'download',
         allowHttpError: true,
       });
       if (!res.ok) {
         const json = await res.json();
-        alert(t('face_history.export_failed', { error: json.error || 'Unknown error' }));
+        setError(t('face_history.export_failed', { error: json.error || t('face_history.unknown_error') }));
+        setReportStatus('error');
         return;
       }
 
@@ -466,7 +473,8 @@ export default function FaceHistory({ isVisible = true } = {}) {
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      alert(t('face_history.export_failed', { error: err.message }));
+      setError(t('face_history.export_failed', { error: err.message || t('face_history.unknown_error') }));
+      setReportStatus('error');
     }
   };
 
@@ -500,7 +508,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
             borderRadius: '8px',
           }}
         >
-          Error: {error}
+          {t('face_history.error_prefix', { error })}
         </div>
       );
     }
@@ -529,6 +537,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
             score={data.lightest.score}
             imageUrl={data.lightest.url}
             accent="#2ecc71"
+            privacyRevealed={privacyRevealed}
           />
 
           <ExtremeCard
@@ -537,6 +546,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
             score={data.heaviest.score}
             imageUrl={data.heaviest.url}
             accent="#e74c3c"
+            privacyRevealed={privacyRevealed}
           />
         </div>
       </>
@@ -622,6 +632,23 @@ export default function FaceHistory({ isVisible = true } = {}) {
           </button>
 
           <button
+            onClick={() => setPrivacyRevealed((value) => !value)}
+            style={{
+              padding: '0.75rem 1.5rem',
+              backgroundColor: 'var(--bg-surface-hover)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+            }}
+          >
+            {privacyRevealed ? t('dashboard.media.hide') : t('dashboard.media.show')}
+          </button>
+
+          <button
             onClick={handleExport}
             style={{
               padding: '0.75rem 1.5rem',
@@ -650,7 +677,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
             marginBottom: '1rem',
           }}
         >
-          Error: {error}
+          {t('face_history.error_prefix', { error })}
         </div>
       )}
 

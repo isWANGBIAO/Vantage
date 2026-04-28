@@ -12,7 +12,7 @@ test('Dashboard keeps startup prewarm polling active while delegating geolocatio
 });
 
 test('Dashboard passes visibility into CameraFeed so hidden prewarm does not stream video', () => {
-  assert.ok(dashboardSource.includes('<CameraFeed isVisible={isVisible} />'));
+  assert.ok(dashboardSource.includes('<CameraFeed isVisible={isVisible} privacyRevealed={mediaPrivacyRevealed} />'));
 });
 
 test('Dashboard sends an explicit local-app intent header for opening folders', () => {

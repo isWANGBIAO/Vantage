@@ -270,11 +270,14 @@ test('ChatInterface markdown renderers avoid unused node params', () => {
 });
 
 test('ChatInterface replaces unreliable chat icons with text badges and text action buttons', () => {
-  assert.ok(chatSource.includes("'AI'"));
-  assert.ok(chatSource.includes("'ME'"));
-  assert.ok(chatSource.includes("'REC'"));
-  assert.ok(chatSource.includes("'STOP'"));
-  assert.ok(chatSource.includes("'SEND'"));
+  assert.ok(chatSource.includes("t('chat.role.assistant')"));
+  assert.ok(chatSource.includes("t('chat.role.user')"));
+  assert.ok(chatSource.includes("t('chat.record.short_start')"));
+  assert.ok(chatSource.includes("t('chat.record.short_stop')"));
+  assert.ok(chatSource.includes("t('chat.send_short')"));
+  assert.equal(chatSource.includes("'REC'"), false);
+  assert.equal(chatSource.includes("'STOP'"), false);
+  assert.equal(chatSource.includes("'SEND'"), false);
   assert.equal(chatSource.includes('<User size={16}'), false);
   assert.equal(chatSource.includes('<Mic size={20}'), false);
   assert.equal(chatSource.includes('<StopCircle size={20}'), false);

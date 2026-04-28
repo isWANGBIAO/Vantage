@@ -68,7 +68,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
-  overflow-x: hidden;
+  overflow-x: auto;
   line-height: 1.6;
 }
 
@@ -89,7 +89,7 @@ body {
   transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
-.glass-panel:hover {
+.glass-panel[data-interactive="true"]:hover {
   border-color: var(--border-hover);
   box-shadow: var(--shadow-lg);
 }
@@ -114,7 +114,8 @@ body {
 }
 
 button {
-  background-image: var(--gradient-primary);
+  background: var(--primary-color);
+  background-image: none;
   border: none;
   border-radius: var(--radius-sm);
   color: white;
@@ -126,8 +127,8 @@ button {
 }
 
 button:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-glow);
+  transform: none;
+  box-shadow: var(--shadow-sm);
   filter: brightness(1.1);
 }
 
@@ -192,7 +193,7 @@ button:disabled {
 }
 
 .markdown-body strong {
-  color: var(--accent-color);
+  color: inherit;
 }
 
 .markdown-body code {
@@ -219,10 +220,13 @@ button:disabled {
 }
 
 .markdown-body table {
+  display: block;
   width: 100%;
+  max-width: 100%;
   border-collapse: collapse;
   margin-bottom: 1rem;
   font-size: 0.9rem;
+  overflow-x: auto;
 }
 
 .markdown-body th,
@@ -403,5 +407,16 @@ button:disabled {
 .thinking-content {
   white-space: pre-wrap;
   overflow-wrap: break-word;
-  word-break: break-all;
+  word-break: normal;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }

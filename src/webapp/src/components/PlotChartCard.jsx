@@ -170,7 +170,7 @@ export default function PlotChartCard({
                   margin: 0,
                   fontSize: featured ? 28 : 22,
                   fontWeight: 800,
-                  letterSpacing: '-0.03em',
+                  letterSpacing: 0,
                   color: themeTokens.cardTitle,
                 }}
               >

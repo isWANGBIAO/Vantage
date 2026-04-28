@@ -35,10 +35,25 @@
 .dashboard-media-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1.5rem;
+  gap: 1rem;
   flex: 1;
   min-height: 0;
   align-content: center;
+}
+
+.dashboard-media-privacy {
+  position: absolute;
+  right: 0.6rem;
+  bottom: 0.6rem;
+  z-index: 12;
+  padding: 0.35rem 0.65rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.58);
+  background-image: none;
+  color: #fff;
+  box-shadow: none;
+  font-size: 0.75rem;
 }
 
 .dashboard-stats-grid {
@@ -74,9 +89,7 @@
 .dashboard-stat-subvalue {
   font-size: 0.8rem;
   color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 960px) {

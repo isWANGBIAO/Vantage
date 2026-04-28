@@ -332,6 +332,10 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
   };
 
   const deleteProvider = (route) => {
+    if (!confirmProviderDelete(route)) {
+      return;
+    }
+
     const providers = { ...form.providerConfig.providers };
     delete providers[route];
     const routes = Object.keys(providers);
@@ -354,6 +358,12 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     }));
     setActiveProviderRoute(nextActive);
     setProviderRouteDraft(nextActive);
+  };
+
+  const confirmProviderDelete = (route) => {
+    const provider = form.providerConfig.providers[route];
+    const name = provider?.name || route;
+    return window.confirm?.(t('settings.provider.delete_confirm', { name })) !== false;
   };
 
   const setDefaultProvider = (route) => {
@@ -479,8 +489,33 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     if (!diagnosticsText) {
       return;
     }
-    await navigator.clipboard?.writeText(diagnosticsText);
-    setSaveStatus(t('settings.about.copied'));
+    try {
+      if (!navigator.clipboard?.writeText) {
+        copyDiagnosticsFallback(diagnosticsText);
+        setSaveStatus(t('settings.about.copy_failed'));
+        return;
+      }
+      await navigator.clipboard.writeText(diagnosticsText);
+      setSaveStatus(t('settings.about.copied'));
+    } catch {
+      copyDiagnosticsFallback(diagnosticsText);
+      setSaveStatus(t('settings.about.copy_failed'));
+    }
+  };
+
+  const copyDiagnosticsFallback = (text) => {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.setAttribute('readonly', 'readonly');
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      document.execCommand?.('copy');
+    } finally {
+      document.body.removeChild(textArea);
+    }
   };
 
   const renderGeneral = () => (
@@ -561,6 +596,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
               type="button"
               className="secondary-button settings-small-button"
               onClick={() => setDefaultProvider(currentProviderRoute)}
+              disabled={form.providerConfig.selected_provider === currentProviderRoute}
             >
               <Star size={15} />
               {t('settings.provider.set_default')}
@@ -704,6 +740,10 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       <div className="settings-status-line">
         <Info size={16} />
         {t('settings.voice_provider.endpoint_hint')}
+      </div>
+      <div className="settings-status-line">
+        <Info size={16} />
+        {t('settings.voice_provider.test_hint')}
       </div>
     </section>
   );

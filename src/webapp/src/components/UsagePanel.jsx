@@ -502,6 +502,7 @@ function UsageSpeedTrendChart({ rows, t }) {
         <div>
           <h3>{t('usage.speed_trend.title')}</h3>
           <div className="usage-secondary-text">{t('usage.speed_trend.subtitle')}</div>
+          <div className="usage-secondary-text">{t('usage.speed_trend.axis_note')}</div>
         </div>
       </div>
 
@@ -614,7 +615,7 @@ export default function UsagePanel({ isVisible = true } = {}) {
     {
       label: t('usage.summary.total_rate'),
       value: formatRatio(summary.average_tokens_per_second),
-      subValue: t('usage.summary.total_duration'),
+      subValue: `${t('usage.summary.total_duration')} · ${t('usage.label.total_rate_hint')}`,
       accent: 'success',
     },
     {
@@ -674,6 +675,7 @@ export default function UsagePanel({ isVisible = true } = {}) {
             <div className="usage-overview-meta">
               <ToneChip tone="neutral">{t('usage.latest_activity')}</ToneChip>
               <span className="usage-secondary-text">{formatTimestamp(summary.latest_call_at)}</span>
+              <ToneChip tone="neutral">{t('usage.window.all_time')}</ToneChip>
             </div>
 
             <div className="usage-meter-group">

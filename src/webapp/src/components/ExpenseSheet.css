@@ -48,6 +48,7 @@
   gap: 0.4rem;
   align-items: center;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .expense-toolbar-meta strong {
@@ -305,6 +306,12 @@
   padding-bottom: 0;
 }
 
+.expense-budget-more {
+  padding-top: 0.45rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
 .expense-asset-item span,
 .expense-social-item span,
 .expense-budget-group-head span,
@@ -393,6 +400,18 @@
   text-align: left;
   color: var(--text-secondary);
   z-index: 1;
+}
+
+.expense-table th:first-child,
+.expense-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg-surface);
+}
+
+.expense-table thead th:first-child {
+  z-index: 2;
 }
 
 .expense-table th,

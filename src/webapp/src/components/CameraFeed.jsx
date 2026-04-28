@@ -2,13 +2,17 @@ import { useState, useEffect, useRef } from 'react';
 import { buildBackendUrl, fetchBackendJson } from '../utils/backendRequest';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
-export default function CameraFeed({ isVisible = false }) {
+export default function CameraFeed({ isVisible = false, privacyRevealed = false }) {
     const { t } = useDisplayLanguage();
     const [status, setStatus] = useState({ online: false, show_person_box: true });
     const [toggling, setToggling] = useState(false);
     const statusErrorLoggedRef = useRef(false);
 
     useEffect(() => {
+        if (!isVisible) {
+            return undefined;
+        }
+
         const checkStatus = async () => {
             try {
                 const data = await fetchBackendJson('/api/status', { retryPolicy: 'poll' });
@@ -25,7 +29,7 @@ export default function CameraFeed({ isVisible = false }) {
         checkStatus();
         const interval = setInterval(checkStatus, 5000);
         return () => clearInterval(interval);
-    }, []);
+    }, [isVisible]);
 
     return (
         <div style={{
@@ -36,7 +40,7 @@ export default function CameraFeed({ isVisible = false }) {
             overflow: 'hidden',
             borderRadius: '8px'
         }}>
-            {status.online && isVisible ? (
+            {status.online && isVisible && privacyRevealed ? (
                 <img
                     src={buildBackendUrl('/api/stream')}
                     alt={t('camera_feed.live_stream_alt')}
@@ -48,12 +52,14 @@ export default function CameraFeed({ isVisible = false }) {
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     color: 'var(--text-muted)'
                 }}>
-                    {status.online ? t('camera_feed.ready') : t('camera_feed.disconnected')}
+                    {status.online && isVisible && !privacyRevealed
+                        ? t('camera_feed.show_stream')
+                        : (status.online ? t('camera_feed.ready') : t('camera_feed.disconnected'))}
                 </div>
             )}
 
             {/* Toggle Detection Overlay Button */}
-            {status.online && isVisible && (
+            {status.online && isVisible && privacyRevealed && (
                 <button
                     onClick={async () => {
                         setToggling(true);
@@ -77,7 +83,7 @@ export default function CameraFeed({ isVisible = false }) {
                         border: `1px solid ${status.show_person_box ? 'var(--accent-color)' : 'rgba(255,255,255,0.2)'}`,
                         padding: '4px 8px',
                         borderRadius: '4px',
-                        display: 'flex', alignItems: 'center', gap: '6px', fontSize: '8px',
+                        display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.72rem',
                         color: status.show_person_box ? 'var(--accent-color)' : '#999',
                         zIndex: 20,
                         cursor: toggling ? 'wait' : 'pointer',
@@ -102,7 +108,7 @@ export default function CameraFeed({ isVisible = false }) {
                 background: 'rgba(0,0,0,0.6)',
                 padding: '4px 8px',
                 borderRadius: '4px',
-                display: 'flex', alignItems: 'center', gap: '6px', fontSize: '8px',
+                display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.72rem',
                 color: status.online ? 'var(--accent-color)' : '#999',
                 zIndex: 20
             }}>
@@ -111,7 +117,7 @@ export default function CameraFeed({ isVisible = false }) {
                     background: status.online ? 'var(--accent-color)' : '#999',
                     boxShadow: status.online ? '0 0 8px var(--accent-color)' : 'none'
                 }}></span>
-                {status.online ? (isVisible ? t('camera_feed.live') : t('camera_feed.ready_short')) : t('camera_feed.offline')}
+                {status.online ? (isVisible && privacyRevealed ? t('camera_feed.live') : t('camera_feed.ready_short')) : t('camera_feed.offline')}
             </div>
         </div>
     );

@@ -347,12 +347,13 @@ function AppShell() {
             {NAV_ITEMS.map((item) => {
               const isActive = item.key === activeTab;
 
-              return (
-                <a
-                  key={item.key}
-                  href="#"
-                  className={`app-nav-link ${isActive ? 'active-nav' : ''}`}
-                  style={{
+                return (
+                  <a
+                    key={item.key}
+                    href={`#${item.key.replaceAll(' ', '-')}`}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`app-nav-link ${isActive ? 'active-nav' : ''}`}
+                    style={{
                     color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
                     fontWeight: isActive ? 600 : 400,
                   }}

@@ -58,6 +58,13 @@ function formatMetricValue(item, locale, t) {
   return formatNumber(item.value, locale);
 }
 
+function compactWorkbookPath(fullPath) {
+  const value = String(fullPath || '').trim();
+  if (!value) return '';
+  const parts = value.split(/[\\/]/).filter(Boolean);
+  return parts.slice(-2).join(' / ') || value;
+}
+
 function SectionHeader({ icon, title, description }) {
   const IconComponent = icon;
 
@@ -88,7 +95,12 @@ function MetricRow({ label, value, hint }) {
 
 function SheetTable({ sheet, t }) {
   return (
-    <div className="expense-raw-sheet">
+    <div
+      className="expense-raw-sheet"
+      role="tabpanel"
+      id={`expense-raw-sheet-${sheet.name}`}
+      aria-labelledby={`expense-raw-tab-${sheet.name}`}
+    >
       <div className="expense-raw-sheet-header">
         <div>
           <h3>{sheet.name}</h3>
@@ -206,6 +218,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
 
   const selectedRawSheet =
     viewModel.rawSheets.find((sheet) => sheet.name === activeRawSheet) || viewModel.rawSheets[0] || null;
+  const compactSourcePath = compactWorkbookPath(viewModel.meta.fullPath);
 
   const balanceChartCard = balanceChart || {
     id: 'balance',
@@ -232,7 +245,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
             </span>
             <span title={viewModel.meta.fullPath}>
               <strong>{t('expense.source')}</strong>
-              {viewModel.meta.fullPath || t('expense.file_fallback')}
+              {compactSourcePath || t('expense.file_fallback')}
             </span>
             <span>
               <strong>{t('expense.updated')}</strong>
@@ -344,6 +357,11 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                               <span>{formatCurrency(item.monthlyValue, effectiveLanguage)}</span>
                             </div>
                           ))}
+                          {group.items.length > 4 ? (
+                            <div className="expense-budget-more">
+                              {t('expense.more_items', { count: group.items.length - 4 })}
+                            </div>
+                          ) : null}
                         </div>
                       </section>
                     ))}
@@ -440,6 +458,10 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                   <button
                     key={sheet.name}
                     type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    aria-controls={`expense-raw-sheet-${sheet.name}`}
+                    id={`expense-raw-tab-${sheet.name}`}
                     className={`expense-tab-button ${isActive ? 'is-active' : ''}`}
                     onClick={() => setActiveRawSheet(sheet.name)}
                   >

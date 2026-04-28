@@ -54,6 +54,7 @@
   min-width: 0;
   flex: 1;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .app-layout--electron .app-header-actions {
@@ -92,14 +93,25 @@
 .app-nav {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.75rem;
   overflow-x: auto;
   padding-bottom: 0.25rem;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-hover) transparent;
+  min-width: min(100%, 420px);
 }
 
 .app-nav::-webkit-scrollbar {
-  display: none;
+  height: 6px;
+}
+
+.app-nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-nav::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
+  border-radius: 999px;
 }
 
 .app-nav-link {
@@ -109,6 +121,21 @@
   font-size: 0.95rem;
   white-space: nowrap;
   flex: 0 0 auto;
+}
+
+.app-nav-link[aria-current='page'] {
+  font-weight: 700;
+}
+
+.app-nav-link:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.app-nav-link:focus-visible,
+.settings-entry-button:focus-visible,
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 3px;
 }
 
 .theme-toggle {
@@ -750,7 +777,7 @@
 .settings-path-value {
   color: var(--text-secondary);
   font-size: 0.84rem;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .settings-status-line {
@@ -863,7 +890,7 @@
 
 .settings-about-grid strong {
   min-width: 0;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .settings-inline-actions {
@@ -885,7 +912,7 @@
   }
 
   .app-layout--electron .app-header {
-    padding-right: 154px;
+    padding-right: max(1.25rem, env(titlebar-area-width, 1.25rem));
   }
 
   .app-header-actions {
@@ -941,7 +968,7 @@
   }
 
   .app-layout--electron .app-header {
-    padding-right: 154px;
+    padding-right: max(1rem, env(titlebar-area-width, 1rem));
   }
 
   .app-header-actions {

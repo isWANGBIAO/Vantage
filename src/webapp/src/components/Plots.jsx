@@ -211,9 +211,12 @@ function SummaryPill({ label, value, tone = 'default', themeTokens }) {
 }
 
 function WarningPanel({ warnings, onSelectChart, availableChartIds, themeTokens, t }) {
+  const [warningExpanded, setWarningExpanded] = useState(false);
   if (!warnings.length) {
     return null;
   }
+  const visibleWarnings = warningExpanded ? warnings : warnings.slice(0, 2);
+  const hiddenWarningCount = warnings.length - visibleWarnings.length;
 
   return (
     <section
@@ -252,7 +255,7 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds, themeTokens,
       </div>
 
       <div style={{ display: 'grid', gap: 12 }}>
-        {warnings.map((warning, index) => {
+        {visibleWarnings.map((warning, index) => {
           const details = getWarningDetails(warning);
           const chartIds = getWarningCharts(warning).filter((chartId) => availableChartIds.has(chartId));
 
@@ -323,6 +326,25 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds, themeTokens,
           );
         })}
       </div>
+      {hiddenWarningCount > 0 || warningExpanded ? (
+        <button
+          type="button"
+          onClick={() => setWarningExpanded((value) => !value)}
+          style={{
+            justifySelf: 'start',
+            padding: '8px 12px',
+            borderRadius: 8,
+            background: themeTokens.warningPanelActionBackground,
+            backgroundImage: 'none',
+            color: themeTokens.warningPanelActionText,
+            border: `1px solid ${themeTokens.warningPanelCardBorder}`,
+            boxShadow: 'none',
+            fontSize: 12,
+          }}
+        >
+          {warningExpanded ? t('plots.warning.hide_details') : t('plots.warning.show_details', { count: hiddenWarningCount })}
+        </button>
+      ) : null}
     </section>
   );
 }
@@ -473,7 +495,7 @@ function ChartCard({
                   margin: 0,
                   fontSize: featured ? 28 : 22,
                   fontWeight: 800,
-                  letterSpacing: '-0.03em',
+                  letterSpacing: 0,
                   color: themeTokens.cardTitle,
                 }}
               >
@@ -591,7 +613,7 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap, theme, th
               boxShadow: `0 0 0 8px ${section.accent}16`,
             }}
           />
-          <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.03em', color: themeTokens.sectionTitle }}>{section.title}</div>
+          <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: 0, color: themeTokens.sectionTitle }}>{section.title}</div>
         </div>
         <div style={{ fontSize: 14, lineHeight: 1.65, color: themeTokens.sectionText, maxWidth: 840 }}>
           {section.description}
@@ -825,7 +847,7 @@ export default function Plots({ theme = 'dark' }) {
                     margin: 0,
                     fontSize: 'clamp(34px, 4vw, 52px)',
                     lineHeight: 1,
-                    letterSpacing: '-0.05em',
+                  letterSpacing: 0,
                     color: themeTokens.pageTitle,
                   }}
                 >
