@@ -26,19 +26,20 @@ test('resolveRuntimePaths defaults packaged runs to LOCALAPPDATA Vantage directo
   assert.equal(runtimePaths.migrationDir, path.win32.join(localAppData, 'Vantage', 'migration'));
 });
 
-test('resolveRuntimePaths falls back to the project root in development mode', () => {
+test('resolveRuntimePaths keeps history out of the project root in development mode', () => {
   const projectRoot = path.win32.join('C:\\repo', 'ai');
+  const localAppData = path.win32.join('C:\\Users\\97012', 'AppData', 'Local');
 
   const runtimePaths = resolveRuntimePaths({
     appMode: 'development',
-    env: {},
+    env: { LOCALAPPDATA: localAppData },
     projectRoot,
   });
 
   assert.equal(runtimePaths.appMode, 'development');
   assert.equal(runtimePaths.dataDir, projectRoot);
   assert.equal(runtimePaths.configDir, path.win32.join(projectRoot, 'config'));
-  assert.equal(runtimePaths.historyDir, path.win32.join(projectRoot, 'history'));
+  assert.equal(runtimePaths.historyDir, path.win32.join(localAppData, 'Vantage-dev', 'history'));
   assert.equal(runtimePaths.logDir, path.win32.join(projectRoot, 'logs'));
   assert.equal(runtimePaths.plotDir, path.win32.join(projectRoot, 'plot_outputs'));
   assert.equal(runtimePaths.cacheDir, path.win32.join(projectRoot, 'cache'));

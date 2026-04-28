@@ -5,6 +5,7 @@ from pathlib import Path
 
 class Config:
     APP_NAME = "Vantage"
+    DEV_APP_NAME = "Vantage-dev"
 
     @staticmethod
     def get_project_root():
@@ -34,15 +35,19 @@ class Config:
         return "development"
 
     @staticmethod
-    def _get_default_packaged_data_dir():
+    def _get_default_user_data_dir(app_name):
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
-            return Path(local_app_data) / Config.APP_NAME
+            return Path(local_app_data) / app_name
 
         if sys.platform == "win32":
-            return Path.home() / "AppData" / "Local" / Config.APP_NAME
+            return Path.home() / "AppData" / "Local" / app_name
 
-        return Path.home() / ".local" / "share" / Config.APP_NAME
+        return Path.home() / ".local" / "share" / app_name
+
+    @staticmethod
+    def _get_default_packaged_data_dir():
+        return Config._get_default_user_data_dir(Config.APP_NAME)
 
     @staticmethod
     def get_data_dir():
@@ -64,6 +69,19 @@ class Config:
             resolved = Path(explicit_path).expanduser().resolve()
         else:
             resolved = Config.get_data_dir() / default_name
+
+        resolved.mkdir(parents=True, exist_ok=True)
+        return resolved
+
+    @staticmethod
+    def _resolve_history_dir():
+        explicit_path = os.environ.get("VANTAGE_HISTORY_DIR")
+        if explicit_path:
+            resolved = Path(explicit_path).expanduser().resolve()
+        elif os.environ.get("VANTAGE_DATA_DIR") or Config.get_app_mode() == "packaged":
+            resolved = Config.get_data_dir() / "history"
+        else:
+            resolved = Config._get_default_user_data_dir(Config.DEV_APP_NAME) / "history"
 
         resolved.mkdir(parents=True, exist_ok=True)
         return resolved
@@ -98,7 +116,7 @@ class Config:
 
     @staticmethod
     def get_history_dir():
-        return Config._resolve_runtime_dir("VANTAGE_HISTORY_DIR", "history")
+        return Config._resolve_history_dir()
 
     @staticmethod
     def get_logs_dir():

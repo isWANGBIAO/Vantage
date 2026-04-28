@@ -30,11 +30,12 @@ def test_runtime_paths_default_to_local_appdata_in_packaged_mode(tmp_path):
     assert paths["migration_dir"] == local_appdata / "Vantage" / "migration"
 
 
-def test_runtime_paths_fall_back_to_project_root_in_development_mode(tmp_path):
+def test_runtime_paths_keep_history_out_of_project_root_in_development_mode(tmp_path):
     project_root = tmp_path / "repo"
+    local_appdata = tmp_path / "LocalAppData"
     project_root.mkdir()
 
-    with patch.dict(os.environ, {}, clear=True), patch.object(
+    with patch.dict(os.environ, {"LOCALAPPDATA": str(local_appdata)}, clear=True), patch.object(
         Config,
         "get_project_root",
         return_value=project_root,
@@ -44,7 +45,7 @@ def test_runtime_paths_fall_back_to_project_root_in_development_mode(tmp_path):
     assert paths["app_mode"] == "development"
     assert paths["data_dir"] == project_root
     assert paths["config_dir"] == project_root / "config"
-    assert paths["history_dir"] == project_root / "history"
+    assert paths["history_dir"] == local_appdata / "Vantage-dev" / "history"
     assert paths["log_dir"] == project_root / "logs"
     assert paths["plot_dir"] == project_root / "plot_outputs"
     assert paths["cache_dir"] == project_root / "cache"
