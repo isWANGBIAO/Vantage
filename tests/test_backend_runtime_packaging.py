@@ -6,12 +6,15 @@ import pytest
 
 from src.core.backend_runtime_packaging import (
     APP_EXE_NAME,
+    BACKEND_RUNTIME_FINGERPRINT_NAME,
     CONFLICTING_RUNTIME_DLL_NAMES,
     FORBIDDEN_RUNTIME_PACKAGE_NAMES,
     PROJECT_ACTIVITY_SNAPSHOT_NAME,
     REQUIRED_ROOT_RESOURCE_NAMES,
     RUNTIME_NAME,
+    backend_runtime_fingerprint_matches,
     build_backend_runtime_manifest,
+    build_backend_runtime_fingerprint,
     build_pyinstaller_arguments,
     build_backend_runtime_size_report,
     build_project_activity_snapshot,
@@ -19,6 +22,7 @@ from src.core.backend_runtime_packaging import (
     remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
     validate_packaging_python_environment,
+    write_backend_runtime_fingerprint,
     write_project_activity_snapshot,
 )
 
@@ -246,3 +250,58 @@ def test_backend_runtime_size_report_flags_forbidden_packages(tmp_path):
     assert report["top_directories"][0]["name"] == "jaxlib"
     assert report["top_files"][0]["path"].endswith("jaxlib/heavy.bin")
     assert "jaxlib" in FORBIDDEN_RUNTIME_PACKAGE_NAMES
+
+
+def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(tmp_path):
+    _create_required_runtime_resources(tmp_path)
+    (tmp_path / "requirements-backend-runtime-gpu.txt").write_text("fastapi==0.1\n", encoding="utf-8")
+    backend_file = tmp_path / "src" / "server.py"
+    backend_file.parent.mkdir(parents=True, exist_ok=True)
+    backend_file.write_text("print('backend v1')\n", encoding="utf-8")
+    frontend_file = tmp_path / "src" / "webapp" / "src" / "App.jsx"
+    frontend_file.parent.mkdir(parents=True, exist_ok=True)
+    frontend_file.write_text("export default function App() { return null }\n", encoding="utf-8")
+
+    resources = collect_backend_runtime_resources(tmp_path)
+
+    original = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+    frontend_file.write_text("export default function App() { return 'changed' }\n", encoding="utf-8")
+    after_frontend_change = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+    backend_file.write_text("print('backend v2')\n", encoding="utf-8")
+    after_backend_change = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+
+    assert original["digest"] == after_frontend_change["digest"]
+    assert original["digest"] != after_backend_change["digest"]
+    assert any(entry["path"] == "requirements-backend-runtime-gpu.txt" for entry in original["inputs"])
+    assert not any(entry["path"].startswith("src/webapp/") for entry in original["inputs"])
+
+
+def test_backend_runtime_cache_match_requires_existing_runtime_and_matching_fingerprint(tmp_path):
+    _create_required_runtime_resources(tmp_path)
+    (tmp_path / "requirements-backend-runtime-gpu.txt").write_text("fastapi==0.1\n", encoding="utf-8")
+    backend_file = tmp_path / "src" / "server.py"
+    backend_file.parent.mkdir(parents=True, exist_ok=True)
+    backend_file.write_text("print('backend')\n", encoding="utf-8")
+    layout = resolve_backend_runtime_layout(tmp_path)
+    resources = collect_backend_runtime_resources(tmp_path)
+    fingerprint = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+
+    layout["runtime_dir"].mkdir(parents=True)
+    layout["resource_dir"].mkdir()
+    layout["executable_path"].write_bytes(b"exe")
+    layout["manifest_path"].write_text("{}", encoding="utf-8")
+    for resource in resources:
+        packaged_path = layout["resource_dir"] / resource.output_relative_path
+        if resource.source.is_dir():
+            packaged_path.mkdir(parents=True, exist_ok=True)
+        else:
+            packaged_path.parent.mkdir(parents=True, exist_ok=True)
+            packaged_path.write_bytes(b"resource")
+    write_backend_runtime_fingerprint(layout, fingerprint)
+
+    assert (layout["build_root"] / BACKEND_RUNTIME_FINGERPRINT_NAME).exists()
+    assert backend_runtime_fingerprint_matches(layout, fingerprint, resources)
+
+    changed = dict(fingerprint)
+    changed["digest"] = "different"
+    assert not backend_runtime_fingerprint_matches(layout, changed, resources)

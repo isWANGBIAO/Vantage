@@ -14,6 +14,7 @@
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:build": "vite build && electron-builder",
+    "electron:package": "electron-builder",
     "electron:start": "electron ."
   },
   "dependencies": {

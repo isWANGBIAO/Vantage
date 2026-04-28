@@ -15,12 +15,15 @@ set "STARTUP_FOLDER=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "BACKEND_RUNTIME_VENV=%PROJECT_ROOT%.venv-backend-runtime-gpu"
 set "BACKEND_RUNTIME_PYTHON=%BACKEND_RUNTIME_VENV%\Scripts\python.exe"
 set "BACKEND_RUNTIME_REQUIREMENTS=%PROJECT_ROOT%requirements-backend-runtime-gpu.txt"
+set "BACKEND_RUNTIME_REQUIREMENTS_STAMP=%BACKEND_RUNTIME_VENV%\.requirements-backend-runtime-gpu.sha256"
 
-echo [0/7] Cleaning residual source processes...
+call :CaptureSeconds RUN_START_SECONDS
+
+call :StepStart "[0/7] Cleaning residual source processes..."
 python src\scripts\cleanup_vantage_python_processes.py --include-desktop >nul 2>&1
-echo       Source cleanup complete
+call :StepDone "Source cleanup complete"
 
-echo [1/7] Checking frontend dependencies...
+call :StepStart "[1/7] Checking frontend dependencies..."
 if not exist "%PROJECT_ROOT%src\webapp\node_modules" (
     echo       Installing dependencies...
     pushd "%PROJECT_ROOT%src\webapp"
@@ -34,8 +37,9 @@ if not exist "%PROJECT_ROOT%src\webapp\node_modules" (
 ) else (
     echo       Dependencies already installed
 )
+call :StepDone "Frontend dependency check complete"
 
-echo [2/7] Preparing backend packaging environment...
+call :StepStart "[2/7] Preparing backend packaging environment..."
 if not exist "%BACKEND_RUNTIME_PYTHON%" (
     echo       Creating clean backend runtime venv...
     python -m venv "%BACKEND_RUNTIME_VENV%"
@@ -47,43 +51,58 @@ if not exist "%BACKEND_RUNTIME_PYTHON%" (
     echo       Backend runtime venv already exists
 )
 
-echo       Syncing backend runtime dependencies...
-"%BACKEND_RUNTIME_PYTHON%" -m pip install --upgrade pip
-if errorlevel 1 (
-    echo       Backend runtime pip upgrade failed
-    exit /b 1
-)
-"%BACKEND_RUNTIME_PYTHON%" -m pip install -r "%BACKEND_RUNTIME_REQUIREMENTS%"
-if errorlevel 1 (
-    echo       Backend runtime dependency install failed
-    exit /b 1
+for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath '%BACKEND_RUNTIME_REQUIREMENTS%').Hash"`) do set "BACKEND_RUNTIME_REQUIREMENTS_HASH=%%H"
+set "BACKEND_RUNTIME_REQUIREMENTS_STORED_HASH="
+if exist "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" (
+    for /f "usebackq delims=" %%H in ("%BACKEND_RUNTIME_REQUIREMENTS_STAMP%") do set "BACKEND_RUNTIME_REQUIREMENTS_STORED_HASH=%%H"
 )
 
-echo [3/7] Building backend runtime...
-"%BACKEND_RUNTIME_PYTHON%" src\scripts\build_backend_runtime.py
+if /I "!BACKEND_RUNTIME_REQUIREMENTS_HASH!"=="!BACKEND_RUNTIME_REQUIREMENTS_STORED_HASH!" if not "%VANTAGE_FORCE_BACKEND_DEPS%"=="1" (
+    echo       Backend runtime dependencies already synced
+) else (
+    echo       Syncing backend runtime dependencies...
+    "%BACKEND_RUNTIME_PYTHON%" -m pip install --upgrade pip
+    if errorlevel 1 (
+        echo       Backend runtime pip upgrade failed
+        exit /b 1
+    )
+    "%BACKEND_RUNTIME_PYTHON%" -m pip install -r "%BACKEND_RUNTIME_REQUIREMENTS%"
+    if errorlevel 1 (
+        echo       Backend runtime dependency install failed
+        exit /b 1
+    )
+    > "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" echo !BACKEND_RUNTIME_REQUIREMENTS_HASH!
+)
+call :StepDone "Backend packaging environment ready"
+
+call :StepStart "[3/7] Building frontend and backend runtime in parallel..."
+"%BACKEND_RUNTIME_PYTHON%" src\scripts\run_packaging_builds.py --backend-python "%BACKEND_RUNTIME_PYTHON%"
 if errorlevel 1 (
-    echo       Backend runtime build failed
+    echo       Parallel packaging build failed
     exit /b 1
 )
+call :StepDone "Frontend and backend build step complete"
 
-echo [4/7] Verifying backend runtime...
+call :StepStart "[4/7] Verifying backend runtime..."
 "%BACKEND_RUNTIME_PYTHON%" src\scripts\verify_backend_runtime.py --timeout-seconds 60
 if errorlevel 1 (
     echo       Backend runtime verification failed
     exit /b 1
 )
+call :StepDone "Backend runtime verification complete"
 
-echo [5/7] Building Windows installer...
+call :StepStart "[5/7] Building Windows installer..."
 pushd "%PROJECT_ROOT%src\webapp"
-call npm run electron:build
+call npm run electron:package
 if errorlevel 1 (
     popd
     echo       Installer build failed
     exit /b 1
 )
 popd
+call :StepDone "Windows installer build complete"
 
-echo [6/7] Preparing silent install...
+call :StepStart "[6/7] Preparing silent install..."
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$targets = Get-ChildItem -Path '%STARTUP_FOLDER%' -Filter 'RUN.bat*.lnk' -ErrorAction SilentlyContinue; if ($targets) { $targets | Remove-Item -Force; Write-Host '      Removed startup shortcut residue' } else { Write-Host '      No startup shortcut residue found' }"
 
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$installer = Get-ChildItem -Path '%PROJECT_ROOT%src\\webapp\\electron-dist' -Filter 'Vantage Setup *.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($installer) { $installer.FullName }"`) do set "INSTALLER_PATH=%%I"
@@ -96,8 +115,9 @@ if not defined INSTALLER_PATH (
 echo       Latest installer: %INSTALLER_PATH%
 taskkill /IM Vantage.exe /F >nul 2>&1
 taskkill /IM VantageBackend.exe /F >nul 2>&1
+call :StepDone "Silent install prepared"
 
-echo [7/7] Installing and launching Vantage...
+call :StepStart "[7/7] Installing and launching Vantage..."
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$process = Start-Process -FilePath '%INSTALLER_PATH%' -ArgumentList '/S' -Wait -PassThru; exit $process.ExitCode"
 if errorlevel 1 (
     echo       Silent installer failed
@@ -110,8 +130,30 @@ if not exist "%INSTALLED_EXE%" (
 )
 
 start "" "%INSTALLED_EXE%"
+call :StepDone "Install and launch command complete"
+
+call :CaptureSeconds RUN_END_SECONDS
+set /a TOTAL_DURATION_SECONDS=RUN_END_SECONDS-RUN_START_SECONDS
 
 echo.
 echo ========================================
 echo    Build, install, and launch complete
+echo    Total elapsed: !TOTAL_DURATION_SECONDS!s
 echo ========================================
+
+exit /b 0
+
+:CaptureSeconds
+for /f "usebackq delims=" %%T in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "[DateTimeOffset]::Now.ToUnixTimeSeconds()"`) do set "%~1=%%T"
+exit /b 0
+
+:StepStart
+call :CaptureSeconds STEP_START_SECONDS
+echo %~1
+exit /b 0
+
+:StepDone
+call :CaptureSeconds STEP_END_SECONDS
+set /a STEP_DURATION_SECONDS=STEP_END_SECONDS-STEP_START_SECONDS
+echo       %~1 (!STEP_DURATION_SECONDS!s)
+exit /b 0

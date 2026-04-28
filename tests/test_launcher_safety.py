@@ -45,8 +45,37 @@ def test_run_bat_builds_and_silently_installs_latest_package():
 
     assert ".venv-backend-runtime-gpu" in run_bat
     assert "requirements-backend-runtime-gpu.txt" in run_bat
-    assert '"%BACKEND_RUNTIME_PYTHON%" src\\scripts\\build_backend_runtime.py' in run_bat
+    assert "run_packaging_builds.py" in run_bat
     assert '"%BACKEND_RUNTIME_PYTHON%" src\\scripts\\verify_backend_runtime.py --timeout-seconds 60' in run_bat
-    assert "npm run electron:build" in run_bat
+    assert "npm run electron:package" in run_bat
+    assert "npm run electron:build" not in run_bat
     assert "ArgumentList '/S'" in run_bat
     assert 'Filter \'Vantage Setup *.exe\'' in run_bat
+
+
+def test_run_bat_skips_reinstalling_backend_dependencies_when_requirements_hash_matches():
+    run_bat = Path("run.bat").read_text(encoding="utf-8")
+
+    assert "BACKEND_RUNTIME_REQUIREMENTS_STAMP" in run_bat
+    assert "VANTAGE_FORCE_BACKEND_DEPS" in run_bat
+    assert "Backend runtime dependencies already synced" in run_bat
+
+
+def test_run_bat_prints_step_timings():
+    run_bat = Path("run.bat").read_text(encoding="utf-8")
+
+    assert ":StepStart" in run_bat
+    assert ":StepDone" in run_bat
+    assert "Total elapsed" in run_bat
+
+
+def test_packaging_build_orchestrator_runs_frontend_and_backend_builds_in_parallel():
+    source = Path("src/scripts/run_packaging_builds.py").read_text(encoding="utf-8")
+
+    assert "ThreadPoolExecutor" in source
+    assert "reconfigure(encoding=\"utf-8\", errors=\"replace\")" in source
+    assert "build_backend_runtime.py" in source
+    assert "--reuse-if-unchanged" in source
+    assert "npm" in source
+    assert "run" in source
+    assert "build" in source

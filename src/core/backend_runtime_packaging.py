@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
@@ -14,6 +15,19 @@ from pathlib import Path
 RUNTIME_NAME = "VantageBackend"
 APP_EXE_NAME = f"{RUNTIME_NAME}.exe"
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
+BACKEND_RUNTIME_FINGERPRINT_NAME = "runtime-fingerprint.json"
+BACKEND_RUNTIME_FINGERPRINT_VERSION = 1
+BACKEND_RUNTIME_SOURCE_INPUTS = (
+    "requirements-backend-runtime-gpu.txt",
+    "src/core",
+    "src/manager",
+    "src/scripts",
+    "src/services",
+    "src/utils",
+    "src/output_model.py",
+    "src/server.py",
+)
+BACKEND_RUNTIME_SOURCE_SUFFIXES = (".py",)
 
 REQUIRED_ROOT_RESOURCE_NAMES = (
     "Prompt_Action_Plan.md",
@@ -299,6 +313,130 @@ def write_project_activity_snapshot(
     return BundledResource(resolved_output_path, Path("."))
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_directory(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    total_bytes = 0
+    for child in sorted(file_path for file_path in path.rglob("*") if file_path.is_file()):
+        relative_child = child.relative_to(path).as_posix()
+        child_hash = _sha256_file(child)
+        child_size = child.stat().st_size
+        total_bytes += child_size
+        digest.update(
+            json.dumps(
+                {
+                    "path": relative_child,
+                    "bytes": child_size,
+                    "sha256": child_hash,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+    return digest.hexdigest(), total_bytes
+
+
+def _fingerprint_entry(project_root: Path, source: Path, logical_path: str | Path) -> dict[str, object]:
+    resolved_source = source.resolve()
+    if resolved_source.is_dir():
+        source_hash, source_bytes = _sha256_directory(resolved_source)
+    else:
+        stat = resolved_source.stat()
+        source_hash = _sha256_file(resolved_source)
+        source_bytes = stat.st_size
+    return {
+        "path": Path(logical_path).as_posix(),
+        "bytes": source_bytes,
+        "sha256": source_hash,
+    }
+
+
+def _iter_backend_source_files(project_root: Path):
+    for relative_input in BACKEND_RUNTIME_SOURCE_INPUTS:
+        source_path = project_root / relative_input
+        if not source_path.exists():
+            continue
+        if source_path.is_file():
+            yield source_path
+            continue
+        for child in source_path.rglob("*"):
+            if not child.is_file():
+                continue
+            if child.suffix.lower() not in BACKEND_RUNTIME_SOURCE_SUFFIXES:
+                continue
+            if "__pycache__" in child.parts:
+                continue
+            yield child
+
+
+def build_backend_runtime_fingerprint(
+    project_root: str | Path,
+    *,
+    resources: list[BundledResource],
+) -> dict[str, object]:
+    resolved_root = Path(project_root).resolve()
+    entries_by_path: dict[str, dict[str, object]] = {}
+
+    for source_path in _iter_backend_source_files(resolved_root):
+        logical_path = source_path.resolve().relative_to(resolved_root).as_posix()
+        entries_by_path[logical_path] = _fingerprint_entry(resolved_root, source_path, logical_path)
+
+    for resource in resources:
+        if resource.output_relative_path.as_posix() == PROJECT_ACTIVITY_SNAPSHOT_NAME:
+            continue
+        logical_path = resource.output_relative_path.as_posix()
+        entries_by_path[logical_path] = _fingerprint_entry(resolved_root, resource.source, logical_path)
+
+    inputs = [entries_by_path[key] for key in sorted(entries_by_path)]
+    digest_payload = {
+        "version": BACKEND_RUNTIME_FINGERPRINT_VERSION,
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "inputs": inputs,
+    }
+    digest = hashlib.sha256(
+        json.dumps(digest_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+    return {
+        "version": BACKEND_RUNTIME_FINGERPRINT_VERSION,
+        "algorithm": "sha256",
+        "python": digest_payload["python"],
+        "digest": digest,
+        "inputs": inputs,
+    }
+
+
+def backend_runtime_fingerprint_path(layout: dict[str, Path]) -> Path:
+    return layout["build_root"] / BACKEND_RUNTIME_FINGERPRINT_NAME
+
+
+def write_backend_runtime_fingerprint(
+    layout: dict[str, Path],
+    fingerprint: dict[str, object],
+) -> dict[str, object]:
+    fingerprint_path = backend_runtime_fingerprint_path(layout)
+    fingerprint_path.parent.mkdir(parents=True, exist_ok=True)
+    fingerprint_path.write_text(
+        json.dumps(fingerprint, indent=2, ensure_ascii=True) + "\n",
+        encoding="utf-8",
+    )
+    return fingerprint
+
+
+def load_backend_runtime_fingerprint(layout: dict[str, Path]) -> dict[str, object] | None:
+    fingerprint_path = backend_runtime_fingerprint_path(layout)
+    if not fingerprint_path.exists():
+        return None
+    return json.loads(fingerprint_path.read_text(encoding="utf-8"))
+
+
 def build_pyinstaller_arguments(
     *,
     project_root: str | Path,
@@ -519,3 +657,20 @@ def validate_backend_runtime_bundle(
             errors.append("Forbidden runtime packages bundled: " + ", ".join(forbidden_present))
 
     return errors
+
+
+def backend_runtime_fingerprint_matches(
+    layout: dict[str, Path],
+    expected_fingerprint: dict[str, object],
+    resources: list[BundledResource],
+) -> bool:
+    stored_fingerprint = load_backend_runtime_fingerprint(layout)
+    if not stored_fingerprint:
+        return False
+    if stored_fingerprint.get("digest") != expected_fingerprint.get("digest"):
+        return False
+    if stored_fingerprint.get("version") != expected_fingerprint.get("version"):
+        return False
+    if stored_fingerprint.get("python") != expected_fingerprint.get("python"):
+        return False
+    return not validate_backend_runtime_bundle(layout, resources)

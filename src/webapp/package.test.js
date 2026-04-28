@@ -7,8 +7,10 @@ const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.met
 test('package exposes frontend test and check scripts', () => {
   assert.ok(packageJson.scripts.test);
   assert.ok(packageJson.scripts.check);
+  assert.ok(packageJson.scripts['electron:package']);
   assert.match(packageJson.scripts.test, /node --test/);
   assert.match(packageJson.scripts.check, /npm run test/);
+  assert.equal(packageJson.scripts['electron:package'], 'electron-builder');
 });
 
 test('package bundles the backend runtime and installer shortcuts for Windows', () => {

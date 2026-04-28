@@ -23,12 +23,15 @@ PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
 from src.core.backend_runtime_packaging import (
     PROJECT_ACTIVITY_SNAPSHOT_NAME,
+    backend_runtime_fingerprint_matches,
+    build_backend_runtime_fingerprint,
     build_pyinstaller_arguments,
     collect_backend_runtime_resources,
     remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
     validate_packaging_python_environment,
     validate_backend_runtime_bundle,
+    write_backend_runtime_fingerprint,
     write_backend_runtime_size_report,
     write_backend_runtime_manifest,
     write_project_activity_snapshot,
@@ -48,6 +51,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--keep-build-root",
         action="store_true",
         help="Do not remove the existing build/backend-runtime directory before building.",
+    )
+    parser.add_argument(
+        "--reuse-if-unchanged",
+        action="store_true",
+        help="Reuse the existing PyInstaller runtime when backend inputs have not changed.",
     )
     return parser
 
@@ -85,6 +93,41 @@ def main() -> int:
         print(environment_error)
         return 1
 
+    static_resources = collect_backend_runtime_resources(PROJECT_ROOT)
+    runtime_fingerprint = build_backend_runtime_fingerprint(
+        PROJECT_ROOT,
+        resources=static_resources,
+    )
+
+    if args.reuse_if_unchanged and backend_runtime_fingerprint_matches(
+        layout,
+        runtime_fingerprint,
+        static_resources,
+    ):
+        project_activity_resource = write_project_activity_snapshot(
+            PROJECT_ROOT,
+            layout["build_root"] / PROJECT_ACTIVITY_SNAPSHOT_NAME,
+        )
+        _sync_extra_runtime_resources(layout, [project_activity_resource])
+        resources = sorted(
+            [*static_resources, project_activity_resource],
+            key=lambda resource: resource.output_relative_path.as_posix(),
+        )
+        manifest = write_backend_runtime_manifest(layout=layout, resources=resources)
+        size_report = write_backend_runtime_size_report(layout)
+        write_backend_runtime_fingerprint(layout, runtime_fingerprint)
+        print("Backend runtime unchanged; reused existing PyInstaller output.")
+        print(f"Built backend runtime: {layout['executable_path']}")
+        print(f"Runtime manifest: {layout['manifest_path']}")
+        print(f"Bundled resources: {len(manifest['resource_outputs'])}")
+        print("Removed conflicting runtime DLLs: 0")
+        print(f"Runtime size: {size_report['total_mb']} MB")
+        if size_report["forbidden_packages_present"]:
+            print("Forbidden runtime packages present: " + ", ".join(size_report["forbidden_packages_present"]))
+        else:
+            print("Forbidden runtime packages present: none")
+        return 0
+
     if not args.keep_build_root:
         _clean_existing_build(layout)
 
@@ -93,7 +136,10 @@ def main() -> int:
         PROJECT_ROOT,
         layout["build_root"] / PROJECT_ACTIVITY_SNAPSHOT_NAME,
     )
-    resources = collect_backend_runtime_resources(PROJECT_ROOT, extra_resources=[project_activity_resource])
+    resources = sorted(
+        [*static_resources, project_activity_resource],
+        key=lambda resource: resource.output_relative_path.as_posix(),
+    )
 
     if not args.skip_build:
         pyinstaller_args = build_pyinstaller_arguments(
@@ -108,6 +154,7 @@ def main() -> int:
     removed_runtime_dlls = remove_conflicting_runtime_libraries(layout["runtime_dir"])
     manifest = write_backend_runtime_manifest(layout=layout, resources=resources)
     size_report = write_backend_runtime_size_report(layout)
+    write_backend_runtime_fingerprint(layout, runtime_fingerprint)
     errors = validate_backend_runtime_bundle(layout, resources)
     if errors:
         for error in errors:
