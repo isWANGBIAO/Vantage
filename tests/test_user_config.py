@@ -26,7 +26,11 @@ def test_load_settings_creates_default_settings_file(tmp_path):
         "launch_at_login": False,
         "display_language": "system",
         "theme": "dark",
+        "theme_mode": "dark",
         "background_mode": "balanced",
+        "voice_base_url": "",
+        "voice_api_key": "",
+        "voice_model": "FunAudioLLM/SenseVoiceSmall",
     }
     assert payload == expected
     assert json.loads((config_dir / "settings.json").read_text(encoding="utf-8")) == expected
@@ -141,7 +145,11 @@ def test_save_settings_normalizes_partial_payload(tmp_path):
         "launch_at_login": True,
         "display_language": "system",
         "theme": "dark",
+        "theme_mode": "dark",
         "background_mode": "balanced",
+        "voice_base_url": "",
+        "voice_api_key": "",
+        "voice_model": "FunAudioLLM/SenseVoiceSmall",
     }
     assert payload == expected
     assert json.loads(settings_file.read_text(encoding="utf-8")) == expected
@@ -172,7 +180,11 @@ def test_load_settings_repairs_invalid_display_language(tmp_path):
         "launch_at_login": False,
         "display_language": "system",
         "theme": "dark",
+        "theme_mode": "dark",
         "background_mode": "balanced",
+        "voice_base_url": "",
+        "voice_api_key": "",
+        "voice_model": "FunAudioLLM/SenseVoiceSmall",
     }
     assert payload == expected
     assert json.loads(settings_file.read_text(encoding="utf-8")) == expected
@@ -192,6 +204,55 @@ def test_save_settings_accepts_theme_and_background_mode(tmp_path):
 
     assert payload["theme"] == "light"
     assert payload["background_mode"] == "power_saver"
+
+
+def test_save_settings_accepts_auto_theme_and_voice_provider(tmp_path):
+    user_config = _load_user_config_module()
+    settings_file = tmp_path / "config" / "settings.json"
+
+    payload = user_config.save_settings(
+        {
+            "theme": "light",
+            "theme_mode": "auto",
+            "voice_base_url": "https://voice.example.invalid/v1",
+            "voice_api_key": "sk-voice",
+            "voice_model": "FunAudioLLM/SenseVoiceSmall",
+        },
+        settings_file=settings_file,
+    )
+
+    assert payload["theme"] == "light"
+    assert payload["theme_mode"] == "auto"
+    assert payload["voice_base_url"] == "https://voice.example.invalid/v1"
+    assert payload["voice_api_key"] == "sk-voice"
+    assert payload["voice_model"] == "FunAudioLLM/SenseVoiceSmall"
+
+
+def test_get_voice_provider_config_requires_base_url_key_and_model(tmp_path):
+    user_config = _load_user_config_module()
+    settings_file = tmp_path / "config" / "settings.json"
+
+    incomplete = user_config.get_voice_provider_config(settings_file=settings_file)
+    assert incomplete["complete"] is False
+    assert incomplete["missing"] == ["voice_base_url", "voice_api_key"]
+
+    user_config.save_settings(
+        {
+            "voice_base_url": "https://voice.example.invalid/v1",
+            "voice_api_key": "sk-voice",
+            "voice_model": "sensevoice",
+        },
+        settings_file=settings_file,
+    )
+
+    complete = user_config.get_voice_provider_config(settings_file=settings_file)
+    assert complete == {
+        "base_url": "https://voice.example.invalid/v1",
+        "api_key": "sk-voice",
+        "model": "sensevoice",
+        "complete": True,
+        "missing": [],
+    }
 
 
 def test_get_active_provider_config_returns_selected_complete_provider(tmp_path):

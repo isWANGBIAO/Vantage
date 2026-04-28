@@ -3,8 +3,13 @@ const DEFAULT_SETTINGS_STATE = {
   settings: {
     displayLanguage: 'system',
     theme: 'dark',
+    themeMode: 'dark',
     launchAtLogin: false,
     backgroundMode: 'balanced',
+    voiceBaseUrl: '',
+    voiceApiKey: '',
+    voiceHasApiKey: false,
+    voiceModel: 'FunAudioLLM/SenseVoiceSmall',
   },
   provider: {
     version: 2,
@@ -47,6 +52,10 @@ function normalizeSettings(payload, mode) {
           ? safeSettings.displayLanguage
           : DEFAULT_SETTINGS_STATE.settings.displayLanguage,
       theme: safeSettings.theme === 'light' ? 'light' : DEFAULT_SETTINGS_STATE.settings.theme,
+      themeMode:
+        ['auto', 'dark', 'light'].includes(safeSettings.themeMode)
+          ? safeSettings.themeMode
+          : (safeSettings.theme === 'light' ? 'light' : DEFAULT_SETTINGS_STATE.settings.themeMode),
       launchAtLogin:
         typeof safeSettings.launchAtLogin === 'boolean'
           ? safeSettings.launchAtLogin
@@ -55,6 +64,22 @@ function normalizeSettings(payload, mode) {
         ['balanced', 'prewarm', 'power_saver'].includes(safeSettings.backgroundMode)
           ? safeSettings.backgroundMode
           : DEFAULT_SETTINGS_STATE.settings.backgroundMode,
+      voiceBaseUrl:
+        typeof safeSettings.voiceBaseUrl === 'string'
+          ? safeSettings.voiceBaseUrl
+          : DEFAULT_SETTINGS_STATE.settings.voiceBaseUrl,
+      voiceApiKey:
+        typeof safeSettings.voiceApiKey === 'string'
+          ? safeSettings.voiceApiKey
+          : DEFAULT_SETTINGS_STATE.settings.voiceApiKey,
+      voiceHasApiKey:
+        typeof safeSettings.voiceHasApiKey === 'boolean'
+          ? safeSettings.voiceHasApiKey
+          : Boolean(safeSettings.voiceApiKey),
+      voiceModel:
+        typeof safeSettings.voiceModel === 'string' && safeSettings.voiceModel.trim()
+          ? safeSettings.voiceModel
+          : DEFAULT_SETTINGS_STATE.settings.voiceModel,
     },
     provider:
       safePayload.provider && typeof safePayload.provider === 'object'
@@ -102,8 +127,13 @@ export async function saveSettingsState(submission, electronAPI) {
         settings: {
           displayLanguage: submission?.displayLanguage,
           theme: submission?.theme,
+          themeMode: submission?.themeMode,
           launchAtLogin: Boolean(submission?.launchAtLogin),
           backgroundMode: submission?.backgroundMode,
+          voiceBaseUrl: submission?.voiceBaseUrl,
+          voiceApiKey: submission?.voiceApiKey,
+          voiceHasApiKey: Boolean(submission?.voiceApiKey),
+          voiceModel: submission?.voiceModel,
         },
       },
       'browser',

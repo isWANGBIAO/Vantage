@@ -181,6 +181,42 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 1)
         self.assertIn("TRANSCRIPTION_ERROR:", stdout.getvalue())
 
+    def test_transcribe_mode_passes_voice_provider_arguments(self):
+        stdout = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            sys,
+            "argv",
+            [
+                "run_prompt.py",
+                "--transcribe",
+                "audio.webm",
+                "--transcribe-base-url",
+                "https://voice.example.invalid/v1",
+                "--transcribe-api-key",
+                "sk-voice",
+                "--transcribe-model",
+                "sensevoice",
+            ],
+        ), patch.object(run_prompt.Config, "load_env"), patch.object(
+            run_prompt.Config,
+            "get_history_dir",
+            return_value=Path(temp_dir),
+        ), patch.object(
+            run_prompt.AudioService,
+            "transcribe",
+            return_value="hello",
+        ) as mock_transcribe, redirect_stdout(stdout):
+            run_prompt.main()
+
+        mock_transcribe.assert_called_once_with(
+            "audio.webm",
+            base_url="https://voice.example.invalid/v1",
+            api_key="sk-voice",
+            model="sensevoice",
+        )
+        self.assertIn("TRANSCRIPTION_RESULT:hello", stdout.getvalue())
+
     def test_analysis_mode_streams_both_round_prompts(self):
         fake_client = _FakeLLMClient()
 

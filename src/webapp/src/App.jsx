@@ -67,10 +67,31 @@ function DisplayLanguageSelect() {
   );
 }
 
+function resolveSystemTheme() {
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  return 'dark';
+}
+
+function resolveEffectiveTheme(themeMode, systemTheme = 'dark') {
+  if (themeMode === 'auto') {
+    return systemTheme === 'light' ? 'light' : 'dark';
+  }
+  if (themeMode === 'light' || themeMode === 'dark') {
+    return themeMode;
+  }
+  return 'dark';
+}
+
 function AppShell() {
   const { t, displayLanguage, setDisplayLanguage } = useDisplayLanguage();
   const [activeTab, setActiveTab] = useState('action plan');
-  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  const [themeMode, setThemeMode] = useState(() => (
+    localStorage.getItem('themeMode') || localStorage.getItem('theme') || 'dark'
+  ));
+  const [systemTheme, setSystemTheme] = useState(() => resolveSystemTheme());
+  const theme = resolveEffectiveTheme(themeMode, systemTheme);
   const [settingsState, setSettingsState] = useState(null);
   const [backgroundTabsReady, setBackgroundTabsReady] = useState(false);
   const lastAppliedOnboardingLanguageRef = useRef(null);
@@ -91,8 +112,28 @@ function AppShell() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('theme', theme);
+    localStorage.setItem('themeMode', themeMode);
     void window.electronAPI?.setTitleBarTheme?.(theme);
-  }, [theme]);
+  }, [theme, themeMode]);
+
+  useEffect(() => {
+    if (themeMode !== 'auto' || typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleSystemThemeChange = () => {
+      setSystemTheme(resolveSystemTheme());
+    };
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleSystemThemeChange);
+      return () => mediaQuery.removeEventListener('change', handleSystemThemeChange);
+    }
+
+    mediaQuery.addListener(handleSystemThemeChange);
+    return () => mediaQuery.removeListener(handleSystemThemeChange);
+  }, [themeMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,7 +144,8 @@ function AppShell() {
         return;
       }
       if (nextState.settings?.theme) {
-        setTheme(nextState.settings.theme);
+        const nextThemeMode = nextState.settings.themeMode || nextState.settings.theme;
+        setThemeMode(nextThemeMode);
       }
       setSettingsState(nextState);
     };
@@ -175,13 +217,14 @@ function AppShell() {
 
   const handleToggleTheme = async () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(nextTheme);
+    setThemeMode(nextTheme);
 
     try {
       const currentState = settingsState || await loadSettingsState();
       const savedState = await saveSettingsState({
         displayLanguage,
         theme: nextTheme,
+        themeMode: nextTheme,
         launchAtLogin: Boolean(currentState.settings?.launchAtLogin),
         backgroundMode: currentState.settings?.backgroundMode || 'balanced',
       });
@@ -209,8 +252,9 @@ function AppShell() {
   const handlePickLegacyRoot = async () => pickLegacyRoot();
 
   const handleSettingsApplied = (settings) => {
-    if (settings?.theme) {
-      setTheme(settings.theme);
+    if (settings?.themeMode || settings?.theme) {
+      const nextThemeMode = settings.themeMode || settings.theme || themeMode;
+      setThemeMode(nextThemeMode);
     }
     if (settings?.displayLanguage) {
       void setDisplayLanguage(settings.displayLanguage);
@@ -379,7 +423,7 @@ function AppShell() {
         </Suspense>
         <Suspense fallback={null}>
           {activeTab === 'settings' ? (
-            <Settings currentTheme={theme} onSettingsApplied={handleSettingsApplied} />
+            <Settings currentTheme={theme} currentThemeMode={themeMode} onSettingsApplied={handleSettingsApplied} />
           ) : null}
         </Suspense>
       </main>

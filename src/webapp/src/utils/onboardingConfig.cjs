@@ -7,7 +7,11 @@ const DEFAULT_SETTINGS = {
   launch_at_login: false,
   display_language: 'system',
   theme: 'dark',
+  theme_mode: 'dark',
   background_mode: 'balanced',
+  voice_base_url: '',
+  voice_api_key: '',
+  voice_model: 'FunAudioLLM/SenseVoiceSmall',
 };
 
 const PROVIDER_CONFIG_VERSION = 2;
@@ -87,6 +91,13 @@ function sanitizeTheme(value) {
   return value === 'dark' || value === 'light' ? value : DEFAULT_SETTINGS.theme;
 }
 
+function sanitizeThemeMode(value, fallbackTheme = DEFAULT_SETTINGS.theme) {
+  if (value === 'auto' || value === 'dark' || value === 'light') {
+    return value;
+  }
+  return sanitizeTheme(fallbackTheme);
+}
+
 function sanitizeBackgroundMode(value) {
   return value === 'balanced' || value === 'prewarm' || value === 'power_saver'
     ? value
@@ -107,7 +118,11 @@ function sanitizeSettings(payload) {
         : DEFAULT_SETTINGS.launch_at_login,
     display_language: sanitizeDisplayLanguage(safePayload.display_language),
     theme: sanitizeTheme(safePayload.theme),
+    theme_mode: sanitizeThemeMode(safePayload.theme_mode, safePayload.theme),
     background_mode: sanitizeBackgroundMode(safePayload.background_mode),
+    voice_base_url: normalizeOptionalString(safePayload.voice_base_url) || '',
+    voice_api_key: normalizeOptionalString(safePayload.voice_api_key) || '',
+    voice_model: normalizeOptionalString(safePayload.voice_model) || DEFAULT_SETTINGS.voice_model,
   };
 }
 
@@ -314,8 +329,13 @@ function buildSettingsState({
     settings: {
       displayLanguage: settings.display_language,
       theme: settings.theme,
+      themeMode: settings.theme_mode,
       launchAtLogin: settings.launch_at_login,
       backgroundMode: settings.background_mode,
+      voiceBaseUrl: settings.voice_base_url,
+      voiceApiKey: maskApiKey(settings.voice_api_key),
+      voiceHasApiKey: Boolean(normalizeOptionalString(settings.voice_api_key)),
+      voiceModel: settings.voice_model,
     },
     provider: maskProviderConfig(providerConfig),
     runtimePaths: runtimePathEntries,
@@ -430,12 +450,40 @@ function saveSettingsPayload({
   saveSettings(runtimePaths, {
     ...currentSettings,
     display_language: sanitizeDisplayLanguage(safePayload.displayLanguage),
-    theme: sanitizeTheme(safePayload.theme),
+    theme: sanitizeTheme(
+      Object.prototype.hasOwnProperty.call(safePayload, 'theme')
+        ? safePayload.theme
+        : currentSettings.theme,
+    ),
+    theme_mode: sanitizeThemeMode(
+      Object.prototype.hasOwnProperty.call(safePayload, 'themeMode')
+        ? safePayload.themeMode
+        : currentSettings.theme_mode,
+      Object.prototype.hasOwnProperty.call(safePayload, 'theme')
+        ? safePayload.theme
+        : currentSettings.theme,
+    ),
     launch_at_login:
       typeof safePayload.launchAtLogin === 'boolean'
         ? safePayload.launchAtLogin
         : currentSettings.launch_at_login,
     background_mode: sanitizeBackgroundMode(safePayload.backgroundMode),
+    voice_base_url: Object.prototype.hasOwnProperty.call(safePayload, 'voiceBaseUrl')
+      ? (normalizeOptionalString(safePayload.voiceBaseUrl) || '')
+      : currentSettings.voice_base_url,
+    voice_api_key: (() => {
+      if (!Object.prototype.hasOwnProperty.call(safePayload, 'voiceApiKey')) {
+        return currentSettings.voice_api_key;
+      }
+      const submitted = normalizeOptionalString(safePayload.voiceApiKey);
+      if (!submitted || submitted === '********') {
+        return submitted === '********' ? currentSettings.voice_api_key : '';
+      }
+      return submitted;
+    })(),
+    voice_model: Object.prototype.hasOwnProperty.call(safePayload, 'voiceModel')
+      ? (normalizeOptionalString(safePayload.voiceModel) || DEFAULT_SETTINGS.voice_model)
+      : currentSettings.voice_model,
   });
 
   saveProviderConfig(
@@ -584,7 +632,11 @@ function saveOnboardingCompletion({ runtimePaths, submission, projectRoot, now =
       submission.displayLanguage ?? currentSettings.display_language,
     ),
     theme: currentSettings.theme,
+    theme_mode: currentSettings.theme_mode,
     background_mode: currentSettings.background_mode,
+    voice_base_url: currentSettings.voice_base_url,
+    voice_api_key: currentSettings.voice_api_key,
+    voice_model: currentSettings.voice_model,
   };
   writeJsonFile(getSettingsFile(runtimePaths), settings);
 
@@ -627,6 +679,7 @@ module.exports = {
   sanitizeProviderConfig,
   sanitizeSettings,
   sanitizeTheme,
+  sanitizeThemeMode,
   saveProviderConfig,
   saveSettings,
   saveSettingsPayload,

@@ -2549,8 +2549,45 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
     
     return StreamingResponse(process_stream(), media_type="application/x-ndjson")
 
+
+def _load_voice_transcription_config():
+    settings = load_settings()
+    base_url = str(settings.get("voice_base_url") or "").strip()
+    api_key = str(settings.get("voice_api_key") or "").strip()
+    model = str(settings.get("voice_model") or "FunAudioLLM/SenseVoiceSmall").strip()
+    missing = []
+    if not base_url:
+        missing.append("voice_base_url")
+    if not api_key:
+        missing.append("voice_api_key")
+    if not model:
+        missing.append("voice_model")
+
+    return {
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": model or "FunAudioLLM/SenseVoiceSmall",
+        "complete": not missing,
+        "missing": missing,
+    }
+
+
 @app.post("/api/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
+    voice_config = _load_voice_transcription_config()
+    if not voice_config["complete"]:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Voice transcription provider is not configured",
+                "details": "Configure voice Base URL, API key, and model in Settings.",
+                "voice_model": voice_config["model"],
+                "voice_base_url": voice_config["base_url"],
+                "configuration_error": True,
+                "missing": voice_config["missing"],
+            },
+        )
+
     original_filename = file.filename or "recording.webm"
     ext = os.path.splitext(original_filename)[1] or ".webm"
     
@@ -2564,7 +2601,16 @@ async def transcribe_audio(file: UploadFile = File(...)):
         buffer.write(content)
         print(f"[Transcribe] File size: {len(content)} bytes")
         
-    cmd, run_prompt_cwd = _build_run_prompt_subprocess(["--transcribe", temp_filename])
+    cmd, run_prompt_cwd = _build_run_prompt_subprocess([
+        "--transcribe",
+        temp_filename,
+        "--transcribe-base-url",
+        voice_config["base_url"],
+        "--transcribe-api-key",
+        voice_config["api_key"],
+        "--transcribe-model",
+        voice_config["model"],
+    ])
     print(f"[Transcribe] Running command: {' '.join(cmd)}")
     
     env = os.environ.copy()
@@ -2612,19 +2658,35 @@ async def transcribe_audio(file: UploadFile = File(...)):
             details = transcription_error or stderr_text or output.strip()
             return JSONResponse(
                 status_code=500,
-                content={"error": "Transcription failed", "details": details},
+                content={
+                    "error": "Transcription failed",
+                    "details": details,
+                    "voice_model": voice_config["model"],
+                    "voice_base_url": voice_config["base_url"],
+                    "configuration_error": False,
+                },
             )
         
         if not transcription:
             details = transcription_error or stderr_text or output.strip() or "No transcription result returned"
             return JSONResponse(
                 status_code=500,
-                content={"error": "Transcription failed", "details": details},
+                content={
+                    "error": "Transcription failed",
+                    "details": details,
+                    "voice_model": voice_config["model"],
+                    "voice_base_url": voice_config["base_url"],
+                    "configuration_error": False,
+                },
             )
         
         print(f"[Transcribe] Result: '{transcription}'")
                 
-        return {"transcription": transcription}
+        return {
+            "transcription": transcription,
+            "voice_model": voice_config["model"],
+            "voice_base_url": voice_config["base_url"],
+        }
     finally:
         if proc is not None and proc.returncode is None:
             try:

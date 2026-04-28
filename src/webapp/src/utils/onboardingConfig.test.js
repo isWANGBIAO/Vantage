@@ -51,7 +51,11 @@ test('loadSettings defaults formal theme and background mode settings', () => {
   });
 
   assert.equal(state.settings.theme, 'dark');
+  assert.equal(state.settings.themeMode, 'dark');
   assert.equal(state.settings.backgroundMode, 'balanced');
+  assert.equal(state.settings.voiceBaseUrl, '');
+  assert.equal(state.settings.voiceApiKey, '');
+  assert.equal(state.settings.voiceModel, 'FunAudioLLM/SenseVoiceSmall');
   assert.equal(state.app.version, '1.2.3');
   assert.equal(state.app.mode, 'packaged');
   assert.equal(state.systemLocale, 'zh-CN');
@@ -75,8 +79,12 @@ test('saveSettingsPayload persists general settings and provider config', () => 
     payload: {
       displayLanguage: 'en-US',
       theme: 'light',
+      themeMode: 'auto',
       launchAtLogin: true,
       backgroundMode: 'power_saver',
+      voiceBaseUrl: 'https://voice.example.invalid/v1',
+      voiceApiKey: 'sk-voice-secret',
+      voiceModel: 'sensevoice',
       provider: {
         route: 'cliproxyapi',
         baseUrl: 'https://example.invalid/v1',
@@ -98,8 +106,13 @@ test('saveSettingsPayload persists general settings and provider config', () => 
 
   assert.equal(state.settings.displayLanguage, 'en-US');
   assert.equal(state.settings.theme, 'light');
+  assert.equal(state.settings.themeMode, 'auto');
   assert.equal(state.settings.launchAtLogin, true);
   assert.equal(state.settings.backgroundMode, 'power_saver');
+  assert.equal(state.settings.voiceBaseUrl, 'https://voice.example.invalid/v1');
+  assert.equal(state.settings.voiceApiKey, '********');
+  assert.equal(state.settings.voiceHasApiKey, true);
+  assert.equal(state.settings.voiceModel, 'sensevoice');
   assert.equal(state.provider.providers.cliproxyapi.api_key, '********');
   assert.deepEqual(settings, {
     version: 1,
@@ -107,7 +120,11 @@ test('saveSettingsPayload persists general settings and provider config', () => 
     launch_at_login: true,
     display_language: 'en-US',
     theme: 'light',
+    theme_mode: 'auto',
     background_mode: 'power_saver',
+    voice_base_url: 'https://voice.example.invalid/v1',
+    voice_api_key: 'sk-voice-secret',
+    voice_model: 'sensevoice',
   });
   assert.deepEqual(providers, {
     version: 2,
@@ -426,7 +443,11 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
     launch_at_login: true,
     display_language: 'en-US',
     theme: 'dark',
+    theme_mode: 'dark',
     background_mode: 'balanced',
+    voice_base_url: '',
+    voice_api_key: '',
+    voice_model: 'FunAudioLLM/SenseVoiceSmall',
   });
   assert.deepEqual(providers, {
     version: 2,

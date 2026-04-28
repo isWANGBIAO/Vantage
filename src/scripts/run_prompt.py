@@ -14,7 +14,7 @@ sys.path.append(str(project_root))
 from src.core.config import Config
 from src.core.context import ContextManager
 from src.services.llm_client import LLMClient
-from src.services.audio_service import AudioService
+from src.services.audio_service import AudioService, AudioTranscriptionError
 from src.services.model_call_recorder import get_session_usage_summary
 from src.utils.data_loader import DataLoader
 from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
@@ -380,6 +380,9 @@ def main():
     parser.add_argument("prompt_file", nargs="?", help="Path to the prompt file")
     parser.add_argument("output_file", nargs="?", help="Path to the output file")
     parser.add_argument("--transcribe", help="Path to audio file to transcribe")
+    parser.add_argument("--transcribe-base-url", help="Voice transcription provider base URL")
+    parser.add_argument("--transcribe-api-key", help="Voice transcription provider API key")
+    parser.add_argument("--transcribe-model", help="Voice transcription model name")
     parser.add_argument("--chat_message", help="User message for chat mode")
     parser.add_argument("--context_file", help="Path to load context from")
     parser.add_argument("--model", help="Model name override for this run")
@@ -400,7 +403,16 @@ def main():
         
         # === TRANSCRIPT MODE ===
         if args.transcribe:
-            text = AudioService.transcribe(args.transcribe)
+            try:
+                text = AudioService.transcribe(
+                    args.transcribe,
+                    base_url=args.transcribe_base_url,
+                    api_key=args.transcribe_api_key,
+                    model=args.transcribe_model,
+                )
+            except AudioTranscriptionError as exc:
+                print(f"TRANSCRIPTION_ERROR:{exc}")
+                raise SystemExit(1) from exc
             if text is None:
                 print("TRANSCRIPTION_ERROR:Audio transcription failed")
                 raise SystemExit(1)

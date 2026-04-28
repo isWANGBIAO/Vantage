@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm';
 import { Bot, Trash2 } from 'lucide-react';
 
 import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
+import { loadSettingsState } from '../utils/settingsState';
 import {
   CHAT_CONTEXT_BASE_UPDATED_EVENT,
   buildInitialEmbeddedChatState,
@@ -46,6 +47,18 @@ import {
     saveFastModeEnabled,
 } from '../utils/modelServiceTier';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
+
+const DEFAULT_VOICE_MODEL = 'FunAudioLLM/SenseVoiceSmall';
+
+function normalizeVoiceConfig(settingsState) {
+    const settings = settingsState?.settings || {};
+    return {
+        baseUrl: typeof settings.voiceBaseUrl === 'string' ? settings.voiceBaseUrl : '',
+        model: typeof settings.voiceModel === 'string' && settings.voiceModel.trim()
+            ? settings.voiceModel
+            : DEFAULT_VOICE_MODEL,
+    };
+}
 
 function buildClientSentAt() {
     const now = new Date();
@@ -230,6 +243,8 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     const [contextPreferredModelId, setContextPreferredModelId] = useState('');
 
+    const [voiceConfig, setVoiceConfig] = useState(() => normalizeVoiceConfig(null));
+
     const [isLoading, setIsLoading] = useState(false);
 
     const [isRecording, setIsRecording] = useState(false);
@@ -256,6 +271,45 @@ export default function ChatInterface({ embedded = false } = {}) {
     const manualModelSelectionRef = useRef(false);
 
     const streamRef = useRef(null); // 存储 audio stream 避免作用域问题
+
+
+    useEffect(() => {
+
+        let cancelled = false;
+
+        const loadVoiceConfig = async () => {
+
+            const settingsState = await loadSettingsState().catch(() => null);
+
+            if (!cancelled) {
+
+                setVoiceConfig(normalizeVoiceConfig(settingsState));
+
+            }
+
+        };
+
+        const handleSettingsUpdated = (event) => {
+
+            setVoiceConfig(normalizeVoiceConfig({ settings: event?.detail }));
+
+            void loadVoiceConfig();
+
+        };
+
+        void loadVoiceConfig();
+
+        window.addEventListener('vantage:settings-updated', handleSettingsUpdated);
+
+        return () => {
+
+            cancelled = true;
+
+            window.removeEventListener('vantage:settings-updated', handleSettingsUpdated);
+
+        };
+
+    }, []);
 
 
 
@@ -787,7 +841,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                     console.log("[Voice] Sending to /api/transcribe...");
 
-                    const data = await fetchBackendJson('/api/transcribe', {
+                    const transcribeResponse = await fetchBackend('/api/transcribe', {
 
                         method: 'POST',
 
@@ -795,7 +849,37 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                         retryPolicy: 'mutation',
 
+                        allowHttpError: true,
+
                     });
+
+                    const data = await transcribeResponse.json().catch(() => ({}));
+
+                    if (!transcribeResponse.ok) {
+
+                        const failedModel = data.voice_model || voiceConfig.model || DEFAULT_VOICE_MODEL;
+
+                        const failedBaseUrl = data.voice_base_url || voiceConfig.baseUrl || '';
+
+                        const details = data.details || data.error || `HTTP ${transcribeResponse.status}`;
+
+                        const failedContext = failedBaseUrl ? `${failedModel} @ ${failedBaseUrl}` : failedModel;
+
+                        if (data.configuration_error) {
+
+                            setInput(t('chat.voice_config_error', { model: failedModel }));
+
+                        } else {
+
+                            setInput(t('chat.transcription_error', {
+                                error: `${failedContext}: ${details}`,
+                            }));
+
+                        }
+
+                        return;
+
+                    }
 
                     console.log("[Voice] Transcribe result:", data);
 
@@ -861,7 +945,9 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                     console.error("[Voice] Transcription error:", err);
 
-                    setInput(t('chat.transcription_error', { error: err.message }));
+                    setInput(t('chat.transcription_error', {
+                        error: `${voiceConfig.model || DEFAULT_VOICE_MODEL}: ${err.message}`,
+                    }));
 
                 } finally {
 
@@ -995,6 +1081,21 @@ export default function ChatInterface({ embedded = false } = {}) {
             alignItems: 'flex-end'
 
         }}>
+
+            <span
+                title={voiceConfig.baseUrl || t('settings.voice_provider.base_url')}
+                style={{
+                    alignSelf: 'center',
+                    color: 'var(--text-muted)',
+                    fontSize: '0.72rem',
+                    maxWidth: '180px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                }}
+            >
+                {t('chat.voice_model', { model: voiceConfig.model || DEFAULT_VOICE_MODEL })}
+            </span>
 
             <button
 

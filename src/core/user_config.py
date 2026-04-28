@@ -12,6 +12,7 @@ SETTINGS_VERSION = 1
 PROVIDERS_VERSION = 2
 PROVIDER_TYPE_OPENAI_COMPATIBLE = "openai-compatible"
 MIGRATION_STATE_VERSION = 1
+DEFAULT_VOICE_MODEL = "FunAudioLLM/SenseVoiceSmall"
 
 DEFAULT_SETTINGS = {
     "version": SETTINGS_VERSION,
@@ -19,7 +20,11 @@ DEFAULT_SETTINGS = {
     "launch_at_login": False,
     "display_language": "system",
     "theme": "dark",
+    "theme_mode": "dark",
     "background_mode": "balanced",
+    "voice_base_url": "",
+    "voice_api_key": "",
+    "voice_model": DEFAULT_VOICE_MODEL,
 }
 
 DEFAULT_PROVIDER_CONFIG = {
@@ -155,6 +160,14 @@ def _coerce_theme(payload: dict | None, key: str = "theme") -> str:
     return "dark"
 
 
+def _coerce_theme_mode(payload: dict | None, key: str = "theme_mode") -> str:
+    value = payload.get(key) if isinstance(payload, dict) else None
+    if value in {"auto", "dark", "light"}:
+        return value
+
+    return _coerce_theme(payload)
+
+
 def _coerce_background_mode(payload: dict | None, key: str = "background_mode") -> str:
     value = payload.get(key) if isinstance(payload, dict) else None
     if value in {"balanced", "prewarm", "power_saver"}:
@@ -188,7 +201,11 @@ def _sanitize_settings(payload: dict | None) -> dict:
         "launch_at_login": _coerce_bool(payload, "launch_at_login", False),
         "display_language": _coerce_display_language(payload),
         "theme": _coerce_theme(payload),
+        "theme_mode": _coerce_theme_mode(payload),
         "background_mode": _coerce_background_mode(payload),
+        "voice_base_url": _coerce_optional_str(payload, "voice_base_url") or "",
+        "voice_api_key": _coerce_optional_str(payload, "voice_api_key") or "",
+        "voice_model": _coerce_optional_str(payload, "voice_model") or DEFAULT_VOICE_MODEL,
     }
 
 
@@ -304,6 +321,28 @@ def get_active_provider_config(providers_file: str | Path | None = None) -> dict
         return chain[0]
 
     return None
+
+
+def get_voice_provider_config(settings_file: str | Path | None = None) -> dict:
+    settings = load_settings(settings_file=settings_file)
+    base_url = _coerce_optional_str(settings, "voice_base_url") or ""
+    api_key = _coerce_optional_str(settings, "voice_api_key") or ""
+    model = _coerce_optional_str(settings, "voice_model") or DEFAULT_VOICE_MODEL
+    missing = []
+    if not base_url:
+        missing.append("voice_base_url")
+    if not api_key:
+        missing.append("voice_api_key")
+    if not model:
+        missing.append("voice_model")
+
+    return {
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": model,
+        "complete": not missing,
+        "missing": missing,
+    }
 
 
 def load_migration_state(migration_state_file: str | Path | None = None) -> dict:

@@ -20,6 +20,7 @@ import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 const SECTION_ORDER = [
   { key: 'general', labelKey: 'settings.section.general' },
   { key: 'ai_provider', labelKey: 'settings.section.ai_provider' },
+  { key: 'voice_provider', labelKey: 'settings.section.voice_provider' },
   { key: 'data_logs', labelKey: 'settings.section.data_logs' },
   { key: 'performance', labelKey: 'settings.section.performance' },
   { key: 'about', labelKey: 'settings.section.about' },
@@ -32,9 +33,12 @@ const LANGUAGE_OPTIONS = [
 ];
 
 const THEME_OPTIONS = [
+  { value: 'auto', labelKey: 'settings.general.theme_auto' },
   { value: 'dark', labelKey: 'settings.general.theme_dark' },
   { value: 'light', labelKey: 'settings.general.theme_light' },
 ];
+
+const DEFAULT_VOICE_MODEL = 'FunAudioLLM/SenseVoiceSmall';
 
 const BACKGROUND_MODE_OPTIONS = [
   { value: 'balanced', labelKey: 'settings.performance.balanced' },
@@ -142,7 +146,7 @@ function SettingsRow({ label, children }) {
   );
 }
 
-export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
+export default function Settings({ currentTheme = 'dark', currentThemeMode = 'dark', onSettingsApplied }) {
   const { displayLanguage, setDisplayLanguage, t } = useDisplayLanguage();
   const [activeSection, setActiveSection] = useState('general');
   const [activeProviderRoute, setActiveProviderRoute] = useState('custom');
@@ -151,11 +155,17 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
   const [form, setForm] = useState({
     displayLanguage,
     theme: currentTheme,
+    themeMode: currentThemeMode,
     launchAtLogin: false,
     backgroundMode: 'balanced',
+    voiceBaseUrl: '',
+    voiceApiKey: '',
+    voiceModel: DEFAULT_VOICE_MODEL,
+    voiceHasApiKey: false,
     providerConfig: normalizeProviderConfigForForm(null),
   });
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showVoiceApiKey, setShowVoiceApiKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [saveStatus, setSaveStatus] = useState('');
@@ -187,8 +197,13 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
       setForm({
         displayLanguage: nextState.settings.displayLanguage || displayLanguage,
         theme: nextState.settings.theme || currentTheme,
+        themeMode: nextState.settings.themeMode || nextState.settings.theme || currentThemeMode,
         launchAtLogin: Boolean(nextState.settings.launchAtLogin),
         backgroundMode: nextState.settings.backgroundMode || 'balanced',
+        voiceBaseUrl: nextState.settings.voiceBaseUrl || '',
+        voiceApiKey: nextState.settings.voiceApiKey || '',
+        voiceModel: nextState.settings.voiceModel || DEFAULT_VOICE_MODEL,
+        voiceHasApiKey: Boolean(nextState.settings.voiceHasApiKey),
         providerConfig,
       });
     }
@@ -198,7 +213,7 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
     return () => {
       cancelled = true;
     };
-  }, [currentTheme, displayLanguage]);
+  }, [currentTheme, currentThemeMode, displayLanguage]);
 
   const providerRoutes = Object.keys(form.providerConfig.providers);
   const currentProviderRoute = form.providerConfig.providers[activeProviderRoute]
@@ -218,10 +233,22 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
       `dataDir=${state.app.dataDir || ''}`,
       `language=${form.displayLanguage}`,
       `theme=${form.theme}`,
+      `themeMode=${form.themeMode}`,
       `backgroundMode=${form.backgroundMode}`,
+      `voiceBaseUrl=${form.voiceBaseUrl || ''}`,
+      `voiceModel=${form.voiceModel || ''}`,
       `provider=${form.providerConfig.selected_provider || ''}`,
     ].join('\n');
-  }, [form.backgroundMode, form.displayLanguage, form.providerConfig.selected_provider, form.theme, state]);
+  }, [
+    form.backgroundMode,
+    form.displayLanguage,
+    form.providerConfig.selected_provider,
+    form.theme,
+    form.themeMode,
+    form.voiceBaseUrl,
+    form.voiceModel,
+    state,
+  ]);
 
   const updateProviderConfig = (updater) => {
     setForm((prev) => ({
@@ -385,9 +412,10 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
     }
   };
 
-  const updateTheme = (theme) => {
-    setForm((prev) => ({ ...prev, theme }));
-    onSettingsApplied?.({ theme });
+  const updateThemeMode = (themeMode) => {
+    const nextTheme = themeMode === 'auto' ? currentTheme : themeMode;
+    setForm((prev) => ({ ...prev, themeMode, theme: nextTheme }));
+    onSettingsApplied?.({ themeMode, theme: nextTheme });
   };
 
   const handleSave = async () => {
@@ -403,12 +431,20 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
         ...prev,
         displayLanguage: savedState.settings.displayLanguage,
         theme: savedState.settings.theme,
+        themeMode: savedState.settings.themeMode,
         launchAtLogin: Boolean(savedState.settings.launchAtLogin),
         backgroundMode: savedState.settings.backgroundMode,
+        voiceBaseUrl: savedState.settings.voiceBaseUrl || '',
+        voiceApiKey: savedState.settings.voiceApiKey || '',
+        voiceModel: savedState.settings.voiceModel || DEFAULT_VOICE_MODEL,
+        voiceHasApiKey: Boolean(savedState.settings.voiceHasApiKey),
         providerConfig,
       }));
       await setDisplayLanguage(savedState.settings.displayLanguage);
       onSettingsApplied?.(savedState.settings);
+      window.dispatchEvent(new CustomEvent('vantage:settings-updated', {
+        detail: savedState.settings,
+      }));
       const modelCatalog = await fetchBackendJson('/api/llm_models', { retryPolicy: 'poll' }).catch(() => null);
       window.dispatchEvent(new CustomEvent('vantage:llm-models-updated', {
         detail: modelCatalog || {
@@ -463,8 +499,8 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
             <button
               key={option.value}
               type="button"
-              className={form.theme === option.value ? 'is-active' : ''}
-              onClick={() => updateTheme(option.value)}
+              className={form.themeMode === option.value ? 'is-active' : ''}
+              onClick={() => updateThemeMode(option.value)}
             >
               {t(option.labelKey)}
             </button>
@@ -620,6 +656,53 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
     </section>
   );
 
+  const renderVoiceProvider = () => (
+    <section className="settings-section">
+      <SettingsRow label={t('settings.voice_provider.base_url')}>
+        <input
+          className="settings-input"
+          value={form.voiceBaseUrl}
+          placeholder="https://api.example.com/v1"
+          onChange={(event) => setForm((prev) => ({ ...prev, voiceBaseUrl: event.target.value }))}
+        />
+      </SettingsRow>
+      <SettingsRow label={t('settings.voice_provider.api_key')}>
+        <span className="settings-secret-input">
+          <input
+            className="settings-input"
+            type={showVoiceApiKey ? 'text' : 'password'}
+            value={form.voiceApiKey}
+            onChange={(event) => setForm((prev) => ({
+              ...prev,
+              voiceApiKey: event.target.value,
+              voiceHasApiKey: Boolean(event.target.value),
+            }))}
+          />
+          <button
+            type="button"
+            className="settings-icon-button"
+            onClick={() => setShowVoiceApiKey((prev) => !prev)}
+            title={t(showVoiceApiKey ? 'settings.provider.hide_key' : 'settings.provider.show_key')}
+          >
+            {showVoiceApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </span>
+      </SettingsRow>
+      <SettingsRow label={t('settings.voice_provider.model')}>
+        <input
+          className="settings-input"
+          value={form.voiceModel}
+          placeholder={DEFAULT_VOICE_MODEL}
+          onChange={(event) => setForm((prev) => ({ ...prev, voiceModel: event.target.value }))}
+        />
+      </SettingsRow>
+      <div className="settings-status-line">
+        <Info size={16} />
+        {t('settings.voice_provider.endpoint_hint')}
+      </div>
+    </section>
+  );
+
   const renderDataLogs = () => (
     <section className="settings-section">
       <div className="settings-path-grid">
@@ -702,6 +785,9 @@ export default function Settings({ currentTheme = 'dark', onSettingsApplied }) {
     }
     if (activeSection === 'ai_provider') {
       return renderProvider();
+    }
+    if (activeSection === 'voice_provider') {
+      return renderVoiceProvider();
     }
     if (activeSection === 'data_logs') {
       return renderDataLogs();

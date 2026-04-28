@@ -4,6 +4,7 @@ const {
     Tray,
     Menu,
     nativeImage,
+    nativeTheme,
     ipcMain,
     dialog,
     shell,
@@ -69,6 +70,14 @@ function getTitleBarOverlayOptions(theme = 'dark') {
     };
 }
 
+function resolveEffectiveThemeForMain(settings = loadSettings(runtimePaths)) {
+    const themeMode = settings.theme_mode || settings.theme || 'dark';
+    if (themeMode === 'auto') {
+        return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+    }
+    return themeMode === 'light' ? 'light' : 'dark';
+}
+
 function getWindowChromeOptions() {
     const options = {
         autoHideMenuBar: true,
@@ -76,7 +85,7 @@ function getWindowChromeOptions() {
 
     if (process.platform === 'win32') {
         options.titleBarStyle = 'hidden';
-        options.titleBarOverlay = getTitleBarOverlayOptions();
+        options.titleBarOverlay = getTitleBarOverlayOptions(resolveEffectiveThemeForMain());
     }
 
     return options;
@@ -248,6 +257,9 @@ ipcMain.handle('settings:save', async (event, payload) => {
     }
 
     syncTrayMenu();
+    if (mainWindow && process.platform === 'win32' && typeof mainWindow.setTitleBarOverlay === 'function') {
+        mainWindow.setTitleBarOverlay(getTitleBarOverlayOptions(resolveEffectiveThemeForMain()));
+    }
     return state;
 });
 

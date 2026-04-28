@@ -35,11 +35,20 @@ test('App persists the header theme toggle through formal settings', () => {
   assert.ok(appSource.includes('saveSettingsState'));
   assert.ok(appSource.includes('displayLanguage,'));
   assert.ok(appSource.includes('theme: nextTheme'));
+  assert.ok(appSource.includes('themeMode: nextTheme'));
 });
 
 test('App renders the header theme toggle as a labelled pill instead of a blank circle', () => {
   assert.ok(appSource.includes('className="theme-toggle"'));
   assert.ok(appSource.includes("<span>{t(theme === 'dark' ? 'settings.general.theme_light' : 'settings.general.theme_dark')}</span>"));
+});
+
+test('App supports automatic theme mode driven by prefers-color-scheme', () => {
+  assert.ok(appSource.includes('resolveSystemTheme'));
+  assert.ok(appSource.includes('resolveEffectiveTheme'));
+  assert.ok(appSource.includes("const [themeMode, setThemeMode]"));
+  assert.ok(appSource.includes("window.matchMedia('(prefers-color-scheme: dark)'"));
+  assert.ok(appSource.includes('currentThemeMode={themeMode}'));
 });
 
 test('App keeps the global footer off full-height tabs including system logs', () => {

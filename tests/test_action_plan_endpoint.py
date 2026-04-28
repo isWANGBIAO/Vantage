@@ -108,6 +108,13 @@ async def _consume_response_body(response):
 
 
 class ActionPlanEndpointTests(unittest.TestCase):
+    def _complete_voice_settings(self):
+        return {
+            "voice_base_url": "https://voice.example.invalid/v1",
+            "voice_api_key": "sk-voice",
+            "voice_model": "sensevoice",
+        }
+
     def test_server_keeps_debug_suite_endpoints_registered(self):
         route_paths = {route.path for route in server.app.routes}
 
@@ -242,6 +249,10 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 "abspath",
                 side_effect=fake_abspath,
             ), patch.object(
+                server,
+                "load_settings",
+                return_value=self._complete_voice_settings(),
+            ), patch.object(
                 server.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(side_effect=RuntimeError("spawn failed")),
@@ -269,6 +280,10 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 server.os.path,
                 "abspath",
                 side_effect=fake_abspath,
+            ), patch.object(
+                server,
+                "load_settings",
+                return_value=self._complete_voice_settings(),
             ), patch.object(
                 server.asyncio,
                 "create_subprocess_exec",
@@ -298,6 +313,10 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 "abspath",
                 side_effect=fake_abspath,
             ), patch.object(
+                server,
+                "load_settings",
+                return_value=self._complete_voice_settings(),
+            ), patch.object(
                 server.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(side_effect=fake_create_subprocess_exec),
@@ -309,6 +328,57 @@ class ActionPlanEndpointTests(unittest.TestCase):
             self.assertEqual(len(set(temp_paths)), 2)
             self.assertTrue(all(path.parent == Path(temp_dir) for path in temp_paths))
             self.assertFalse(any(path.exists() for path in temp_paths))
+
+    def test_transcribe_audio_returns_configuration_error_when_voice_provider_missing(self):
+        with patch.object(
+            server,
+            "load_settings",
+            return_value={
+                "voice_base_url": "",
+                "voice_api_key": "",
+                "voice_model": "FunAudioLLM/SenseVoiceSmall",
+            },
+        ), patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(),
+        ) as mock_create:
+            response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+
+        self.assertEqual(response.status_code, 400)
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(payload["error"], "Voice transcription provider is not configured")
+        self.assertEqual(payload["voice_model"], "FunAudioLLM/SenseVoiceSmall")
+        self.assertEqual(payload["voice_base_url"], "")
+        self.assertEqual(payload["configuration_error"], True)
+        self.assertEqual(payload["missing"], ["voice_base_url", "voice_api_key"])
+        mock_create.assert_not_called()
+
+    def test_transcribe_audio_passes_voice_provider_to_run_prompt_and_returns_metadata(self):
+        fake_process = _FakeProcess(returncode=0)
+        fake_process.communicate = AsyncMock(return_value=(b"TRANSCRIPTION_RESULT:hello\n", b""))
+        created_args = []
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            created_args.extend(cmd)
+            return fake_process
+
+        with patch.object(server, "load_settings", return_value=self._complete_voice_settings()), patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(side_effect=fake_create_subprocess_exec),
+        ):
+            response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+
+        self.assertEqual(response["transcription"], "hello")
+        self.assertEqual(response["voice_model"], "sensevoice")
+        self.assertEqual(response["voice_base_url"], "https://voice.example.invalid/v1")
+        self.assertIn("--transcribe-base-url", created_args)
+        self.assertIn("--transcribe-api-key", created_args)
+        self.assertIn("--transcribe-model", created_args)
+        self.assertEqual(created_args[created_args.index("--transcribe-base-url") + 1], "https://voice.example.invalid/v1")
+        self.assertEqual(created_args[created_args.index("--transcribe-api-key") + 1], "sk-voice")
+        self.assertEqual(created_args[created_args.index("--transcribe-model") + 1], "sensevoice")
 
     def test_transcribe_audio_returns_error_when_subprocess_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -323,6 +393,10 @@ class ActionPlanEndpointTests(unittest.TestCase):
             fake_process.communicate = AsyncMock(return_value=(b"TRANSCRIPTION_ERROR:missing api key\n", b"transcribe failed"))
 
             with patch.object(server.os.path, "abspath", side_effect=fake_abspath), patch.object(
+                server,
+                "load_settings",
+                return_value=self._complete_voice_settings(),
+            ), patch.object(
                 server.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(return_value=fake_process),

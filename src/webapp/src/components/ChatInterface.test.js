@@ -58,6 +58,8 @@ test('ChatInterface copy uses readable labels for model and voice flow', () => {
   assert.ok(chatSource.includes("t('chat.transcribing')"));
   assert.ok(chatSource.includes("t('chat.transcription_failed')"));
   assert.ok(chatSource.includes("t('chat.transcription_error'"));
+  assert.ok(chatSource.includes("t('chat.voice_model'"));
+  assert.ok(chatSource.includes("t('chat.voice_config_error'"));
   assert.ok(chatSource.includes("t('chat.microphone_error'"));
   assert.ok(chatSource.includes("t('chat.input_placeholder')"));
 
@@ -77,6 +79,16 @@ test('ChatInterface copy uses readable labels for model and voice flow', () => {
       `visible copy line should stay ASCII: ${line}`,
     );
   }
+});
+
+test('ChatInterface loads voice provider settings and surfaces transcription metadata', () => {
+  assert.ok(chatSource.includes('loadSettingsState'));
+  assert.ok(chatSource.includes('voiceConfig'));
+  assert.ok(chatSource.includes('voice_model'));
+  assert.ok(chatSource.includes('voice_base_url'));
+  assert.ok(chatSource.includes('configuration_error'));
+  assert.ok(chatSource.includes("allowHttpError: true"));
+  assert.ok(chatSource.includes("vantage:settings-updated"));
 });
 
 test('ChatInterface uses provider-aware model options before falling back to legacy models', () => {

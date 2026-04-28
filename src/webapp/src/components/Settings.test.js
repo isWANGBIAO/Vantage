@@ -8,6 +8,7 @@ test('Settings exposes the five formal settings sections', () => {
   for (const sectionKey of [
     'settings.section.general',
     'settings.section.ai_provider',
+    'settings.section.voice_provider',
     'settings.section.data_logs',
     'settings.section.performance',
     'settings.section.about',
@@ -15,6 +16,19 @@ test('Settings exposes the five formal settings sections', () => {
     assert.ok(settingsSource.includes(sectionKey), `${sectionKey} should be defined`);
   }
   assert.ok(settingsSource.includes('t(section.labelKey)'));
+});
+
+test('Settings exposes automatic theme mode and independent voice provider controls', () => {
+  assert.ok(settingsSource.includes("value: 'auto'"));
+  assert.ok(settingsSource.includes('settings.general.theme_auto'));
+  assert.ok(settingsSource.includes('themeMode'));
+  assert.ok(settingsSource.includes('renderVoiceProvider'));
+  assert.ok(settingsSource.includes('voiceBaseUrl'));
+  assert.ok(settingsSource.includes('voiceApiKey'));
+  assert.ok(settingsSource.includes('voiceModel'));
+  assert.ok(settingsSource.includes('settings.voice_provider.base_url'));
+  assert.ok(settingsSource.includes('settings.voice_provider.api_key'));
+  assert.ok(settingsSource.includes('settings.voice_provider.model'));
 });
 
 test('Settings masks provider API key until the user reveals it', () => {
