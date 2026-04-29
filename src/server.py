@@ -441,6 +441,7 @@ _background_mode_cache = {
     "mode": None,
     "loaded_at": 0.0,
 }
+_background_mode_cache_lock = threading.Lock()
 
 
 def _mount_static_once(route_path, directory, name):
@@ -465,11 +466,17 @@ def _mount_static_once(route_path, directory, name):
 
 
 def _start_background_thread_once(thread_name, target):
-    if state.background_thread_status.get(thread_name):
-        return False
+    with state.lock:
+        if state.background_thread_status.get(thread_name):
+            return False
+        state.background_thread_status[thread_name] = True
 
-    threading.Thread(target=target, daemon=True).start()
-    state.background_thread_status[thread_name] = True
+    try:
+        threading.Thread(target=target, daemon=True).start()
+    except Exception:
+        with state.lock:
+            state.background_thread_status[thread_name] = False
+        raise
     return True
 
 
@@ -574,10 +581,11 @@ def sanitize_background_mode(value):
 
 def load_background_mode(now_ts=None):
     now_ts = now_ts if now_ts is not None else time.time()
-    cached_mode = _background_mode_cache.get("mode")
-    cached_at = float(_background_mode_cache.get("loaded_at") or 0.0)
-    if cached_mode and now_ts - cached_at < BACKGROUND_MODE_CACHE_TTL_SECONDS:
-        return cached_mode
+    with _background_mode_cache_lock:
+        cached_mode = _background_mode_cache.get("mode")
+        cached_at = float(_background_mode_cache.get("loaded_at") or 0.0)
+        if cached_mode and now_ts - cached_at < BACKGROUND_MODE_CACHE_TTL_SECONDS:
+            return cached_mode
 
     try:
         settings = load_settings()
@@ -586,8 +594,9 @@ def load_background_mode(now_ts=None):
         print(f"Failed to load background mode setting: {exc}")
         mode = "balanced"
 
-    _background_mode_cache["mode"] = mode
-    _background_mode_cache["loaded_at"] = now_ts
+    with _background_mode_cache_lock:
+        _background_mode_cache["mode"] = mode
+        _background_mode_cache["loaded_at"] = now_ts
     return mode
 
 
@@ -1323,7 +1332,7 @@ def find_latest_file_recursive(
                     if mtime > latest_time:
                         latest_time = mtime
                         latest_file = full_path
-                except:
+                except OSError:
                     pass
     return latest_file
 
@@ -1579,59 +1588,59 @@ def generate_frames():
     try:
         while True:
             frame = None
-            overlay_score = None
+            show_person_box = False
+            person_boxes_copy = []
             with state.lock:
                 if state.latest_frame is not None:
                     frame = state.latest_frame.copy()
-                else:
-                    # Create a black placeholder image (16:9 aspect ratio)
-                    import numpy as np
-                    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-                    cv2.putText(frame, "Camera Offline", (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 2)
                 overlay_score = state.latest_live_face_score
+                show_person_box = state.show_person_box
+                if show_person_box:
+                    person_boxes_copy = list(state.person_boxes)
 
-                # Draw YOLO bounding boxes if enabled
-                if state.show_person_box and frame is not None:
-                    for (x1, y1, x2, y2) in state.person_boxes:
-                        # Neon Green box
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                        # Keep the person label above the box even when using a large font.
-                        person_font = cv2.FONT_HERSHEY_SIMPLEX
-                        person_label = "Person"
-                        (_, person_text_height), person_baseline = cv2.getTextSize(
-                            person_label,
-                            person_font,
-                            FACE_OVERLAY_PERSON_FONT_SCALE,
-                            FACE_OVERLAY_PERSON_THICKNESS,
-                        )
-                        person_y = max(person_text_height + person_baseline + 8, y1 - 16)
-                        cv2.putText(
-                            frame,
-                            person_label,
-                            (x1, person_y),
-                            person_font,
-                            FACE_OVERLAY_PERSON_FONT_SCALE,
-                            (0, 255, 0),
-                            FACE_OVERLAY_PERSON_THICKNESS,
-                        )
-                        score_label = format_live_face_score_label(overlay_score)
-                        font = cv2.FONT_HERSHEY_SIMPLEX
-                        font_scale = FACE_OVERLAY_SCORE_FONT_SCALE
-                        thickness = FACE_OVERLAY_SCORE_THICKNESS
-                        padding = FACE_OVERLAY_SCORE_PADDING
-                        (text_width, text_height), baseline = cv2.getTextSize(score_label, font, font_scale, thickness)
-                        text_x = max(6, x2 - text_width)
-                        text_y = max(text_height + baseline + padding, y1 - 12)
-                        background_tl = (
-                            max(0, text_x - padding),
-                            max(0, text_y - text_height - baseline - padding),
-                        )
-                        background_br = (
-                            min(frame.shape[1] - 1, text_x + text_width + padding),
-                            min(frame.shape[0] - 1, text_y + padding),
-                        )
-                        cv2.rectangle(frame, background_tl, background_br, (0, 255, 0), -1)
-                        cv2.putText(frame, score_label, (text_x, text_y), font, font_scale, (0, 0, 0), thickness)
+            if frame is None:
+                import numpy as np
+                frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+                cv2.putText(frame, "Camera Offline", (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 2)
+
+            if show_person_box:
+                for (x1, y1, x2, y2) in person_boxes_copy:
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    person_label = "Person"
+                    (_, person_text_height), person_baseline = cv2.getTextSize(
+                        person_label,
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        FACE_OVERLAY_PERSON_FONT_SCALE,
+                        FACE_OVERLAY_PERSON_THICKNESS,
+                    )
+                    person_y = max(person_text_height + person_baseline + 8, y1 - 16)
+                    cv2.putText(
+                        frame,
+                        person_label,
+                        (x1, person_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        FACE_OVERLAY_PERSON_FONT_SCALE,
+                        (0, 255, 0),
+                        FACE_OVERLAY_PERSON_THICKNESS,
+                    )
+                    score_label = format_live_face_score_label(overlay_score)
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = FACE_OVERLAY_SCORE_FONT_SCALE
+                    thickness = FACE_OVERLAY_SCORE_THICKNESS
+                    padding = FACE_OVERLAY_SCORE_PADDING
+                    (text_width, text_height), baseline = cv2.getTextSize(score_label, font, font_scale, thickness)
+                    text_x = max(6, x2 - text_width)
+                    text_y = max(text_height + baseline + padding, y1 - 12)
+                    background_tl = (
+                        max(0, text_x - padding),
+                        max(0, text_y - text_height - baseline - padding),
+                    )
+                    background_br = (
+                        min(frame.shape[1] - 1, text_x + text_width + padding),
+                        min(frame.shape[0] - 1, text_y + padding),
+                    )
+                    cv2.rectangle(frame, background_tl, background_br, (0, 255, 0), -1)
+                    cv2.putText(frame, score_label, (text_x, text_y), font, font_scale, (0, 0, 0), thickness)
 
             ret, buffer = cv2.imencode('.jpg', frame)
             frame_bytes = buffer.tobytes()
@@ -2715,9 +2724,8 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
     original_filename = file.filename or "recording.webm"
     ext = os.path.splitext(original_filename)[1] or ".webm"
-    
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    temp_fd, temp_filename = tempfile.mkstemp(prefix="temp_audio_", suffix=ext, dir=project_root)
+
+    temp_fd, temp_filename = tempfile.mkstemp(prefix="temp_audio_", suffix=ext)
     
     print(f"[Transcribe] Saving uploaded file to: {temp_filename}")
     
@@ -2777,13 +2785,13 @@ async def transcribe_audio(file: UploadFile = File(...)):
         output = ""
         try:
             output = stdout.decode('utf-8')
-        except:
+        except UnicodeDecodeError:
             output = stdout.decode('gbk', errors='replace')
         
         if stderr:
             try:
                 stderr_text = stderr.decode('utf-8')
-            except:
+            except UnicodeDecodeError:
                 stderr_text = stderr.decode('gbk', errors='replace')
             stderr_text = _redact_api_key_from_message(stderr_text, voice_config["api_key"])
             print(f"[Transcribe] Stderr: {stderr_text}")
@@ -3106,11 +3114,7 @@ def get_sedentary_stats():
 
         now = time.time()
         heartbeat = getattr(state.monitor, "last_monitor_heartbeat", None)
-        stale_timeout = getattr(
-            state.monitor,
-            "monitor_stale_timeout",
-            getattr(state.monitor, "grace_period", None),
-        )
+        stale_timeout = getattr(state.monitor, "monitor_stale_timeout", 120)
         if heartbeat is not None and stale_timeout is not None and (now - heartbeat) >= stale_timeout:
              return {
                  "status": "active",

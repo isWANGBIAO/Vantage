@@ -36,23 +36,27 @@ def get_location():
 
     def run_async_in_thread(result_holder):
         loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        latitude, longitude = loop.run_until_complete(fetch_location())
-        result_holder['latitude'] = latitude
-        result_holder['longitude'] = longitude
+        try:
+            asyncio.set_event_loop(loop)
+            latitude, longitude = loop.run_until_complete(fetch_location())
+            result_holder['latitude'] = latitude
+            result_holder['longitude'] = longitude
+        finally:
+            loop.close()
 
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():  # 如果事件循环已在运行（如在 GUI 程序中）
-            result_holder = {}
-            thread = threading.Thread(target=run_async_in_thread, args=(result_holder,))
-            thread.start()
-            thread.join()  # 等待子线程完成
-            latitude = result_holder.get('latitude')
-            longitude = result_holder.get('longitude')
-        else:
-            latitude, longitude = loop.run_until_complete(fetch_location())
-    except RuntimeError:  # 如果没有事件循环
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+
+    if running_loop is not None:
+        result_holder = {}
+        thread = threading.Thread(target=run_async_in_thread, args=(result_holder,))
+        thread.start()
+        thread.join()
+        latitude = result_holder.get('latitude')
+        longitude = result_holder.get('longitude')
+    else:
         latitude, longitude = asyncio.run(fetch_location())
 
     return latitude, longitude
