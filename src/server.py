@@ -51,7 +51,12 @@ import requests
 import pandas as pd
 
 from src.core.config import Config
-from src.core.user_config import load_provider_config, load_settings
+from src.core.user_config import (
+    DEFAULT_LOCAL_PROXY_BASE_URL,
+    LOCAL_PROXY_PROVIDER_ROUTES,
+    load_provider_config,
+    load_settings,
+)
 from src.core.media_storage import get_media_paths_settings_file, resolve_media_storage_paths
 from src.manager.manager_main import Monitor
 from src.services.face_analysis_pipeline import (
@@ -2445,6 +2450,9 @@ def _resolve_discover_secret(request: LLMModelDiscoverRequest):
             if not base_url:
                 base_url = str(saved_provider.get("base_url") or "").strip()
             provider_type = str(saved_provider.get("type") or provider_type).strip()
+
+    if not base_url and route.lower() in LOCAL_PROXY_PROVIDER_ROUTES:
+        base_url = DEFAULT_LOCAL_PROXY_BASE_URL
 
     return {
         "route": route or "custom",

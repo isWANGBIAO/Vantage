@@ -196,6 +196,7 @@ def _sanitize_provider_entry(route: str, entry: dict | None) -> dict:
     models = _coerce_provider_models(entry, model)
     if not model and models:
         model = models[0]
+    base_url = _coerce_optional_str(entry, "base_url") or _default_base_url_for_provider(route) or ""
 
     return {
         "route": route,
@@ -203,7 +204,7 @@ def _sanitize_provider_entry(route: str, entry: dict | None) -> dict:
         "type": _coerce_provider_type(entry),
         "enabled": _coerce_bool(entry, "enabled", True),
         "api_key": _coerce_optional_str(entry, "api_key") or "",
-        "base_url": _coerce_optional_str(entry, "base_url") or "",
+        "base_url": base_url,
         "model": model,
         "models": _coerce_provider_models(entry, model),
         "last_refreshed_at": _coerce_optional_str(entry, "last_refreshed_at"),

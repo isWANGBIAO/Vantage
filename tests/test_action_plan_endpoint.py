@@ -794,6 +794,50 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertNotIn("sk-test-secret-1234567890", payload["error"])
         self.assertIn("[REDACTED_API_KEY]", payload["error"])
 
+    def test_discover_llm_models_uses_saved_key_and_local_proxy_default_url(self):
+        request = server.LLMModelDiscoverRequest(
+            route="custom",
+            base_url="",
+            api_key="********",
+            type="openai-compatible",
+        )
+
+        with (
+            patch.object(
+                server,
+                "load_provider_config",
+                return_value={
+                    "version": 2,
+                    "selected_provider": "custom",
+                    "providers": {
+                        "custom": {
+                            "api_key": "saved-local-key",
+                            "base_url": "",
+                            "model": "gpt-5.5",
+                        },
+                    },
+                },
+            ),
+            patch.object(
+                server.LLMClient,
+                "discover_models_for_config",
+                return_value={
+                    "models": ["gpt-5.5"],
+                    "model_capabilities": {"gpt-5.5": None},
+                    "error": None,
+                },
+            ) as discover,
+        ):
+            payload = asyncio.run(server.discover_llm_models(request))
+
+        self.assertEqual(payload["models"], ["gpt-5.5"])
+        discover.assert_called_once_with(
+            route="custom",
+            base_url="http://127.0.0.1:8317/v1",
+            api_key="saved-local-key",
+            provider_type="openai-compatible",
+        )
+
     def test_generate_action_plan_defaults_reasoning_effort_to_medium(self):
         fake_process = _FakeProcess()
 

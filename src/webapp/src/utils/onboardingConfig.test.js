@@ -277,6 +277,47 @@ test('buildSettingsState reports a complete provider when selected provider is e
   assert.equal(state.provider.providers.custom.has_api_key, true);
 });
 
+test('buildSettingsState shows local proxy defaults for saved provider key', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-settings-local-proxy-default-'));
+  const runtimePaths = {
+    configDir: path.join(root, 'config'),
+    historyDir: path.join(root, 'history'),
+    logDir: path.join(root, 'logs'),
+    plotDir: path.join(root, 'plots'),
+    cacheDir: path.join(root, 'cache'),
+    runtimeDir: path.join(root, 'runtime'),
+    migrationDir: path.join(root, 'migration'),
+    dataDir: path.join(root, 'data'),
+  };
+  mkdirSync(runtimePaths.configDir, { recursive: true });
+  writeFileSync(
+    path.join(runtimePaths.configDir, 'providers.json'),
+    JSON.stringify({
+      version: 2,
+      selected_provider: 'custom',
+      providers: {
+        custom: {
+          api_key: 'local-proxy-key',
+          base_url: '',
+          model: 'gpt-5.5',
+        },
+      },
+    }),
+    'utf8',
+  );
+
+  const state = buildSettingsState({
+    runtimePaths,
+    projectRoot: root,
+  });
+
+  assert.equal(state.provider.selected_provider, 'custom');
+  assert.equal(state.provider.providers.custom.api_key, '********');
+  assert.equal(state.provider.providers.custom.has_api_key, true);
+  assert.equal(state.provider.providers.custom.base_url, 'http://127.0.0.1:8317/v1');
+  assert.equal(state.provider.providers.custom.model, 'gpt-5.5');
+});
+
 test('saveSettingsPayload does not switch to an empty submitted provider', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'vantage-settings-save-provider-heal-'));
   const runtimePaths = {

@@ -171,13 +171,14 @@ function defaultBaseUrlForProvider(route) {
 function sanitizeProviderEntry(route, entry) {
   const safeEntry = entry && typeof entry === 'object' ? entry : {};
   const model = normalizeOptionalString(safeEntry.model) || normalizeModels(safeEntry.models, null)[0] || '';
+  const baseUrl = normalizeOptionalString(safeEntry.base_url) || defaultBaseUrlForProvider(route) || '';
   return {
     route,
     name: normalizeOptionalString(safeEntry.name) || route,
     type: normalizeProviderType(safeEntry.type),
     enabled: typeof safeEntry.enabled === 'boolean' ? safeEntry.enabled : true,
     api_key: normalizeOptionalString(safeEntry.api_key) || '',
-    base_url: normalizeOptionalString(safeEntry.base_url) || '',
+    base_url: baseUrl,
     model,
     models: normalizeModels(safeEntry.models, model),
     last_refreshed_at: normalizeOptionalString(safeEntry.last_refreshed_at),

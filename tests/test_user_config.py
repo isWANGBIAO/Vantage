@@ -374,6 +374,8 @@ def test_get_active_provider_config_accepts_local_proxy_api_key_without_repo_env
         "models": [],
         "last_refreshed_at": None,
     }
+    persisted = json.loads(providers_file.read_text(encoding="utf-8"))
+    assert persisted["providers"]["custom"]["base_url"] == "http://127.0.0.1:8317/v1"
 
 
 def test_get_provider_chain_config_orders_selected_and_skips_disabled(tmp_path):
