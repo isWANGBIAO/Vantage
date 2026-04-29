@@ -140,6 +140,9 @@ src/AI_Prediction/data/*.csv
 src/scripts/download_model_helper.py
 results.csv
 
+# Claude Code
+.claude/
+
 # Agent skills (superpowers)
 .agents/
 logs/
