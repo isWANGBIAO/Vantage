@@ -161,7 +161,7 @@ def load_excel_safely(path):
             # Cleanup
             try:
                 os.remove(temp_path)
-            except:
+            except OSError:
                 pass
             
             return df

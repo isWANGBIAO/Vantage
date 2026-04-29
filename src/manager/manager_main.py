@@ -61,7 +61,6 @@ class Monitor:
             real_person, photo_path = take_photo(self.camera, latitude, longitude, self.photos_path)
 
             current_time = time.time()
-            self.last_monitor_heartbeat = current_time
 
             if real_person:
                 self.last_missing_time = None

@@ -273,7 +273,7 @@ class DarkCircleAnalyzer:
                  dt = datetime.strptime(ts_str[:15], "%Y%m%d_%H%M%S")
                  result['timestamp'] = dt.timestamp()
                  result['datetime'] = dt.strftime("%Y-%m-%d %H:%M:%S")
-        except:
+        except (ValueError, IndexError):
              # Try OS mtime as fallback
              pass
         
@@ -489,8 +489,8 @@ def main():
             if 'path' in df_exist.columns:
                 processed_paths = set(df_exist['path'].astype(str))
                 print(f"Resuming... skipping {len(processed_paths)} already processed files.")
-        except:
-            print("Could not read existing CSV, starting fresh.")
+        except (OSError, ValueError) as exc:
+            print(f"Could not read existing CSV ({exc}), starting fresh.")
     
     files_to_process = [f for f in files if f not in processed_paths]
     print(f"Remaining to process: {len(files_to_process)}")
@@ -637,13 +637,7 @@ def main():
                 print(f"Error copying {src}: {e}")
 
         # Worst (Darkest) -> High Score
-        for i, row in df_valid.tail(10).iterrows():
-            try:
-                src = row['path']
-                # Tail is lowest to highest, so we want the very end (highest)
-                # Let's reverse tail to get highest first
-                pass
-            except: pass
+        # NOTE: tail(10) iteration was dead code — worst export relies on df_desc below instead.
             
         # Re-sort descending for worst export
         df_desc = df_valid.sort_values('score', ascending=False)
