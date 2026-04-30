@@ -62,17 +62,17 @@ class SleepScheduleDashboardTests(unittest.TestCase):
     def test_balance_dashboard_splits_actual_assets_from_forecast_path(self):
         data_frame = pd.DataFrame(
             {
-                "日期": pd.to_datetime(["2026-04-30", "2026-05-31", "2026-06-30"]),
-                "支付宝资产": [57433.39, None, None],
-                "银行卡资产": [157.33, None, None],
-                "微信资产": [142.80, None, None],
-                "股票资产": [1089.10, None, None],
-                "现金及现金等价物+股票": [58822.62, 0.0, 0.0],
-                "收入工资": [9834.0, 9834.0, 9834.0],
-                "期间收入": [9972.0, 9834.0, 9834.0],
-                "期间支出": [3880.93, 68656.62, 9834.0],
-                "日均支出": [129.36, 2214.73, 327.8],
-                "记录类型": ["实际", "预测", "预测"],
+                "日期": pd.to_datetime(["2026-04-30", "2026-05-31", "2026-06-30", "2026-07-31"]),
+                "支付宝资产": [57433.39, None, None, None],
+                "银行卡资产": [157.33, None, None, None],
+                "微信资产": [142.80, None, None, None],
+                "股票资产": [1089.10, None, None, None],
+                "现金及现金等价物+股票": [58822.62, 0.0, 0.0, 0.0],
+                "收入工资": [9834.0, 9834.0, 30834.0, 6000.0],
+                "期间收入": [9972.0, 9834.0, 30834.0, 6000.0],
+                "期间支出": [3880.93, 68656.62, 30834.0, 6000.0],
+                "日均支出": [129.36, 2214.73, 1027.8, 193.5],
+                "记录类型": ["实际", "预测", "预测", "预测"],
             }
         )
 
@@ -86,8 +86,15 @@ class SleepScheduleDashboardTests(unittest.TestCase):
         forecast_series = next(item for item in chart["option"]["series"] if item["name"] == "预测期末现金+股票")
 
         self.assertEqual([point[0] for point in cash_series["data"]], ["2026-04-30"])
-        self.assertEqual([point[0] for point in forecast_series["data"]], ["2026-04-30", "2026-05-31", "2026-06-30"])
-        self.assertEqual([point[1] for point in forecast_series["data"]], [58823.0, 68657.0, 78491.0])
+        self.assertEqual(
+            [point["value"][0] for point in forecast_series["data"]],
+            ["2026-04-30", "2026-05-31", "2026-06-30", "2026-07-31"],
+        )
+        self.assertEqual([point["value"][1] for point in forecast_series["data"]], [58823.0, 68657.0, 99491.0, 105491.0])
+        self.assertEqual([point.get("monthlyIncome") for point in forecast_series["data"]], [None, 9834.0, 30834.0, 6000.0])
+        self.assertEqual(forecast_series["step"], "end")
+        self.assertFalse(forecast_series["smooth"])
+        self.assertTrue(forecast_series["showSymbol"])
         self.assertEqual(forecast_series["lineStyle"]["type"], "dashed")
         self.assertTrue(all(zoom["start"] == 0 for zoom in chart["option"]["dataZoom"]))
         self.assertTrue(all(zoom["end"] == 100 for zoom in chart["option"]["dataZoom"]))

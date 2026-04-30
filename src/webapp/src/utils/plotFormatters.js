@@ -191,6 +191,44 @@ function genericTooltipFormatter(params, language = 'zh-CN') {
   return header ? `${header}<br/>${rows}` : rows;
 }
 
+function getPointMonthlyIncome(point) {
+  const source = point?.data;
+  if (!source || Array.isArray(source) || typeof source !== 'object') {
+    return null;
+  }
+
+  const value = source.monthlyIncome ?? source.monthly_income ?? source.periodIncome ?? source.period_income;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function balanceTooltipFormatter(params, language = 'zh-CN') {
+  const points = Array.isArray(params) ? params : [params];
+  if (!points.length) {
+    return '';
+  }
+
+  const header = tooltipHeader(points[0]);
+  const rows = points
+    .flatMap((param) => {
+      const marker = param.marker || '•';
+      const seriesName = localizePlotText(param.seriesName || '', language);
+      const rawValue = Array.isArray(param.value) ? param.value[param.value.length - 1] : param.value;
+      const value = formatBySeriesName(seriesName, rawValue, language);
+      const output = [`${marker} ${seriesName}: ${value}`];
+      const monthlyIncome = getPointMonthlyIncome(param);
+
+      if (monthlyIncome !== null) {
+        output.push(`${marker} ${localizePlotText('当月收入', language)}: ${formatCurrency(monthlyIncome)}`);
+      }
+
+      return output;
+    })
+    .join('<br/>');
+
+  return header ? `${header}<br/>${rows}` : rows;
+}
+
 function weightBodyfatFormatter(params, language = 'zh-CN') {
   const points = Array.isArray(params) ? params : [params];
   if (!points.length) {
@@ -271,6 +309,8 @@ function createTooltipFormatter(chartId, language = 'zh-CN') {
       return sleepScheduleFormatter;
     case 'running':
       return (params) => runningFormatter(params, language);
+    case 'balance':
+      return (params) => balanceTooltipFormatter(params, language);
     case 'radar-goal':
       return (params) => radarFormatter(params, language);
     default:

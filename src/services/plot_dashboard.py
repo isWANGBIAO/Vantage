@@ -75,6 +75,23 @@ def _series_points(dates, values, digits=2):
     ]
 
 
+def _forecast_balance_points(forecast_df):
+    points = []
+    for position, (_, row) in enumerate(forecast_df.iterrows()):
+        point = {
+            'value': [
+                _to_chart_date(row.get('日期')),
+                _to_chart_number(row.get('projected_balance'), 0),
+            ],
+        }
+        if position > 0:
+            monthly_income = _to_chart_number(row.get('total_income'), 2)
+            if monthly_income is not None:
+                point['monthlyIncome'] = monthly_income
+        points.append(point)
+    return points
+
+
 def _category_values(values, digits=2):
     return [_to_chart_number(value, digits) for value in values]
 
@@ -922,14 +939,13 @@ def _build_balance_dashboard_chart():
             {
                 'name': '预测期末现金+股票',
                 'type': 'line',
-                'showSymbol': False,
-                'smooth': True,
+                'showSymbol': True,
+                'smooth': False,
+                'step': 'end',
+                'symbol': 'circle',
+                'symbolSize': 7,
                 'lineStyle': {'width': 2, 'type': 'dashed'},
-                'data': _series_points(
-                    forecast_series_df['日期'].tolist(),
-                    forecast_series_df['projected_balance'].to_numpy(dtype=float),
-                    0,
-                ),
+                'data': _forecast_balance_points(forecast_series_df),
             }
         )
 

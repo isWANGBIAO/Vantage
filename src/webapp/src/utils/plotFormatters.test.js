@@ -29,3 +29,35 @@ test('buildChartOption keeps the light palette for the light theme', () => {
   assert.equal(option.xAxis.axisLabel.color, 'rgba(19, 45, 37, 0.62)');
   assert.equal(option.yAxis.axisPointer.label.backgroundColor, '#183a2f');
 });
+
+test('balance tooltip shows monthly income for forecast points', () => {
+  const option = buildChartOption({
+    id: 'balance',
+    option: {
+      xAxis: { type: 'time' },
+      yAxis: { type: 'value' },
+      series: [
+        {
+          type: 'line',
+          name: '预测期末现金+股票',
+          data: [{ value: ['2026-08-31', 119159], monthlyIncome: 30834 }],
+        },
+      ],
+    },
+  }, 'light', 'zh-CN');
+
+  const html = option.tooltip.formatter([
+    {
+      axisValueLabel: '2026-08-31',
+      marker: '●',
+      seriesName: '预测期末现金+股票',
+      value: ['2026-08-31', 119159],
+      data: { value: ['2026-08-31', 119159], monthlyIncome: 30834 },
+    },
+  ]);
+
+  assert.match(html, /2026-08-31/);
+  assert.match(html, /预测期末现金\+股票/);
+  assert.match(html, /当月收入/);
+  assert.match(html, /¥30834/);
+});
