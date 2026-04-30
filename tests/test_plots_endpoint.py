@@ -1,7 +1,5 @@
 import asyncio
-import sys
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from src import server
@@ -16,28 +14,20 @@ class PlotRefreshEndpointTests(unittest.TestCase):
         if hasattr(server, "_clear_plot_dashboard_cache"):
             server._clear_plot_dashboard_cache()
 
-    def test_refresh_plots_runs_script_before_returning(self):
-        calls = []
-        script_path = Path(server.__file__).resolve().parent / "scripts" / "plot.py"
-
-        def fake_run(command, **kwargs):
-            calls.append((command, kwargs))
-
+    def test_refresh_plots_clears_dashboard_cache_without_matplotlib_export(self):
         with (
-            patch.object(server.os.path, "exists", return_value=True),
-            patch.object(server.subprocess, "run", side_effect=fake_run),
-            patch.object(server, "_get_runtime_workdir", return_value=Path("C:/runtime")),
+            patch.object(server, "_clear_plot_dashboard_cache") as clear_cache,
+            patch.object(
+                server.subprocess,
+                "run",
+                side_effect=AssertionError("Vantage UI refresh should not run plot.py"),
+            ) as run_script,
         ):
             payload = asyncio.run(server.refresh_plots())
 
-        self.assertEqual(payload, {"message": "Plots refreshed successfully"})
-        self.assertEqual(len(calls), 1)
-        command, kwargs = calls[0]
-        self.assertEqual(command, [sys.executable, str(script_path), "--dark"])
-        self.assertTrue(kwargs["check"])
-        self.assertEqual(Path(kwargs["cwd"]), Path("C:/runtime"))
-        self.assertEqual(kwargs["env"]["PYTHONIOENCODING"], "utf-8")
-        self.assertEqual(kwargs["timeout"], server.PLOT_REFRESH_TIMEOUT_SECONDS)
+        self.assertEqual(payload, {"message": "Plot dashboard data cache cleared", "status": "ready"})
+        clear_cache.assert_called_once()
+        run_script.assert_not_called()
 
     def test_refresh_plots_rejects_concurrent_refresh(self):
         acquired = server._plot_refresh_lock.acquire(blocking=False)

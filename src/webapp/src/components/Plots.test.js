@@ -15,7 +15,7 @@ test('Plots routes visible shell copy through the display language layer', () =>
   assert.ok(plotsSource.includes("t('plots.summary.generated_at')"));
 });
 
-test('Plots refresh button starts the backend plot refresh job before reloading data', () => {
+test('Plots refresh button clears the dashboard cache before reloading data', () => {
   assert.ok(plotsSource.includes("fetchBackendJson('/api/plots/refresh', {"));
   assert.ok(plotsSource.includes("method: 'POST'"));
   assert.ok(plotsSource.includes("retryPolicy: 'mutation'"));

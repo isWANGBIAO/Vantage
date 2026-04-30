@@ -30,7 +30,7 @@ test('Expense Sheet renders a separate future income forecast section', () => {
   assert.ok(cssSource.includes('.expense-forecast-summary'));
 });
 
-test('Expense Sheet refresh starts the backend plot refresh job before reloading charts', () => {
+test('Expense Sheet refresh clears the dashboard cache before reloading charts', () => {
   assert.ok(jsxSource.includes("fetchBackendJson('/api/plots/refresh', {"));
   assert.ok(jsxSource.includes("method: 'POST'"));
   assert.ok(jsxSource.includes("retryPolicy: 'mutation'"));

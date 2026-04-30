@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -147,6 +148,35 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual([point["date"] for point in payload["forecast_points"]], ["2026-05-31", "2026-06-30"])
         self.assertEqual(payload["forecast_points"][0]["fixed_income"], 7500.0)
         self.assertEqual(payload["forecast_points"][0]["projected_balance"], 61202.23)
+
+    def test_balance_sheet_forecast_rolls_forward_from_latest_actual_income(self):
+        expense_sheet = pd.DataFrame(
+            {
+                "日期": pd.to_datetime(["2026-04-30", "2026-05-31", "2026-06-30"]),
+                "支付宝资产": [57433.39, 0.0, 0.0],
+                "银行卡资产": [157.33, 0.0, 0.0],
+                "微信资产": [142.8, 0.0, 0.0],
+                "股票资产": [1089.1, 0.0, 0.0],
+                "现金及现金等价物+股票": [58822.62, 0.0, 0.0],
+                "收入工资": [9834.0, 9834.0, 9834.0],
+                "期间收入": [9972.0, 9834.0, 9834.0],
+                "期间支出": [3880.93, 68656.62, 9834.0],
+                "日均支出": [129.36, 2214.73, 327.8],
+                "记录类型": ["实际", "预测", "预测"],
+            }
+        )
+
+        forecast_points = server._build_balance_forecast_points(
+            {"开销": expense_sheet},
+            as_of=date(2026, 5, 1),
+        )
+
+        self.assertEqual([point["date"] for point in forecast_points], ["2026-05-31", "2026-06-30"])
+        self.assertEqual(forecast_points[0]["total_income"], 9834.0)
+        self.assertEqual(forecast_points[0]["planned_spend"], 0.0)
+        self.assertEqual(forecast_points[0]["net_cash_flow"], 9834.0)
+        self.assertAlmostEqual(forecast_points[0]["projected_balance"], 68656.62)
+        self.assertAlmostEqual(forecast_points[1]["projected_balance"], 78490.62)
 
 
 if __name__ == "__main__":

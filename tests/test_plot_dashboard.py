@@ -67,11 +67,12 @@ class SleepScheduleDashboardTests(unittest.TestCase):
                 "银行卡资产": [157.33, None, None],
                 "微信资产": [142.80, None, None],
                 "股票资产": [1089.10, None, None],
-                "现金及现金等价物+股票": [58822.62, None, None],
-                "实际/预测期末现金+股票": [58822.62, 61202.23, 63581.85],
-                "日均支出": [129.36, 165.17, 170.68],
+                "现金及现金等价物+股票": [58822.62, 0.0, 0.0],
+                "收入工资": [9834.0, 9834.0, 9834.0],
+                "期间收入": [9972.0, 9834.0, 9834.0],
+                "期间支出": [3880.93, 68656.62, 9834.0],
+                "日均支出": [129.36, 2214.73, 327.8],
                 "记录类型": ["实际", "预测", "预测"],
-                "固定收入": [None, 7500.0, 7500.0],
             }
         )
 
@@ -85,8 +86,11 @@ class SleepScheduleDashboardTests(unittest.TestCase):
         forecast_series = next(item for item in chart["option"]["series"] if item["name"] == "预测期末现金+股票")
 
         self.assertEqual([point[0] for point in cash_series["data"]], ["2026-04-30"])
-        self.assertEqual([point[0] for point in forecast_series["data"]], ["2026-05-31", "2026-06-30"])
+        self.assertEqual([point[0] for point in forecast_series["data"]], ["2026-04-30", "2026-05-31", "2026-06-30"])
+        self.assertEqual([point[1] for point in forecast_series["data"]], [58823.0, 68657.0, 78491.0])
         self.assertEqual(forecast_series["lineStyle"]["type"], "dashed")
+        self.assertTrue(all(zoom["start"] == 0 for zoom in chart["option"]["dataZoom"]))
+        self.assertTrue(all(zoom["end"] == 100 for zoom in chart["option"]["dataZoom"]))
 
 
 if __name__ == "__main__":

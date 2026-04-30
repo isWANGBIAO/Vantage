@@ -105,7 +105,6 @@ FACE_OVERLAY_SCORE_THICKNESS = 8
 FACE_OVERLAY_SCORE_PADDING = 24
 FACE_OVERLAY_PERSON_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
 FACE_OVERLAY_PERSON_THICKNESS = 6
-PLOT_REFRESH_TIMEOUT_SECONDS = 60
 FACE_EXPORT_TIMEOUT_SECONDS = 60
 _face_analysis_runtime = None
 _face_analysis_runtime_lock = threading.Lock()
@@ -1204,7 +1203,30 @@ def _build_expense_trend_points(sheets):
     trend_points.sort(key=lambda item: item["date"])
     return trend_points
 
-def _build_balance_forecast_points(sheets):
+def _sum_present_numbers(values):
+    present_values = [value for value in values if value is not None]
+    if not present_values:
+        return None
+    return sum(present_values)
+
+
+def _latest_numeric_value(df, value_col, date_col=None):
+    if df is None or df.empty or value_col is None:
+        return None
+
+    working_df = df.copy()
+    if date_col is not None and date_col in working_df.columns:
+        working_df = working_df.sort_values(date_col)
+
+    values = []
+    for value in working_df[value_col].tolist():
+        number = _coerce_number(value)
+        if number is not None:
+            values.append(number)
+    return values[-1] if values else None
+
+
+def _build_balance_forecast_points(sheets, as_of=None):
     sheet_name, df = _find_expense_sheet(sheets)
     if df is None or df.empty:
         return []
@@ -1213,14 +1235,23 @@ def _build_balance_forecast_points(sheets):
     if date_col is None:
         return []
 
-    forecast_df = _filter_forecast_expense_rows(df, date_col=date_col)
+    actual_df = _filter_actual_expense_rows(df, date_col=date_col, as_of=as_of)
+    forecast_df = _filter_forecast_expense_rows(df, date_col=date_col, as_of=as_of)
     if forecast_df is None or forecast_df.empty:
         return []
 
+    forecast_df = forecast_df.sort_values(date_col)
+    balance_col = _find_first_column(
+        actual_df,
+        ["现金及现金等价物+股票", "实际/预测期末现金+股票", "现金及现金等价物", "现金", "股票"],
+    )
+    rolling_balance = _latest_numeric_value(actual_df, balance_col, date_col=date_col)
+
+    living_income_col = _find_first_column(forecast_df, ["收入生活费", "生活费收入", "living_income"])
     fixed_income_col = _find_first_column(forecast_df, ["固定收入", "收入工资", "固定工资", "fixed_income"])
     extra_income_col = _find_first_column(forecast_df, ["额外收入", "收入其他", "extra_income"])
     total_income_col = _find_first_column(forecast_df, ["收入合计", "期间收入", "total_income"])
-    planned_spend_col = _find_first_column(forecast_df, ["预测/实际支出", "预测支出", "期间支出", "planned_spend"])
+    planned_spend_col = _find_first_column(forecast_df, ["预测/实际支出", "预测支出", "计划支出", "planned_spend"])
     net_cash_flow_col = _find_first_column(forecast_df, ["净现金流", "net_cash_flow"])
     projected_balance_col = _find_first_column(
         forecast_df,
@@ -1239,17 +1270,24 @@ def _build_balance_forecast_points(sheets):
 
         fixed_income = _coerce_number(row.get(fixed_income_col)) if fixed_income_col is not None else None
         extra_income = _coerce_number(row.get(extra_income_col)) if extra_income_col is not None else None
+        living_income = _coerce_number(row.get(living_income_col)) if living_income_col is not None else None
         total_income = _coerce_number(row.get(total_income_col)) if total_income_col is not None else None
         planned_spend = _coerce_number(row.get(planned_spend_col)) if planned_spend_col is not None else None
         net_cash_flow = _coerce_number(row.get(net_cash_flow_col)) if net_cash_flow_col is not None else None
         projected_balance = _coerce_number(row.get(projected_balance_col)) if projected_balance_col is not None else None
 
         if total_income is None:
-            total_income = (fixed_income or 0) + (extra_income or 0) if fixed_income is not None or extra_income is not None else None
+            total_income = _sum_present_numbers([living_income, fixed_income, extra_income])
+        if planned_spend is None:
+            planned_spend = 0.0
         if net_cash_flow is None and total_income is not None and planned_spend is not None:
             net_cash_flow = total_income - planned_spend
 
-        if all(value is None for value in [fixed_income, extra_income, total_income, planned_spend, net_cash_flow, projected_balance]):
+        if net_cash_flow is not None and rolling_balance is not None:
+            rolling_balance += net_cash_flow
+            projected_balance = rolling_balance
+
+        if all(value is None for value in [fixed_income, extra_income, total_income, net_cash_flow, projected_balance]):
             continue
 
         forecast_points.append(
@@ -2035,28 +2073,6 @@ async def image_proxy(path: str):
 
 @app.post("/api/plots/refresh")
 async def refresh_plots():
-    # Locate plot.py in src/scripts
-    current_dir = os.path.dirname(os.path.abspath(__file__)) # src/server.py -> src
-    script_path = os.path.join(current_dir, "scripts", "plot.py")
-    
-    if not os.path.exists(script_path):
-        # Fallback to absolute path check
-        script_path = os.path.abspath("src/scripts/plot.py")
-
-    if not os.path.exists(script_path):
-        return JSONResponse(status_code=404, content={"error": "plot.py not found"})
-
-    def run_plot_script():
-        env = os.environ.copy()
-        env["PYTHONIOENCODING"] = "utf-8"
-        subprocess.run(
-            [sys.executable, script_path, "--dark"],
-            check=True,
-            env=env,
-            cwd=str(_get_runtime_workdir()),
-            timeout=PLOT_REFRESH_TIMEOUT_SECONDS,
-        )
-
     if not _plot_refresh_lock.acquire(blocking=False):
         return JSONResponse(
             status_code=409,
@@ -2064,89 +2080,15 @@ async def refresh_plots():
         )
 
     try:
-        await asyncio.to_thread(run_plot_script)
-    except subprocess.TimeoutExpired:
-        print(f"Error refreshing plots: timed out after {PLOT_REFRESH_TIMEOUT_SECONDS}s")
-        return JSONResponse(
-            status_code=504,
-            content={"error": f"plot.py timed out after {PLOT_REFRESH_TIMEOUT_SECONDS}s"},
-        )
+        _clear_plot_dashboard_cache()
     except Exception as e:
         print(f"Error refreshing plots: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
     finally:
         _plot_refresh_lock.release()
 
-    print("Plots refreshed successfully")
-    _clear_plot_dashboard_cache()
-    return {"message": "Plots refreshed successfully"}
-
-def ensure_thumbnail(file_path, thumb_path):
-    if not os.path.exists(thumb_path):
-        try:
-            img = cv2.imread(file_path)
-            if img is not None:
-                h, w = img.shape[:2]
-                scale = 60.0 / float(h)
-                new_w = int(w * scale)
-                dim = (new_w, 60)
-                resized = cv2.resize(img, dim, interpolation=cv2.INTER_AREA)
-                cv2.imwrite(thumb_path, resized)
-        except Exception as e:
-            print(f"Error creating thumbnail for {file_path}: {e}")
-
-@app.get("/api/plots/list")
-async def list_plots():
-    """Return list of all plot images for carousel display"""
-    plot_dir = str(_get_plot_dir())
-    if not os.path.exists(plot_dir):
-        return {"plots": [], "error": "plot_outputs directory not found"}
-    
-    thumb_dir = os.path.join(plot_dir, "thumbnails")
-    if not os.path.exists(thumb_dir):
-        os.makedirs(thumb_dir, exist_ok=True)
-    
-    try:
-        files = [
-            f for f in os.listdir(plot_dir)
-            if f.endswith(".png")
-            and not f.startswith("plot_collage")
-            and not f.endswith("_screen.png")
-        ]
-        
-        order = [
-            "weight_bodyfat", "time_allocation_bar", "time_trend_screen_remaining",
-            "time_trend_averages", "time_trend_delta", "running_pace",
-            "radar_goal", "hhh_frequency", "hhh_interval_trend", "balance_sheet"
-        ]
-        
-        def sort_key(name):
-            for index, prefix in enumerate(order):
-                if name.startswith(prefix):
-                    return (index, name)
-            return (len(order), name)
-        
-        sorted_files = sorted(files, key=sort_key)
-        
-        plot_list = []
-        for f in sorted_files:
-            file_path = os.path.join(plot_dir, f)
-            thumb_path = os.path.join(thumb_dir, f)
-            await asyncio.to_thread(ensure_thumbnail, file_path, thumb_path)
-            plot_list.append({
-                "name": f,
-                "url": f"/static/plots/{f}",
-                "thumbnail_url": f"/static/plots/thumbnails/{f}"
-            })
-        
-        return {
-            "plots": plot_list,
-            "count": len(plot_list)
-        }
-    except Exception as e:
-        print(f"Error listing plots: {e}")
-        return {"plots": [], "error": str(e)}
-
+    print("Plot dashboard data cache cleared")
+    return {"message": "Plot dashboard data cache cleared", "status": "ready"}
 
 @app.get("/api/plots/data")
 async def get_plot_dashboard_data():

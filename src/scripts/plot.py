@@ -1107,6 +1107,116 @@ def filter_balance_sheet_forecasts(data_frame, as_of=None):
     return data_frame.loc[forecast_mask].copy()
 
 
+def _series_number(value):
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return None
+    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(number):
+        return None
+    return float(number)
+
+
+def _row_number(row, column):
+    if column is None:
+        return None
+    return _series_number(row.get(column))
+
+
+def _sum_row_numbers(row, columns):
+    values = [_row_number(row, column) for column in columns if column is not None]
+    present_values = [value for value in values if value is not None]
+    if not present_values:
+        return None
+    return sum(present_values)
+
+
+def _latest_balance_anchor(actual_df, date_col="日期"):
+    if actual_df is None or actual_df.empty:
+        return None, None
+
+    balance_col = _find_balance_column(
+        actual_df,
+        ["现金及现金等价物+股票", "实际/预测期末现金+股票", "现金及现金等价物"],
+    )
+    if balance_col is None:
+        return None, None
+
+    working_df = actual_df.sort_values(date_col) if date_col in actual_df.columns else actual_df
+    for _, row in working_df.iloc[::-1].iterrows():
+        balance = _row_number(row, balance_col)
+        if balance is None:
+            continue
+        raw_date = row.get(date_col)
+        parsed_date = pd.to_datetime(raw_date, errors="coerce")
+        if pd.isna(parsed_date):
+            continue
+        return parsed_date, balance
+
+    return None, None
+
+
+def build_balance_sheet_forecast_series(data_frame, as_of=None, include_anchor=False):
+    columns = ["日期", "projected_balance", "total_income", "planned_spend", "net_cash_flow"]
+    if data_frame is None or data_frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    actual_df = filter_balance_sheet_actuals(data_frame, as_of=as_of).sort_values("日期")
+    forecast_df = filter_balance_sheet_forecasts(data_frame, as_of=as_of).sort_values("日期")
+    if forecast_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    anchor_date, rolling_balance = _latest_balance_anchor(actual_df)
+    if rolling_balance is None:
+        return pd.DataFrame(columns=columns)
+
+    living_income_col = _find_balance_column(forecast_df, ["收入生活费", "生活费收入", "living_income"])
+    fixed_income_col = _find_balance_column(forecast_df, ["固定收入", "收入工资", "固定工资", "fixed_income"])
+    extra_income_col = _find_balance_column(forecast_df, ["额外收入", "收入其他", "extra_income"])
+    total_income_col = _find_balance_column(forecast_df, ["收入合计", "期间收入", "total_income"])
+    planned_spend_col = _find_balance_column(forecast_df, ["预测/实际支出", "预测支出", "计划支出", "planned_spend"])
+
+    rows = []
+    if include_anchor and anchor_date is not None:
+        rows.append(
+            {
+                "日期": anchor_date,
+                "projected_balance": rolling_balance,
+                "total_income": 0.0,
+                "planned_spend": 0.0,
+                "net_cash_flow": 0.0,
+            }
+        )
+
+    for _, row in forecast_df.iterrows():
+        parsed_date = pd.to_datetime(row.get("日期"), errors="coerce")
+        if pd.isna(parsed_date):
+            continue
+
+        total_income = _row_number(row, total_income_col)
+        if total_income is None:
+            total_income = _sum_row_numbers(row, [living_income_col, fixed_income_col, extra_income_col])
+        if total_income is None:
+            continue
+
+        planned_spend = _row_number(row, planned_spend_col) if planned_spend_col is not None else 0.0
+        if planned_spend is None:
+            planned_spend = 0.0
+
+        net_cash_flow = total_income - planned_spend
+        rolling_balance += net_cash_flow
+        rows.append(
+            {
+                "日期": parsed_date,
+                "projected_balance": rolling_balance,
+                "total_income": total_income,
+                "planned_spend": planned_spend,
+                "net_cash_flow": net_cash_flow,
+            }
+        )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
 def plot_balance_sheet(data_frame_balance, output_dir=None):
     actual_df = filter_balance_sheet_actuals(data_frame_balance).sort_values("日期")
     if actual_df.empty:
@@ -1138,25 +1248,17 @@ def plot_balance_sheet(data_frame_balance, output_dir=None):
     ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
     fig.autofmt_xdate(rotation=45)
 
-    forecast_df = filter_balance_sheet_forecasts(data_frame_balance).sort_values("日期")
-    forecast_balance_col = _find_balance_column(
-        forecast_df,
-        ["实际/预测期末现金+股票", "预测期末现金+股票", "现金及现金等价物+股票"],
-    ) if not forecast_df.empty else None
-    if forecast_balance_col is not None:
-        forecast_values = pd.to_numeric(forecast_df[forecast_balance_col], errors="coerce")
-        forecast_dates = forecast_df["日期"]
-        valid_forecast = forecast_values.notna()
-        if valid_forecast.any():
-            ax1.plot(
-                forecast_dates[valid_forecast],
-                forecast_values[valid_forecast],
-                "--",
-                label="预测期末现金+股票",
-                color=COLORS["lightblue"],
-                linewidth=1.8,
-                alpha=0.85,
-            )
+    forecast_series = build_balance_sheet_forecast_series(data_frame_balance, include_anchor=True)
+    if len(forecast_series) > 1:
+        ax1.plot(
+            forecast_series["日期"],
+            forecast_series["projected_balance"],
+            "--",
+            label="预测期末现金+股票",
+            color=COLORS["lightblue"],
+            linewidth=1.8,
+            alpha=0.85,
+        )
 
     ax2 = ax1.twinx()
     ax2.plot(

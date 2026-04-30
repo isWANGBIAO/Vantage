@@ -884,7 +884,6 @@ def _build_hhh_interval_dashboard_chart(data_frame):
 def _build_balance_dashboard_chart():
     source_balance_df = plot_module.load_balance_sheet().copy().sort_values('日期')
     balance_df = plot_module.filter_balance_sheet_actuals(source_balance_df).sort_values('日期')
-    forecast_df = plot_module.filter_balance_sheet_forecasts(source_balance_df).sort_values('日期')
     if balance_df.empty:
         raise ValueError('资产数据为空')
 
@@ -896,11 +895,10 @@ def _build_balance_dashboard_chart():
     if balance_col is None:
         raise ValueError('未找到现金及现金等价物字段')
 
-    forecast_dates = forecast_df['日期'].tolist() if not forecast_df.empty else []
-    forecast_balance_col = plot_module._find_balance_column(
-        forecast_df,
-        ['实际/预测期末现金+股票', '预测期末现金+股票', '现金及现金等价物+股票'],
-    ) if not forecast_df.empty else None
+    forecast_series_df = plot_module.build_balance_sheet_forecast_series(
+        source_balance_df,
+        include_anchor=True,
+    )
 
     series = [
         {
@@ -919,7 +917,7 @@ def _build_balance_dashboard_chart():
         {'name': '日均支出', 'type': 'line', 'showSymbol': False, 'smooth': True, 'yAxisIndex': 1, 'data': _series_points(dates, balance_df['日均支出'].to_numpy(dtype=float), 0)},
     ]
 
-    if forecast_balance_col is not None:
+    if not forecast_series_df.empty and len(forecast_series_df) > 1:
         series.append(
             {
                 'name': '预测期末现金+股票',
@@ -927,7 +925,11 @@ def _build_balance_dashboard_chart():
                 'showSymbol': False,
                 'smooth': True,
                 'lineStyle': {'width': 2, 'type': 'dashed'},
-                'data': _series_points(forecast_dates, forecast_df[forecast_balance_col].to_numpy(dtype=float), 0),
+                'data': _series_points(
+                    forecast_series_df['日期'].tolist(),
+                    forecast_series_df['projected_balance'].to_numpy(dtype=float),
+                    0,
+                ),
             }
         )
 
@@ -953,8 +955,8 @@ def _build_balance_dashboard_chart():
         },
         'toolbox': {'right': 12, 'feature': {'saveAsImage': {}}},
         'dataZoom': [
-            {'type': 'inside', 'start': _zoom_start(len(dates), 45), 'end': 100},
-            {'type': 'slider', 'start': _zoom_start(len(dates), 45), 'end': 100, 'bottom': 8},
+            {'type': 'inside', 'start': 0, 'end': 100},
+            {'type': 'slider', 'start': 0, 'end': 100, 'bottom': 8},
         ],
         'grid': {'top': 72, 'left': 56, 'right': 56, 'bottom': 72, 'containLabel': True},
         'xAxis': {'type': 'time'},
