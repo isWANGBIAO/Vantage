@@ -1226,6 +1226,26 @@ def _latest_numeric_value(df, value_col, date_col=None):
     return values[-1] if values else None
 
 
+def _average_recent_numeric_values(df, value_col, date_col=None, count=6):
+    if df is None or df.empty or value_col is None:
+        return None
+
+    working_df = df.copy()
+    if date_col is not None and date_col in working_df.columns:
+        working_df = working_df.sort_values(date_col)
+
+    values = []
+    for value in working_df[value_col].tolist():
+        number = _coerce_number(value)
+        if number is not None:
+            values.append(number)
+
+    recent_values = values[-count:]
+    if not recent_values:
+        return None
+    return sum(recent_values) / len(recent_values)
+
+
 def _build_balance_forecast_points(sheets, as_of=None):
     sheet_name, df = _find_expense_sheet(sheets)
     if df is None or df.empty:
@@ -1246,6 +1266,8 @@ def _build_balance_forecast_points(sheets, as_of=None):
         ["现金及现金等价物+股票", "实际/预测期末现金+股票", "现金及现金等价物", "现金", "股票"],
     )
     rolling_balance = _latest_numeric_value(actual_df, balance_col, date_col=date_col)
+    actual_spend_col = _find_first_column(actual_df, ["期间支出", "实际支出", "支出", "monthly_spend", "spend"])
+    estimated_monthly_spend = _average_recent_numeric_values(actual_df, actual_spend_col, date_col=date_col, count=6)
 
     living_income_col = _find_first_column(forecast_df, ["收入生活费", "生活费收入", "living_income"])
     fixed_income_col = _find_first_column(forecast_df, ["固定收入", "收入工资", "固定工资", "fixed_income"])
@@ -1272,15 +1294,16 @@ def _build_balance_forecast_points(sheets, as_of=None):
         extra_income = _coerce_number(row.get(extra_income_col)) if extra_income_col is not None else None
         living_income = _coerce_number(row.get(living_income_col)) if living_income_col is not None else None
         total_income = _coerce_number(row.get(total_income_col)) if total_income_col is not None else None
-        planned_spend = _coerce_number(row.get(planned_spend_col)) if planned_spend_col is not None else None
+        explicit_planned_spend = _coerce_number(row.get(planned_spend_col)) if planned_spend_col is not None else None
         net_cash_flow = _coerce_number(row.get(net_cash_flow_col)) if net_cash_flow_col is not None else None
         projected_balance = _coerce_number(row.get(projected_balance_col)) if projected_balance_col is not None else None
 
         if total_income is None:
             total_income = _sum_present_numbers([living_income, fixed_income, extra_income])
+        planned_spend = estimated_monthly_spend if estimated_monthly_spend is not None else explicit_planned_spend
         if planned_spend is None:
             planned_spend = 0.0
-        if net_cash_flow is None and total_income is not None and planned_spend is not None:
+        if total_income is not None and planned_spend is not None:
             net_cash_flow = total_income - planned_spend
 
         if net_cash_flow is not None and rolling_balance is not None:

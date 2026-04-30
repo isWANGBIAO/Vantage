@@ -147,22 +147,36 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual([point["date"] for point in payload["trend_points"]], ["2026-04-30"])
         self.assertEqual([point["date"] for point in payload["forecast_points"]], ["2026-05-31", "2026-06-30"])
         self.assertEqual(payload["forecast_points"][0]["fixed_income"], 7500.0)
-        self.assertEqual(payload["forecast_points"][0]["projected_balance"], 61202.23)
+        self.assertEqual(payload["forecast_points"][0]["planned_spend"], 3880.93)
+        self.assertEqual(payload["forecast_points"][0]["net_cash_flow"], 3619.07)
+        self.assertAlmostEqual(payload["forecast_points"][0]["projected_balance"], 62441.69)
+        self.assertAlmostEqual(payload["forecast_points"][1]["projected_balance"], 66060.76)
 
     def test_balance_sheet_forecast_rolls_forward_from_latest_actual_income(self):
         expense_sheet = pd.DataFrame(
             {
-                "日期": pd.to_datetime(["2026-04-30", "2026-05-31", "2026-06-30"]),
-                "支付宝资产": [57433.39, 0.0, 0.0],
-                "银行卡资产": [157.33, 0.0, 0.0],
-                "微信资产": [142.8, 0.0, 0.0],
-                "股票资产": [1089.1, 0.0, 0.0],
-                "现金及现金等价物+股票": [58822.62, 0.0, 0.0],
-                "收入工资": [9834.0, 9834.0, 9834.0],
-                "期间收入": [9972.0, 9834.0, 9834.0],
-                "期间支出": [3880.93, 68656.62, 9834.0],
-                "日均支出": [129.36, 2214.73, 327.8],
-                "记录类型": ["实际", "预测", "预测"],
+                "日期": pd.to_datetime(
+                    [
+                        "2025-11-30",
+                        "2025-12-31",
+                        "2026-01-31",
+                        "2026-02-28",
+                        "2026-03-31",
+                        "2026-04-30",
+                        "2026-05-31",
+                        "2026-06-30",
+                    ]
+                ),
+                "支付宝资产": [12000.0, 18000.0, 24000.0, 30000.0, 50416.0, 57433.39, 0.0, 0.0],
+                "银行卡资产": [0.0, 0.0, 0.0, 0.0, 1112.0, 157.33, 0.0, 0.0],
+                "微信资产": [0.0, 0.0, 0.0, 0.0, 9.0, 142.8, 0.0, 0.0],
+                "股票资产": [0.0, 0.0, 0.0, 0.0, 1194.0, 1089.1, 0.0, 0.0],
+                "现金及现金等价物+股票": [12000.0, 18000.0, 24000.0, 30000.0, 52731.0, 58822.62, 0.0, 0.0],
+                "收入工资": [0.0, 0.0, 0.0, 0.0, 9834.0, 9834.0, 9834.0, 30834.0],
+                "期间收入": [0.0, 0.0, 0.0, 0.0, 9834.0, 9972.0, 9834.0, 30834.0],
+                "期间支出": [1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0, 68656.62, 30834.0],
+                "日均支出": [33.33, 64.52, 96.77, 142.86, 161.29, 200.0, 2214.73, 1027.8],
+                "记录类型": ["实际", "实际", "实际", "实际", "实际", "实际", "预测", "预测"],
             }
         )
 
@@ -173,10 +187,12 @@ class BalanceSheetEndpointTests(unittest.TestCase):
 
         self.assertEqual([point["date"] for point in forecast_points], ["2026-05-31", "2026-06-30"])
         self.assertEqual(forecast_points[0]["total_income"], 9834.0)
-        self.assertEqual(forecast_points[0]["planned_spend"], 0.0)
-        self.assertEqual(forecast_points[0]["net_cash_flow"], 9834.0)
-        self.assertAlmostEqual(forecast_points[0]["projected_balance"], 68656.62)
-        self.assertAlmostEqual(forecast_points[1]["projected_balance"], 78490.62)
+        self.assertEqual(forecast_points[0]["planned_spend"], 3500.0)
+        self.assertEqual(forecast_points[0]["net_cash_flow"], 6334.0)
+        self.assertAlmostEqual(forecast_points[0]["projected_balance"], 65156.62)
+        self.assertEqual(forecast_points[1]["planned_spend"], 3500.0)
+        self.assertEqual(forecast_points[1]["net_cash_flow"], 27334.0)
+        self.assertAlmostEqual(forecast_points[1]["projected_balance"], 92490.62)
 
 
 if __name__ == "__main__":

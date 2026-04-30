@@ -1155,6 +1155,23 @@ def _latest_balance_anchor(actual_df, date_col="日期"):
     return None, None
 
 
+def _average_recent_row_numbers(data_frame, value_col, date_col="日期", count=6):
+    if data_frame is None or data_frame.empty or value_col is None:
+        return None
+
+    working_df = data_frame.sort_values(date_col) if date_col in data_frame.columns else data_frame
+    values = []
+    for _, row in working_df.iterrows():
+        value = _row_number(row, value_col)
+        if value is not None:
+            values.append(value)
+
+    recent_values = values[-count:]
+    if not recent_values:
+        return None
+    return sum(recent_values) / len(recent_values)
+
+
 def build_balance_sheet_forecast_series(data_frame, as_of=None, include_anchor=False):
     columns = ["日期", "projected_balance", "total_income", "planned_spend", "net_cash_flow"]
     if data_frame is None or data_frame.empty:
@@ -1168,6 +1185,9 @@ def build_balance_sheet_forecast_series(data_frame, as_of=None, include_anchor=F
     anchor_date, rolling_balance = _latest_balance_anchor(actual_df)
     if rolling_balance is None:
         return pd.DataFrame(columns=columns)
+
+    actual_spend_col = _find_balance_column(actual_df, ["期间支出", "实际支出", "支出", "monthly_spend", "spend"])
+    estimated_monthly_spend = _average_recent_row_numbers(actual_df, actual_spend_col)
 
     living_income_col = _find_balance_column(forecast_df, ["收入生活费", "生活费收入", "living_income"])
     fixed_income_col = _find_balance_column(forecast_df, ["固定收入", "收入工资", "固定工资", "fixed_income"])
@@ -1198,7 +1218,8 @@ def build_balance_sheet_forecast_series(data_frame, as_of=None, include_anchor=F
         if total_income is None:
             continue
 
-        planned_spend = _row_number(row, planned_spend_col) if planned_spend_col is not None else 0.0
+        explicit_planned_spend = _row_number(row, planned_spend_col) if planned_spend_col is not None else None
+        planned_spend = estimated_monthly_spend if estimated_monthly_spend is not None else explicit_planned_spend
         if planned_spend is None:
             planned_spend = 0.0
 

@@ -939,11 +939,8 @@ def _build_balance_dashboard_chart():
             {
                 'name': '预测期末现金+股票',
                 'type': 'line',
-                'showSymbol': True,
-                'smooth': False,
-                'step': 'end',
-                'symbol': 'circle',
-                'symbolSize': 7,
+                'showSymbol': False,
+                'smooth': True,
                 'lineStyle': {'width': 2, 'type': 'dashed'},
                 'data': _forecast_balance_points(forecast_series_df),
             }
