@@ -26,6 +26,18 @@ def _normalize_text(value):
     return str(value or "").replace("\\", "/").lower()
 
 
+def _normalized_path_aliases(path):
+    if not path:
+        return []
+
+    aliases = []
+    for candidate in (Path(path), Path(path).resolve(strict=False)):
+        normalized = _normalize_text(candidate).rstrip("/")
+        if normalized and normalized not in aliases:
+            aliases.append(normalized)
+    return aliases
+
+
 def _safe_process_name(process):
     try:
         return process.name()
@@ -48,34 +60,46 @@ def _safe_process_cwd(process):
 
 
 def _normalized_project_root(project_root):
-    return _normalize_text(Path(project_root).resolve()).rstrip("/")
+    return _normalized_path_aliases(project_root)[-1]
+
+
+def _normalized_project_roots(project_root):
+    return _normalized_path_aliases(project_root)
 
 
 def _is_process_in_project(process, project_root):
     normalized_cmdline = _normalize_text(_safe_process_cmdline(process))
     normalized_cwd = _normalize_text(_safe_process_cwd(process)).rstrip("/")
-    normalized_root = _normalized_project_root(project_root)
+    normalized_roots = _normalized_project_roots(project_root)
 
-    return normalized_cwd.startswith(normalized_root) or normalized_root in normalized_cmdline
+    return _matches_any_root(normalized_cwd, normalized_roots) or _contains_any_root(normalized_cmdline, normalized_roots)
 
 
-def _desktop_webapp_root(project_root):
-    return _normalized_project_root(Path(project_root) / "src" / "webapp")
+def _desktop_webapp_roots(project_root):
+    return _normalized_path_aliases(Path(project_root) / "src" / "webapp")
 
 
 def _is_same_or_descendant_path(candidate, root):
     return candidate == root or candidate.startswith(f"{root}/")
 
 
+def _matches_any_root(candidate, roots):
+    return any(_is_same_or_descendant_path(candidate, root) for root in roots)
+
+
+def _contains_any_root(text, roots):
+    return any(root in text for root in roots)
+
+
 def _belongs_to_current_project(normalized_cmdline, normalized_cwd, project_root):
-    normalized_root = _normalized_project_root(project_root)
-    normalized_webapp_root = _desktop_webapp_root(project_root)
+    normalized_roots = _normalized_project_roots(project_root)
+    normalized_webapp_roots = _desktop_webapp_roots(project_root)
 
     return (
-        _is_same_or_descendant_path(normalized_cwd, normalized_webapp_root)
-        or _is_same_or_descendant_path(normalized_cwd, normalized_root)
-        or normalized_webapp_root in normalized_cmdline
-        or normalized_root in normalized_cmdline
+        _matches_any_root(normalized_cwd, normalized_webapp_roots)
+        or _matches_any_root(normalized_cwd, normalized_roots)
+        or _contains_any_root(normalized_cmdline, normalized_webapp_roots)
+        or _contains_any_root(normalized_cmdline, normalized_roots)
     )
 
 
@@ -83,25 +107,23 @@ def _is_vantage_desktop_entrypoint(normalized_cmdline, normalized_cwd, process_n
     if not _belongs_to_current_project(normalized_cmdline, normalized_cwd, project_root):
         return False
 
-    normalized_webapp_root = _desktop_webapp_root(project_root)
+    normalized_webapp_roots = _desktop_webapp_roots(project_root)
 
-    if process_name in ("electron", "electron.exe") and _is_same_or_descendant_path(
-        normalized_cwd, normalized_webapp_root
+    if process_name in ("electron", "electron.exe") and _matches_any_root(normalized_cwd, normalized_webapp_roots):
+        return True
+
+    if any(token in normalized_cmdline for token in ("electron:start", "electron:dev")) and _matches_any_root(
+        normalized_cwd, normalized_webapp_roots
     ):
         return True
 
-    if any(token in normalized_cmdline for token in ("electron:start", "electron:dev")) and _is_same_or_descendant_path(
-        normalized_cwd, normalized_webapp_root
-    ):
+    if "--app-path=" in normalized_cmdline and _contains_any_root(normalized_cmdline, normalized_webapp_roots):
         return True
 
-    if "--app-path=" in normalized_cmdline and normalized_webapp_root in normalized_cmdline:
+    if "electron/cli.js" in normalized_cmdline and _contains_any_root(normalized_cmdline, normalized_webapp_roots):
         return True
 
-    if "electron/cli.js" in normalized_cmdline and normalized_webapp_root in normalized_cmdline:
-        return True
-
-    if "main.cjs" in normalized_cmdline and normalized_webapp_root in normalized_cmdline:
+    if "main.cjs" in normalized_cmdline and _contains_any_root(normalized_cmdline, normalized_webapp_roots):
         return True
 
     return False
@@ -117,8 +139,8 @@ def is_vantage_server_process(process, project_root):
 
     normalized_cmdline = _normalize_text(_safe_process_cmdline(process))
     normalized_cwd = _normalize_text(_safe_process_cwd(process)).rstrip("/")
-    normalized_root = _normalized_project_root(project_root)
-    in_project_root = normalized_cwd == normalized_root
+    normalized_roots = _normalized_project_roots(project_root)
+    in_project_root = normalized_cwd in normalized_roots
     belongs_to_project = _belongs_to_current_project(normalized_cmdline, normalized_cwd, project_root)
 
     has_server_script = any(token in normalized_cmdline for token in SERVER_SCRIPT_TOKENS)

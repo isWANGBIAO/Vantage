@@ -1046,12 +1046,78 @@ def load_balance_sheet(path=None):
     return load_excel_safely(path)
 
 
+def _find_balance_column(data_frame, candidates):
+    columns = list(data_frame.columns)
+    seen = set()
+    for candidate in candidates:
+        for column in columns:
+            name = str(column)
+            if name == candidate and name not in seen:
+                seen.add(name)
+                return column
+    for candidate in candidates:
+        for column in columns:
+            name = str(column)
+            if candidate in name and name not in seen:
+                seen.add(name)
+                return column
+    return None
+
+
+def _balance_row_masks(data_frame, as_of=None):
+    if data_frame is None or data_frame.empty:
+        empty = pd.Series([], dtype=bool)
+        return empty, empty
+
+    if as_of is None:
+        as_of = pd.Timestamp.today().date()
+
+    record_col = _find_balance_column(data_frame, ["记录类型", "数据类型", "类型", "record_type", "record type"])
+    if record_col is not None:
+        record_text = data_frame[record_col].fillna("").astype(str).str.strip().str.lower()
+        explicit_forecast = record_text.str.contains("预测|计划|forecast|plan", regex=True, na=False)
+        explicit_actual = record_text.str.contains("实际|真实|actual|history|historical", regex=True, na=False)
+    else:
+        explicit_forecast = pd.Series(False, index=data_frame.index)
+        explicit_actual = pd.Series(False, index=data_frame.index)
+
+    date_col = _find_balance_column(data_frame, ["日期", "date"])
+    if date_col is not None:
+        parsed_dates = pd.to_datetime(data_frame[date_col], errors="coerce")
+        future_dates = parsed_dates.dt.date > as_of
+    else:
+        future_dates = pd.Series(False, index=data_frame.index)
+
+    forecast_mask = explicit_forecast | (~explicit_actual & future_dates.fillna(False))
+    actual_mask = explicit_actual | (~explicit_forecast & ~future_dates.fillna(False))
+    return actual_mask, forecast_mask
+
+
+def filter_balance_sheet_actuals(data_frame, as_of=None):
+    if data_frame is None or data_frame.empty:
+        return data_frame
+    actual_mask, _ = _balance_row_masks(data_frame, as_of=as_of)
+    return data_frame.loc[actual_mask].copy()
+
+
+def filter_balance_sheet_forecasts(data_frame, as_of=None):
+    if data_frame is None or data_frame.empty:
+        return data_frame
+    _, forecast_mask = _balance_row_masks(data_frame, as_of=as_of)
+    return data_frame.loc[forecast_mask].copy()
+
+
 def plot_balance_sheet(data_frame_balance, output_dir=None):
-    date = data_frame_balance["日期"]
-    day_average_expenditure = data_frame_balance["日均支出"]
+    actual_df = filter_balance_sheet_actuals(data_frame_balance).sort_values("日期")
+    if actual_df.empty:
+        raise ValueError("资产实际记录为空，无法绘图")
+
+    date = actual_df["日期"]
+    day_average_expenditure = actual_df["日均支出"]
 
     fig, ax1 = plt.subplots(figsize=get_figsize("balance"))
-    balance = data_frame_balance["现金及现金等价物+股票"].to_numpy()
+    balance_col = _find_balance_column(actual_df, ["现金及现金等价物+股票", "实际/预测期末现金+股票", "现金及现金等价物"])
+    balance = actual_df[balance_col].to_numpy()
 
     ax1.plot(
         date,
@@ -1071,6 +1137,26 @@ def plot_balance_sheet(data_frame_balance, output_dir=None):
     ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
     ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
     fig.autofmt_xdate(rotation=45)
+
+    forecast_df = filter_balance_sheet_forecasts(data_frame_balance).sort_values("日期")
+    forecast_balance_col = _find_balance_column(
+        forecast_df,
+        ["实际/预测期末现金+股票", "预测期末现金+股票", "现金及现金等价物+股票"],
+    ) if not forecast_df.empty else None
+    if forecast_balance_col is not None:
+        forecast_values = pd.to_numeric(forecast_df[forecast_balance_col], errors="coerce")
+        forecast_dates = forecast_df["日期"]
+        valid_forecast = forecast_values.notna()
+        if valid_forecast.any():
+            ax1.plot(
+                forecast_dates[valid_forecast],
+                forecast_values[valid_forecast],
+                "--",
+                label="预测期末现金+股票",
+                color=COLORS["lightblue"],
+                linewidth=1.8,
+                alpha=0.85,
+            )
 
     ax2 = ax1.twinx()
     ax2.plot(

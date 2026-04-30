@@ -882,11 +882,55 @@ def _build_hhh_interval_dashboard_chart(data_frame):
 
 
 def _build_balance_dashboard_chart():
-    balance_df = plot_module.load_balance_sheet().copy().sort_values('日期')
+    source_balance_df = plot_module.load_balance_sheet().copy().sort_values('日期')
+    balance_df = plot_module.filter_balance_sheet_actuals(source_balance_df).sort_values('日期')
+    forecast_df = plot_module.filter_balance_sheet_forecasts(source_balance_df).sort_values('日期')
     if balance_df.empty:
         raise ValueError('资产数据为空')
 
     dates = balance_df['日期'].tolist()
+    balance_col = plot_module._find_balance_column(
+        balance_df,
+        ['现金及现金等价物+股票', '实际/预测期末现金+股票', '现金及现金等价物'],
+    )
+    if balance_col is None:
+        raise ValueError('未找到现金及现金等价物字段')
+
+    forecast_dates = forecast_df['日期'].tolist() if not forecast_df.empty else []
+    forecast_balance_col = plot_module._find_balance_column(
+        forecast_df,
+        ['实际/预测期末现金+股票', '预测期末现金+股票', '现金及现金等价物+股票'],
+    ) if not forecast_df.empty else None
+
+    series = [
+        {
+            'name': '现金及现金等价物+股票',
+            'type': 'line',
+            'showSymbol': False,
+            'smooth': True,
+            'lineStyle': {'width': 3},
+            'areaStyle': {'opacity': 0.08},
+            'data': _series_points(dates, balance_df[balance_col].to_numpy(dtype=float), 0),
+        },
+        {'name': '支付宝资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['支付宝资产'].to_numpy(dtype=float), 0)},
+        {'name': '银行卡资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['银行卡资产'].to_numpy(dtype=float), 0)},
+        {'name': '微信资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['微信资产'].to_numpy(dtype=float), 0)},
+        {'name': '股票资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['股票资产'].to_numpy(dtype=float), 0)},
+        {'name': '日均支出', 'type': 'line', 'showSymbol': False, 'smooth': True, 'yAxisIndex': 1, 'data': _series_points(dates, balance_df['日均支出'].to_numpy(dtype=float), 0)},
+    ]
+
+    if forecast_balance_col is not None:
+        series.append(
+            {
+                'name': '预测期末现金+股票',
+                'type': 'line',
+                'showSymbol': False,
+                'smooth': True,
+                'lineStyle': {'width': 2, 'type': 'dashed'},
+                'data': _series_points(forecast_dates, forecast_df[forecast_balance_col].to_numpy(dtype=float), 0),
+            }
+        )
+
     option = {
         'color': [
             plot_module.COLORS['blue'],
@@ -895,6 +939,7 @@ def _build_balance_dashboard_chart():
             plot_module.COLORS['purple'],
             plot_module.COLORS['red'],
             plot_module.COLORS['lightblue'],
+            plot_module.COLORS['gray'],
         ],
         'tooltip': {'trigger': 'axis'},
         'legend': {
@@ -917,22 +962,7 @@ def _build_balance_dashboard_chart():
             {'type': 'value', 'name': '资产 (元)'},
             {'type': 'value', 'name': '日均支出 (元/天)', 'position': 'right'},
         ],
-        'series': [
-            {
-                'name': '现金及现金等价物+股票',
-                'type': 'line',
-                'showSymbol': False,
-                'smooth': True,
-                'lineStyle': {'width': 3},
-                'areaStyle': {'opacity': 0.08},
-                'data': _series_points(dates, balance_df['现金及现金等价物+股票'].to_numpy(dtype=float), 0),
-            },
-            {'name': '支付宝资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['支付宝资产'].to_numpy(dtype=float), 0)},
-            {'name': '银行卡资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['银行卡资产'].to_numpy(dtype=float), 0)},
-            {'name': '微信资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['微信资产'].to_numpy(dtype=float), 0)},
-            {'name': '股票资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['股票资产'].to_numpy(dtype=float), 0)},
-            {'name': '日均支出', 'type': 'line', 'showSymbol': False, 'smooth': True, 'yAxisIndex': 1, 'data': _series_points(dates, balance_df['日均支出'].to_numpy(dtype=float), 0)},
-        ],
+        'series': series,
     }
 
     latest_row = balance_df.iloc[-1]
@@ -944,7 +974,7 @@ def _build_balance_dashboard_chart():
         formatter='currency',
         height=430,
         summary=[
-            {'label': '最新总资产', 'value': f"¥{int(round(float(latest_row['现金及现金等价物+股票']))):,}"},
+            {'label': '最新总资产', 'value': f"¥{int(round(float(latest_row[balance_col]))):,}"},
             {'label': '最新日均支出', 'value': f"¥{int(round(float(latest_row['日均支出']))):,}/天"},
         ],
     )

@@ -157,6 +157,49 @@ test('buildExpenseSheetViewModel prefers full trend_points history for the chart
   assert.equal(viewModel.recentSpending.some((item) => item.date === '2026-04-12'), false);
 });
 
+test('buildExpenseSheetViewModel exposes future fixed income forecast separately', () => {
+  const payload = {
+    source: {
+      path: 'C:\\Users\\97012\\OneDrive\\Mine\\Balance Sheet.xlsx',
+      updated_at: '2026-04-30 23:27:13',
+      sheet_count: 1,
+    },
+    forecast_points: [
+      {
+        date: '2026-05-31',
+        fixed_income: 7500,
+        extra_income: 0,
+        total_income: 7500,
+        planned_spend: 5120.39,
+        net_cash_flow: 2379.61,
+        projected_balance: 61202.23,
+      },
+      {
+        date: '2029-06-30',
+        fixed_income: 7500,
+        extra_income: 0,
+        total_income: 7500,
+        planned_spend: 5120.39,
+        net_cash_flow: 2379.61,
+        projected_balance: 149247.93,
+      },
+    ],
+    sheets: [],
+  };
+
+  const viewModel = buildExpenseSheetViewModel(payload);
+
+  assert.equal(viewModel.forecast.monthCount, 2);
+  assert.equal(viewModel.forecast.monthlyFixedIncome, 7500);
+  assert.equal(viewModel.forecast.monthlyExtraIncome, 0);
+  assert.equal(viewModel.forecast.monthlyTotalIncome, 7500);
+  assert.equal(viewModel.forecast.monthlyPlannedSpend, 5120.39);
+  assert.equal(viewModel.forecast.monthlyNetCashFlow, 2379.61);
+  assert.equal(viewModel.forecast.latestProjectedBalance, 149247.93);
+  assert.equal(viewModel.forecast.startDate, '2026-05-31');
+  assert.equal(viewModel.forecast.endDate, '2029-06-30');
+});
+
 test('buildExpenseSheetViewModel treats non-required budget flags as optional', () => {
   const payload = {
     summary: {},

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -57,6 +58,35 @@ class SleepScheduleDashboardTests(unittest.TestCase):
         self.assertEqual(chart["option"]["series"][0]["data"][0][0], "2026-04-19")
         self.assertAlmostEqual(chart["option"]["series"][0]["data"][0][1], 22 + 28 / 60, places=4)
         self.assertAlmostEqual(chart["option"]["series"][1]["data"][0][1], 24 + 10 + 40 / 60, places=4)
+
+    def test_balance_dashboard_splits_actual_assets_from_forecast_path(self):
+        data_frame = pd.DataFrame(
+            {
+                "日期": pd.to_datetime(["2026-04-30", "2026-05-31", "2026-06-30"]),
+                "支付宝资产": [57433.39, None, None],
+                "银行卡资产": [157.33, None, None],
+                "微信资产": [142.80, None, None],
+                "股票资产": [1089.10, None, None],
+                "现金及现金等价物+股票": [58822.62, None, None],
+                "实际/预测期末现金+股票": [58822.62, 61202.23, 63581.85],
+                "日均支出": [129.36, 165.17, 170.68],
+                "记录类型": ["实际", "预测", "预测"],
+                "固定收入": [None, 7500.0, 7500.0],
+            }
+        )
+
+        with patch.object(plot_dashboard.plot_module, "load_balance_sheet", return_value=data_frame):
+            chart = plot_dashboard._build_balance_dashboard_chart()
+
+        self.assertEqual(chart["summary"][0]["value"], "¥58,823")
+        self.assertEqual(chart["summary"][1]["value"], "¥129/天")
+
+        cash_series = next(item for item in chart["option"]["series"] if item["name"] == "现金及现金等价物+股票")
+        forecast_series = next(item for item in chart["option"]["series"] if item["name"] == "预测期末现金+股票")
+
+        self.assertEqual([point[0] for point in cash_series["data"]], ["2026-04-30"])
+        self.assertEqual([point[0] for point in forecast_series["data"]], ["2026-05-31", "2026-06-30"])
+        self.assertEqual(forecast_series["lineStyle"]["type"], "dashed")
 
 
 if __name__ == "__main__":

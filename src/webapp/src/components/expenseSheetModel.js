@@ -407,6 +407,118 @@ function buildTrendChartSection(payload, sheet, summary = {}, anchorTimestamp) {
   };
 }
 
+function normalizeForecastPoint(point) {
+  const date = normalizeText(point?.date);
+  const timestamp = parseDateValue(date);
+  if (!date || timestamp === null) return null;
+
+  const fixedIncome = toNumber(point?.fixed_income ?? point?.fixedIncome);
+  const extraIncome = toNumber(point?.extra_income ?? point?.extraIncome);
+  const totalIncome = toNumber(point?.total_income ?? point?.totalIncome);
+  const plannedSpend = toNumber(point?.planned_spend ?? point?.plannedSpend);
+  const netCashFlow = toNumber(point?.net_cash_flow ?? point?.netCashFlow);
+  const projectedBalance = toNumber(point?.projected_balance ?? point?.projectedBalance);
+
+  if (
+    fixedIncome === null &&
+    extraIncome === null &&
+    totalIncome === null &&
+    plannedSpend === null &&
+    netCashFlow === null &&
+    projectedBalance === null
+  ) {
+    return null;
+  }
+
+  return {
+    date,
+    timestamp,
+    fixedIncome,
+    extraIncome,
+    totalIncome,
+    plannedSpend,
+    netCashFlow,
+    projectedBalance,
+  };
+}
+
+function buildSheetForecastPoints(sheet, anchorTimestamp) {
+  if (!sheet) return [];
+
+  return sheet.rows
+    .map((row) => {
+      const date = normalizeText(getCell(sheet, row, ['日期', 'date']));
+      const timestamp = parseDateValue(date);
+      if (!date || timestamp === null) return null;
+
+      const recordType = normalizeText(getCell(sheet, row, ['记录类型', '数据类型', '类型', 'record_type']));
+      const markedForecast = /预测|计划|forecast|plan/i.test(recordType);
+      const markedActual = /实际|真实|actual|history|historical/i.test(recordType);
+      if (!markedForecast && (markedActual || timestamp <= anchorTimestamp)) return null;
+
+      return normalizeForecastPoint({
+        date,
+        fixed_income: getCell(sheet, row, ['固定收入', '收入工资', 'fixed_income']),
+        extra_income: getCell(sheet, row, ['额外收入', '收入其他', 'extra_income']),
+        total_income: getCell(sheet, row, ['收入合计', '期间收入', 'total_income']),
+        planned_spend: getCell(sheet, row, ['预测/实际支出', '预测支出', '期间支出', 'planned_spend']),
+        net_cash_flow: getCell(sheet, row, ['净现金流', 'net_cash_flow']),
+        projected_balance: getCell(sheet, row, [
+          '实际/预测期末现金+股票',
+          '预测期末现金+股票',
+          '现金及现金等价物+股票',
+          'projected_balance',
+        ]),
+      });
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.timestamp - right.timestamp);
+}
+
+function pickFirstNumber(points, key) {
+  const item = points.find((point) => point[key] !== null);
+  return item ? pointValue(item, key) : null;
+}
+
+function pickLastNumber(points, key) {
+  const item = [...points].reverse().find((point) => point[key] !== null);
+  return item ? pointValue(item, key) : null;
+}
+
+function pointValue(point, key) {
+  return point?.[key] ?? null;
+}
+
+function buildForecastSection(payload, sheet, anchorTimestamp) {
+  const payloadForecastPoints = Array.isArray(payload?.forecast_points)
+    ? payload.forecast_points
+    : Array.isArray(payload?.forecastPoints)
+      ? payload.forecastPoints
+      : [];
+
+  const points = payloadForecastPoints
+    .map(normalizeForecastPoint)
+    .filter(Boolean)
+    .sort((left, right) => left.timestamp - right.timestamp);
+
+  const resolvedPoints = points.length ? points : buildSheetForecastPoints(sheet, anchorTimestamp);
+  const firstPoint = resolvedPoints[0] || null;
+  const lastPoint = resolvedPoints.at(-1) || null;
+
+  return {
+    points: resolvedPoints,
+    monthCount: resolvedPoints.length,
+    monthlyFixedIncome: pickFirstNumber(resolvedPoints, 'fixedIncome'),
+    monthlyExtraIncome: pickFirstNumber(resolvedPoints, 'extraIncome'),
+    monthlyTotalIncome: pickFirstNumber(resolvedPoints, 'totalIncome'),
+    monthlyPlannedSpend: pickFirstNumber(resolvedPoints, 'plannedSpend'),
+    monthlyNetCashFlow: pickFirstNumber(resolvedPoints, 'netCashFlow'),
+    latestProjectedBalance: pickLastNumber(resolvedPoints, 'projectedBalance'),
+    startDate: firstPoint?.date ?? '--',
+    endDate: lastPoint?.date ?? '--',
+  };
+}
+
 export function buildExpenseSheetViewModel(payload = {}, options = {}) {
   const resolvedPayload = payload ?? {};
   const sheets = resolvedPayload.sheets || [];
@@ -418,6 +530,7 @@ export function buildExpenseSheetViewModel(payload = {}, options = {}) {
   const socialSheet = findSheet(sheets, SOCIAL_SHEET_NAMES);
 
   const trendChart = buildTrendChartSection(resolvedPayload, expenseSheet, resolvedPayload.summary, anchorTimestamp);
+  const forecast = buildForecastSection(resolvedPayload, expenseSheet, anchorTimestamp);
   const dailyAverage =
     trendChart.summary.latestDailyAverage ?? toNumber(resolvedPayload.summary?.time_cost?.daily_average);
   const cashAndStock =
@@ -444,6 +557,7 @@ export function buildExpenseSheetViewModel(payload = {}, options = {}) {
       { id: 'coverageDays', label: '现金覆盖天数', value: coverageDays, unit: 'days' },
     ],
     trendChart,
+    forecast,
     recentSpending: buildRecentSpending(expenseSheet, anchorTimestamp),
     budget: buildBudgetSection(budgetSheet, resolvedPayload.summary?.budget),
     assets: buildAssetSection(assetSheet),

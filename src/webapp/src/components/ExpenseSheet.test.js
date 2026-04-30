@@ -18,7 +18,16 @@ test('Expense Sheet pulls static UI copy from the display language layer', () =>
   assert.ok(jsxSource.includes("useDisplayLanguage()"));
   assert.ok(jsxSource.includes("t('expense.title')"));
   assert.ok(jsxSource.includes("t('expense.balance_chart_title')"));
+  assert.ok(jsxSource.includes("t('expense.forecast_title')"));
   assert.ok(jsxSource.includes("t('expense.raw_sheets_aria')"));
+});
+
+test('Expense Sheet renders a separate future income forecast section', () => {
+  assert.ok(jsxSource.includes('viewModel.forecast.monthCount > 0'));
+  assert.ok(jsxSource.includes('expense-forecast-summary'));
+  assert.ok(jsxSource.includes("viewModel.forecast.monthlyFixedIncome"));
+  assert.ok(jsxSource.includes("viewModel.forecast.latestProjectedBalance"));
+  assert.ok(cssSource.includes('.expense-forecast-summary'));
 });
 
 test('Expense Sheet refresh starts the backend plot refresh job before reloading charts', () => {

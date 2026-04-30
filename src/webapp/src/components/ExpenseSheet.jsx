@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
+  CalendarRange,
   ClipboardList,
   Coins,
   Clock,
@@ -373,6 +374,50 @@ export default function ExpenseSheet({ theme = 'dark' }) {
             </div>
 
             <aside className="expense-secondary-column">
+              {viewModel.forecast.monthCount > 0 ? (
+                <section className="glass-panel expense-section">
+                  <SectionHeader
+                    icon={CalendarRange}
+                    title={t('expense.forecast_title')}
+                    description={t('expense.forecast_desc')}
+                  />
+                  <div className="expense-forecast-summary">
+                    <MetricRow
+                      label={t('expense.forecast_range')}
+                      value={`${viewModel.forecast.startDate} - ${viewModel.forecast.endDate}`}
+                      hint={t('expense.forecast_range_hint', {
+                        count: formatNumber(viewModel.forecast.monthCount, effectiveLanguage, 0),
+                      })}
+                    />
+                    <MetricRow
+                      label={t('expense.forecast_fixed_income')}
+                      value={formatCurrency(viewModel.forecast.monthlyFixedIncome, effectiveLanguage)}
+                      hint={t('expense.forecast_fixed_income_hint')}
+                    />
+                    <MetricRow
+                      label={t('expense.forecast_extra_income')}
+                      value={formatCurrency(viewModel.forecast.monthlyExtraIncome, effectiveLanguage)}
+                    />
+                    <MetricRow
+                      label={t('expense.forecast_total_income')}
+                      value={formatCurrency(viewModel.forecast.monthlyTotalIncome, effectiveLanguage)}
+                    />
+                    <MetricRow
+                      label={t('expense.forecast_planned_spend')}
+                      value={formatCurrency(viewModel.forecast.monthlyPlannedSpend, effectiveLanguage)}
+                    />
+                    <MetricRow
+                      label={t('expense.forecast_net_cash_flow')}
+                      value={formatCurrency(viewModel.forecast.monthlyNetCashFlow, effectiveLanguage)}
+                    />
+                    <MetricRow
+                      label={t('expense.forecast_projected_balance')}
+                      value={formatCurrency(viewModel.forecast.latestProjectedBalance, effectiveLanguage)}
+                    />
+                  </div>
+                </section>
+              ) : null}
+
               <section className="glass-panel expense-section">
                 <SectionHeader
                   icon={Coins}

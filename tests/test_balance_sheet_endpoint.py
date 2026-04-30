@@ -91,6 +91,63 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(payload["trend_points"][0]["balance"], 1000.0)
         self.assertEqual(payload["trend_points"][-1]["daily_average"], 51.0)
 
+    def test_balance_sheet_summary_uses_actual_rows_and_exact_cash_total(self):
+        expense_sheet = pd.DataFrame(
+            {
+                "日期": pd.to_datetime(["2026-04-30", "2026-05-31", "2029-06-30"]),
+                "股票资产": [1089.10, None, None],
+                "现金及现金等价物+股票": [58822.62, None, None],
+                "实际/预测期末现金+股票": [58822.62, 61202.23, 149247.93],
+                "期间支出": [3880.93, 5120.39, 5120.39],
+                "预测/实际支出": [3880.93, 5120.39, 5120.39],
+                "日均支出": [129.36, 165.17, 170.68],
+                "记录类型": ["实际", "预测", "预测"],
+                "固定收入": [None, 7500.0, 7500.0],
+                "收入合计": [9972.0, 7500.0, 7500.0],
+            }
+        )
+
+        summary = server._build_balance_summary({"开销": expense_sheet})
+        trend_points = server._build_expense_trend_points({"开销": expense_sheet})
+
+        self.assertEqual(summary["time_cost"]["latest_date"], "2026-04-30")
+        self.assertEqual(summary["time_cost"]["daily_average"], 129.36)
+        self.assertEqual(summary["assets"]["cash_and_stock"]["field"], "现金及现金等价物+股票")
+        self.assertEqual(summary["assets"]["cash_and_stock"]["value"], 58822.62)
+        self.assertEqual(len(trend_points), 1)
+        self.assertEqual(trend_points[0]["date"], "2026-04-30")
+
+    def test_balance_sheet_route_splits_actual_trend_from_forecast_points(self):
+        route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
+
+        self.assertIsNotNone(route)
+
+        expense_sheet = pd.DataFrame(
+            {
+                "日期": pd.to_datetime(["2026-04-30", "2026-05-31", "2026-06-30"]),
+                "现金及现金等价物+股票": [58822.62, None, None],
+                "实际/预测期末现金+股票": [58822.62, 61202.23, 63581.85],
+                "期间支出": [3880.93, 5120.39, 5120.39],
+                "预测/实际支出": [3880.93, 5120.39, 5120.39],
+                "日均支出": [129.36, 165.17, 170.68],
+                "记录类型": ["实际", "预测", "预测"],
+                "固定收入": [None, 7500.0, 7500.0],
+                "额外收入": [None, 0.0, 0.0],
+                "收入合计": [9972.0, 7500.0, 7500.0],
+                "净现金流": [6091.07, 2379.61, 2379.61],
+            }
+        )
+
+        with patch.object(server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")), patch.object(
+            server.DataLoader, "load_excel_sheets", return_value={"开销": expense_sheet}
+        ):
+            payload = asyncio.run(route.endpoint())
+
+        self.assertEqual([point["date"] for point in payload["trend_points"]], ["2026-04-30"])
+        self.assertEqual([point["date"] for point in payload["forecast_points"]], ["2026-05-31", "2026-06-30"])
+        self.assertEqual(payload["forecast_points"][0]["fixed_income"], 7500.0)
+        self.assertEqual(payload["forecast_points"][0]["projected_balance"], 61202.23)
+
 
 if __name__ == "__main__":
     unittest.main()

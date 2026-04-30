@@ -886,16 +886,14 @@ def _find_date_column(df):
 def _find_metric_from_columns(df, keywords):
     if df is None or df.empty:
         return None
-    for col in df.columns:
-        col_name = str(col)
-        if any(k in col_name for k in keywords):
-            values = []
-            for v in df[col].tolist():
-                num = _coerce_number(v)
-                if num is not None:
-                    values.append(num)
-            if values:
-                return {"value": values[-1], "field": col_name}
+    for col in _find_matching_columns(df.columns, keywords):
+        values = []
+        for v in df[col].tolist():
+            num = _coerce_number(v)
+            if num is not None:
+                values.append(num)
+        if values:
+            return {"value": values[-1], "field": str(col)}
     return None
 
 def _find_metric_from_rows(df, keywords):
@@ -976,18 +974,77 @@ def _find_first_column(columns_or_df, keywords):
     else:
         columns = columns_or_df
 
+    matching_columns = _find_matching_columns(columns, keywords)
+    return matching_columns[0] if matching_columns else None
+
+
+def _find_matching_columns(columns, keywords):
     keyword_texts = [str(keyword) for keyword in keywords if keyword is not None]
+    matches = []
+    seen = set()
+    for keyword in keyword_texts:
+        for col in columns:
+            name = str(col)
+            if name == keyword and name not in seen:
+                matches.append(col)
+                seen.add(name)
+    for keyword in keyword_texts:
+        for col in columns:
+            name = str(col)
+            if keyword in name and name not in seen:
+                matches.append(col)
+                seen.add(name)
+    return matches
 
-    for col in columns:
-        name = str(col)
-        if any(name == keyword for keyword in keyword_texts):
-            return col
 
-    for col in columns:
-        name = str(col)
-        if any(keyword in name for keyword in keyword_texts):
-            return col
-    return None
+def _find_record_type_column(df):
+    if df is None or df.empty:
+        return None
+    return _find_first_column(df, ["记录类型", "数据类型", "类型", "record_type", "record type"])
+
+
+def _row_type_masks(df, date_col=None, as_of=None):
+    if df is None or df.empty:
+        empty = pd.Series([], dtype=bool)
+        return empty, empty
+
+    record_col = _find_record_type_column(df)
+    if record_col is not None:
+        record_text = df[record_col].fillna("").astype(str).str.strip().str.lower()
+        explicit_forecast = record_text.str.contains("预测|计划|forecast|plan", regex=True, na=False)
+        explicit_actual = record_text.str.contains("实际|真实|actual|history|historical", regex=True, na=False)
+    else:
+        explicit_forecast = pd.Series(False, index=df.index)
+        explicit_actual = pd.Series(False, index=df.index)
+
+    if date_col is None:
+        date_col = _find_date_column(df)
+    if as_of is None:
+        as_of = date.today()
+
+    if date_col is not None:
+        parsed_dates = pd.to_datetime(df[date_col], errors="coerce")
+        future_dates = parsed_dates.dt.date > as_of
+    else:
+        future_dates = pd.Series(False, index=df.index)
+
+    forecast_mask = explicit_forecast | (~explicit_actual & future_dates.fillna(False))
+    actual_mask = explicit_actual | (~explicit_forecast & ~future_dates.fillna(False))
+    return actual_mask, forecast_mask
+
+
+def _filter_actual_expense_rows(df, date_col=None, as_of=None):
+    if df is None or df.empty:
+        return df
+    actual_mask, _ = _row_type_masks(df, date_col=date_col, as_of=as_of)
+    return df.loc[actual_mask].copy()
+
+
+def _filter_forecast_expense_rows(df, date_col=None, as_of=None):
+    if df is None or df.empty:
+        return df
+    _, forecast_mask = _row_type_masks(df, date_col=date_col, as_of=as_of)
+    return df.loc[forecast_mask].copy()
 
 def _find_expense_sheet(sheets):
     if not sheets:
@@ -1106,9 +1163,13 @@ def _build_expense_trend_points(sheets):
     if date_col is None:
         return []
 
-    balance_col = _find_first_column(df, ["现金及现金等价物+股票", "现金及现金等价物", "现金", "股票"])
+    df = _filter_actual_expense_rows(df, date_col=date_col)
+    if df is None or df.empty:
+        return []
+
+    balance_col = _find_first_column(df, ["现金及现金等价物+股票", "实际/预测期末现金+股票", "现金及现金等价物", "现金", "股票"])
     daily_average_col = _find_first_column(df, ["日均支出", "日均开销", "日均成本"])
-    period_spend_col = _find_first_column(df, ["期间支出", "支出"])
+    period_spend_col = _find_first_column(df, ["预测/实际支出", "期间支出", "支出"])
 
     if balance_col is None and daily_average_col is None and period_spend_col is None:
         return []
@@ -1143,20 +1204,92 @@ def _build_expense_trend_points(sheets):
     trend_points.sort(key=lambda item: item["date"])
     return trend_points
 
+def _build_balance_forecast_points(sheets):
+    sheet_name, df = _find_expense_sheet(sheets)
+    if df is None or df.empty:
+        return []
+
+    date_col = _find_date_column(df)
+    if date_col is None:
+        return []
+
+    forecast_df = _filter_forecast_expense_rows(df, date_col=date_col)
+    if forecast_df is None or forecast_df.empty:
+        return []
+
+    fixed_income_col = _find_first_column(forecast_df, ["固定收入", "收入工资", "固定工资", "fixed_income"])
+    extra_income_col = _find_first_column(forecast_df, ["额外收入", "收入其他", "extra_income"])
+    total_income_col = _find_first_column(forecast_df, ["收入合计", "期间收入", "total_income"])
+    planned_spend_col = _find_first_column(forecast_df, ["预测/实际支出", "预测支出", "期间支出", "planned_spend"])
+    net_cash_flow_col = _find_first_column(forecast_df, ["净现金流", "net_cash_flow"])
+    projected_balance_col = _find_first_column(
+        forecast_df,
+        ["实际/预测期末现金+股票", "预测期末现金+股票", "现金及现金等价物+股票", "projected_balance"],
+    )
+
+    forecast_points = []
+    for _, row in forecast_df.iterrows():
+        raw_date = _normalize_cell_value(row.get(date_col))
+        if raw_date is None:
+            continue
+
+        parsed_date = pd.to_datetime(raw_date, errors="coerce")
+        if pd.isna(parsed_date):
+            continue
+
+        fixed_income = _coerce_number(row.get(fixed_income_col)) if fixed_income_col is not None else None
+        extra_income = _coerce_number(row.get(extra_income_col)) if extra_income_col is not None else None
+        total_income = _coerce_number(row.get(total_income_col)) if total_income_col is not None else None
+        planned_spend = _coerce_number(row.get(planned_spend_col)) if planned_spend_col is not None else None
+        net_cash_flow = _coerce_number(row.get(net_cash_flow_col)) if net_cash_flow_col is not None else None
+        projected_balance = _coerce_number(row.get(projected_balance_col)) if projected_balance_col is not None else None
+
+        if total_income is None:
+            total_income = (fixed_income or 0) + (extra_income or 0) if fixed_income is not None or extra_income is not None else None
+        if net_cash_flow is None and total_income is not None and planned_spend is not None:
+            net_cash_flow = total_income - planned_spend
+
+        if all(value is None for value in [fixed_income, extra_income, total_income, planned_spend, net_cash_flow, projected_balance]):
+            continue
+
+        forecast_points.append(
+            {
+                "date": parsed_date.strftime("%Y-%m-%d"),
+                "fixed_income": fixed_income,
+                "extra_income": extra_income,
+                "total_income": total_income,
+                "planned_spend": planned_spend,
+                "net_cash_flow": net_cash_flow,
+                "projected_balance": projected_balance,
+                "sheet": sheet_name,
+            }
+        )
+
+    forecast_points.sort(key=lambda item: item["date"])
+    return forecast_points
+
 def _build_balance_summary(sheets):
-    daily_avg = _find_metric(sheets, ["日均支出", "日均开销", "日均成本"])
-    monthly_total = _find_metric(sheets, ["月支出", "月度支出", "当月支出", "月总支出"])
-    monthly_avg = _find_metric(sheets, ["月均支出", "月均开销", "月均成本"])
+    metric_sheets = dict(sheets)
+    expense_sheet_name, expense_df = _find_expense_sheet(sheets)
+    if expense_df is not None and not expense_df.empty:
+        date_col = _find_date_column(expense_df)
+        actual_expense_df = _filter_actual_expense_rows(expense_df, date_col=date_col)
+        if actual_expense_df is not None and not actual_expense_df.empty:
+            metric_sheets[expense_sheet_name] = actual_expense_df
+
+    daily_avg = _find_metric(metric_sheets, ["日均支出", "日均开销", "日均成本"])
+    monthly_total = _find_metric(metric_sheets, ["月支出", "月度支出", "当月支出", "月总支出"])
+    monthly_avg = _find_metric(metric_sheets, ["月均支出", "月均开销", "月均成本"])
 
     latest_date = None
     if daily_avg and "sheet" in daily_avg:
-        latest_date = _find_latest_date_in_df(sheets.get(daily_avg["sheet"]))
+        latest_date = _find_latest_date_in_df(metric_sheets.get(daily_avg["sheet"]))
     if latest_date is None and monthly_total and "sheet" in monthly_total:
-        latest_date = _find_latest_date_in_df(sheets.get(monthly_total["sheet"]))
+        latest_date = _find_latest_date_in_df(metric_sheets.get(monthly_total["sheet"]))
     if latest_date is None and monthly_avg and "sheet" in monthly_avg:
-        latest_date = _find_latest_date_in_df(sheets.get(monthly_avg["sheet"]))
+        latest_date = _find_latest_date_in_df(metric_sheets.get(monthly_avg["sheet"]))
     if latest_date is None:
-        for df in sheets.values():
+        for df in metric_sheets.values():
             latest_date = _find_latest_date_in_df(df)
             if latest_date:
                 break
@@ -1188,12 +1321,12 @@ def _build_balance_summary(sheets):
         per_day_month = daily_avg_value
 
     assets = {
-        "fixed_assets": _find_metric(sheets, ["固定资产"]),
-        "current_assets": _find_metric(sheets, ["流动资产"]),
-        "total_assets": _find_metric(sheets, ["总资产", "资产合计"]),
-        "liabilities": _find_metric(sheets, ["负债合计", "负债"]),
-        "equity": _find_metric(sheets, ["净资产", "所有者权益", "股东权益"]),
-        "cash_and_stock": _find_metric(sheets, ["现金及现金等价物+股票", "现金及现金等价物", "现金", "股票"])
+        "fixed_assets": _find_metric(metric_sheets, ["固定资产"]),
+        "current_assets": _find_metric(metric_sheets, ["流动资产"]),
+        "total_assets": _find_metric(metric_sheets, ["总资产", "资产合计"]),
+        "liabilities": _find_metric(metric_sheets, ["负债合计", "负债"]),
+        "equity": _find_metric(metric_sheets, ["净资产", "所有者权益", "股东权益"]),
+        "cash_and_stock": _find_metric(metric_sheets, ["现金及现金等价物+股票", "实际/预测期末现金+股票", "现金及现金等价物", "现金", "股票"])
     }
 
     budget = _build_budget_summary(sheets)
@@ -2910,6 +3043,7 @@ async def get_balance_sheet():
         summary = _build_balance_summary(sheets)
         suggestions = _build_balance_suggestions(summary)
         trend_points = _build_expense_trend_points(sheets)
+        forecast_points = _build_balance_forecast_points(sheets)
 
         sheet_payloads = []
         for sheet_name, df in sheets.items():
@@ -2926,6 +3060,7 @@ async def get_balance_sheet():
             "summary": summary,
             "suggestions": suggestions,
             "trend_points": trend_points,
+            "forecast_points": forecast_points,
             "sheets": sheet_payloads,
         }
     except FileNotFoundError as exc:
