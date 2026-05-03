@@ -45,9 +45,13 @@ test('App preserves voice provider settings when saving the header theme toggle'
   assert.ok(appSource.includes('voiceBaseUrl: currentState.settings?.voiceBaseUrl'));
   assert.ok(appSource.includes('voiceApiKey: currentState.settings?.voiceApiKey'));
   assert.ok(appSource.includes('voiceModel: currentState.settings?.voiceModel'));
+  assert.ok(appSource.includes('voiceProviderMode: currentState.settings?.voiceProviderMode'));
+  assert.ok(appSource.includes('voiceModels: currentState.settings?.voiceModels'));
   assert.ok(appSource.includes('imageBaseUrl: currentState.settings?.imageBaseUrl'));
   assert.ok(appSource.includes('imageApiKey: currentState.settings?.imageApiKey'));
   assert.ok(appSource.includes('imageModel: currentState.settings?.imageModel'));
+  assert.ok(appSource.includes('imageProviderMode: currentState.settings?.imageProviderMode'));
+  assert.ok(appSource.includes('imageModels: currentState.settings?.imageModels'));
 });
 
 test('App renders the header theme toggle as a labelled pill instead of a blank circle', () => {

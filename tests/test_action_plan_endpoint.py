@@ -399,6 +399,94 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertEqual(created_args[created_args.index("--transcribe-model") + 1], "sensevoice")
         self.assertEqual(created_env["VANTAGE_TRANSCRIBE_API_KEY"], "sk-voice")
 
+    def test_transcribe_audio_inherits_ai_provider_credentials(self):
+        fake_process = _FakeProcess(returncode=0)
+        fake_process.communicate = AsyncMock(return_value=(b"TRANSCRIPTION_RESULT:hello\n", b""))
+        created_args = []
+        created_env = {}
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            created_args.extend(cmd)
+            created_env.update(kwargs.get("env") or {})
+            return fake_process
+
+        with patch.object(
+            server,
+            "load_settings",
+            return_value={
+                "voice_provider_mode": "inherit_ai",
+                "voice_model": "sensevoice",
+            },
+        ), patch.object(
+            server,
+            "load_provider_config",
+            return_value={
+                "selected_provider": "custom",
+                "providers": {
+                    "custom": {
+                        "route": "custom",
+                        "enabled": True,
+                        "api_key": "sk-ai",
+                        "base_url": "http://127.0.0.1:8317/v1",
+                        "model": "gpt-5.5",
+                    }
+                },
+            },
+        ), patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(side_effect=fake_create_subprocess_exec),
+        ):
+            response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+
+        self.assertEqual(response["transcription"], "hello")
+        self.assertEqual(response["voice_model"], "sensevoice")
+        self.assertEqual(response["voice_base_url"], "http://127.0.0.1:8317/v1")
+        self.assertEqual(response["voice_provider_mode"], "inherit_ai")
+        self.assertEqual(response["voice_provider_route"], "custom")
+        self.assertEqual(created_args[created_args.index("--transcribe-base-url") + 1], "http://127.0.0.1:8317/v1")
+        self.assertEqual(created_env["VANTAGE_TRANSCRIBE_API_KEY"], "sk-ai")
+
+    def test_provider_model_discover_inherits_ai_provider(self):
+        with patch.object(
+            server,
+            "load_provider_config",
+            return_value={
+                "selected_provider": "custom",
+                "providers": {
+                    "custom": {
+                        "route": "custom",
+                        "enabled": True,
+                        "api_key": "sk-ai",
+                        "base_url": "http://127.0.0.1:8317/v1",
+                        "model": "gpt-5.5",
+                    }
+                },
+            },
+        ), patch.object(
+            server.LLMClient,
+            "discover_models_for_config",
+            return_value={"models": ["gpt-image-1"], "model_capabilities": {}, "error": None},
+        ) as mock_discover:
+            response = asyncio.run(
+                server.discover_provider_models(
+                    server.ProviderModelDiscoverRequest(
+                        kind="image",
+                        mode="inherit_ai",
+                    )
+                )
+            )
+
+        self.assertEqual(response["models"], ["gpt-image-1"])
+        self.assertEqual(response["resolved_provider"]["mode"], "inherit_ai")
+        self.assertEqual(response["resolved_provider"]["route"], "custom")
+        mock_discover.assert_called_once_with(
+            route="custom",
+            base_url="http://127.0.0.1:8317/v1",
+            api_key="sk-ai",
+            provider_type="openai-compatible",
+        )
+
     def test_transcribe_audio_redacts_voice_api_key_from_logs(self):
         fake_process = _FakeProcess(returncode=0)
         fake_process.communicate = AsyncMock(return_value=(b"TRANSCRIPTION_RESULT:hello\n", b""))

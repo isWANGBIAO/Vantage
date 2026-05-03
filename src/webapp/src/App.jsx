@@ -270,12 +270,18 @@ function AppShell() {
         launchAtLogin: Boolean(currentState.settings?.launchAtLogin),
         backgroundMode: currentState.settings?.backgroundMode || 'balanced',
         actionPlanAutoGenerate: currentState.settings?.actionPlanAutoGenerate !== false,
+        voiceProviderMode: currentState.settings?.voiceProviderMode,
         voiceBaseUrl: currentState.settings?.voiceBaseUrl,
         voiceApiKey: currentState.settings?.voiceApiKey,
         voiceModel: currentState.settings?.voiceModel,
+        voiceModels: currentState.settings?.voiceModels,
+        voiceLastRefreshedAt: currentState.settings?.voiceLastRefreshedAt,
+        imageProviderMode: currentState.settings?.imageProviderMode,
         imageBaseUrl: currentState.settings?.imageBaseUrl,
         imageApiKey: currentState.settings?.imageApiKey,
         imageModel: currentState.settings?.imageModel,
+        imageModels: currentState.settings?.imageModels,
+        imageLastRefreshedAt: currentState.settings?.imageLastRefreshedAt,
       });
       setSettingsState(savedState);
     } catch (error) {

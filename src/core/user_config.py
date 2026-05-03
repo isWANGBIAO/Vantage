@@ -13,6 +13,8 @@ PROVIDERS_VERSION = 2
 PROVIDER_TYPE_OPENAI_COMPATIBLE = "openai-compatible"
 MIGRATION_STATE_VERSION = 1
 DEFAULT_VOICE_MODEL = "FunAudioLLM/SenseVoiceSmall"
+PROVIDER_MODE_INHERIT_AI = "inherit_ai"
+PROVIDER_MODE_CUSTOM = "custom"
 DEFAULT_LOCAL_PROXY_BASE_URL = "http://127.0.0.1:8317/v1"
 LOCAL_PROXY_PROVIDER_ROUTES = {
     "custom",
@@ -31,12 +33,18 @@ DEFAULT_SETTINGS = {
     "theme_mode": "dark",
     "background_mode": "balanced",
     "action_plan_auto_generate": True,
+    "voice_provider_mode": PROVIDER_MODE_INHERIT_AI,
     "voice_base_url": "",
     "voice_api_key": "",
     "voice_model": DEFAULT_VOICE_MODEL,
+    "voice_models": [DEFAULT_VOICE_MODEL],
+    "voice_last_refreshed_at": None,
+    "image_provider_mode": PROVIDER_MODE_INHERIT_AI,
     "image_base_url": "",
     "image_api_key": "",
     "image_model": "",
+    "image_models": [],
+    "image_last_refreshed_at": None,
 }
 
 DEFAULT_PROVIDER_CONFIG = {
@@ -158,6 +166,23 @@ def _coerce_provider_models(payload: dict | None, model: str | None) -> list[str
     return models
 
 
+def _coerce_model_list(payload: dict | None, key: str, model: str | None = None) -> list[str]:
+    return _coerce_provider_models({**(payload or {}), "models": (payload or {}).get(key)}, model)
+
+
+def _coerce_special_provider_mode(payload: dict | None, *, prefix: str) -> str:
+    value = payload.get(f"{prefix}_provider_mode") if isinstance(payload, dict) else None
+    if value == PROVIDER_MODE_CUSTOM:
+        return PROVIDER_MODE_CUSTOM
+    if value == PROVIDER_MODE_INHERIT_AI:
+        return PROVIDER_MODE_INHERIT_AI
+
+    # Legacy settings that already had their own provider fields should keep working.
+    if _coerce_optional_str(payload, f"{prefix}_base_url") or _coerce_optional_str(payload, f"{prefix}_api_key"):
+        return PROVIDER_MODE_CUSTOM
+    return PROVIDER_MODE_INHERIT_AI
+
+
 def _default_base_url_for_provider(route: str | None) -> str | None:
     normalized_route = str(route or "").strip().lower()
     if normalized_route in LOCAL_PROXY_PROVIDER_ROUTES:
@@ -224,12 +249,18 @@ def _sanitize_settings(payload: dict | None) -> dict:
         "theme_mode": _coerce_theme_mode(payload),
         "background_mode": _coerce_background_mode(payload),
         "action_plan_auto_generate": _coerce_bool(payload, "action_plan_auto_generate", True),
+        "voice_provider_mode": _coerce_special_provider_mode(payload, prefix="voice"),
         "voice_base_url": _coerce_optional_str(payload, "voice_base_url") or "",
         "voice_api_key": _coerce_optional_str(payload, "voice_api_key") or "",
         "voice_model": _coerce_optional_str(payload, "voice_model") or DEFAULT_VOICE_MODEL,
+        "voice_models": _coerce_model_list(payload, "voice_models", _coerce_optional_str(payload, "voice_model") or DEFAULT_VOICE_MODEL),
+        "voice_last_refreshed_at": _coerce_optional_str(payload, "voice_last_refreshed_at"),
+        "image_provider_mode": _coerce_special_provider_mode(payload, prefix="image"),
         "image_base_url": _coerce_optional_str(payload, "image_base_url") or "",
         "image_api_key": _coerce_optional_str(payload, "image_api_key") or "",
         "image_model": _coerce_optional_str(payload, "image_model") or "",
+        "image_models": _coerce_model_list(payload, "image_models", _coerce_optional_str(payload, "image_model")),
+        "image_last_refreshed_at": _coerce_optional_str(payload, "image_last_refreshed_at"),
     }
 
 
@@ -349,20 +380,45 @@ def get_active_provider_config(providers_file: str | Path | None = None) -> dict
     return None
 
 
-def get_voice_provider_config(settings_file: str | Path | None = None) -> dict:
+def _build_special_provider_config(
+    *,
+    kind: str,
+    settings_file: str | Path | None = None,
+    providers_file: str | Path | None = None,
+) -> dict:
     settings = load_settings(settings_file=settings_file)
-    base_url = _coerce_optional_str(settings, "voice_base_url") or ""
-    api_key = _coerce_optional_str(settings, "voice_api_key") or ""
-    model = _coerce_optional_str(settings, "voice_model") or DEFAULT_VOICE_MODEL
+    mode = _coerce_special_provider_mode(settings, prefix=kind)
+    model_default = DEFAULT_VOICE_MODEL if kind == "voice" else ""
+    model = _coerce_optional_str(settings, f"{kind}_model") or model_default
+
+    route = kind
+    name = "Voice Provider" if kind == "voice" else "Image Provider"
+    base_url = ""
+    api_key = ""
+
+    if mode == PROVIDER_MODE_INHERIT_AI:
+        provider = get_active_provider_config(providers_file=providers_file)
+        if provider:
+            route = provider["route"]
+            name = provider.get("name") or route
+            base_url = provider.get("base_url") or ""
+            api_key = provider.get("api_key") or ""
+    else:
+        base_url = _coerce_optional_str(settings, f"{kind}_base_url") or ""
+        api_key = _coerce_optional_str(settings, f"{kind}_api_key") or ""
+
     missing = []
     if not base_url:
-        missing.append("voice_base_url")
+        missing.append(f"{kind}_base_url")
     if not api_key:
-        missing.append("voice_api_key")
+        missing.append(f"{kind}_api_key")
     if not model:
-        missing.append("voice_model")
+        missing.append(f"{kind}_model")
 
     return {
+        "mode": mode,
+        "route": route,
+        "name": name,
         "base_url": base_url,
         "api_key": api_key,
         "model": model,
@@ -371,26 +427,26 @@ def get_voice_provider_config(settings_file: str | Path | None = None) -> dict:
     }
 
 
-def get_image_provider_config(settings_file: str | Path | None = None) -> dict:
-    settings = load_settings(settings_file=settings_file)
-    base_url = _coerce_optional_str(settings, "image_base_url") or ""
-    api_key = _coerce_optional_str(settings, "image_api_key") or ""
-    model = _coerce_optional_str(settings, "image_model") or ""
-    missing = []
-    if not base_url:
-        missing.append("image_base_url")
-    if not api_key:
-        missing.append("image_api_key")
-    if not model:
-        missing.append("image_model")
+def get_voice_provider_config(
+    settings_file: str | Path | None = None,
+    providers_file: str | Path | None = None,
+) -> dict:
+    return _build_special_provider_config(
+        kind="voice",
+        settings_file=settings_file,
+        providers_file=providers_file,
+    )
 
-    return {
-        "base_url": base_url,
-        "api_key": api_key,
-        "model": model,
-        "complete": not missing,
-        "missing": missing,
-    }
+
+def get_image_provider_config(
+    settings_file: str | Path | None = None,
+    providers_file: str | Path | None = None,
+) -> dict:
+    return _build_special_provider_config(
+        kind="image",
+        settings_file=settings_file,
+        providers_file=providers_file,
+    )
 
 
 def load_migration_state(migration_state_file: str | Path | None = None) -> dict:

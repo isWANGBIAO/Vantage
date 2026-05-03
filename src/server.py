@@ -2479,6 +2479,15 @@ class LLMModelDiscoverRequest(BaseModel):
     type: Optional[str] = None
 
 
+class ProviderModelDiscoverRequest(BaseModel):
+    kind: Optional[str] = None
+    mode: Optional[str] = None
+    route: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    type: Optional[str] = None
+
+
 @app.get("/api/chat/context")
 async def get_chat_context():
     return _build_chat_context_payload()
@@ -2577,6 +2586,135 @@ def _redact_api_key_from_message(message: str, api_key: str | None = None) -> st
     return re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-[REDACTED]", redacted)
 
 
+def _normalize_special_provider_kind(kind: str | None) -> str:
+    normalized = str(kind or "").strip().lower()
+    return normalized if normalized in {"voice", "image"} else "voice"
+
+
+def _normalize_special_provider_mode(mode: str | None, settings: dict, kind: str) -> str:
+    normalized = str(mode or settings.get(f"{kind}_provider_mode") or "").strip()
+    if normalized == "custom":
+        return "custom"
+    if normalized == "inherit_ai":
+        return "inherit_ai"
+    if settings.get(f"{kind}_base_url") or settings.get(f"{kind}_api_key"):
+        return "custom"
+    return "inherit_ai"
+
+
+def _first_complete_ai_provider():
+    provider_config = load_provider_config()
+    providers = provider_config.get("providers") if isinstance(provider_config, dict) else {}
+    if not isinstance(providers, dict):
+        return None
+
+    candidate_routes = []
+    selected = str(provider_config.get("selected_provider") or "").strip()
+    if selected:
+        candidate_routes.append(selected)
+    candidate_routes.extend(route for route in providers if route not in candidate_routes)
+
+    for route in candidate_routes:
+        provider = providers.get(route)
+        if not isinstance(provider, dict) or provider.get("enabled") is False:
+            continue
+        api_key = str(provider.get("api_key") or "").strip()
+        base_url = str(provider.get("base_url") or "").strip()
+        if not base_url and route.lower() in LOCAL_PROXY_PROVIDER_ROUTES:
+            base_url = DEFAULT_LOCAL_PROXY_BASE_URL
+        if not api_key or not base_url:
+            continue
+        return {
+            "mode": "inherit_ai",
+            "route": route,
+            "name": str(provider.get("name") or route).strip(),
+            "type": str(provider.get("type") or "openai-compatible").strip() or "openai-compatible",
+            "base_url": base_url,
+            "api_key": api_key,
+        }
+    return None
+
+
+def _resolve_special_provider_config(
+    *,
+    kind: str,
+    mode: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    route: str | None = None,
+    provider_type: str | None = None,
+):
+    normalized_kind = _normalize_special_provider_kind(kind)
+    settings = load_settings()
+    normalized_mode = _normalize_special_provider_mode(mode, settings, normalized_kind)
+    model_default = "FunAudioLLM/SenseVoiceSmall" if normalized_kind == "voice" else ""
+    model = str(settings.get(f"{normalized_kind}_model") or model_default).strip()
+
+    if normalized_mode == "inherit_ai":
+        provider = _first_complete_ai_provider()
+        if provider:
+            resolved = {
+                **provider,
+                "kind": normalized_kind,
+                "model": model,
+                "complete": True,
+                "missing": [],
+            }
+            return resolved
+        resolved = {
+            "kind": normalized_kind,
+            "mode": "inherit_ai",
+            "route": route or "",
+            "name": "AI Provider",
+            "type": provider_type or "openai-compatible",
+            "base_url": "",
+            "api_key": "",
+            "model": model,
+            "complete": False,
+            "missing": [f"{normalized_kind}_base_url", f"{normalized_kind}_api_key"],
+        }
+        if not model:
+            resolved["missing"].append(f"{normalized_kind}_model")
+        return resolved
+
+    saved_api_key = str(settings.get(f"{normalized_kind}_api_key") or "").strip()
+    resolved_api_key = str(api_key or "").strip()
+    if not resolved_api_key or resolved_api_key == "********":
+        resolved_api_key = saved_api_key
+    resolved_base_url = str(base_url or settings.get(f"{normalized_kind}_base_url") or "").strip()
+    resolved_type = str(provider_type or "openai-compatible").strip() or "openai-compatible"
+    resolved_route = str(route or normalized_kind).strip() or normalized_kind
+    missing = []
+    if not resolved_base_url:
+        missing.append(f"{normalized_kind}_base_url")
+    if not resolved_api_key:
+        missing.append(f"{normalized_kind}_api_key")
+    if not model:
+        missing.append(f"{normalized_kind}_model")
+    return {
+        "kind": normalized_kind,
+        "mode": "custom",
+        "route": resolved_route,
+        "name": "Voice Provider" if normalized_kind == "voice" else "Image Provider",
+        "type": resolved_type,
+        "base_url": resolved_base_url,
+        "api_key": resolved_api_key,
+        "model": model,
+        "complete": not missing,
+        "missing": missing,
+    }
+
+
+def _safe_resolved_provider_payload(provider_config: dict) -> dict:
+    return {
+        "kind": provider_config.get("kind"),
+        "mode": provider_config.get("mode"),
+        "route": provider_config.get("route"),
+        "name": provider_config.get("name"),
+        "base_url": provider_config.get("base_url"),
+    }
+
+
 def _redact_subprocess_command_for_log(cmd, *, api_key: str | None = None) -> str:
     redacted_parts = []
     redact_next = False
@@ -2595,6 +2733,52 @@ def _redact_subprocess_command_for_log(cmd, *, api_key: str | None = None) -> st
         if text in sensitive_flags:
             redact_next = True
     return " ".join(redacted_parts)
+
+
+@app.post("/api/provider_models/discover")
+async def discover_provider_models(request: ProviderModelDiscoverRequest):
+    resolved = _resolve_special_provider_config(
+        kind=request.kind,
+        mode=request.mode,
+        base_url=request.base_url,
+        api_key=request.api_key,
+        route=request.route,
+        provider_type=request.type,
+    )
+    if not resolved.get("base_url") or not resolved.get("api_key"):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "models": [],
+                "model_capabilities": {},
+                "error": "Provider Base URL and API key are required for model discovery.",
+                "resolved_provider": _safe_resolved_provider_payload(resolved),
+                "missing": resolved.get("missing") or [],
+            },
+        )
+
+    try:
+        payload = LLMClient.discover_models_for_config(
+            route=resolved["route"],
+            base_url=resolved["base_url"],
+            api_key=resolved["api_key"],
+            provider_type=resolved["type"],
+        )
+        return {
+            **payload,
+            "resolved_provider": _safe_resolved_provider_payload(resolved),
+        }
+    except Exception as error:
+        error_message = _redact_api_key_from_message(str(error), resolved["api_key"])
+        return JSONResponse(
+            status_code=400,
+            content={
+                "models": [],
+                "model_capabilities": {},
+                "error": error_message,
+                "resolved_provider": _safe_resolved_provider_payload(resolved),
+            },
+        )
 
 
 @app.post("/api/llm_models/discover")
@@ -2784,25 +2968,7 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
 
 
 def _load_voice_transcription_config():
-    settings = load_settings()
-    base_url = str(settings.get("voice_base_url") or "").strip()
-    api_key = str(settings.get("voice_api_key") or "").strip()
-    model = str(settings.get("voice_model") or "FunAudioLLM/SenseVoiceSmall").strip()
-    missing = []
-    if not base_url:
-        missing.append("voice_base_url")
-    if not api_key:
-        missing.append("voice_api_key")
-    if not model:
-        missing.append("voice_model")
-
-    return {
-        "base_url": base_url,
-        "api_key": api_key,
-        "model": model or "FunAudioLLM/SenseVoiceSmall",
-        "complete": not missing,
-        "missing": missing,
-    }
+    return _resolve_special_provider_config(kind="voice")
 
 
 @app.post("/api/transcribe")
@@ -2816,6 +2982,8 @@ async def transcribe_audio(file: UploadFile = File(...)):
                 "details": "Configure voice Base URL, API key, and model in Settings.",
                 "voice_model": voice_config["model"],
                 "voice_base_url": voice_config["base_url"],
+                "voice_provider_mode": voice_config.get("mode"),
+                "voice_provider_route": voice_config.get("route"),
                 "configuration_error": True,
                 "missing": voice_config["missing"],
             },
@@ -2877,6 +3045,8 @@ async def transcribe_audio(file: UploadFile = File(...)):
                     "details": f"Voice transcription exceeded {TRANSCRIBE_TIMEOUT_SECONDS} seconds.",
                     "voice_model": voice_config["model"],
                     "voice_base_url": voice_config["base_url"],
+                    "voice_provider_mode": voice_config.get("mode"),
+                    "voice_provider_route": voice_config.get("route"),
                     "configuration_error": False,
                 },
             )
@@ -2920,6 +3090,8 @@ async def transcribe_audio(file: UploadFile = File(...)):
                     "details": details,
                     "voice_model": voice_config["model"],
                     "voice_base_url": voice_config["base_url"],
+                    "voice_provider_mode": voice_config.get("mode"),
+                    "voice_provider_route": voice_config.get("route"),
                     "configuration_error": False,
                 },
             )
@@ -2946,6 +3118,8 @@ async def transcribe_audio(file: UploadFile = File(...)):
             "transcription": transcription,
             "voice_model": voice_config["model"],
             "voice_base_url": voice_config["base_url"],
+            "voice_provider_mode": voice_config.get("mode"),
+            "voice_provider_route": voice_config.get("route"),
         }
     finally:
         if proc is not None and proc.returncode is None:
@@ -3125,24 +3299,7 @@ def _build_purchase_recommendation_messages(prompt_payload):
 
 
 def _load_image_generation_config():
-    settings = load_settings()
-    base_url = str(settings.get("image_base_url") or "").strip()
-    api_key = str(settings.get("image_api_key") or "").strip()
-    model = str(settings.get("image_model") or "").strip()
-    missing = []
-    if not base_url:
-        missing.append("image_base_url")
-    if not api_key:
-        missing.append("image_api_key")
-    if not model:
-        missing.append("image_model")
-    return {
-        "base_url": base_url,
-        "api_key": api_key,
-        "model": model,
-        "complete": not missing,
-        "missing": missing,
-    }
+    return _resolve_special_provider_config(kind="image")
 
 
 def _save_cover_bytes(cache_key, image_bytes):
@@ -3188,6 +3345,8 @@ def _generate_purchase_cover_image(cache_key, prompt):
             "error": "Image generation provider is not configured.",
             "configuration_error": True,
             "missing": image_config["missing"],
+            "provider_mode": image_config.get("mode"),
+            "provider_route": image_config.get("route"),
         }, None
 
     try:

@@ -10,12 +10,18 @@ const DEFAULT_SETTINGS = {
   theme_mode: 'dark',
   background_mode: 'balanced',
   action_plan_auto_generate: true,
+  voice_provider_mode: 'inherit_ai',
   voice_base_url: '',
   voice_api_key: '',
   voice_model: 'FunAudioLLM/SenseVoiceSmall',
+  voice_models: ['FunAudioLLM/SenseVoiceSmall'],
+  voice_last_refreshed_at: null,
+  image_provider_mode: 'inherit_ai',
   image_base_url: '',
   image_api_key: '',
   image_model: '',
+  image_models: [],
+  image_last_refreshed_at: null,
 };
 
 const PROVIDER_CONFIG_VERSION = 2;
@@ -116,6 +122,19 @@ function sanitizeBackgroundMode(value) {
     : DEFAULT_SETTINGS.background_mode;
 }
 
+function sanitizeSpecialProviderMode(value, safePayload, prefix) {
+  if (value === 'custom' || value === 'inherit_ai') {
+    return value;
+  }
+  if (
+    normalizeOptionalString(safePayload?.[`${prefix}_base_url`])
+    || normalizeOptionalString(safePayload?.[`${prefix}_api_key`])
+  ) {
+    return 'custom';
+  }
+  return 'inherit_ai';
+}
+
 function sanitizeSettings(payload) {
   const safePayload = payload && typeof payload === 'object' ? payload : {};
   return {
@@ -136,12 +155,18 @@ function sanitizeSettings(payload) {
       typeof safePayload.action_plan_auto_generate === 'boolean'
         ? safePayload.action_plan_auto_generate
         : DEFAULT_SETTINGS.action_plan_auto_generate,
+    voice_provider_mode: sanitizeSpecialProviderMode(safePayload.voice_provider_mode, safePayload, 'voice'),
     voice_base_url: normalizeOptionalString(safePayload.voice_base_url) || '',
     voice_api_key: normalizeOptionalString(safePayload.voice_api_key) || '',
     voice_model: normalizeOptionalString(safePayload.voice_model) || DEFAULT_SETTINGS.voice_model,
+    voice_models: normalizeModels(safePayload.voice_models, safePayload.voice_model || DEFAULT_SETTINGS.voice_model),
+    voice_last_refreshed_at: normalizeOptionalString(safePayload.voice_last_refreshed_at),
+    image_provider_mode: sanitizeSpecialProviderMode(safePayload.image_provider_mode, safePayload, 'image'),
     image_base_url: normalizeOptionalString(safePayload.image_base_url) || '',
     image_api_key: normalizeOptionalString(safePayload.image_api_key) || '',
     image_model: normalizeOptionalString(safePayload.image_model) || '',
+    image_models: normalizeModels(safePayload.image_models, safePayload.image_model),
+    image_last_refreshed_at: normalizeOptionalString(safePayload.image_last_refreshed_at),
   };
 }
 
@@ -344,6 +369,7 @@ function buildSettingsState({
   runtimePaths,
   projectRoot,
   appVersion = '0.0.0',
+  appBuildInfo = {},
   appMode,
   systemLocale = 'en-US',
 } = {}) {
@@ -361,14 +387,20 @@ function buildSettingsState({
       launchAtLogin: settings.launch_at_login,
       backgroundMode: settings.background_mode,
       actionPlanAutoGenerate: settings.action_plan_auto_generate,
+      voiceProviderMode: settings.voice_provider_mode,
       voiceBaseUrl: settings.voice_base_url,
       voiceApiKey: maskApiKey(settings.voice_api_key),
       voiceHasApiKey: Boolean(normalizeOptionalString(settings.voice_api_key)),
       voiceModel: settings.voice_model,
+      voiceModels: settings.voice_models,
+      voiceLastRefreshedAt: settings.voice_last_refreshed_at,
+      imageProviderMode: settings.image_provider_mode,
       imageBaseUrl: settings.image_base_url,
       imageApiKey: maskApiKey(settings.image_api_key),
       imageHasApiKey: Boolean(normalizeOptionalString(settings.image_api_key)),
       imageModel: settings.image_model,
+      imageModels: settings.image_models,
+      imageLastRefreshedAt: settings.image_last_refreshed_at,
     },
     provider: maskProviderConfig(providerConfig),
     runtimePaths: runtimePathEntries,
@@ -379,6 +411,8 @@ function buildSettingsState({
     },
     app: {
       version: appVersion,
+      buildDate: normalizeOptionalString(appBuildInfo.build_date),
+      buildCommit: normalizeOptionalString(appBuildInfo.build_commit),
       mode: appMode || runtimePaths.appMode || 'development',
       backendRuntimePath: runtimePaths.runtimeDir,
       dataDir: runtimePaths.dataDir,
@@ -473,6 +507,7 @@ function saveSettingsPayload({
   payload,
   projectRoot,
   appVersion = '0.0.0',
+  appBuildInfo = {},
   appMode,
   systemLocale = 'en-US',
 } = {}) {
@@ -505,6 +540,9 @@ function saveSettingsPayload({
       typeof safePayload.actionPlanAutoGenerate === 'boolean'
         ? safePayload.actionPlanAutoGenerate
         : currentSettings.action_plan_auto_generate,
+    voice_provider_mode: Object.prototype.hasOwnProperty.call(safePayload, 'voiceProviderMode')
+      ? (safePayload.voiceProviderMode === 'custom' ? 'custom' : 'inherit_ai')
+      : currentSettings.voice_provider_mode,
     voice_base_url: Object.prototype.hasOwnProperty.call(safePayload, 'voiceBaseUrl')
       ? (normalizeOptionalString(safePayload.voiceBaseUrl) || '')
       : currentSettings.voice_base_url,
@@ -521,6 +559,15 @@ function saveSettingsPayload({
     voice_model: Object.prototype.hasOwnProperty.call(safePayload, 'voiceModel')
       ? (normalizeOptionalString(safePayload.voiceModel) || DEFAULT_SETTINGS.voice_model)
       : currentSettings.voice_model,
+    voice_models: Object.prototype.hasOwnProperty.call(safePayload, 'voiceModels')
+      ? normalizeModels(safePayload.voiceModels, safePayload.voiceModel || currentSettings.voice_model)
+      : currentSettings.voice_models,
+    voice_last_refreshed_at: Object.prototype.hasOwnProperty.call(safePayload, 'voiceLastRefreshedAt')
+      ? normalizeOptionalString(safePayload.voiceLastRefreshedAt)
+      : currentSettings.voice_last_refreshed_at,
+    image_provider_mode: Object.prototype.hasOwnProperty.call(safePayload, 'imageProviderMode')
+      ? (safePayload.imageProviderMode === 'custom' ? 'custom' : 'inherit_ai')
+      : currentSettings.image_provider_mode,
     image_base_url: Object.prototype.hasOwnProperty.call(safePayload, 'imageBaseUrl')
       ? (normalizeOptionalString(safePayload.imageBaseUrl) || '')
       : currentSettings.image_base_url,
@@ -537,6 +584,12 @@ function saveSettingsPayload({
     image_model: Object.prototype.hasOwnProperty.call(safePayload, 'imageModel')
       ? (normalizeOptionalString(safePayload.imageModel) || '')
       : currentSettings.image_model,
+    image_models: Object.prototype.hasOwnProperty.call(safePayload, 'imageModels')
+      ? normalizeModels(safePayload.imageModels, safePayload.imageModel || currentSettings.image_model)
+      : currentSettings.image_models,
+    image_last_refreshed_at: Object.prototype.hasOwnProperty.call(safePayload, 'imageLastRefreshedAt')
+      ? normalizeOptionalString(safePayload.imageLastRefreshedAt)
+      : currentSettings.image_last_refreshed_at,
   });
 
   saveProviderConfig(
@@ -548,6 +601,7 @@ function saveSettingsPayload({
     runtimePaths,
     projectRoot,
     appVersion,
+    appBuildInfo,
     appMode,
     systemLocale,
   });

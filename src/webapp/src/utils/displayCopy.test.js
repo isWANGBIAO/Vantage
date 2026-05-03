@@ -93,3 +93,17 @@ test('displayCopy includes Expense Sheet JSON copy labels in both languages', ()
     assert.ok(DISPLAY_COPY['zh-CN'][key], `zh-CN missing ${key}`);
   }
 });
+
+test('displayCopy includes provider mode and build info labels in both languages', () => {
+  for (const key of [
+    'settings.provider.mode.inherit_ai',
+    'settings.provider.mode.custom',
+    'settings.provider.inherited_from_ai',
+    'settings.provider.inherited_key_available',
+    'settings.about.build_date',
+    'settings.about.build_commit',
+  ]) {
+    assert.ok(DISPLAY_COPY['en-US'][key], `${key} should exist in English copy`);
+    assert.ok(DISPLAY_COPY['zh-CN'][key], `${key} should exist in Chinese copy`);
+  }
+});

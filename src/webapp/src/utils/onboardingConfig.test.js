@@ -54,12 +54,20 @@ test('loadSettings defaults formal theme and background mode settings', () => {
   assert.equal(state.settings.themeMode, 'dark');
   assert.equal(state.settings.backgroundMode, 'balanced');
   assert.equal(state.settings.actionPlanAutoGenerate, true);
+  assert.equal(state.settings.voiceProviderMode, 'inherit_ai');
   assert.equal(state.settings.voiceBaseUrl, '');
   assert.equal(state.settings.voiceApiKey, '');
   assert.equal(state.settings.voiceModel, 'FunAudioLLM/SenseVoiceSmall');
+  assert.deepEqual(state.settings.voiceModels, ['FunAudioLLM/SenseVoiceSmall']);
+  assert.equal(state.settings.voiceLastRefreshedAt, null);
+  assert.equal(state.settings.imageProviderMode, 'inherit_ai');
   assert.equal(state.settings.imageBaseUrl, '');
   assert.equal(state.settings.imageApiKey, '');
   assert.equal(state.settings.imageModel, '');
+  assert.deepEqual(state.settings.imageModels, []);
+  assert.equal(state.settings.imageLastRefreshedAt, null);
+  assert.equal(state.app.buildDate, null);
+  assert.equal(state.app.buildCommit, null);
   assert.equal(state.app.version, '1.2.3');
   assert.equal(state.app.mode, 'packaged');
   assert.equal(state.systemLocale, 'zh-CN');
@@ -87,12 +95,18 @@ test('saveSettingsPayload persists general settings and provider config', () => 
       launchAtLogin: true,
       backgroundMode: 'power_saver',
       actionPlanAutoGenerate: false,
+      voiceProviderMode: 'custom',
       voiceBaseUrl: 'https://voice.example.invalid/v1',
       voiceApiKey: 'sk-voice-secret',
       voiceModel: 'sensevoice',
+      voiceModels: ['sensevoice', 'sensevoice-large'],
+      voiceLastRefreshedAt: '2026-05-03T12:00:00+08:00',
+      imageProviderMode: 'custom',
       imageBaseUrl: 'https://images.example.invalid/v1',
       imageApiKey: 'sk-image-secret',
       imageModel: 'image-model',
+      imageModels: ['image-model', 'image-large'],
+      imageLastRefreshedAt: '2026-05-03T12:01:00+08:00',
       provider: {
         route: 'cliproxyapi',
         baseUrl: 'https://example.invalid/v1',
@@ -118,14 +132,20 @@ test('saveSettingsPayload persists general settings and provider config', () => 
   assert.equal(state.settings.launchAtLogin, true);
   assert.equal(state.settings.backgroundMode, 'power_saver');
   assert.equal(state.settings.actionPlanAutoGenerate, false);
+  assert.equal(state.settings.voiceProviderMode, 'custom');
   assert.equal(state.settings.voiceBaseUrl, 'https://voice.example.invalid/v1');
   assert.equal(state.settings.voiceApiKey, '********');
   assert.equal(state.settings.voiceHasApiKey, true);
   assert.equal(state.settings.voiceModel, 'sensevoice');
+  assert.deepEqual(state.settings.voiceModels, ['sensevoice', 'sensevoice-large']);
+  assert.equal(state.settings.voiceLastRefreshedAt, '2026-05-03T12:00:00+08:00');
+  assert.equal(state.settings.imageProviderMode, 'custom');
   assert.equal(state.settings.imageBaseUrl, 'https://images.example.invalid/v1');
   assert.equal(state.settings.imageApiKey, '********');
   assert.equal(state.settings.imageHasApiKey, true);
   assert.equal(state.settings.imageModel, 'image-model');
+  assert.deepEqual(state.settings.imageModels, ['image-model', 'image-large']);
+  assert.equal(state.settings.imageLastRefreshedAt, '2026-05-03T12:01:00+08:00');
   assert.equal(state.provider.providers.cliproxyapi.api_key, '********');
   assert.deepEqual(settings, {
     version: 1,
@@ -136,12 +156,18 @@ test('saveSettingsPayload persists general settings and provider config', () => 
     theme_mode: 'auto',
     background_mode: 'power_saver',
     action_plan_auto_generate: false,
+    voice_provider_mode: 'custom',
     voice_base_url: 'https://voice.example.invalid/v1',
     voice_api_key: 'sk-voice-secret',
     voice_model: 'sensevoice',
+    voice_models: ['sensevoice', 'sensevoice-large'],
+    voice_last_refreshed_at: '2026-05-03T12:00:00+08:00',
+    image_provider_mode: 'custom',
     image_base_url: 'https://images.example.invalid/v1',
     image_api_key: 'sk-image-secret',
     image_model: 'image-model',
+    image_models: ['image-model', 'image-large'],
+    image_last_refreshed_at: '2026-05-03T12:01:00+08:00',
   });
   assert.deepEqual(providers, {
     version: 2,
