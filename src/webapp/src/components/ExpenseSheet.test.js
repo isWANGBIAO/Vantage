@@ -48,3 +48,10 @@ test('Expense Sheet provides a toolbar action for copying the full prompt JSON',
   assert.ok(cssSource.includes('.expense-toolbar-actions'));
   assert.ok(cssSource.includes('.expense-copy-json-button'));
 });
+
+test('Expense Sheet renders every budget item instead of a truncated preview', () => {
+  assert.ok(jsxSource.includes('group.items.map((item) => ('));
+  assert.equal(jsxSource.includes('group.items.slice(0, 4)'), false);
+  assert.equal(jsxSource.includes('expense-budget-more'), false);
+  assert.equal(jsxSource.includes("t('expense.more_items'"), false);
+});

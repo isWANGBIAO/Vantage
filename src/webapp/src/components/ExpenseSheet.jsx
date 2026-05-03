@@ -442,17 +442,12 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                           <span>{formatCurrency(group.total, effectiveLanguage)} {t('expense.per_month')}</span>
                         </div>
                         <div className="expense-budget-items">
-                          {group.items.slice(0, 4).map((item) => (
+                          {group.items.map((item) => (
                             <div key={`${group.name}-${item.name}`} className="expense-budget-item">
                               <span>{item.name}</span>
                               <span>{formatCurrency(item.monthlyValue, effectiveLanguage)}</span>
                             </div>
                           ))}
-                          {group.items.length > 4 ? (
-                            <div className="expense-budget-more">
-                              {t('expense.more_items', { count: group.items.length - 4 })}
-                            </div>
-                          ) : null}
                         </div>
                       </section>
                     ))}
