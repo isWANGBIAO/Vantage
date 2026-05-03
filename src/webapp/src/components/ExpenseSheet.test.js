@@ -63,6 +63,13 @@ test('Expense Sheet loads AI purchase recommendations and renders the top recomm
   assert.ok(cssSource.includes('.expense-purchase-groups'));
 });
 
+test('Expense Sheet purchase cover shows the full image without stretching to recommendation height', () => {
+  assert.ok(cssSource.includes('align-items: start;'));
+  assert.ok(cssSource.includes('aspect-ratio: 1 / 1;'));
+  assert.ok(cssSource.includes('object-fit: contain;'));
+  assert.equal(cssSource.includes('object-fit: cover;'), false);
+});
+
 test('Expense Sheet purchase recommendation copy actions use fallback clipboard support', () => {
   assert.ok(jsxSource.includes('JSON.stringify(purchaseRecommendations)'));
   assert.ok(jsxSource.includes('purchaseRecommendations?.cover_image?.prompt'));
