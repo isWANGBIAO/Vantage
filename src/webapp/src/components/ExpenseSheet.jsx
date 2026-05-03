@@ -12,6 +12,7 @@ import {
   Sparkles,
   TableProperties,
   Wallet,
+  X,
 } from 'lucide-react';
 import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import './ExpenseSheet.css';
@@ -118,6 +119,24 @@ function compactWorkbookPath(fullPath) {
   return parts.slice(-2).join(' / ') || value;
 }
 
+function normalizePurchaseItemName(value) {
+  return String(value || '').trim().toLocaleLowerCase();
+}
+
+function removePurchaseItemFromGroups(groups, groupKey, itemName) {
+  const targetName = normalizePurchaseItemName(itemName);
+  return (groups || []).map((group) => {
+    if (group.key !== groupKey || !targetName) {
+      return group;
+    }
+
+    return {
+      ...group,
+      items: (group.items || []).filter((item) => normalizePurchaseItemName(item.name) !== targetName),
+    };
+  });
+}
+
 function SectionHeader({ icon, title, description }) {
   const IconComponent = icon;
 
@@ -204,8 +223,20 @@ export default function ExpenseSheet({ theme = 'dark' }) {
   const [purchaseError, setPurchaseError] = useState('');
   const [purchaseGenerating, setPurchaseGenerating] = useState(false);
   const [purchaseCopyStatus, setPurchaseCopyStatus] = useState('idle');
+  const [dismissedPurchaseCount, setDismissedPurchaseCount] = useState(0);
   const copyStatusResetRef = useRef(null);
   const purchaseCopyStatusResetRef = useRef(null);
+
+  const fetchDismissedPurchaseItems = useCallback(async () => {
+    try {
+      const payload = await fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed', {
+        retryPolicy: 'load',
+      });
+      setDismissedPurchaseCount(Number(payload?.count) || 0);
+    } catch {
+      setDismissedPurchaseCount(0);
+    }
+  }, []);
 
   const fetchPurchaseRecommendations = useCallback(async ({ regenerate = false } = {}) => {
     if (regenerate) {
@@ -228,6 +259,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
         throw new Error(payload.details || payload.error || t('expense.error.generic'));
       }
       setPurchaseRecommendations(payload);
+      setDismissedPurchaseCount(Number(payload?.dismissed_count) || 0);
     } catch (err) {
       setPurchaseError(err.message || t('expense.error.generic'));
     } finally {
@@ -296,6 +328,10 @@ export default function ExpenseSheet({ theme = 'dark' }) {
   useEffect(() => {
     void fetchPurchaseRecommendations();
   }, [fetchPurchaseRecommendations]);
+
+  useEffect(() => {
+    void fetchDismissedPurchaseItems();
+  }, [fetchDismissedPurchaseItems]);
 
   useEffect(() => () => {
     if (copyStatusResetRef.current) {
@@ -391,6 +427,56 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     schedulePurchaseCopyStatusReset();
   }, [purchaseRecommendations, schedulePurchaseCopyStatusReset]);
 
+  const handleDismissPurchaseItem = useCallback(async (groupKey, item) => {
+    if (!purchaseRecommendations || !item?.name) {
+      return;
+    }
+
+    try {
+      const payload = await fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismiss', {
+        method: 'POST',
+        retryPolicy: 'mutation',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cache_key: purchaseRecommendations.cache_key,
+          group_key: groupKey,
+          item,
+        }),
+      });
+      const nextCount = Number(payload?.count ?? purchaseRecommendations.dismissed_count ?? dismissedPurchaseCount) || 0;
+      setDismissedPurchaseCount(nextCount);
+      setPurchaseRecommendations((current) => {
+        if (!current) {
+          return current;
+        }
+        return {
+          ...current,
+          dismissed_count: nextCount,
+          recommendation_groups: removePurchaseItemFromGroups(
+            current.recommendation_groups,
+            groupKey,
+            item.name,
+          ),
+        };
+      });
+    } catch (err) {
+      setPurchaseError(err.message || t('expense.error.generic'));
+    }
+  }, [dismissedPurchaseCount, purchaseRecommendations, t]);
+
+  const handleClearDismissedPurchaseItems = useCallback(async () => {
+    try {
+      await fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed', {
+        method: 'DELETE',
+        retryPolicy: 'mutation',
+      });
+      setDismissedPurchaseCount(0);
+      await fetchPurchaseRecommendations();
+    } catch (err) {
+      setPurchaseError(err.message || t('expense.error.generic'));
+    }
+  }, [fetchPurchaseRecommendations, t]);
+
   const selectedRawSheet =
     viewModel.rawSheets.find((sheet) => sheet.name === activeRawSheet) || viewModel.rawSheets[0] || null;
   const compactSourcePath = compactWorkbookPath(viewModel.meta.fullPath);
@@ -409,6 +495,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     : purchaseCopyStatus === 'failed'
       ? t('expense.purchase.copy_failed')
       : t('expense.purchase.copy_cover_prompt');
+  const purchaseDismissedCount = Number(purchaseRecommendations?.dismissed_count ?? dismissedPurchaseCount) || 0;
 
   const balanceChartCard = balanceChart || {
     id: 'balance',
@@ -546,6 +633,16 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                 {purchaseRecommendations.image_model ? (
                   <span>{t('expense.purchase.image_model', { value: purchaseRecommendations.image_model })}</span>
                 ) : null}
+                <span>{t('expense.purchase.dismissed_count', { count: purchaseDismissedCount })}</span>
+                <button
+                  type="button"
+                  className="expense-purchase-clear-dismissed"
+                  onClick={handleClearDismissedPurchaseItems}
+                  disabled={purchaseDismissedCount <= 0}
+                  title={t('expense.purchase.clear_dismissed_title')}
+                >
+                  {t('expense.purchase.clear_dismissed')}
+                </button>
               </div>
               <div className="expense-purchase-groups">
                 {(purchaseRecommendations.recommendation_groups || []).map((group) => (
@@ -555,6 +652,15 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                       <div className="expense-purchase-items">
                         {group.items.map((item) => (
                           <article key={`${group.key}-${item.name}`} className="expense-purchase-item">
+                            <button
+                              type="button"
+                              className="expense-purchase-dismiss-button"
+                              onClick={() => handleDismissPurchaseItem(group.key, item)}
+                              title={t('expense.purchase.dismiss')}
+                              aria-label={t('expense.purchase.dismiss')}
+                            >
+                              <X size={14} />
+                            </button>
                             <div className="expense-purchase-item-head">
                               <strong>{item.name}</strong>
                               {item.category ? <span>{item.category}</span> : null}

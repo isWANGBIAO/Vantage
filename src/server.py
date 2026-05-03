@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import base64
+import sqlite3
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -36,7 +37,7 @@ import calendar
 import tempfile
 import copy
 from collections import deque
-from contextlib import suppress
+from contextlib import closing, suppress
 from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta
 from pathlib import Path
@@ -2488,6 +2489,12 @@ class ProviderModelDiscoverRequest(BaseModel):
     type: Optional[str] = None
 
 
+class PurchaseRecommendationDismissRequest(BaseModel):
+    cache_key: Optional[str] = None
+    group_key: Optional[str] = None
+    item: Optional[dict] = None
+
+
 @app.get("/api/chat/context")
 async def get_chat_context():
     return _build_chat_context_payload()
@@ -3196,6 +3203,182 @@ def _purchase_recommendation_cache_file(cache_key):
     return _purchase_recommendation_cache_dir() / f"{cache_key}.json"
 
 
+def _purchase_recommendation_db_path():
+    history_dir = Path(Config.get_history_dir())
+    history_dir.mkdir(parents=True, exist_ok=True)
+    return history_dir / "state.db"
+
+
+def _normalize_purchase_text_key(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().casefold())
+
+
+def _purchase_dismissal_key(group_key, item_name):
+    group_part = _normalize_purchase_text_key(group_key)
+    name_part = _normalize_purchase_text_key(item_name)
+    return hashlib.sha256(f"{group_part}|{name_part}".encode("utf-8")).hexdigest()
+
+
+def _ensure_purchase_recommendation_schema(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS purchase_recommendation_dismissals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dismissal_key TEXT NOT NULL UNIQUE,
+            name_key TEXT NOT NULL,
+            group_key TEXT NOT NULL,
+            cache_key TEXT,
+            name TEXT NOT NULL,
+            category TEXT,
+            estimated_price TEXT,
+            reason TEXT,
+            evidence TEXT,
+            duplicate_check TEXT,
+            impulse_risk TEXT,
+            item_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_purchase_dismissals_name_key
+        ON purchase_recommendation_dismissals (name_key)
+        """
+    )
+    conn.commit()
+
+
+def _connect_purchase_recommendation_db():
+    conn = sqlite3.connect(_purchase_recommendation_db_path())
+    conn.row_factory = sqlite3.Row
+    _ensure_purchase_recommendation_schema(conn)
+    return conn
+
+
+def _dismissed_purchase_row_to_item(row):
+    return {
+        "id": row["id"],
+        "cache_key": row["cache_key"] or "",
+        "group_key": row["group_key"] or "",
+        "name": row["name"] or "",
+        "category": row["category"] or "",
+        "estimated_price": row["estimated_price"] or "",
+        "reason": row["reason"] or "",
+        "evidence": row["evidence"] or "",
+        "duplicate_check": row["duplicate_check"] or "",
+        "impulse_risk": row["impulse_risk"] or "",
+        "created_at": row["created_at"] or "",
+    }
+
+
+def _list_dismissed_purchase_items():
+    with closing(_connect_purchase_recommendation_db()) as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM purchase_recommendation_dismissals
+            ORDER BY created_at DESC, id DESC
+            """
+        ).fetchall()
+    return [_dismissed_purchase_row_to_item(row) for row in rows]
+
+
+def _build_purchase_dismissed_payload():
+    items = _list_dismissed_purchase_items()
+    return {"items": items, "count": len(items)}
+
+
+def _record_purchase_recommendation_dismissal(cache_key, group_key, item):
+    normalized_item = _normalize_purchase_item(item)
+    name = normalized_item["name"]
+    if not name:
+        raise ValueError("Recommendation item name is required.")
+    normalized_group = str(group_key or "").strip() or "unknown"
+    name_key = _normalize_purchase_text_key(name)
+    dismissal_key = _purchase_dismissal_key(normalized_group, name)
+    created_at = datetime.now().isoformat(timespec="seconds")
+    with closing(_connect_purchase_recommendation_db()) as conn:
+        before = conn.total_changes
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO purchase_recommendation_dismissals (
+                dismissal_key,
+                name_key,
+                group_key,
+                cache_key,
+                name,
+                category,
+                estimated_price,
+                reason,
+                evidence,
+                duplicate_check,
+                impulse_risk,
+                item_json,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                dismissal_key,
+                name_key,
+                normalized_group,
+                str(cache_key or "").strip(),
+                name,
+                normalized_item["category"],
+                normalized_item["estimated_price"],
+                normalized_item["reason"],
+                normalized_item["evidence"],
+                normalized_item["duplicate_check"],
+                normalized_item["impulse_risk"],
+                json.dumps(normalized_item, ensure_ascii=False, separators=(",", ":")),
+                created_at,
+            ),
+        )
+        created = conn.total_changes > before
+        conn.commit()
+    payload = _build_purchase_dismissed_payload()
+    return {"ok": True, "created": created, "count": payload["count"], "item": {**normalized_item, "group_key": normalized_group}}
+
+
+def _clear_purchase_recommendation_dismissals():
+    with closing(_connect_purchase_recommendation_db()) as conn:
+        conn.execute("DELETE FROM purchase_recommendation_dismissals")
+        conn.commit()
+    return {"ok": True, "items": [], "count": 0}
+
+
+def _filter_dismissed_purchase_groups(groups, dismissed_items):
+    dismissed_name_keys = {
+        _normalize_purchase_text_key(item.get("name"))
+        for item in (dismissed_items or [])
+        if item.get("name")
+    }
+    if not dismissed_name_keys:
+        return groups
+    filtered_groups = []
+    for group in groups or []:
+        next_group = copy.deepcopy(group)
+        next_group["items"] = [
+            item
+            for item in (next_group.get("items") or [])
+            if _normalize_purchase_text_key(item.get("name")) not in dismissed_name_keys
+        ]
+        filtered_groups.append(next_group)
+    return filtered_groups
+
+
+def _with_dismissed_purchase_filter(payload, dismissed_items=None):
+    dismissed_items = dismissed_items if dismissed_items is not None else _list_dismissed_purchase_items()
+    next_payload = copy.deepcopy(payload)
+    next_payload["dismissed_count"] = len(dismissed_items)
+    next_payload["recommendation_groups"] = _filter_dismissed_purchase_groups(
+        next_payload.get("recommendation_groups") or [],
+        dismissed_items,
+    )
+    return next_payload
+
+
 def _purchase_recommendation_cover_path(filename):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", filename or ""):
         return None
@@ -3277,11 +3460,25 @@ def _normalize_purchase_recommendation_groups(raw_groups):
     return groups
 
 
-def _build_purchase_recommendation_messages(prompt_payload):
+def _build_purchase_recommendation_messages(prompt_payload, dismissed_items=None):
     balance_json = json.dumps(prompt_payload, ensure_ascii=False, separators=(",", ":"))
+    dismissed_payload = [
+        {
+            "name": item.get("name", ""),
+            "category": item.get("category", ""),
+            "group_key": item.get("group_key", ""),
+            "reason": item.get("reason", ""),
+            "evidence": item.get("evidence", ""),
+            "duplicate_check": item.get("duplicate_check", ""),
+            "impulse_risk": item.get("impulse_risk", ""),
+        }
+        for item in (dismissed_items or [])
+    ]
+    dismissed_json = json.dumps(dismissed_payload, ensure_ascii=False, separators=(",", ":"))
     system_prompt = (
         "你是一个克制但有品味的个人购物建议助手。必须基于用户的 Balance Sheet JSON，"
-        "同时给出实用补缺、夜间防冲动、愿望清单三类推荐。不要推荐已经明显买过或资产中已有的重复物品。"
+        "同时给出实用补缺、夜间防冲动、愿望清单三类推荐。不要推荐已经明显买过、资产中已有、"
+        "或用户已明确打叉排除的重复物品。"
         "只输出 JSON，不要 Markdown。"
     )
     user_prompt = (
@@ -3289,7 +3486,10 @@ def _build_purchase_recommendation_messages(prompt_payload):
         "输出结构必须是 JSON object，包含 recommendation_groups 和 cover_prompt。\n"
         "recommendation_groups 必须包含 key=practical/night_guard/wishlist 三组，每组 3-5 个 items。"
         "每个 item 包含 name、category、estimated_price、reason、evidence、duplicate_check、impulse_risk。\n"
+        "已排除购物推荐 JSON 表示用户已经打叉、不想再看到的方向。请不要推荐同名、近似同类、功能重复的物品；"
+        "如果某个排除项是一个品类，也要避开同用途替代品。\n"
         "cover_prompt 用英文描述一张适合这个推荐面板的简洁封面图，不要出现文字。\n\n"
+        f"已排除购物推荐 JSON:\n{dismissed_json}\n\n"
         f"Balance Sheet JSON:\n{balance_json}"
     )
     return [
@@ -3379,12 +3579,13 @@ def _build_purchase_recommendations_payload(force_regenerate=False):
 
     prompt_payload = DataLoader.build_balance_sheet_prompt_payload_from_sheets(sheets, file_name=path.name)
     cache_key = _purchase_recommendation_cache_key(prompt_payload)
+    dismissed_items = _list_dismissed_purchase_items()
     if not force_regenerate:
         cached = _load_purchase_recommendation_cache(cache_key)
         if cached:
-            return cached
+            return _with_dismissed_purchase_filter(cached, dismissed_items)
 
-    messages = _build_purchase_recommendation_messages(prompt_payload)
+    messages = _build_purchase_recommendation_messages(prompt_payload, dismissed_items=dismissed_items)
     llm_result = LLMClient().chat(
         messages=messages,
         stream=False,
@@ -3411,7 +3612,7 @@ def _build_purchase_recommendations_payload(force_regenerate=False):
         "response_raw": llm_result,
     }
     _save_purchase_recommendation_cache(payload)
-    return payload
+    return _with_dismissed_purchase_filter(payload, dismissed_items)
 
 
 @app.get("/api/balance_sheet/purchase_recommendations")
@@ -3445,6 +3646,45 @@ async def regenerate_balance_sheet_purchase_recommendations():
                 "error": "Failed to regenerate purchase recommendations.",
                 "details": str(exc),
             },
+        )
+
+
+@app.post("/api/balance_sheet/purchase_recommendations/dismiss")
+async def dismiss_balance_sheet_purchase_recommendation(request: PurchaseRecommendationDismissRequest):
+    try:
+        return _record_purchase_recommendation_dismissal(
+            cache_key=request.cache_key,
+            group_key=request.group_key,
+            item=request.item or {},
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": "Failed to dismiss purchase recommendation.", "details": str(exc)},
+        )
+
+
+@app.get("/api/balance_sheet/purchase_recommendations/dismissed")
+async def get_dismissed_balance_sheet_purchase_recommendations():
+    try:
+        return _build_purchase_dismissed_payload()
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"items": [], "count": 0, "error": "Failed to load dismissed recommendations.", "details": str(exc)},
+        )
+
+
+@app.delete("/api/balance_sheet/purchase_recommendations/dismissed")
+async def clear_dismissed_balance_sheet_purchase_recommendations():
+    try:
+        return _clear_purchase_recommendation_dismissals()
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": "Failed to clear dismissed recommendations.", "details": str(exc)},
         )
 
 

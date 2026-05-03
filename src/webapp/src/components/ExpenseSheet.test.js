@@ -71,6 +71,23 @@ test('Expense Sheet purchase recommendation copy actions use fallback clipboard 
   assert.ok(jsxSource.includes('writeTextWithFallback'));
 });
 
+test('Expense Sheet lets users dismiss purchase recommendation items', () => {
+  assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismiss'"));
+  assert.ok(jsxSource.includes('handleDismissPurchaseItem'));
+  assert.ok(jsxSource.includes('expense-purchase-dismiss-button'));
+  assert.ok(jsxSource.includes("t('expense.purchase.dismiss')"));
+  assert.ok(jsxSource.includes('setPurchaseRecommendations((current) =>'));
+  assert.ok(cssSource.includes('.expense-purchase-dismiss-button'));
+});
+
+test('Expense Sheet shows and clears dismissed purchase recommendation count', () => {
+  assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed'"));
+  assert.ok(jsxSource.includes("method: 'DELETE'"));
+  assert.ok(jsxSource.includes('handleClearDismissedPurchaseItems'));
+  assert.ok(jsxSource.includes("t('expense.purchase.dismissed_count'"));
+  assert.ok(jsxSource.includes("t('expense.purchase.clear_dismissed')"));
+});
+
 test('Expense Sheet renders every budget item instead of a truncated preview', () => {
   assert.ok(jsxSource.includes('group.items.map((item) => ('));
   assert.equal(jsxSource.includes('group.items.slice(0, 4)'), false);
