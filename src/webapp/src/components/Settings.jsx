@@ -21,6 +21,7 @@ const SECTION_ORDER = [
   { key: 'general', labelKey: 'settings.section.general' },
   { key: 'ai_provider', labelKey: 'settings.section.ai_provider' },
   { key: 'voice_provider', labelKey: 'settings.section.voice_provider' },
+  { key: 'image_provider', labelKey: 'settings.section.image_provider' },
   { key: 'data_logs', labelKey: 'settings.section.data_logs' },
   { key: 'performance', labelKey: 'settings.section.performance' },
   { key: 'about', labelKey: 'settings.section.about' },
@@ -163,10 +164,15 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     voiceApiKey: '',
     voiceModel: DEFAULT_VOICE_MODEL,
     voiceHasApiKey: false,
+    imageBaseUrl: '',
+    imageApiKey: '',
+    imageModel: '',
+    imageHasApiKey: false,
     providerConfig: normalizeProviderConfigForForm(null),
   });
   const [showApiKey, setShowApiKey] = useState(false);
   const [showVoiceApiKey, setShowVoiceApiKey] = useState(false);
+  const [showImageApiKey, setShowImageApiKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [saveStatus, setSaveStatus] = useState('');
@@ -206,6 +212,10 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         voiceApiKey: nextState.settings.voiceApiKey || '',
         voiceModel: nextState.settings.voiceModel || DEFAULT_VOICE_MODEL,
         voiceHasApiKey: Boolean(nextState.settings.voiceHasApiKey),
+        imageBaseUrl: nextState.settings.imageBaseUrl || '',
+        imageApiKey: nextState.settings.imageApiKey || '',
+        imageModel: nextState.settings.imageModel || '',
+        imageHasApiKey: Boolean(nextState.settings.imageHasApiKey),
         providerConfig,
       });
     }
@@ -240,6 +250,8 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       `actionPlanAutoGenerate=${form.actionPlanAutoGenerate}`,
       `voiceBaseUrl=${form.voiceBaseUrl || ''}`,
       `voiceModel=${form.voiceModel || ''}`,
+      `imageBaseUrl=${form.imageBaseUrl || ''}`,
+      `imageModel=${form.imageModel || ''}`,
       `provider=${form.providerConfig.selected_provider || ''}`,
     ].join('\n');
   }, [
@@ -251,6 +263,8 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     form.themeMode,
     form.voiceBaseUrl,
     form.voiceModel,
+    form.imageBaseUrl,
+    form.imageModel,
     state,
   ]);
 
@@ -453,6 +467,10 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         voiceApiKey: savedState.settings.voiceApiKey || '',
         voiceModel: savedState.settings.voiceModel || DEFAULT_VOICE_MODEL,
         voiceHasApiKey: Boolean(savedState.settings.voiceHasApiKey),
+        imageBaseUrl: savedState.settings.imageBaseUrl || '',
+        imageApiKey: savedState.settings.imageApiKey || '',
+        imageModel: savedState.settings.imageModel || '',
+        imageHasApiKey: Boolean(savedState.settings.imageHasApiKey),
         providerConfig,
       }));
       await setDisplayLanguage(savedState.settings.displayLanguage);
@@ -748,6 +766,57 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     </section>
   );
 
+  const renderImageProvider = () => (
+    <section className="settings-section">
+      <SettingsRow label={t('settings.image_provider.base_url')}>
+        <input
+          className="settings-input"
+          value={form.imageBaseUrl}
+          placeholder="https://api.example.com/v1"
+          onChange={(event) => setForm((prev) => ({ ...prev, imageBaseUrl: event.target.value }))}
+        />
+      </SettingsRow>
+      <SettingsRow label={t('settings.image_provider.api_key')}>
+        <span className="settings-secret-input">
+          <input
+            className="settings-input"
+            type={showImageApiKey ? 'text' : 'password'}
+            value={form.imageApiKey}
+            onChange={(event) => setForm((prev) => ({
+              ...prev,
+              imageApiKey: event.target.value,
+              imageHasApiKey: Boolean(event.target.value),
+            }))}
+          />
+          <button
+            type="button"
+            className="settings-icon-button"
+            onClick={() => setShowImageApiKey((prev) => !prev)}
+            title={t(showImageApiKey ? 'settings.provider.hide_key' : 'settings.provider.show_key')}
+          >
+            {showImageApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </span>
+      </SettingsRow>
+      <SettingsRow label={t('settings.image_provider.model')}>
+        <input
+          className="settings-input"
+          value={form.imageModel}
+          placeholder="gpt-image-1"
+          onChange={(event) => setForm((prev) => ({ ...prev, imageModel: event.target.value }))}
+        />
+      </SettingsRow>
+      <div className="settings-status-line">
+        <Info size={16} />
+        {t('settings.image_provider.endpoint_hint')}
+      </div>
+      <div className="settings-status-line">
+        <Info size={16} />
+        {t('settings.image_provider.test_hint')}
+      </div>
+    </section>
+  );
+
   const renderDataLogs = () => (
     <section className="settings-section">
       <div className="settings-path-grid">
@@ -848,6 +917,9 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     }
     if (activeSection === 'voice_provider') {
       return renderVoiceProvider();
+    }
+    if (activeSection === 'image_provider') {
+      return renderImageProvider();
     }
     if (activeSection === 'data_logs') {
       return renderDataLogs();

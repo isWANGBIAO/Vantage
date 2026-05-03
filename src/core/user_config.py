@@ -34,6 +34,9 @@ DEFAULT_SETTINGS = {
     "voice_base_url": "",
     "voice_api_key": "",
     "voice_model": DEFAULT_VOICE_MODEL,
+    "image_base_url": "",
+    "image_api_key": "",
+    "image_model": "",
 }
 
 DEFAULT_PROVIDER_CONFIG = {
@@ -224,6 +227,9 @@ def _sanitize_settings(payload: dict | None) -> dict:
         "voice_base_url": _coerce_optional_str(payload, "voice_base_url") or "",
         "voice_api_key": _coerce_optional_str(payload, "voice_api_key") or "",
         "voice_model": _coerce_optional_str(payload, "voice_model") or DEFAULT_VOICE_MODEL,
+        "image_base_url": _coerce_optional_str(payload, "image_base_url") or "",
+        "image_api_key": _coerce_optional_str(payload, "image_api_key") or "",
+        "image_model": _coerce_optional_str(payload, "image_model") or "",
     }
 
 
@@ -355,6 +361,28 @@ def get_voice_provider_config(settings_file: str | Path | None = None) -> dict:
         missing.append("voice_api_key")
     if not model:
         missing.append("voice_model")
+
+    return {
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": model,
+        "complete": not missing,
+        "missing": missing,
+    }
+
+
+def get_image_provider_config(settings_file: str | Path | None = None) -> dict:
+    settings = load_settings(settings_file=settings_file)
+    base_url = _coerce_optional_str(settings, "image_base_url") or ""
+    api_key = _coerce_optional_str(settings, "image_api_key") or ""
+    model = _coerce_optional_str(settings, "image_model") or ""
+    missing = []
+    if not base_url:
+        missing.append("image_base_url")
+    if not api_key:
+        missing.append("image_api_key")
+    if not model:
+        missing.append("image_model")
 
     return {
         "base_url": base_url,

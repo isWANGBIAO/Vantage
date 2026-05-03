@@ -28,6 +28,9 @@ test('loadSettingsState falls back to browser defaults without Electron', async 
   assert.equal(state.settings.voiceBaseUrl, '');
   assert.equal(state.settings.voiceApiKey, '');
   assert.equal(state.settings.voiceModel, 'FunAudioLLM/SenseVoiceSmall');
+  assert.equal(state.settings.imageBaseUrl, '');
+  assert.equal(state.settings.imageApiKey, '');
+  assert.equal(state.settings.imageModel, '');
   assert.equal(state.settings.actionPlanAutoGenerate, true);
   assert.equal(state.mode, 'browser');
 });
@@ -42,6 +45,9 @@ test('saveSettingsState forwards payload to Electron settings bridge', async () 
     voiceBaseUrl: 'https://voice.example.invalid/v1',
     voiceApiKey: 'sk-voice',
     voiceModel: 'sensevoice',
+    imageBaseUrl: 'https://images.example.invalid/v1',
+    imageApiKey: 'sk-image',
+    imageModel: 'image-model',
     actionPlanAutoGenerate: false,
     provider: {
       route: 'cliproxyapi',
@@ -65,6 +71,9 @@ test('saveSettingsState forwards payload to Electron settings bridge', async () 
           voiceBaseUrl: 'https://voice.example.invalid/v1',
           voiceApiKey: '********',
           voiceModel: 'sensevoice',
+          imageBaseUrl: 'https://images.example.invalid/v1',
+          imageApiKey: '********',
+          imageModel: 'image-model',
           actionPlanAutoGenerate: false,
         },
       };
@@ -76,6 +85,8 @@ test('saveSettingsState forwards payload to Electron settings bridge', async () 
   assert.equal(result.settings.themeMode, 'auto');
   assert.equal(result.settings.voiceApiKey, '********');
   assert.equal(result.settings.voiceModel, 'sensevoice');
+  assert.equal(result.settings.imageApiKey, '********');
+  assert.equal(result.settings.imageModel, 'image-model');
   assert.equal(result.settings.actionPlanAutoGenerate, false);
 });
 
@@ -101,6 +112,9 @@ test('browser settings fallback persists to localStorage and returns deep copies
       voiceBaseUrl: 'https://voice.example.invalid/v1',
       voiceApiKey: 'sk-voice',
       voiceModel: 'sensevoice',
+      imageBaseUrl: 'https://images.example.invalid/v1',
+      imageApiKey: 'sk-image',
+      imageModel: 'image-model',
       actionPlanAutoGenerate: false,
     }, undefined);
 
@@ -111,6 +125,7 @@ test('browser settings fallback persists to localStorage and returns deep copies
     assert.equal(loaded.settings.themeMode, 'auto');
     assert.equal(loaded.settings.backgroundMode, 'power_saver');
     assert.equal(loaded.settings.voiceModel, 'sensevoice');
+    assert.equal(loaded.settings.imageModel, 'image-model');
     assert.equal(loaded.settings.actionPlanAutoGenerate, false);
 
     loaded.settings.backgroundMode = 'prewarm';

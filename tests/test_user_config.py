@@ -32,6 +32,9 @@ def test_load_settings_creates_default_settings_file(tmp_path):
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",
+        "image_base_url": "",
+        "image_api_key": "",
+        "image_model": "",
     }
     assert payload == expected
     assert json.loads((config_dir / "settings.json").read_text(encoding="utf-8")) == expected
@@ -152,6 +155,9 @@ def test_save_settings_normalizes_partial_payload(tmp_path):
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",
+        "image_base_url": "",
+        "image_api_key": "",
+        "image_model": "",
     }
     assert payload == expected
     assert json.loads(settings_file.read_text(encoding="utf-8")) == expected
@@ -188,6 +194,9 @@ def test_load_settings_repairs_invalid_display_language(tmp_path):
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",
+        "image_base_url": "",
+        "image_api_key": "",
+        "image_model": "",
     }
     assert payload == expected
     assert json.loads(settings_file.read_text(encoding="utf-8")) == expected
@@ -255,6 +264,33 @@ def test_get_voice_provider_config_requires_base_url_key_and_model(tmp_path):
         "base_url": "https://voice.example.invalid/v1",
         "api_key": "sk-voice",
         "model": "sensevoice",
+        "complete": True,
+        "missing": [],
+    }
+
+
+def test_get_image_provider_config_requires_base_url_key_and_model(tmp_path):
+    user_config = _load_user_config_module()
+    settings_file = tmp_path / "config" / "settings.json"
+
+    incomplete = user_config.get_image_provider_config(settings_file=settings_file)
+    assert incomplete["complete"] is False
+    assert incomplete["missing"] == ["image_base_url", "image_api_key", "image_model"]
+
+    user_config.save_settings(
+        {
+            "image_base_url": "https://images.example.invalid/v1",
+            "image_api_key": "sk-image",
+            "image_model": "image-model",
+        },
+        settings_file=settings_file,
+    )
+
+    complete = user_config.get_image_provider_config(settings_file=settings_file)
+    assert complete == {
+        "base_url": "https://images.example.invalid/v1",
+        "api_key": "sk-image",
+        "model": "image-model",
         "complete": True,
         "missing": [],
     }

@@ -13,6 +13,9 @@ const DEFAULT_SETTINGS = {
   voice_base_url: '',
   voice_api_key: '',
   voice_model: 'FunAudioLLM/SenseVoiceSmall',
+  image_base_url: '',
+  image_api_key: '',
+  image_model: '',
 };
 
 const PROVIDER_CONFIG_VERSION = 2;
@@ -136,6 +139,9 @@ function sanitizeSettings(payload) {
     voice_base_url: normalizeOptionalString(safePayload.voice_base_url) || '',
     voice_api_key: normalizeOptionalString(safePayload.voice_api_key) || '',
     voice_model: normalizeOptionalString(safePayload.voice_model) || DEFAULT_SETTINGS.voice_model,
+    image_base_url: normalizeOptionalString(safePayload.image_base_url) || '',
+    image_api_key: normalizeOptionalString(safePayload.image_api_key) || '',
+    image_model: normalizeOptionalString(safePayload.image_model) || '',
   };
 }
 
@@ -359,6 +365,10 @@ function buildSettingsState({
       voiceApiKey: maskApiKey(settings.voice_api_key),
       voiceHasApiKey: Boolean(normalizeOptionalString(settings.voice_api_key)),
       voiceModel: settings.voice_model,
+      imageBaseUrl: settings.image_base_url,
+      imageApiKey: maskApiKey(settings.image_api_key),
+      imageHasApiKey: Boolean(normalizeOptionalString(settings.image_api_key)),
+      imageModel: settings.image_model,
     },
     provider: maskProviderConfig(providerConfig),
     runtimePaths: runtimePathEntries,
@@ -511,6 +521,22 @@ function saveSettingsPayload({
     voice_model: Object.prototype.hasOwnProperty.call(safePayload, 'voiceModel')
       ? (normalizeOptionalString(safePayload.voiceModel) || DEFAULT_SETTINGS.voice_model)
       : currentSettings.voice_model,
+    image_base_url: Object.prototype.hasOwnProperty.call(safePayload, 'imageBaseUrl')
+      ? (normalizeOptionalString(safePayload.imageBaseUrl) || '')
+      : currentSettings.image_base_url,
+    image_api_key: (() => {
+      if (!Object.prototype.hasOwnProperty.call(safePayload, 'imageApiKey')) {
+        return currentSettings.image_api_key;
+      }
+      const submitted = normalizeOptionalString(safePayload.imageApiKey);
+      if (!submitted || submitted === '********') {
+        return submitted === '********' ? currentSettings.image_api_key : '';
+      }
+      return submitted;
+    })(),
+    image_model: Object.prototype.hasOwnProperty.call(safePayload, 'imageModel')
+      ? (normalizeOptionalString(safePayload.imageModel) || '')
+      : currentSettings.image_model,
   });
 
   saveProviderConfig(
@@ -665,6 +691,9 @@ function saveOnboardingCompletion({ runtimePaths, submission, projectRoot, now =
     voice_base_url: currentSettings.voice_base_url,
     voice_api_key: currentSettings.voice_api_key,
     voice_model: currentSettings.voice_model,
+    image_base_url: currentSettings.image_base_url,
+    image_api_key: currentSettings.image_api_key,
+    image_model: currentSettings.image_model,
   };
   writeJsonFile(getSettingsFile(runtimePaths), settings);
 

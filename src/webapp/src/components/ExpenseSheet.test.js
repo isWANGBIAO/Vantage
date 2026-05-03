@@ -49,6 +49,28 @@ test('Expense Sheet provides a toolbar action for copying the full prompt JSON',
   assert.ok(cssSource.includes('.expense-copy-json-button'));
 });
 
+test('Expense Sheet loads AI purchase recommendations and renders the top recommendation card', () => {
+  assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations'"));
+  assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations/regenerate'"));
+  assert.ok(jsxSource.includes('purchaseRecommendations'));
+  assert.ok(jsxSource.includes('expense-purchase-card'));
+  assert.ok(jsxSource.includes("t('expense.purchase.title')"));
+  assert.ok(jsxSource.includes("t('expense.purchase.regenerate')"));
+  assert.ok(jsxSource.includes("t('expense.purchase.copy_json')"));
+  assert.ok(jsxSource.includes("t('expense.purchase.copy_cover_prompt')"));
+  assert.ok(cssSource.includes('.expense-purchase-card'));
+  assert.ok(cssSource.includes('.expense-purchase-cover'));
+  assert.ok(cssSource.includes('.expense-purchase-groups'));
+});
+
+test('Expense Sheet purchase recommendation copy actions use fallback clipboard support', () => {
+  assert.ok(jsxSource.includes('JSON.stringify(purchaseRecommendations)'));
+  assert.ok(jsxSource.includes('purchaseRecommendations?.cover_image?.prompt'));
+  assert.ok(jsxSource.includes('handleCopyPurchaseJson'));
+  assert.ok(jsxSource.includes('handleCopyCoverPrompt'));
+  assert.ok(jsxSource.includes('writeTextWithFallback'));
+});
+
 test('Expense Sheet renders every budget item instead of a truncated preview', () => {
   assert.ok(jsxSource.includes('group.items.map((item) => ('));
   assert.equal(jsxSource.includes('group.items.slice(0, 4)'), false);

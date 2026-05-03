@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import base64
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -2995,6 +2996,306 @@ async def get_system_logs():
         return {"logs": lines[-200:]}
     except Exception as e:
         return {"logs": [f"Error reading logs: {str(e)}"]}
+
+PURCHASE_RECOMMENDATION_GROUPS = [
+    ("practical", "实用补缺"),
+    ("night_guard", "夜间防冲动"),
+    ("wishlist", "愿望清单"),
+]
+PURCHASE_RECOMMENDATION_CACHE_DIR = "balance_sheet_purchase_recommendations"
+PURCHASE_RECOMMENDATION_IMAGE_TIMEOUT_SECONDS = 120
+
+
+def _purchase_recommendation_cache_dir():
+    cache_dir = Path(Config.get_cache_dir()) / PURCHASE_RECOMMENDATION_CACHE_DIR
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "covers").mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _purchase_recommendation_cache_key(prompt_payload):
+    encoded = json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _purchase_recommendation_cache_file(cache_key):
+    return _purchase_recommendation_cache_dir() / f"{cache_key}.json"
+
+
+def _purchase_recommendation_cover_path(filename):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", filename or ""):
+        return None
+    cover_dir = _purchase_recommendation_cache_dir() / "covers"
+    candidate = (cover_dir / filename).resolve()
+    if cover_dir.resolve() not in candidate.parents and candidate != cover_dir.resolve():
+        return None
+    return candidate
+
+
+def _load_purchase_recommendation_cache(cache_key):
+    cache_file = _purchase_recommendation_cache_file(cache_key)
+    if not cache_file.exists():
+        return None
+    try:
+        payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("cache_key") != cache_key:
+        return None
+    payload["from_cache"] = True
+    return payload
+
+
+def _save_purchase_recommendation_cache(payload):
+    cache_file = _purchase_recommendation_cache_file(payload["cache_key"])
+    cache_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _extract_json_object_from_text(text):
+    value = str(text or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", value, re.IGNORECASE)
+    if fenced:
+        value = fenced.group(1)
+    else:
+        start = value.find("{")
+        end = value.rfind("}")
+        if start >= 0 and end > start:
+            value = value[start : end + 1]
+    return json.loads(value)
+
+
+def _normalize_purchase_item(item):
+    source = item if isinstance(item, dict) else {}
+    return {
+        "name": str(source.get("name") or "").strip(),
+        "category": str(source.get("category") or "").strip(),
+        "estimated_price": str(source.get("estimated_price") or source.get("price") or "").strip(),
+        "reason": str(source.get("reason") or "").strip(),
+        "evidence": str(source.get("evidence") or "").strip(),
+        "duplicate_check": str(source.get("duplicate_check") or "").strip(),
+        "impulse_risk": str(source.get("impulse_risk") or "").strip(),
+    }
+
+
+def _normalize_purchase_recommendation_groups(raw_groups):
+    by_key = {}
+    if isinstance(raw_groups, list):
+        for group in raw_groups:
+            if isinstance(group, dict) and group.get("key"):
+                by_key[str(group.get("key"))] = group
+    elif isinstance(raw_groups, dict):
+        for key, value in raw_groups.items():
+            if isinstance(value, dict):
+                by_key[str(key)] = {"key": key, **value}
+            elif isinstance(value, list):
+                by_key[str(key)] = {"key": key, "items": value}
+
+    groups = []
+    for key, title in PURCHASE_RECOMMENDATION_GROUPS:
+        group = by_key.get(key) or {}
+        items = group.get("items") if isinstance(group, dict) else []
+        normalized_items = [_normalize_purchase_item(item) for item in (items if isinstance(items, list) else [])]
+        groups.append({
+            "key": key,
+            "title": str(group.get("title") or title).strip(),
+            "items": normalized_items[:5],
+        })
+    return groups
+
+
+def _build_purchase_recommendation_messages(prompt_payload):
+    balance_json = json.dumps(prompt_payload, ensure_ascii=False, separators=(",", ":"))
+    system_prompt = (
+        "你是一个克制但有品味的个人购物建议助手。必须基于用户的 Balance Sheet JSON，"
+        "同时给出实用补缺、夜间防冲动、愿望清单三类推荐。不要推荐已经明显买过或资产中已有的重复物品。"
+        "只输出 JSON，不要 Markdown。"
+    )
+    user_prompt = (
+        "请根据下面的 Balance Sheet JSON 生成购物推荐。\n"
+        "输出结构必须是 JSON object，包含 recommendation_groups 和 cover_prompt。\n"
+        "recommendation_groups 必须包含 key=practical/night_guard/wishlist 三组，每组 3-5 个 items。"
+        "每个 item 包含 name、category、estimated_price、reason、evidence、duplicate_check、impulse_risk。\n"
+        "cover_prompt 用英文描述一张适合这个推荐面板的简洁封面图，不要出现文字。\n\n"
+        f"Balance Sheet JSON:\n{balance_json}"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _load_image_generation_config():
+    settings = load_settings()
+    base_url = str(settings.get("image_base_url") or "").strip()
+    api_key = str(settings.get("image_api_key") or "").strip()
+    model = str(settings.get("image_model") or "").strip()
+    missing = []
+    if not base_url:
+        missing.append("image_base_url")
+    if not api_key:
+        missing.append("image_api_key")
+    if not model:
+        missing.append("image_model")
+    return {
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": model,
+        "complete": not missing,
+        "missing": missing,
+    }
+
+
+def _save_cover_bytes(cache_key, image_bytes):
+    filename = f"{cache_key[:16]}.png"
+    cover_path = _purchase_recommendation_cache_dir() / "covers" / filename
+    cover_path.write_bytes(image_bytes)
+    return f"/api/balance_sheet/purchase_recommendations/cover/{filename}"
+
+
+def _image_bytes_from_generation_response(image_payload):
+    data = image_payload.get("data") if isinstance(image_payload, dict) else None
+    first = data[0] if isinstance(data, list) and data else None
+    if not isinstance(first, dict):
+        raise ValueError("Image provider response did not include data[0].")
+
+    b64_json = first.get("b64_json")
+    if isinstance(b64_json, str) and b64_json.strip():
+        return base64.b64decode(b64_json)
+
+    url = first.get("url")
+    if isinstance(url, str) and url.startswith("data:image"):
+        _, encoded = url.split(",", 1)
+        return base64.b64decode(encoded)
+    if isinstance(url, str) and url.strip():
+        response = requests.get(url, timeout=PURCHASE_RECOMMENDATION_IMAGE_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        return response.content
+
+    raise ValueError("Image provider response did not include b64_json or url.")
+
+
+def _generate_purchase_cover_image(cache_key, prompt):
+    image_config = _load_image_generation_config()
+    base_cover = {
+        "url": None,
+        "prompt": prompt,
+        "error": None,
+        "configuration_error": False,
+    }
+    if not image_config["complete"]:
+        return {
+            **base_cover,
+            "error": "Image generation provider is not configured.",
+            "configuration_error": True,
+            "missing": image_config["missing"],
+        }, None
+
+    try:
+        response = requests.post(
+            f"{image_config['base_url'].rstrip('/')}/images/generations",
+            headers={
+                "Authorization": f"Bearer {image_config['api_key']}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": image_config["model"],
+                "prompt": prompt,
+                "n": 1,
+                "size": "1024x1024",
+            },
+            timeout=PURCHASE_RECOMMENDATION_IMAGE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        image_bytes = _image_bytes_from_generation_response(response.json())
+        return {**base_cover, "url": _save_cover_bytes(cache_key, image_bytes)}, image_config["model"]
+    except Exception as error:
+        return {**base_cover, "error": str(error)}, image_config["model"]
+
+
+def _build_purchase_recommendations_payload(force_regenerate=False):
+    path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
+    sheets = DataLoader.load_excel_sheets(path)
+    if not sheets:
+        return JSONResponse(status_code=404, content={"error": "No sheets found in Balance Sheet.xlsx"})
+
+    prompt_payload = DataLoader.build_balance_sheet_prompt_payload_from_sheets(sheets, file_name=path.name)
+    cache_key = _purchase_recommendation_cache_key(prompt_payload)
+    if not force_regenerate:
+        cached = _load_purchase_recommendation_cache(cache_key)
+        if cached:
+            return cached
+
+    messages = _build_purchase_recommendation_messages(prompt_payload)
+    llm_result = LLMClient().chat(
+        messages=messages,
+        stream=False,
+        source="expense_purchase_recommendations",
+        entrypoint="src/server.py",
+        metadata={"balance_sheet_cache_key": cache_key},
+    )
+    raw_content = llm_result.get("content") if isinstance(llm_result, dict) else ""
+    parsed = _extract_json_object_from_text(raw_content)
+    cover_prompt = str(parsed.get("cover_prompt") or "").strip() or (
+        "A clean editorial shopping recommendation mood board, no text, soft realistic lighting"
+    )
+    cover_image, image_model = _generate_purchase_cover_image(cache_key, cover_prompt)
+    payload = {
+        "status": "ready",
+        "from_cache": False,
+        "cache_key": cache_key,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "text_model": llm_result.get("model") if isinstance(llm_result, dict) else None,
+        "image_model": image_model,
+        "cover_image": cover_image,
+        "recommendation_groups": _normalize_purchase_recommendation_groups(parsed.get("recommendation_groups")),
+        "usage": llm_result.get("usage") if isinstance(llm_result, dict) else None,
+        "response_raw": llm_result,
+    }
+    _save_purchase_recommendation_cache(payload)
+    return payload
+
+
+@app.get("/api/balance_sheet/purchase_recommendations")
+async def get_balance_sheet_purchase_recommendations():
+    try:
+        return _build_purchase_recommendations_payload(force_regenerate=False)
+    except FileNotFoundError as exc:
+        return JSONResponse(status_code=404, content={"error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "status": "error",
+                "error": "Failed to generate purchase recommendations.",
+                "details": str(exc),
+            },
+        )
+
+
+@app.post("/api/balance_sheet/purchase_recommendations/regenerate")
+async def regenerate_balance_sheet_purchase_recommendations():
+    try:
+        return _build_purchase_recommendations_payload(force_regenerate=True)
+    except FileNotFoundError as exc:
+        return JSONResponse(status_code=404, content={"error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "status": "error",
+                "error": "Failed to regenerate purchase recommendations.",
+                "details": str(exc),
+            },
+        )
+
+
+@app.get("/api/balance_sheet/purchase_recommendations/cover/{filename}")
+async def get_balance_sheet_purchase_recommendation_cover(filename: str):
+    cover_path = _purchase_recommendation_cover_path(filename)
+    if cover_path is None or not cover_path.exists():
+        return JSONResponse(status_code=404, content={"error": "Cover image not found"})
+    return FileResponse(cover_path, media_type="image/png")
+
 
 @app.get("/api/balance_sheet")
 async def get_balance_sheet():

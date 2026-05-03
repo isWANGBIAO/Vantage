@@ -57,6 +57,9 @@ test('loadSettings defaults formal theme and background mode settings', () => {
   assert.equal(state.settings.voiceBaseUrl, '');
   assert.equal(state.settings.voiceApiKey, '');
   assert.equal(state.settings.voiceModel, 'FunAudioLLM/SenseVoiceSmall');
+  assert.equal(state.settings.imageBaseUrl, '');
+  assert.equal(state.settings.imageApiKey, '');
+  assert.equal(state.settings.imageModel, '');
   assert.equal(state.app.version, '1.2.3');
   assert.equal(state.app.mode, 'packaged');
   assert.equal(state.systemLocale, 'zh-CN');
@@ -87,6 +90,9 @@ test('saveSettingsPayload persists general settings and provider config', () => 
       voiceBaseUrl: 'https://voice.example.invalid/v1',
       voiceApiKey: 'sk-voice-secret',
       voiceModel: 'sensevoice',
+      imageBaseUrl: 'https://images.example.invalid/v1',
+      imageApiKey: 'sk-image-secret',
+      imageModel: 'image-model',
       provider: {
         route: 'cliproxyapi',
         baseUrl: 'https://example.invalid/v1',
@@ -116,6 +122,10 @@ test('saveSettingsPayload persists general settings and provider config', () => 
   assert.equal(state.settings.voiceApiKey, '********');
   assert.equal(state.settings.voiceHasApiKey, true);
   assert.equal(state.settings.voiceModel, 'sensevoice');
+  assert.equal(state.settings.imageBaseUrl, 'https://images.example.invalid/v1');
+  assert.equal(state.settings.imageApiKey, '********');
+  assert.equal(state.settings.imageHasApiKey, true);
+  assert.equal(state.settings.imageModel, 'image-model');
   assert.equal(state.provider.providers.cliproxyapi.api_key, '********');
   assert.deepEqual(settings, {
     version: 1,
@@ -129,6 +139,9 @@ test('saveSettingsPayload persists general settings and provider config', () => 
     voice_base_url: 'https://voice.example.invalid/v1',
     voice_api_key: 'sk-voice-secret',
     voice_model: 'sensevoice',
+    image_base_url: 'https://images.example.invalid/v1',
+    image_api_key: 'sk-image-secret',
+    image_model: 'image-model',
   });
   assert.deepEqual(providers, {
     version: 2,
@@ -494,6 +507,9 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
     voice_base_url: '',
     voice_api_key: '',
     voice_model: 'FunAudioLLM/SenseVoiceSmall',
+    image_base_url: '',
+    image_api_key: '',
+    image_model: '',
   });
   assert.deepEqual(providers, {
     version: 2,

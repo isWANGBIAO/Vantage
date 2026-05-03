@@ -273,6 +273,9 @@ function AppShell() {
         voiceBaseUrl: currentState.settings?.voiceBaseUrl,
         voiceApiKey: currentState.settings?.voiceApiKey,
         voiceModel: currentState.settings?.voiceModel,
+        imageBaseUrl: currentState.settings?.imageBaseUrl,
+        imageApiKey: currentState.settings?.imageApiKey,
+        imageModel: currentState.settings?.imageModel,
       });
       setSettingsState(savedState);
     } catch (error) {

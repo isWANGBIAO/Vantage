@@ -10,6 +10,10 @@ const DEFAULT_SETTINGS_STATE = {
     voiceApiKey: '',
     voiceHasApiKey: false,
     voiceModel: 'FunAudioLLM/SenseVoiceSmall',
+    imageBaseUrl: '',
+    imageApiKey: '',
+    imageHasApiKey: false,
+    imageModel: '',
     actionPlanAutoGenerate: true,
   },
   provider: {
@@ -92,6 +96,22 @@ function normalizeSettings(payload, mode) {
         typeof safeSettings.voiceModel === 'string' && safeSettings.voiceModel.trim()
           ? safeSettings.voiceModel
           : defaults.settings.voiceModel,
+      imageBaseUrl:
+        typeof safeSettings.imageBaseUrl === 'string'
+          ? safeSettings.imageBaseUrl
+          : defaults.settings.imageBaseUrl,
+      imageApiKey:
+        typeof safeSettings.imageApiKey === 'string'
+          ? safeSettings.imageApiKey
+          : defaults.settings.imageApiKey,
+      imageHasApiKey:
+        typeof safeSettings.imageHasApiKey === 'boolean'
+          ? safeSettings.imageHasApiKey
+          : Boolean(safeSettings.imageApiKey),
+      imageModel:
+        typeof safeSettings.imageModel === 'string'
+          ? safeSettings.imageModel
+          : defaults.settings.imageModel,
       actionPlanAutoGenerate:
         typeof safeSettings.actionPlanAutoGenerate === 'boolean'
           ? safeSettings.actionPlanAutoGenerate
@@ -159,6 +179,10 @@ export async function saveSettingsState(submission, electronAPI) {
           voiceApiKey: submission?.voiceApiKey,
           voiceHasApiKey: Boolean(submission?.voiceApiKey),
           voiceModel: submission?.voiceModel,
+          imageBaseUrl: submission?.imageBaseUrl,
+          imageApiKey: submission?.imageApiKey,
+          imageHasApiKey: Boolean(submission?.imageApiKey),
+          imageModel: submission?.imageModel,
           actionPlanAutoGenerate:
             typeof submission?.actionPlanAutoGenerate === 'boolean'
               ? submission.actionPlanAutoGenerate

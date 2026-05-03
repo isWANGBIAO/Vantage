@@ -7,11 +7,13 @@ import {
   Copy,
   Clock,
   HandCoins,
+  Image as ImageIcon,
   RefreshCw,
+  Sparkles,
   TableProperties,
   Wallet,
 } from 'lucide-react';
-import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
+import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import './ExpenseSheet.css';
 import { buildExpenseSheetViewModel } from './expenseSheetModel.js';
 import PlotChartCard from './PlotChartCard.jsx';
@@ -93,6 +95,20 @@ function formatMetricValue(item, locale, t) {
   if (item.unit === 'currency') return formatCurrency(item.value, locale);
   if (item.unit === 'days') return formatDays(item.value, locale, t);
   return formatNumber(item.value, locale);
+}
+
+function formatDateTime(value, locale) {
+  if (!value) return '--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString(locale, {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function compactWorkbookPath(fullPath) {
@@ -183,7 +199,42 @@ export default function ExpenseSheet({ theme = 'dark' }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeRawSheet, setActiveRawSheet] = useState('');
   const [copyJsonStatus, setCopyJsonStatus] = useState('idle');
+  const [purchaseRecommendations, setPurchaseRecommendations] = useState(null);
+  const [purchaseLoading, setPurchaseLoading] = useState(true);
+  const [purchaseError, setPurchaseError] = useState('');
+  const [purchaseGenerating, setPurchaseGenerating] = useState(false);
+  const [purchaseCopyStatus, setPurchaseCopyStatus] = useState('idle');
   const copyStatusResetRef = useRef(null);
+  const purchaseCopyStatusResetRef = useRef(null);
+
+  const fetchPurchaseRecommendations = useCallback(async ({ regenerate = false } = {}) => {
+    if (regenerate) {
+      setPurchaseGenerating(true);
+    } else {
+      setPurchaseLoading(true);
+    }
+    setPurchaseError('');
+
+    try {
+      const payload = regenerate
+        ? await fetchBackendJson('/api/balance_sheet/purchase_recommendations/regenerate', {
+          method: 'POST',
+          retryPolicy: 'mutation',
+        })
+        : await fetchBackendJson('/api/balance_sheet/purchase_recommendations', {
+          retryPolicy: 'load',
+        });
+      if (payload?.status === 'error') {
+        throw new Error(payload.details || payload.error || t('expense.error.generic'));
+      }
+      setPurchaseRecommendations(payload);
+    } catch (err) {
+      setPurchaseError(err.message || t('expense.error.generic'));
+    } finally {
+      setPurchaseLoading(false);
+      setPurchaseGenerating(false);
+    }
+  }, [t]);
 
   const fetchData = useCallback(async (refresh = false) => {
     setIsLoading(true);
@@ -242,9 +293,16 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     void fetchData();
   }, [fetchData]);
 
+  useEffect(() => {
+    void fetchPurchaseRecommendations();
+  }, [fetchPurchaseRecommendations]);
+
   useEffect(() => () => {
     if (copyStatusResetRef.current) {
       clearTimeout(copyStatusResetRef.current);
+    }
+    if (purchaseCopyStatusResetRef.current) {
+      clearTimeout(purchaseCopyStatusResetRef.current);
     }
   }, []);
 
@@ -289,6 +347,50 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     scheduleCopyStatusReset();
   }, [data, scheduleCopyStatusReset]);
 
+  const schedulePurchaseCopyStatusReset = useCallback(() => {
+    if (purchaseCopyStatusResetRef.current) {
+      clearTimeout(purchaseCopyStatusResetRef.current);
+    }
+
+    purchaseCopyStatusResetRef.current = setTimeout(() => {
+      setPurchaseCopyStatus('idle');
+      purchaseCopyStatusResetRef.current = null;
+    }, COPY_FEEDBACK_DURATION_MS);
+  }, []);
+
+  const handleCopyPurchaseJson = useCallback(async () => {
+    if (!purchaseRecommendations) {
+      setPurchaseCopyStatus('failed');
+      schedulePurchaseCopyStatusReset();
+      return;
+    }
+
+    try {
+      const copied = await writeTextWithFallback(JSON.stringify(purchaseRecommendations));
+      setPurchaseCopyStatus(copied ? 'copied' : 'failed');
+    } catch {
+      setPurchaseCopyStatus('failed');
+    }
+    schedulePurchaseCopyStatusReset();
+  }, [purchaseRecommendations, schedulePurchaseCopyStatusReset]);
+
+  const handleCopyCoverPrompt = useCallback(async () => {
+    const prompt = purchaseRecommendations?.cover_image?.prompt;
+    if (!prompt) {
+      setPurchaseCopyStatus('failed');
+      schedulePurchaseCopyStatusReset();
+      return;
+    }
+
+    try {
+      const copied = await writeTextWithFallback(prompt);
+      setPurchaseCopyStatus(copied ? 'copied' : 'failed');
+    } catch {
+      setPurchaseCopyStatus('failed');
+    }
+    schedulePurchaseCopyStatusReset();
+  }, [purchaseRecommendations, schedulePurchaseCopyStatusReset]);
+
   const selectedRawSheet =
     viewModel.rawSheets.find((sheet) => sheet.name === activeRawSheet) || viewModel.rawSheets[0] || null;
   const compactSourcePath = compactWorkbookPath(viewModel.meta.fullPath);
@@ -297,6 +399,16 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     : copyJsonStatus === 'failed'
       ? t('expense.copy_json_failed')
       : t('expense.copy_json');
+  const purchaseCopyLabel = purchaseCopyStatus === 'copied'
+    ? t('expense.purchase.copied')
+    : purchaseCopyStatus === 'failed'
+      ? t('expense.purchase.copy_failed')
+      : t('expense.purchase.copy_json');
+  const coverPromptCopyLabel = purchaseCopyStatus === 'copied'
+    ? t('expense.purchase.copied')
+    : purchaseCopyStatus === 'failed'
+      ? t('expense.purchase.copy_failed')
+      : t('expense.purchase.copy_cover_prompt');
 
   const balanceChartCard = balanceChart || {
     id: 'balance',
@@ -353,6 +465,125 @@ export default function ExpenseSheet({ theme = 'dark' }) {
             {isRefreshing ? t('expense.refreshing') : t('expense.refresh')}
           </button>
         </div>
+      </section>
+
+      <section className="glass-panel expense-purchase-card">
+        <div className="expense-purchase-head">
+          <div className="expense-section-heading">
+            <span className="expense-section-icon">
+              <Sparkles size={16} />
+            </span>
+            <div>
+              <h3>{t('expense.purchase.title')}</h3>
+              <p>{t('expense.purchase.subtitle')}</p>
+            </div>
+          </div>
+          <div className="expense-purchase-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={handleCopyPurchaseJson}
+              disabled={!purchaseRecommendations}
+            >
+              <Copy size={15} />
+              {purchaseCopyLabel}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={handleCopyCoverPrompt}
+              disabled={!purchaseRecommendations?.cover_image?.prompt}
+            >
+              <Copy size={15} />
+              {coverPromptCopyLabel}
+            </button>
+            <button
+              type="button"
+              className="expense-refresh-button"
+              onClick={() => fetchPurchaseRecommendations({ regenerate: true })}
+              disabled={purchaseGenerating}
+            >
+              <RefreshCw size={16} className={purchaseGenerating ? 'spin-animation' : ''} />
+              {purchaseGenerating ? t('expense.purchase.generating') : t('expense.purchase.regenerate')}
+            </button>
+          </div>
+        </div>
+
+        {purchaseLoading ? (
+          <div className="expense-purchase-state">{t('expense.purchase.loading')}</div>
+        ) : null}
+
+        {!purchaseLoading && purchaseError ? (
+          <div className="expense-purchase-state expense-error-panel">
+            {t('expense.purchase.error', { error: purchaseError })}
+          </div>
+        ) : null}
+
+        {!purchaseLoading && !purchaseError && purchaseRecommendations ? (
+          <div className="expense-purchase-body">
+            <div className="expense-purchase-cover">
+              {purchaseRecommendations.cover_image?.url ? (
+                <img
+                  src={buildBackendUrl(purchaseRecommendations.cover_image.url)}
+                  alt={t('expense.purchase.title')}
+                />
+              ) : (
+                <div className="expense-purchase-cover-empty">
+                  <ImageIcon size={24} />
+                  <span>{purchaseRecommendations.cover_image?.error || t('expense.purchase.cover_unavailable')}</span>
+                </div>
+              )}
+            </div>
+            <div className="expense-purchase-content">
+              <div className="expense-purchase-meta">
+                <span>{purchaseRecommendations.from_cache ? t('expense.purchase.cached') : t('expense.purchase.fresh')}</span>
+                <span>{t('expense.purchase.generated_at', {
+                  value: formatDateTime(purchaseRecommendations.generated_at, effectiveLanguage),
+                })}</span>
+                {purchaseRecommendations.text_model ? (
+                  <span>{t('expense.purchase.text_model', { value: purchaseRecommendations.text_model })}</span>
+                ) : null}
+                {purchaseRecommendations.image_model ? (
+                  <span>{t('expense.purchase.image_model', { value: purchaseRecommendations.image_model })}</span>
+                ) : null}
+              </div>
+              <div className="expense-purchase-groups">
+                {(purchaseRecommendations.recommendation_groups || []).map((group) => (
+                  <section key={group.key} className="expense-purchase-group">
+                    <h4>{group.title}</h4>
+                    {group.items?.length ? (
+                      <div className="expense-purchase-items">
+                        {group.items.map((item) => (
+                          <article key={`${group.key}-${item.name}`} className="expense-purchase-item">
+                            <div className="expense-purchase-item-head">
+                              <strong>{item.name}</strong>
+                              {item.category ? <span>{item.category}</span> : null}
+                            </div>
+                            {item.estimated_price ? (
+                              <p><b>{t('expense.purchase.estimated_price')}:</b> {item.estimated_price}</p>
+                            ) : null}
+                            {item.reason ? <p>{item.reason}</p> : null}
+                            {item.evidence ? (
+                              <p><b>{t('expense.purchase.evidence')}:</b> {item.evidence}</p>
+                            ) : null}
+                            {item.duplicate_check ? (
+                              <p><b>{t('expense.purchase.duplicate_check')}:</b> {item.duplicate_check}</p>
+                            ) : null}
+                            {item.impulse_risk ? (
+                              <p><b>{t('expense.purchase.impulse_risk')}:</b> {item.impulse_risk}</p>
+                            ) : null}
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="expense-empty-copy">{t('expense.purchase.no_items')}</p>
+                    )}
+                  </section>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       {isLoading ? (

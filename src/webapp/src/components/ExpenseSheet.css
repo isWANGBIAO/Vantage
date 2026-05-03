@@ -86,6 +86,152 @@
   color: #ff7675;
 }
 
+.expense-purchase-card {
+  padding: 1.2rem 1.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.expense-purchase-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.expense-purchase-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.expense-purchase-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.expense-purchase-state {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.expense-purchase-body {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.36fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.expense-purchase-cover {
+  min-height: 260px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(116, 185, 255, 0.16), rgba(0, 184, 148, 0.08)),
+    rgba(255, 255, 255, 0.03);
+}
+
+.expense-purchase-cover img {
+  width: 100%;
+  height: 100%;
+  min-height: 260px;
+  display: block;
+  object-fit: cover;
+}
+
+.expense-purchase-cover-empty {
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  padding: 1rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.expense-purchase-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.expense-purchase-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.expense-purchase-meta span {
+  padding: 0.22rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.expense-purchase-groups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.expense-purchase-group {
+  min-width: 0;
+}
+
+.expense-purchase-group h4 {
+  margin: 0 0 0.6rem;
+  font-size: 0.95rem;
+}
+
+.expense-purchase-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.expense-purchase-item {
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.expense-purchase-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.65rem;
+  align-items: flex-start;
+}
+
+.expense-purchase-item-head strong {
+  overflow-wrap: anywhere;
+}
+
+.expense-purchase-item-head span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.expense-purchase-item p {
+  margin: 0.45rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .expense-kpi-strip {
   padding: 1rem 1.1rem 1.1rem;
   display: flex;
@@ -495,6 +641,11 @@
 }
 
 @media (max-width: 1100px) {
+  .expense-purchase-body,
+  .expense-purchase-groups {
+    grid-template-columns: 1fr;
+  }
+
   .expense-kpi-strip-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

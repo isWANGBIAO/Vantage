@@ -31,6 +31,18 @@ test('Settings exposes automatic theme mode and independent voice provider contr
   assert.ok(settingsSource.includes('settings.voice_provider.model'));
 });
 
+test('Settings exposes independent image generation provider controls', () => {
+  assert.ok(settingsSource.includes('settings.section.image_provider'));
+  assert.ok(settingsSource.includes('renderImageProvider'));
+  assert.ok(settingsSource.includes('imageBaseUrl'));
+  assert.ok(settingsSource.includes('imageApiKey'));
+  assert.ok(settingsSource.includes('imageModel'));
+  assert.ok(settingsSource.includes('settings.image_provider.base_url'));
+  assert.ok(settingsSource.includes('settings.image_provider.api_key'));
+  assert.ok(settingsSource.includes('settings.image_provider.model'));
+  assert.ok(settingsSource.includes('showImageApiKey'));
+});
+
 test('Settings masks provider API key until the user reveals it', () => {
   assert.ok(settingsSource.includes('showApiKey'));
   assert.ok(settingsSource.includes("type={showApiKey ? 'text' : 'password'}"));

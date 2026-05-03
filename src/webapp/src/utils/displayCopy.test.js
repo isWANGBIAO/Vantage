@@ -80,6 +80,14 @@ test('displayCopy includes Expense Sheet JSON copy labels in both languages', ()
     'expense.copy_json_copied',
     'expense.copy_json_failed',
     'expense.copy_json_unavailable',
+    'expense.purchase.title',
+    'expense.purchase.regenerate',
+    'expense.purchase.copy_json',
+    'expense.purchase.copy_cover_prompt',
+    'settings.section.image_provider',
+    'settings.image_provider.base_url',
+    'settings.image_provider.api_key',
+    'settings.image_provider.model',
   ]) {
     assert.ok(DISPLAY_COPY['en-US'][key], `en-US missing ${key}`);
     assert.ok(DISPLAY_COPY['zh-CN'][key], `zh-CN missing ${key}`);
