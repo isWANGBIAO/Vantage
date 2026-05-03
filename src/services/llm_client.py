@@ -5,6 +5,7 @@ import logging
 import re
 import time
 import uuid
+from datetime import datetime
 
 import requests
 
@@ -1073,6 +1074,7 @@ class LLMClient:
                 "thinking": message.get("reasoning_content") or "",
                 "usage": usage,
                 "duration": duration,
+                "completed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                 "first_token_latency": None,
                 "model": used_model,
                 "provider_route": used_route,
@@ -1260,6 +1262,7 @@ class LLMClient:
             "thinking": full_thinking,
             "usage": usage_data or {},
             "duration": duration,
+            "completed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "first_token_latency": first_token_latency,
             "model": used_model,
             "provider_route": used_route,

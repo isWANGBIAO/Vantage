@@ -144,7 +144,7 @@ function buildPlanFullInput(systemPrompt, analysisPrompt, analysisReply, planPro
 }
 
 export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
-  const { t } = useDisplayLanguage();
+  const { effectiveLanguage, t } = useDisplayLanguage();
   const [analysisContent, setAnalysisContent] = useState('');
   const [analysisThinking, setAnalysisThinking] = useState('');
   const [planContent, setPlanContent] = useState('');
@@ -1037,7 +1037,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
                 <Activity size={16} color="var(--secondary-color)" />
                 <h4 style={{ margin: 0, fontSize: '0.95rem' }}>{t('action_plan.panel.analysis')}</h4>
               </div>
-              <ActionPlanRoundStats stats={analysisRoundStats} t={t} />
+              <ActionPlanRoundStats stats={analysisRoundStats} t={t} effectiveLanguage={effectiveLanguage} />
             </div>
             <ActionPlanCopyControls
               t={t}
@@ -1091,7 +1091,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
                 <FileText size={16} color="var(--primary-color)" />
                 <h4 style={{ margin: 0, fontSize: '0.95rem' }}>{t('action_plan.panel.today_plan')}</h4>
               </div>
-              <ActionPlanRoundStats stats={planRoundStats} t={t} />
+              <ActionPlanRoundStats stats={planRoundStats} t={t} effectiveLanguage={effectiveLanguage} />
             </div>
             <ActionPlanCopyControls
               t={t}
@@ -1130,6 +1130,24 @@ function formatDurationChipValue(value) {
   return formatted === '-' ? '-' : `${formatted}s`;
 }
 
+function formatGeneratedAtChipValue(value, language) {
+  if (!value) {
+    return '-';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+  return new Intl.DateTimeFormat(language === 'zh-CN' ? 'zh-CN' : 'en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
 function formatRoundSpeedValue(stats) {
   const value = Number(stats?.completion_tokens_per_second ?? stats?.output_tokens_per_second);
   if (!Number.isFinite(value)) {
@@ -1138,7 +1156,7 @@ function formatRoundSpeedValue(stats) {
   return `${value.toFixed(2)} tokens/s`;
 }
 
-function ActionPlanRoundStats({ stats, t }) {
+function ActionPlanRoundStats({ stats, t, effectiveLanguage }) {
   if (!stats) {
     return null;
   }
@@ -1148,6 +1166,7 @@ function ActionPlanRoundStats({ stats, t }) {
   return (
     <div className="action-plan-round-stats">
       <span>{t('common.first_token', { value: formatDurationChipValue(stats.first_token_latency) })}</span>
+      <span>{t('common.generated_at', { value: formatGeneratedAtChipValue(stats.completed_at, effectiveLanguage) })}</span>
       <span>{t('common.time', { value: formatSecondsValue(stats.duration) })}</span>
       <span>{t('common.tokens_detail', { value: formatActionPlanTokenBreakdown(stats) })}</span>
       {cacheBreakdown ? <span>{t('common.cache_request', { value: cacheBreakdown })}</span> : null}

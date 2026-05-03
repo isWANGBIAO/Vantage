@@ -3184,8 +3184,10 @@ PURCHASE_RECOMMENDATION_GROUPS = [
     ("wishlist", "愿望清单"),
 ]
 PURCHASE_RECOMMENDATION_CACHE_DIR = "balance_sheet_purchase_recommendations"
-PURCHASE_RECOMMENDATION_IMAGE_TIMEOUT_SECONDS = 120
+PURCHASE_RECOMMENDATION_IMAGE_TIMEOUT_SECONDS = 300
 PURCHASE_RECOMMENDATION_PROMPT_VERSION = 2
+_purchase_cover_generation_lock = threading.Lock()
+_purchase_cover_generation_jobs = set()
 
 
 def _purchase_recommendation_cache_dir():
@@ -3394,7 +3396,7 @@ def _purchase_recommendation_cover_path(filename):
     return candidate
 
 
-def _load_purchase_recommendation_cache(cache_key):
+def _read_purchase_recommendation_cache_payload(cache_key):
     cache_file = _purchase_recommendation_cache_file(cache_key)
     if not cache_file.exists():
         return None
@@ -3403,6 +3405,13 @@ def _load_purchase_recommendation_cache(cache_key):
     except (OSError, json.JSONDecodeError, TypeError):
         return None
     if not isinstance(payload, dict) or payload.get("cache_key") != cache_key:
+        return None
+    return payload
+
+
+def _load_purchase_recommendation_cache(cache_key):
+    payload = _read_purchase_recommendation_cache_payload(cache_key)
+    if payload is None:
         return None
     payload["from_cache"] = True
     return payload
@@ -3584,10 +3593,12 @@ def _generate_purchase_cover_image(cache_key, prompt):
         "prompt": prompt,
         "error": None,
         "configuration_error": False,
+        "status": "ready",
     }
     if not image_config["complete"]:
         return {
             **base_cover,
+            "status": "error",
             "error": "Image generation provider is not configured.",
             "configuration_error": True,
             "missing": image_config["missing"],
@@ -3614,7 +3625,64 @@ def _generate_purchase_cover_image(cache_key, prompt):
         image_bytes = _image_bytes_from_generation_response(response.json())
         return {**base_cover, "url": _save_cover_bytes(cache_key, image_bytes)}, image_config["model"]
     except Exception as error:
-        return {**base_cover, "error": str(error)}, image_config["model"]
+        return {**base_cover, "status": "error", "error": str(error)}, image_config["model"]
+
+
+def _build_pending_purchase_cover_image(prompt):
+    image_config = _load_image_generation_config()
+    base_cover = {
+        "url": None,
+        "prompt": prompt,
+        "error": None,
+        "configuration_error": False,
+        "status": "generating",
+    }
+    if not image_config["complete"]:
+        return {
+            **base_cover,
+            "status": "error",
+            "error": "Image generation provider is not configured.",
+            "configuration_error": True,
+            "missing": image_config["missing"],
+            "provider_mode": image_config.get("mode"),
+            "provider_route": image_config.get("route"),
+        }, None, False
+    return base_cover, image_config["model"], True
+
+
+def _update_purchase_recommendation_cache_cover(cache_key, cover_image, image_model):
+    payload = _read_purchase_recommendation_cache_payload(cache_key)
+    if not payload:
+        return
+    payload["cover_image"] = cover_image
+    payload["image_model"] = image_model
+    _save_purchase_recommendation_cache(payload)
+
+
+def _run_purchase_cover_generation(cache_key, prompt):
+    try:
+        cover_image, image_model = _generate_purchase_cover_image(cache_key, prompt)
+        _update_purchase_recommendation_cache_cover(cache_key, cover_image, image_model)
+    finally:
+        with _purchase_cover_generation_lock:
+            _purchase_cover_generation_jobs.discard(cache_key)
+
+
+def _start_purchase_cover_generation(cache_key, prompt):
+    if not cache_key or not prompt:
+        return False
+    with _purchase_cover_generation_lock:
+        if cache_key in _purchase_cover_generation_jobs:
+            return False
+        _purchase_cover_generation_jobs.add(cache_key)
+    worker = threading.Thread(
+        target=_run_purchase_cover_generation,
+        args=(cache_key, prompt),
+        name=f"purchase-cover-{cache_key[:8]}",
+        daemon=True,
+    )
+    worker.start()
+    return True
 
 
 def _build_purchase_recommendations_payload(force_regenerate=False):
@@ -3629,6 +3697,9 @@ def _build_purchase_recommendations_payload(force_regenerate=False):
     if not force_regenerate:
         cached = _load_purchase_recommendation_cache(cache_key)
         if cached:
+            cover_image = cached.get("cover_image") if isinstance(cached.get("cover_image"), dict) else {}
+            if cover_image.get("status") == "generating" and cover_image.get("prompt"):
+                _start_purchase_cover_generation(cache_key, cover_image.get("prompt"))
             return _with_dismissed_purchase_filter(cached, dismissed_items)
 
     messages = _build_purchase_recommendation_messages(prompt_payload, dismissed_items=dismissed_items)
@@ -3644,7 +3715,7 @@ def _build_purchase_recommendations_payload(force_regenerate=False):
     recommendation_groups = _normalize_purchase_recommendation_groups(parsed.get("recommendation_groups"))
     raw_cover_prompt = str(parsed.get("cover_prompt") or "").strip()
     cover_prompt = _build_purchase_cover_prompt(raw_cover_prompt, recommendation_groups)
-    cover_image, image_model = _generate_purchase_cover_image(cache_key, cover_prompt)
+    cover_image, image_model, should_generate_cover = _build_pending_purchase_cover_image(cover_prompt)
     payload = {
         "status": "ready",
         "from_cache": False,
@@ -3658,13 +3729,15 @@ def _build_purchase_recommendations_payload(force_regenerate=False):
         "response_raw": llm_result,
     }
     _save_purchase_recommendation_cache(payload)
+    if should_generate_cover:
+        _start_purchase_cover_generation(cache_key, cover_prompt)
     return _with_dismissed_purchase_filter(payload, dismissed_items)
 
 
 @app.get("/api/balance_sheet/purchase_recommendations")
 async def get_balance_sheet_purchase_recommendations():
     try:
-        return _build_purchase_recommendations_payload(force_regenerate=False)
+        return await asyncio.to_thread(_build_purchase_recommendations_payload, force_regenerate=False)
     except FileNotFoundError as exc:
         return JSONResponse(status_code=404, content={"error": str(exc)})
     except Exception as exc:
@@ -3681,7 +3754,7 @@ async def get_balance_sheet_purchase_recommendations():
 @app.post("/api/balance_sheet/purchase_recommendations/regenerate")
 async def regenerate_balance_sheet_purchase_recommendations():
     try:
-        return _build_purchase_recommendations_payload(force_regenerate=True)
+        return await asyncio.to_thread(_build_purchase_recommendations_payload, force_regenerate=True)
     except FileNotFoundError as exc:
         return JSONResponse(status_code=404, content={"error": str(exc)})
     except Exception as exc:

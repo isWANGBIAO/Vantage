@@ -180,6 +180,7 @@ def build_action_plan_request_stats(section, result):
     return {
         "section": section,
         "duration": duration,
+        "completed_at": payload.get("completed_at"),
         "first_token_latency": _as_float_or_none(payload.get("first_token_latency")),
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,

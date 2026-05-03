@@ -226,6 +226,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
   const [dismissedPurchaseCount, setDismissedPurchaseCount] = useState(0);
   const copyStatusResetRef = useRef(null);
   const purchaseCopyStatusResetRef = useRef(null);
+  const purchaseCoverPollTimeoutRef = useRef(null);
 
   const fetchDismissedPurchaseItems = useCallback(async () => {
     try {
@@ -238,10 +239,10 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     }
   }, []);
 
-  const fetchPurchaseRecommendations = useCallback(async ({ regenerate = false } = {}) => {
+  const fetchPurchaseRecommendations = useCallback(async ({ regenerate = false, silent = false } = {}) => {
     if (regenerate) {
       setPurchaseGenerating(true);
-    } else {
+    } else if (!silent) {
       setPurchaseLoading(true);
     }
     setPurchaseError('');
@@ -333,12 +334,36 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     void fetchDismissedPurchaseItems();
   }, [fetchDismissedPurchaseItems]);
 
+  useEffect(() => {
+    if (purchaseRecommendations?.cover_image?.status === 'generating' && !purchaseLoading && !purchaseError) {
+      purchaseCoverPollTimeoutRef.current = setTimeout(() => {
+        purchaseCoverPollTimeoutRef.current = null;
+        void fetchPurchaseRecommendations({ silent: true });
+      }, 5000);
+      return () => {
+        if (purchaseCoverPollTimeoutRef.current) {
+          clearTimeout(purchaseCoverPollTimeoutRef.current);
+          purchaseCoverPollTimeoutRef.current = null;
+        }
+      };
+    }
+    return undefined;
+  }, [
+    fetchPurchaseRecommendations,
+    purchaseError,
+    purchaseLoading,
+    purchaseRecommendations?.cover_image?.status,
+  ]);
+
   useEffect(() => () => {
     if (copyStatusResetRef.current) {
       clearTimeout(copyStatusResetRef.current);
     }
     if (purchaseCopyStatusResetRef.current) {
       clearTimeout(purchaseCopyStatusResetRef.current);
+    }
+    if (purchaseCoverPollTimeoutRef.current) {
+      clearTimeout(purchaseCoverPollTimeoutRef.current);
     }
   }, []);
 
@@ -617,7 +642,11 @@ export default function ExpenseSheet({ theme = 'dark' }) {
               ) : (
                 <div className="expense-purchase-cover-empty">
                   <ImageIcon size={24} />
-                  <span>{purchaseRecommendations.cover_image?.error || t('expense.purchase.cover_unavailable')}</span>
+                  <span>
+                    {purchaseRecommendations.cover_image?.status === 'generating'
+                      ? t('expense.purchase.cover_generating')
+                      : purchaseRecommendations.cover_image?.error || t('expense.purchase.cover_unavailable')}
+                  </span>
                 </div>
               )}
             </div>

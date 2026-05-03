@@ -26,6 +26,7 @@ class _FakeLLMClient:
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
                 "duration": 1.0,
                 "first_token_latency": 0.25,
+                "completed_at": "2026-05-04T02:00:01+08:00",
             }
 
         if print_callback:
@@ -35,6 +36,7 @@ class _FakeLLMClient:
             "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
             "duration": 1.5,
             "first_token_latency": 0.4,
+            "completed_at": "2026-05-04T02:00:03+08:00",
         }
 
 
@@ -53,6 +55,7 @@ class _RetryingFakeLLMClient:
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
                 "duration": 1.0,
                 "first_token_latency": 0.25,
+                "completed_at": "2026-05-04T02:00:01+08:00",
             }
 
         if self.call_count == 2:
@@ -63,6 +66,7 @@ class _RetryingFakeLLMClient:
                 "usage": {"prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28},
                 "duration": 1.5,
                 "first_token_latency": 0.6,
+                "completed_at": "2026-05-04T02:00:02+08:00",
             }
 
         if print_callback:
@@ -72,6 +76,7 @@ class _RetryingFakeLLMClient:
             "usage": {"prompt_tokens": 21, "completion_tokens": 9, "total_tokens": 30},
             "duration": 1.7,
             "first_token_latency": 0.5,
+            "completed_at": "2026-05-04T02:00:04+08:00",
         }
 
 
@@ -1071,9 +1076,11 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(saved_payload["meta"]["stats"]["requests"][0]["section"], "analysis")
         self.assertEqual(saved_payload["meta"]["stats"]["requests"][0]["total_tokens"], 15)
         self.assertEqual(saved_payload["meta"]["stats"]["requests"][0]["first_token_latency"], 0.25)
+        self.assertEqual(saved_payload["meta"]["stats"]["requests"][0]["completed_at"], "2026-05-04T02:00:01+08:00")
         self.assertEqual(saved_payload["meta"]["stats"]["requests"][1]["section"], "plan")
         self.assertEqual(saved_payload["meta"]["stats"]["requests"][1]["total_tokens"], 28)
         self.assertEqual(saved_payload["meta"]["stats"]["requests"][1]["first_token_latency"], 0.4)
+        self.assertEqual(saved_payload["meta"]["stats"]["requests"][1]["completed_at"], "2026-05-04T02:00:03+08:00")
 
 
 if __name__ == "__main__":

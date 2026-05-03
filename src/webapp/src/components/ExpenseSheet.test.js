@@ -63,6 +63,14 @@ test('Expense Sheet loads AI purchase recommendations and renders the top recomm
   assert.ok(cssSource.includes('.expense-purchase-groups'));
 });
 
+test('Expense Sheet polls while purchase cover image is generating in the background', () => {
+  assert.ok(jsxSource.includes("purchaseRecommendations?.cover_image?.status === 'generating'"));
+  assert.ok(jsxSource.includes("t('expense.purchase.cover_generating')"));
+  assert.ok(jsxSource.includes('purchaseCoverPollTimeoutRef'));
+  assert.ok(jsxSource.includes('setTimeout(() => {'));
+  assert.ok(jsxSource.includes('void fetchPurchaseRecommendations({ silent: true });'));
+});
+
 test('Expense Sheet purchase cover shows the full image without stretching to recommendation height', () => {
   assert.ok(cssSource.includes('align-items: start;'));
   assert.ok(cssSource.includes('aspect-ratio: 1 / 1;'));

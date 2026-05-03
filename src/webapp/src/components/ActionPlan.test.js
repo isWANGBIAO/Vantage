@@ -40,10 +40,12 @@ test('ActionPlan loads structured analysis and plan bodies from the backend resp
   assert.ok(actionPlanSource.includes('setPlanPrompt(savedInput.plan_prompt'));
 });
 
-test('ActionPlan renders per-round first token, duration, token, and speed stats', () => {
+test('ActionPlan renders per-round first token, generated time, duration, token, and speed stats', () => {
   assert.ok(actionPlanSource.includes("getActionPlanRoundStats(stats, 'analysis')"));
   assert.ok(actionPlanSource.includes("getActionPlanRoundStats(stats, 'plan')"));
   assert.ok(actionPlanSource.includes("t('common.first_token'"));
+  assert.ok(actionPlanSource.includes("t('common.generated_at'"));
+  assert.ok(actionPlanSource.includes('formatGeneratedAtChipValue(stats.completed_at, effectiveLanguage)'));
   assert.ok(actionPlanSource.includes("t('common.tokens_detail'"));
   assert.ok(actionPlanSource.includes('formatActionPlanTokenBreakdown'));
   assert.equal(actionPlanSource.includes("t('common.history'"), false);

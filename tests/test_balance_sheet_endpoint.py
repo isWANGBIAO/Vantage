@@ -410,12 +410,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(cleared["count"], 0)
         self.assertEqual(after["items"], [])
 
-    def test_purchase_recommendations_generates_and_serves_cover_image(self):
-        route = next(
-            (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
-            None,
-        )
-
+    def test_purchase_recommendations_schedules_cover_image_without_blocking_response(self):
         fake_sheets = {"Asset": pd.DataFrame({"名称": ["耳机"], "金额": [299.0]})}
         llm_payload = {
             "recommendation_groups": [
@@ -425,13 +420,6 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             ],
             "cover_prompt": "A concise shopping recommendation cover",
         }
-
-        class FakeImageResponse:
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {"data": [{"b64_json": base64.b64encode(b"png-bytes").decode("ascii")}]}
 
         with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
             server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")
@@ -447,18 +435,63 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             "content": server.json.dumps(llm_payload, ensure_ascii=False),
             "usage": {"total_tokens": 50},
             "model": "gpt-5.5",
-        }), patch.object(server.requests, "post", return_value=FakeImageResponse()) as post:
-            payload = asyncio.run(route.endpoint())
+        }), patch.object(server, "_start_purchase_cover_generation") as start_cover, patch.object(
+            server.requests, "post"
+        ) as post:
+            payload = server._build_purchase_recommendations_payload()
 
         self.assertEqual(payload["image_model"], "image-model")
+        self.assertEqual(payload["cover_image"]["status"], "generating")
+        self.assertIsNone(payload["cover_image"]["url"])
         self.assertIsNone(payload["cover_image"]["error"])
-        self.assertTrue(payload["cover_image"]["url"].startswith("/api/balance_sheet/purchase_recommendations/cover/"))
+        start_cover.assert_called_once()
+        post.assert_not_called()
+
+    def test_purchase_cover_generation_uses_five_minute_timeout(self):
+        class FakeImageResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"data": [{"b64_json": base64.b64encode(b"png-bytes").decode("ascii")}]}
+
+        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            server,
+            "load_settings",
+            return_value={
+                "image_base_url": "https://images.example.invalid/v1",
+                "image_api_key": "sk-image",
+                "image_model": "image-model",
+            },
+        ), patch.object(server.requests, "post", return_value=FakeImageResponse()) as post:
+            cover_image, image_model = server._generate_purchase_cover_image("abc123", "A concise shopping recommendation cover")
+
+        self.assertEqual(image_model, "image-model")
+        self.assertIsNone(cover_image["error"])
+        self.assertTrue(cover_image["url"].startswith("/api/balance_sheet/purchase_recommendations/cover/"))
         post.assert_called_once()
         self.assertEqual(post.call_args.kwargs["json"]["model"], "image-model")
-        self.assertIn("A concise shopping recommendation cover", post.call_args.kwargs["json"]["prompt"])
-        self.assertIn("editorial product photograph", post.call_args.kwargs["json"]["prompt"])
-        cover_file = Path(self.temp_dir.name) / "balance_sheet_purchase_recommendations" / "covers" / Path(payload["cover_image"]["url"]).name
+        self.assertEqual(post.call_args.kwargs["timeout"], 300)
+        cover_file = Path(self.temp_dir.name) / "balance_sheet_purchase_recommendations" / "covers" / Path(cover_image["url"]).name
         self.assertEqual(cover_file.read_bytes(), b"png-bytes")
+
+    def test_purchase_recommendation_routes_build_off_event_loop(self):
+        route = next(
+            (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
+            None,
+        )
+
+        async def fake_to_thread(func, *args, **kwargs):
+            return {"status": "ready", "func": func.__name__, "args": args, "kwargs": kwargs}
+
+        with patch.object(server.asyncio, "to_thread", side_effect=fake_to_thread) as to_thread:
+            payload = asyncio.run(route.endpoint())
+
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["func"], "_build_purchase_recommendations_payload")
+        self.assertEqual(payload["args"], ())
+        self.assertEqual(payload["kwargs"], {"force_regenerate": False})
+        to_thread.assert_called_once()
 
     def test_purchase_recommendations_regenerate_bypasses_cache(self):
         route = next(
