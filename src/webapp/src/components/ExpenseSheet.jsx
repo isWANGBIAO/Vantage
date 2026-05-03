@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3,
   CalendarRange,
   ClipboardList,
   Coins,
+  Copy,
   Clock,
   HandCoins,
   RefreshCw,
@@ -30,6 +31,41 @@ const KPI_LABEL_KEYS = {
   requiredBudget: 'expense.kpi.required_budget',
   coverageDays: 'expense.kpi.coverage_days',
 };
+
+const COPY_FEEDBACK_DURATION_MS = 1500;
+
+async function writeTextWithFallback(content) {
+  if (!content) {
+    return false;
+  }
+
+  if (
+    globalThis.navigator?.clipboard
+    && typeof globalThis.navigator.clipboard.writeText === 'function'
+  ) {
+    await globalThis.navigator.clipboard.writeText(content);
+    return true;
+  }
+
+  const documentRef = globalThis.document;
+  if (!documentRef?.createElement || !documentRef.body || typeof documentRef.execCommand !== 'function') {
+    return false;
+  }
+
+  const textarea = documentRef.createElement('textarea');
+  textarea.value = content;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  documentRef.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    return documentRef.execCommand('copy');
+  } finally {
+    documentRef.body.removeChild(textarea);
+  }
+}
 
 function formatNumber(value, locale, digits = 2) {
   if (value === null || value === undefined || Number.isNaN(value)) return '--';
@@ -146,6 +182,8 @@ export default function ExpenseSheet({ theme = 'dark' }) {
   const [error, setError] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeRawSheet, setActiveRawSheet] = useState('');
+  const [copyJsonStatus, setCopyJsonStatus] = useState('idle');
+  const copyStatusResetRef = useRef(null);
 
   const fetchData = useCallback(async (refresh = false) => {
     setIsLoading(true);
@@ -204,6 +242,12 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     void fetchData();
   }, [fetchData]);
 
+  useEffect(() => () => {
+    if (copyStatusResetRef.current) {
+      clearTimeout(copyStatusResetRef.current);
+    }
+  }, []);
+
   const viewModel = useMemo(() => buildExpenseSheetViewModel(data), [data]);
 
   useEffect(() => {
@@ -217,9 +261,42 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     void fetchData(true);
   };
 
+  const scheduleCopyStatusReset = useCallback(() => {
+    if (copyStatusResetRef.current) {
+      clearTimeout(copyStatusResetRef.current);
+    }
+
+    copyStatusResetRef.current = setTimeout(() => {
+      setCopyJsonStatus('idle');
+      copyStatusResetRef.current = null;
+    }, COPY_FEEDBACK_DURATION_MS);
+  }, []);
+
+  const handleCopyJson = useCallback(async () => {
+    if (!data?.prompt_payload) {
+      setCopyJsonStatus('failed');
+      scheduleCopyStatusReset();
+      return;
+    }
+
+    try {
+      const copied = await writeTextWithFallback(JSON.stringify(data.prompt_payload));
+      setCopyJsonStatus(copied ? 'copied' : 'failed');
+    } catch {
+      setCopyJsonStatus('failed');
+    }
+
+    scheduleCopyStatusReset();
+  }, [data, scheduleCopyStatusReset]);
+
   const selectedRawSheet =
     viewModel.rawSheets.find((sheet) => sheet.name === activeRawSheet) || viewModel.rawSheets[0] || null;
   const compactSourcePath = compactWorkbookPath(viewModel.meta.fullPath);
+  const copyJsonLabel = copyJsonStatus === 'copied'
+    ? t('expense.copy_json_copied')
+    : copyJsonStatus === 'failed'
+      ? t('expense.copy_json_failed')
+      : t('expense.copy_json');
 
   const balanceChartCard = balanceChart || {
     id: 'balance',
@@ -259,10 +336,23 @@ export default function ExpenseSheet({ theme = 'dark' }) {
           </div>
         </div>
 
-        <button className="expense-refresh-button" onClick={handleRefresh} disabled={isRefreshing}>
-          <RefreshCw size={16} className={isRefreshing ? 'spin-animation' : ''} />
-          {isRefreshing ? t('expense.refreshing') : t('expense.refresh')}
-        </button>
+        <div className="expense-toolbar-actions">
+          <button
+            type="button"
+            className={`expense-copy-json-button ${copyJsonStatus === 'copied' ? 'is-copied' : ''}`.trim()}
+            onClick={handleCopyJson}
+            disabled={isLoading || !data?.prompt_payload}
+            title={data?.prompt_payload ? t('expense.copy_json') : t('expense.copy_json_unavailable')}
+          >
+            <Copy size={16} />
+            {copyJsonLabel}
+          </button>
+
+          <button className="expense-refresh-button" onClick={handleRefresh} disabled={isRefreshing}>
+            <RefreshCw size={16} className={isRefreshing ? 'spin-animation' : ''} />
+            {isRefreshing ? t('expense.refreshing') : t('expense.refresh')}
+          </button>
+        </div>
       </section>
 
       {isLoading ? (

@@ -39,6 +39,22 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(payload["rows"][0][0], "2026-01-06")
         self.assertEqual(payload["rows"][-1][0], "2026-07-24")
 
+    def test_sheet_payload_can_return_all_rows_without_truncation(self):
+        frame = pd.DataFrame(
+            {
+                "Date": pd.date_range("2026-01-01", periods=205, freq="D"),
+                "Value": list(range(205)),
+            }
+        )
+
+        payload = server._sheet_to_payload(frame, max_rows=None)
+
+        self.assertFalse(payload["truncated"])
+        self.assertEqual(payload["row_count"], 205)
+        self.assertEqual(len(payload["rows"]), 205)
+        self.assertEqual(payload["rows"][0][0], "2026-01-01")
+        self.assertEqual(payload["rows"][-1][0], "2026-07-24")
+
     def test_balance_sheet_route_is_registered_and_returns_payload(self):
         route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
 
@@ -64,6 +80,11 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["time_cost"]["daily_average"], 100.0)
         self.assertEqual(payload["summary"]["assets"]["total_assets"]["value"], 5000.0)
         self.assertEqual(payload["sheets"][0]["name"], "Summary")
+        self.assertEqual(payload["prompt_payload"]["file_name"], "Balance Sheet.xlsx")
+        self.assertEqual(payload["prompt_payload"]["sheet_count"], 1)
+        self.assertEqual(payload["prompt_payload"]["total_rows"], 1)
+        self.assertEqual(payload["prompt_payload"]["sheets"][0]["rows"], [["2026-04-01", 100.0, 5000.0]])
+        self.assertIn(list(fake_sheets["Summary"].columns)[1], payload["prompt_payload"]["sheets"][0]["non_null_counts"])
 
     def test_balance_sheet_route_returns_full_trend_points_when_sheet_rows_are_truncated(self):
         route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
@@ -85,7 +106,10 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             payload = asyncio.run(route.endpoint())
 
         self.assertEqual(payload["sheets"][0]["row_count"], 240)
-        self.assertEqual(len(payload["sheets"][0]["rows"]), 200)
+        self.assertFalse(payload["sheets"][0]["truncated"])
+        self.assertEqual(len(payload["sheets"][0]["rows"]), 240)
+        self.assertEqual(payload["prompt_payload"]["total_rows"], 240)
+        self.assertEqual(len(payload["prompt_payload"]["sheets"][0]["rows"]), 240)
         self.assertEqual(len(payload["trend_points"]), 240)
         self.assertEqual(payload["trend_points"][0]["date"], "2020-01-01")
         self.assertEqual(payload["trend_points"][-1]["date"], "2020-08-27")

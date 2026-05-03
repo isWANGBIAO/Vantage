@@ -36,3 +36,15 @@ test('Expense Sheet refresh clears the dashboard cache before reloading charts',
   assert.ok(jsxSource.includes("retryPolicy: 'mutation'"));
   assert.ok(!jsxSource.includes("'/api/plots/data${refresh ? '?refresh=1' : ''}'"));
 });
+
+test('Expense Sheet provides a toolbar action for copying the full prompt JSON', () => {
+  assert.ok(jsxSource.includes('Copy,'));
+  assert.ok(jsxSource.includes("t('expense.copy_json')"));
+  assert.ok(jsxSource.includes("t('expense.copy_json_copied')"));
+  assert.ok(jsxSource.includes("data?.prompt_payload"));
+  assert.ok(jsxSource.includes('JSON.stringify(data.prompt_payload)'));
+  assert.ok(jsxSource.includes('writeTextWithFallback'));
+  assert.ok(jsxSource.includes('expense-toolbar-actions'));
+  assert.ok(cssSource.includes('.expense-toolbar-actions'));
+  assert.ok(cssSource.includes('.expense-copy-json-button'));
+});

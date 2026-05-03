@@ -73,3 +73,15 @@ test('displayCopy keeps en-US and zh-CN key sets aligned', () => {
 
   assert.deepEqual(zhKeys, enKeys);
 });
+
+test('displayCopy includes Expense Sheet JSON copy labels in both languages', () => {
+  for (const key of [
+    'expense.copy_json',
+    'expense.copy_json_copied',
+    'expense.copy_json_failed',
+    'expense.copy_json_unavailable',
+  ]) {
+    assert.ok(DISPLAY_COPY['en-US'][key], `en-US missing ${key}`);
+    assert.ok(DISPLAY_COPY['zh-CN'][key], `zh-CN missing ${key}`);
+  }
+});

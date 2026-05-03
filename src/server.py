@@ -1132,7 +1132,7 @@ def _sheet_to_payload(df, max_rows=200):
         return {"columns": [], "rows": [], "row_count": 0, "truncated": False}
     columns = [str(c) for c in df.columns]
     row_count = len(df)
-    truncated = row_count > max_rows
+    truncated = max_rows is not None and row_count > max_rows
     sliced = df
     if truncated:
         date_col = _find_date_column(df)
@@ -3012,9 +3012,14 @@ async def get_balance_sheet():
 
         sheet_payloads = []
         for sheet_name, df in sheets.items():
-            payload = _sheet_to_payload(df, max_rows=200)
+            payload = _sheet_to_payload(df, max_rows=None)
             payload["name"] = sheet_name
             sheet_payloads.append(payload)
+
+        prompt_payload = DataLoader.build_balance_sheet_prompt_payload_from_sheets(
+            sheets,
+            file_name=path.name,
+        )
 
         return {
             "source": {
@@ -3027,6 +3032,7 @@ async def get_balance_sheet():
             "trend_points": trend_points,
             "forecast_points": forecast_points,
             "sheets": sheet_payloads,
+            "prompt_payload": prompt_payload,
         }
     except FileNotFoundError as exc:
         return JSONResponse(status_code=404, content={"error": str(exc)})

@@ -1,17 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 const preloadSource = readFileSync(new URL('./preload.cjs', import.meta.url), 'utf8');
+const viteBuildScriptSource = readFileSync(new URL('./scripts/vite-build.mjs', import.meta.url), 'utf8');
 
 test('package exposes frontend test and check scripts', () => {
   assert.ok(packageJson.scripts.test);
   assert.ok(packageJson.scripts.check);
   assert.ok(packageJson.scripts['electron:package']);
   assert.match(packageJson.scripts.test, /node --test/);
+  assert.equal(packageJson.scripts.build, 'node scripts/vite-build.mjs');
   assert.match(packageJson.scripts.check, /npm run test/);
   assert.equal(packageJson.scripts['electron:package'], 'electron-builder');
+});
+
+test('build script normalizes junction paths before invoking Vite', () => {
+  assert.ok(existsSync(new URL('./scripts/vite-build.mjs', import.meta.url)));
+  assert.ok(viteBuildScriptSource.includes('realpathSync'));
+  assert.ok(viteBuildScriptSource.includes("path.join("));
+  assert.ok(viteBuildScriptSource.includes("'vite.js'"));
+  assert.ok(viteBuildScriptSource.includes("[viteCli, 'build', webappRoot]"));
 });
 
 test('package bundles the backend runtime and installer shortcuts for Windows', () => {

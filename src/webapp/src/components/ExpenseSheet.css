@@ -56,10 +56,25 @@
   font-weight: 600;
 }
 
+.expense-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.expense-copy-json-button,
 .expense-refresh-button {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+.expense-copy-json-button.is-copied {
+  border-color: rgba(0, 184, 148, 0.4);
+  color: #00b894;
 }
 
 .expense-state-panel {
