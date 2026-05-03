@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
@@ -10,6 +12,12 @@ from src import server
 
 
 class BalanceSheetEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
     def test_parse_required_flag_checks_optional_words_before_required_substrings(self):
         self.assertFalse(server._parse_required_flag("非必须"))
         self.assertFalse(server._parse_required_flag("不必须"))
@@ -39,6 +47,22 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(payload["rows"][0][0], "2026-01-06")
         self.assertEqual(payload["rows"][-1][0], "2026-07-24")
 
+    def test_sheet_payload_can_return_all_rows_without_truncation(self):
+        frame = pd.DataFrame(
+            {
+                "Date": pd.date_range("2026-01-01", periods=205, freq="D"),
+                "Value": list(range(205)),
+            }
+        )
+
+        payload = server._sheet_to_payload(frame, max_rows=None)
+
+        self.assertFalse(payload["truncated"])
+        self.assertEqual(payload["row_count"], 205)
+        self.assertEqual(len(payload["rows"]), 205)
+        self.assertEqual(payload["rows"][0][0], "2026-01-01")
+        self.assertEqual(payload["rows"][-1][0], "2026-07-24")
+
     def test_balance_sheet_route_is_registered_and_returns_payload(self):
         route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
 
@@ -64,6 +88,373 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["time_cost"]["daily_average"], 100.0)
         self.assertEqual(payload["summary"]["assets"]["total_assets"]["value"], 5000.0)
         self.assertEqual(payload["sheets"][0]["name"], "Summary")
+        self.assertEqual(payload["prompt_payload"]["file_name"], "Balance Sheet.xlsx")
+        self.assertEqual(payload["prompt_payload"]["sheet_count"], 1)
+        self.assertEqual(payload["prompt_payload"]["total_rows"], 1)
+        self.assertEqual(payload["prompt_payload"]["sheets"][0]["rows"], [["2026-04-01", 100.0, 5000.0]])
+        self.assertIn(list(fake_sheets["Summary"].columns)[1], payload["prompt_payload"]["sheets"][0]["non_null_counts"])
+
+    def test_purchase_recommendations_generates_text_without_image_provider(self):
+        route = next(
+            (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
+            None,
+        )
+
+        self.assertIsNotNone(route)
+
+        fake_sheets = {
+            "Asset": pd.DataFrame({"名称": ["机械键盘"], "金额": [399.0]}),
+            "开销": pd.DataFrame({"日期": ["2026-05-01"], "备注": ["咖啡"]}),
+        }
+        llm_payload = {
+            "recommendation_groups": [
+                {
+                    "key": "practical",
+                    "title": "实用补缺",
+                    "items": [
+                        {
+                            "name": "桌面理线套装",
+                            "category": "桌面整理",
+                            "estimated_price": "¥50-100",
+                            "reason": "已有键盘但没有整理线材记录。",
+                            "evidence": "Asset 表出现机械键盘。",
+                            "duplicate_check": "未看到理线套装。",
+                            "impulse_risk": "低",
+                        }
+                    ],
+                },
+                {"key": "night_guard", "title": "夜间防冲动", "items": []},
+                {"key": "wishlist", "title": "愿望清单", "items": []},
+            ],
+            "cover_prompt": "A neat desk shopping mood board",
+        }
+
+        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")
+        ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(
+            server, "load_settings", return_value={"image_base_url": "", "image_api_key": "", "image_model": ""}
+        ), patch.object(server.LLMClient, "chat", return_value={
+            "content": server.json.dumps(llm_payload, ensure_ascii=False),
+            "usage": {"total_tokens": 123},
+            "model": "gpt-5.5",
+        }) as chat:
+            payload = asyncio.run(route.endpoint())
+
+        self.assertEqual(payload["status"], "ready")
+        self.assertFalse(payload["from_cache"])
+        self.assertEqual(payload["recommendation_groups"][0]["key"], "practical")
+        self.assertEqual(payload["recommendation_groups"][0]["items"][0]["name"], "桌面理线套装")
+        self.assertEqual(payload["usage"]["total_tokens"], 123)
+        self.assertEqual(payload["text_model"], "gpt-5.5")
+        self.assertIsNone(payload["cover_image"]["url"])
+        self.assertTrue(payload["cover_image"]["configuration_error"])
+        self.assertIn("not configured", payload["cover_image"]["error"])
+        call_kwargs = chat.call_args.kwargs
+        self.assertEqual(call_kwargs["source"], "expense_purchase_recommendations")
+        self.assertFalse(call_kwargs["stream"])
+        self.assertIn("Balance Sheet JSON", call_kwargs["messages"][1]["content"])
+
+    def test_purchase_recommendations_uses_cache_for_same_balance_sheet_hash(self):
+        route = next(
+            (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
+            None,
+        )
+
+        fake_sheets = {"Asset": pd.DataFrame({"名称": ["护眼台灯"], "金额": [199.0]})}
+        llm_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "实用补缺", "items": []},
+                {"key": "night_guard", "title": "夜间防冲动", "items": []},
+                {"key": "wishlist", "title": "愿望清单", "items": []},
+            ],
+            "cover_prompt": "A calm night shopping card",
+        }
+
+        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")
+        ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(
+            server, "load_settings", return_value={"image_base_url": "", "image_api_key": "", "image_model": ""}
+        ), patch.object(server.LLMClient, "chat", return_value={
+            "content": server.json.dumps(llm_payload, ensure_ascii=False),
+            "usage": {"total_tokens": 50},
+            "model": "gpt-5.5",
+        }) as chat:
+            first_payload = asyncio.run(route.endpoint())
+            second_payload = asyncio.run(route.endpoint())
+
+        self.assertFalse(first_payload["from_cache"])
+        self.assertTrue(second_payload["from_cache"])
+        self.assertEqual(first_payload["cache_key"], second_payload["cache_key"])
+        self.assertEqual(chat.call_count, 1)
+
+    def test_purchase_recommendation_dismissal_persists_and_deduplicates(self):
+        dismiss_route = next(
+            (
+                route
+                for route in server.app.routes
+                if route.path == "/api/balance_sheet/purchase_recommendations/dismiss"
+            ),
+            None,
+        )
+        list_route = next(
+            (
+                route
+                for route in server.app.routes
+                if route.path == "/api/balance_sheet/purchase_recommendations/dismissed"
+                and "GET" in getattr(route, "methods", set())
+            ),
+            None,
+        )
+
+        self.assertIsNotNone(dismiss_route)
+        self.assertIsNotNone(list_route)
+
+        request = server.PurchaseRecommendationDismissRequest(
+            cache_key="sheet-hash",
+            group_key="wishlist",
+            item={
+                "name": "电纸书阅读器",
+                "category": "学习/阅读",
+                "estimated_price": "900",
+                "reason": "减少手机刷屏",
+                "evidence": "历史多次买书",
+                "duplicate_check": "没有 Kindle",
+                "impulse_risk": "medium",
+            },
+        )
+
+        with patch.object(server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)):
+            first = asyncio.run(dismiss_route.endpoint(request))
+            second = asyncio.run(dismiss_route.endpoint(request))
+            listed = asyncio.run(list_route.endpoint())
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(first["created"])
+        self.assertFalse(second["created"])
+        self.assertEqual(second["count"], 1)
+        self.assertEqual(listed["count"], 1)
+        self.assertEqual(listed["items"][0]["name"], "电纸书阅读器")
+        self.assertEqual(listed["items"][0]["group_key"], "wishlist")
+
+    def test_purchase_recommendation_prompt_includes_dismissed_items(self):
+        messages = server._build_purchase_recommendation_messages(
+            {"file_name": "Balance Sheet.xlsx", "sheet_count": 1, "total_rows": 0, "sheets": []},
+            dismissed_items=[
+                {
+                    "name": "电纸书阅读器",
+                    "category": "学习/阅读",
+                    "group_key": "wishlist",
+                    "reason": "用户已打叉",
+                }
+            ],
+        )
+
+        user_prompt = messages[1]["content"]
+        self.assertIn("已排除购物推荐", user_prompt)
+        self.assertIn("电纸书阅读器", user_prompt)
+        self.assertIn("同名", user_prompt)
+        self.assertIn("功能重复", user_prompt)
+
+    def test_purchase_recommendations_filter_dismissed_items_from_cached_payload(self):
+        route = next(
+            (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
+            None,
+        )
+        dismiss_route = next(
+            (
+                route
+                for route in server.app.routes
+                if route.path == "/api/balance_sheet/purchase_recommendations/dismiss"
+            ),
+            None,
+        )
+
+        fake_sheets = {"Asset": pd.DataFrame({"名称": ["台灯"], "金额": [199.0]})}
+        llm_payload = {
+            "recommendation_groups": [
+                {
+                    "key": "practical",
+                    "title": "实用补缺",
+                    "items": [
+                        {
+                            "name": "护眼台灯",
+                            "category": "照明",
+                            "estimated_price": "199",
+                            "reason": "夜间阅读更舒服",
+                            "evidence": "资产表没有台灯",
+                            "duplicate_check": "未看到台灯",
+                            "impulse_risk": "low",
+                        }
+                    ],
+                },
+                {"key": "night_guard", "title": "夜间防冲动", "items": []},
+                {"key": "wishlist", "title": "愿望清单", "items": []},
+            ],
+            "cover_prompt": "A shopping cover",
+        }
+
+        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)
+        ), patch.object(server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")), patch.object(
+            server.DataLoader, "load_excel_sheets", return_value=fake_sheets
+        ), patch.object(server, "load_settings", return_value={"image_base_url": "", "image_api_key": "", "image_model": ""}), patch.object(
+            server.LLMClient,
+            "chat",
+            return_value={
+                "content": server.json.dumps(llm_payload, ensure_ascii=False),
+                "usage": {"total_tokens": 50},
+                "model": "gpt-5.5",
+            },
+        ) as chat:
+            first_payload = asyncio.run(route.endpoint())
+            asyncio.run(
+                dismiss_route.endpoint(
+                    server.PurchaseRecommendationDismissRequest(
+                        cache_key=first_payload["cache_key"],
+                        group_key="practical",
+                        item=first_payload["recommendation_groups"][0]["items"][0],
+                    )
+                )
+            )
+            second_payload = asyncio.run(route.endpoint())
+
+        self.assertFalse(first_payload["from_cache"])
+        self.assertTrue(second_payload["from_cache"])
+        self.assertEqual(second_payload["dismissed_count"], 1)
+        self.assertEqual(second_payload["recommendation_groups"][0]["items"], [])
+        self.assertEqual(chat.call_count, 1)
+
+    def test_purchase_recommendation_dismissals_can_be_cleared(self):
+        dismiss_route = next(
+            (
+                route
+                for route in server.app.routes
+                if route.path == "/api/balance_sheet/purchase_recommendations/dismiss"
+            ),
+            None,
+        )
+        list_route = next(
+            (
+                route
+                for route in server.app.routes
+                if route.path == "/api/balance_sheet/purchase_recommendations/dismissed"
+                and "GET" in getattr(route, "methods", set())
+            ),
+            None,
+        )
+        clear_route = next(
+            (
+                route
+                for route in server.app.routes
+                if route.path == "/api/balance_sheet/purchase_recommendations/dismissed"
+                and "DELETE" in getattr(route, "methods", set())
+            ),
+            None,
+        )
+
+        request = server.PurchaseRecommendationDismissRequest(
+            cache_key="sheet-hash",
+            group_key="practical",
+            item={"name": "升降桌", "category": "人体工学"},
+        )
+
+        with patch.object(server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)):
+            asyncio.run(dismiss_route.endpoint(request))
+            before = asyncio.run(list_route.endpoint())
+            cleared = asyncio.run(clear_route.endpoint())
+            after = asyncio.run(list_route.endpoint())
+
+        self.assertEqual(before["count"], 1)
+        self.assertTrue(cleared["ok"])
+        self.assertEqual(cleared["count"], 0)
+        self.assertEqual(after["items"], [])
+
+    def test_purchase_recommendations_generates_and_serves_cover_image(self):
+        route = next(
+            (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
+            None,
+        )
+
+        fake_sheets = {"Asset": pd.DataFrame({"名称": ["耳机"], "金额": [299.0]})}
+        llm_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "实用补缺", "items": []},
+                {"key": "night_guard", "title": "夜间防冲动", "items": []},
+                {"key": "wishlist", "title": "愿望清单", "items": []},
+            ],
+            "cover_prompt": "A concise shopping recommendation cover",
+        }
+
+        class FakeImageResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"data": [{"b64_json": base64.b64encode(b"png-bytes").decode("ascii")}]}
+
+        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")
+        ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(
+            server,
+            "load_settings",
+            return_value={
+                "image_base_url": "https://images.example.invalid/v1",
+                "image_api_key": "sk-image",
+                "image_model": "image-model",
+            },
+        ), patch.object(server.LLMClient, "chat", return_value={
+            "content": server.json.dumps(llm_payload, ensure_ascii=False),
+            "usage": {"total_tokens": 50},
+            "model": "gpt-5.5",
+        }), patch.object(server.requests, "post", return_value=FakeImageResponse()) as post:
+            payload = asyncio.run(route.endpoint())
+
+        self.assertEqual(payload["image_model"], "image-model")
+        self.assertIsNone(payload["cover_image"]["error"])
+        self.assertTrue(payload["cover_image"]["url"].startswith("/api/balance_sheet/purchase_recommendations/cover/"))
+        post.assert_called_once()
+        self.assertEqual(post.call_args.kwargs["json"]["model"], "image-model")
+        self.assertEqual(post.call_args.kwargs["json"]["prompt"], "A concise shopping recommendation cover")
+        cover_file = Path(self.temp_dir.name) / "balance_sheet_purchase_recommendations" / "covers" / Path(payload["cover_image"]["url"]).name
+        self.assertEqual(cover_file.read_bytes(), b"png-bytes")
+
+    def test_purchase_recommendations_regenerate_bypasses_cache(self):
+        route = next(
+            (
+                route
+                for route in server.app.routes
+                if route.path == "/api/balance_sheet/purchase_recommendations/regenerate"
+            ),
+            None,
+        )
+
+        self.assertIsNotNone(route)
+
+        fake_sheets = {"Asset": pd.DataFrame({"名称": ["鼠标"], "金额": [129.0]})}
+        llm_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "实用补缺", "items": []},
+                {"key": "night_guard", "title": "夜间防冲动", "items": []},
+                {"key": "wishlist", "title": "愿望清单", "items": []},
+            ],
+            "cover_prompt": "A shopping cover",
+        }
+
+        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")
+        ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(
+            server, "load_settings", return_value={"image_base_url": "", "image_api_key": "", "image_model": ""}
+        ), patch.object(server.LLMClient, "chat", return_value={
+            "content": server.json.dumps(llm_payload, ensure_ascii=False),
+            "usage": {"total_tokens": 50},
+            "model": "gpt-5.5",
+        }) as chat:
+            first_payload = asyncio.run(route.endpoint())
+            second_payload = asyncio.run(route.endpoint())
+
+        self.assertFalse(first_payload["from_cache"])
+        self.assertFalse(second_payload["from_cache"])
+        self.assertEqual(chat.call_count, 2)
 
     def test_balance_sheet_route_returns_full_trend_points_when_sheet_rows_are_truncated(self):
         route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
@@ -85,7 +476,10 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             payload = asyncio.run(route.endpoint())
 
         self.assertEqual(payload["sheets"][0]["row_count"], 240)
-        self.assertEqual(len(payload["sheets"][0]["rows"]), 200)
+        self.assertFalse(payload["sheets"][0]["truncated"])
+        self.assertEqual(len(payload["sheets"][0]["rows"]), 240)
+        self.assertEqual(payload["prompt_payload"]["total_rows"], 240)
+        self.assertEqual(len(payload["prompt_payload"]["sheets"][0]["rows"]), 240)
         self.assertEqual(len(payload["trend_points"]), 240)
         self.assertEqual(payload["trend_points"][0]["date"], "2020-01-01")
         self.assertEqual(payload["trend_points"][-1]["date"], "2020-08-27")

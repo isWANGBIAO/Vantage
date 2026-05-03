@@ -76,7 +76,18 @@ if /I "!BACKEND_RUNTIME_REQUIREMENTS_HASH!"=="!BACKEND_RUNTIME_REQUIREMENTS_STOR
 )
 call :StepDone "Backend packaging environment ready"
 
-call :StepStart "[3/7] Building frontend and backend runtime in parallel..."
+call :StepStart "[3/8] Preparing build version..."
+pushd "%PROJECT_ROOT%src\webapp"
+call node scripts\prepare-build-version.mjs
+if errorlevel 1 (
+    popd
+    echo       Build version preparation failed
+    exit /b 1
+)
+popd
+call :StepDone "Build version prepared"
+
+call :StepStart "[4/8] Building frontend and backend runtime in parallel..."
 echo       Build workers requested: %VANTAGE_BUILD_WORKERS%
 "%BACKEND_RUNTIME_PYTHON%" src\scripts\run_packaging_builds.py --backend-python "%BACKEND_RUNTIME_PYTHON%" --workers "%VANTAGE_BUILD_WORKERS%"
 if errorlevel 1 (
@@ -85,7 +96,7 @@ if errorlevel 1 (
 )
 call :StepDone "Frontend and backend build step complete"
 
-call :StepStart "[4/7] Verifying backend runtime..."
+call :StepStart "[5/8] Verifying backend runtime..."
 "%BACKEND_RUNTIME_PYTHON%" src\scripts\verify_backend_runtime.py --timeout-seconds 60
 if errorlevel 1 (
     echo       Backend runtime verification failed
@@ -93,7 +104,7 @@ if errorlevel 1 (
 )
 call :StepDone "Backend runtime verification complete"
 
-call :StepStart "[5/7] Building Windows installer..."
+call :StepStart "[6/8] Building Windows installer..."
 pushd "%PROJECT_ROOT%src\webapp"
 call npm run electron:package
 if errorlevel 1 (
@@ -104,7 +115,7 @@ if errorlevel 1 (
 popd
 call :StepDone "Windows installer build complete"
 
-call :StepStart "[6/7] Preparing silent install..."
+call :StepStart "[7/8] Preparing silent install..."
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$targets = Get-ChildItem -Path '%STARTUP_FOLDER%' -Filter 'RUN.bat*.lnk' -ErrorAction SilentlyContinue; if ($targets) { $targets | Remove-Item -Force; Write-Host '      Removed startup shortcut residue' } else { Write-Host '      No startup shortcut residue found' }"
 
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$installer = Get-ChildItem -Path '%PROJECT_ROOT%src\\webapp\\electron-dist' -Filter 'Vantage Setup *.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($installer) { $installer.FullName }"`) do set "INSTALLER_PATH=%%I"
@@ -119,7 +130,7 @@ taskkill /IM Vantage.exe /F >nul 2>&1
 taskkill /IM VantageBackend.exe /F >nul 2>&1
 call :StepDone "Silent install prepared"
 
-call :StepStart "[7/7] Installing and launching Vantage..."
+call :StepStart "[8/8] Installing and launching Vantage..."
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$process = Start-Process -FilePath '%INSTALLER_PATH%' -ArgumentList '/S' -Wait -PassThru; exit $process.ExitCode"
 if errorlevel 1 (
     echo       Silent installer failed

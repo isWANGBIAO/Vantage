@@ -361,6 +361,13 @@ class DataLoader:
             return None
 
         sheets = DataLoader.load_excel_sheets(excel_file_path)
+        return DataLoader.build_balance_sheet_prompt_payload_from_sheets(
+            sheets,
+            file_name=excel_file_path.name,
+        )
+
+    @staticmethod
+    def build_balance_sheet_prompt_payload_from_sheets(sheets, file_name="Balance Sheet.xlsx"):
         payload_sheets = []
 
         for sheet_name, df in sheets.items():
@@ -398,7 +405,7 @@ class DataLoader:
             )
 
         return {
-            "file_name": excel_file_path.name,
+            "file_name": file_name,
             "sheet_count": len(payload_sheets),
             "total_rows": sum(sheet["row_count"] for sheet in payload_sheets),
             "sheets": payload_sheets,

@@ -29,9 +29,18 @@ def test_load_settings_creates_default_settings_file(tmp_path):
         "theme_mode": "dark",
         "background_mode": "balanced",
         "action_plan_auto_generate": True,
+        "voice_provider_mode": "inherit_ai",
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",
+        "voice_models": ["FunAudioLLM/SenseVoiceSmall"],
+        "voice_last_refreshed_at": None,
+        "image_provider_mode": "inherit_ai",
+        "image_base_url": "",
+        "image_api_key": "",
+        "image_model": "",
+        "image_models": [],
+        "image_last_refreshed_at": None,
     }
     assert payload == expected
     assert json.loads((config_dir / "settings.json").read_text(encoding="utf-8")) == expected
@@ -149,9 +158,18 @@ def test_save_settings_normalizes_partial_payload(tmp_path):
         "theme_mode": "dark",
         "background_mode": "balanced",
         "action_plan_auto_generate": True,
+        "voice_provider_mode": "inherit_ai",
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",
+        "voice_models": ["FunAudioLLM/SenseVoiceSmall"],
+        "voice_last_refreshed_at": None,
+        "image_provider_mode": "inherit_ai",
+        "image_base_url": "",
+        "image_api_key": "",
+        "image_model": "",
+        "image_models": [],
+        "image_last_refreshed_at": None,
     }
     assert payload == expected
     assert json.loads(settings_file.read_text(encoding="utf-8")) == expected
@@ -185,9 +203,18 @@ def test_load_settings_repairs_invalid_display_language(tmp_path):
         "theme_mode": "dark",
         "background_mode": "balanced",
         "action_plan_auto_generate": True,
+        "voice_provider_mode": "inherit_ai",
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",
+        "voice_models": ["FunAudioLLM/SenseVoiceSmall"],
+        "voice_last_refreshed_at": None,
+        "image_provider_mode": "inherit_ai",
+        "image_base_url": "",
+        "image_api_key": "",
+        "image_model": "",
+        "image_models": [],
+        "image_last_refreshed_at": None,
     }
     assert payload == expected
     assert json.loads(settings_file.read_text(encoding="utf-8")) == expected
@@ -217,9 +244,12 @@ def test_save_settings_accepts_auto_theme_and_voice_provider(tmp_path):
         {
             "theme": "light",
             "theme_mode": "auto",
+            "voice_provider_mode": "custom",
             "voice_base_url": "https://voice.example.invalid/v1",
             "voice_api_key": "sk-voice",
             "voice_model": "FunAudioLLM/SenseVoiceSmall",
+            "voice_models": ["FunAudioLLM/SenseVoiceSmall", "sensevoice-large"],
+            "voice_last_refreshed_at": "2026-05-03T12:00:00+08:00",
             "action_plan_auto_generate": False,
         },
         settings_file=settings_file,
@@ -227,9 +257,12 @@ def test_save_settings_accepts_auto_theme_and_voice_provider(tmp_path):
 
     assert payload["theme"] == "light"
     assert payload["theme_mode"] == "auto"
+    assert payload["voice_provider_mode"] == "custom"
     assert payload["voice_base_url"] == "https://voice.example.invalid/v1"
     assert payload["voice_api_key"] == "sk-voice"
     assert payload["voice_model"] == "FunAudioLLM/SenseVoiceSmall"
+    assert payload["voice_models"] == ["FunAudioLLM/SenseVoiceSmall", "sensevoice-large"]
+    assert payload["voice_last_refreshed_at"] == "2026-05-03T12:00:00+08:00"
     assert payload["action_plan_auto_generate"] is False
 
 
@@ -243,6 +276,7 @@ def test_get_voice_provider_config_requires_base_url_key_and_model(tmp_path):
 
     user_config.save_settings(
         {
+            "voice_provider_mode": "custom",
             "voice_base_url": "https://voice.example.invalid/v1",
             "voice_api_key": "sk-voice",
             "voice_model": "sensevoice",
@@ -252,12 +286,98 @@ def test_get_voice_provider_config_requires_base_url_key_and_model(tmp_path):
 
     complete = user_config.get_voice_provider_config(settings_file=settings_file)
     assert complete == {
+        "mode": "custom",
+        "route": "voice",
+        "name": "Voice Provider",
         "base_url": "https://voice.example.invalid/v1",
         "api_key": "sk-voice",
         "model": "sensevoice",
         "complete": True,
         "missing": [],
     }
+
+
+def test_get_image_provider_config_requires_base_url_key_and_model(tmp_path):
+    user_config = _load_user_config_module()
+    settings_file = tmp_path / "config" / "settings.json"
+
+    incomplete = user_config.get_image_provider_config(settings_file=settings_file)
+    assert incomplete["complete"] is False
+    assert incomplete["missing"] == ["image_base_url", "image_api_key", "image_model"]
+
+    user_config.save_settings(
+        {
+            "image_provider_mode": "custom",
+            "image_base_url": "https://images.example.invalid/v1",
+            "image_api_key": "sk-image",
+            "image_model": "image-model",
+        },
+        settings_file=settings_file,
+    )
+
+    complete = user_config.get_image_provider_config(settings_file=settings_file)
+    assert complete == {
+        "mode": "custom",
+        "route": "image",
+        "name": "Image Provider",
+        "base_url": "https://images.example.invalid/v1",
+        "api_key": "sk-image",
+        "model": "image-model",
+        "complete": True,
+        "missing": [],
+    }
+
+
+def test_voice_and_image_provider_config_inherit_ai_provider(tmp_path):
+    user_config = _load_user_config_module()
+    config_dir = tmp_path / "config"
+    settings_file = config_dir / "settings.json"
+    providers_file = config_dir / "providers.json"
+
+    user_config.save_settings(
+        {
+            "voice_provider_mode": "inherit_ai",
+            "voice_model": "sensevoice",
+            "image_provider_mode": "inherit_ai",
+            "image_model": "gpt-image-1",
+        },
+        settings_file=settings_file,
+    )
+    user_config.save_provider_config(
+        {
+            "selected_provider": "custom",
+            "providers": {
+                "custom": {
+                    "api_key": "sk-ai",
+                    "base_url": "http://127.0.0.1:8317/v1",
+                    "model": "gpt-5.5",
+                },
+            },
+        },
+        providers_file=providers_file,
+    )
+
+    voice = user_config.get_voice_provider_config(
+        settings_file=settings_file,
+        providers_file=providers_file,
+    )
+    image = user_config.get_image_provider_config(
+        settings_file=settings_file,
+        providers_file=providers_file,
+    )
+
+    assert voice["complete"] is True
+    assert voice["mode"] == "inherit_ai"
+    assert voice["route"] == "custom"
+    assert voice["base_url"] == "http://127.0.0.1:8317/v1"
+    assert voice["api_key"] == "sk-ai"
+    assert voice["model"] == "sensevoice"
+    assert image["complete"] is True
+    assert image["mode"] == "inherit_ai"
+    assert image["route"] == "custom"
+    assert image["base_url"] == "http://127.0.0.1:8317/v1"
+    assert image["api_key"] == "sk-ai"
+    assert image["model"] == "gpt-image-1"
 
 
 def test_get_active_provider_config_returns_selected_complete_provider(tmp_path):

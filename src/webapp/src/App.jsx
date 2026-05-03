@@ -43,6 +43,21 @@ const NAV_ITEMS = [
   { key: 'face history', labelKey: 'app.nav.face_history' },
 ];
 
+const TAB_HASH_TO_KEY = Object.fromEntries([
+  ...NAV_ITEMS.map((item) => [item.key.replaceAll(' ', '-'), item.key]),
+  ['settings', 'settings'],
+]);
+
+const TAB_KEY_TO_HASH = Object.fromEntries([
+  ...NAV_ITEMS.map((item) => [item.key, `#${item.key.replaceAll(' ', '-')}`]),
+  ['settings', '#settings'],
+]);
+
+function getTabKeyFromHash(hash) {
+  const normalizedHash = String(hash || '').replace(/^#/, '').trim().toLowerCase();
+  return TAB_HASH_TO_KEY[normalizedHash] || null;
+}
+
 function DisplayLanguageSelect() {
   const { displayLanguage, languageOptions, setDisplayLanguage, t } = useDisplayLanguage();
 
@@ -86,7 +101,7 @@ function resolveEffectiveTheme(themeMode, systemTheme = 'dark') {
 
 function AppShell() {
   const { t, displayLanguage, setDisplayLanguage } = useDisplayLanguage();
-  const [activeTab, setActiveTab] = useState('action plan');
+  const [activeTab, setActiveTab] = useState(() => getTabKeyFromHash(window.location.hash) || 'action plan');
   const [themeMode, setThemeMode] = useState(() => (
     localStorage.getItem('themeMode') || localStorage.getItem('theme') || 'dark'
   ));
@@ -117,6 +132,19 @@ function AppShell() {
     localStorage.setItem('themeMode', themeMode);
     void window.electronAPI?.setTitleBarTheme?.(theme);
   }, [theme, themeMode]);
+
+  useEffect(() => {
+    const syncActiveTabFromHash = () => {
+      const nextTab = getTabKeyFromHash(window.location.hash);
+      if (nextTab) {
+        setActiveTab(nextTab);
+      }
+    };
+
+    syncActiveTabFromHash();
+    window.addEventListener('hashchange', syncActiveTabFromHash);
+    return () => window.removeEventListener('hashchange', syncActiveTabFromHash);
+  }, []);
 
   useEffect(() => {
     if (themeMode !== 'auto' || typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -242,9 +270,18 @@ function AppShell() {
         launchAtLogin: Boolean(currentState.settings?.launchAtLogin),
         backgroundMode: currentState.settings?.backgroundMode || 'balanced',
         actionPlanAutoGenerate: currentState.settings?.actionPlanAutoGenerate !== false,
+        voiceProviderMode: currentState.settings?.voiceProviderMode,
         voiceBaseUrl: currentState.settings?.voiceBaseUrl,
         voiceApiKey: currentState.settings?.voiceApiKey,
         voiceModel: currentState.settings?.voiceModel,
+        voiceModels: currentState.settings?.voiceModels,
+        voiceLastRefreshedAt: currentState.settings?.voiceLastRefreshedAt,
+        imageProviderMode: currentState.settings?.imageProviderMode,
+        imageBaseUrl: currentState.settings?.imageBaseUrl,
+        imageApiKey: currentState.settings?.imageApiKey,
+        imageModel: currentState.settings?.imageModel,
+        imageModels: currentState.settings?.imageModels,
+        imageLastRefreshedAt: currentState.settings?.imageLastRefreshedAt,
       });
       setSettingsState(savedState);
     } catch (error) {
@@ -285,6 +322,15 @@ function AppShell() {
           ...settings,
         },
       }));
+    }
+  };
+
+  const handleNavTabChange = (tabKey) => {
+    setActiveTab(tabKey);
+    const nextHash = TAB_KEY_TO_HASH[tabKey];
+
+    if (nextHash && window.location.hash !== nextHash) {
+      window.history.pushState(null, '', nextHash);
     }
   };
 
@@ -359,7 +405,7 @@ function AppShell() {
                   }}
                   onClick={(event) => {
                     event.preventDefault();
-                    setActiveTab(item.key);
+                    handleNavTabChange(item.key);
                   }}
                 >
                   {t(item.labelKey)}
@@ -373,7 +419,7 @@ function AppShell() {
           <button
             className="settings-entry-button"
             data-active={activeTab === 'settings' ? 'true' : 'false'}
-            onClick={() => setActiveTab('settings')}
+            onClick={() => handleNavTabChange('settings')}
             title={t('app.nav.settings')}
             aria-label={t('app.nav.settings')}
           >

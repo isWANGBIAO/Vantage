@@ -26,9 +26,30 @@ test('Settings exposes automatic theme mode and independent voice provider contr
   assert.ok(settingsSource.includes('voiceBaseUrl'));
   assert.ok(settingsSource.includes('voiceApiKey'));
   assert.ok(settingsSource.includes('voiceModel'));
+  assert.ok(settingsSource.includes('voiceProviderMode'));
+  assert.ok(settingsSource.includes('voiceModels'));
   assert.ok(settingsSource.includes('settings.voice_provider.base_url'));
   assert.ok(settingsSource.includes('settings.voice_provider.api_key'));
   assert.ok(settingsSource.includes('settings.voice_provider.model'));
+  assert.ok(settingsSource.includes('settings.provider.mode.inherit_ai'));
+  assert.ok(settingsSource.includes('refreshSpecialProviderModels'));
+  assert.ok(settingsSource.includes('/api/provider_models/discover'));
+});
+
+test('Settings exposes independent image generation provider controls', () => {
+  assert.ok(settingsSource.includes('settings.section.image_provider'));
+  assert.ok(settingsSource.includes('renderImageProvider'));
+  assert.ok(settingsSource.includes('imageBaseUrl'));
+  assert.ok(settingsSource.includes('imageApiKey'));
+  assert.ok(settingsSource.includes('imageModel'));
+  assert.ok(settingsSource.includes('imageProviderMode'));
+  assert.ok(settingsSource.includes('imageModels'));
+  assert.ok(settingsSource.includes('settings.image_provider.base_url'));
+  assert.ok(settingsSource.includes('settings.image_provider.api_key'));
+  assert.ok(settingsSource.includes('settings.image_provider.model'));
+  assert.ok(settingsSource.includes('showImageApiKey'));
+  assert.ok(settingsSource.includes('settings.provider.mode.custom'));
+  assert.ok(settingsSource.includes('settings-provider-model-select'));
 });
 
 test('Settings masks provider API key until the user reveals it', () => {
@@ -66,4 +87,11 @@ test('Settings renders multi-provider controls and discover refresh', () => {
   assert.ok(settingsSource.includes('commitProviderRoute'));
   assert.equal(settingsSource.includes('updateProviderRoute'), false);
   assert.equal(settingsSource.includes("onChange={(event) => updateProvider('model', event.target.value)}\n        />"), false);
+});
+
+test('Settings about page shows version build date and commit', () => {
+  assert.ok(settingsSource.includes('settings.about.build_date'));
+  assert.ok(settingsSource.includes('settings.about.build_commit'));
+  assert.ok(settingsSource.includes('state?.app?.buildDate'));
+  assert.ok(settingsSource.includes('state?.app?.buildCommit'));
 });

@@ -23,6 +23,12 @@ const {
     sanitizeDisplayLanguage,
 } = require('./src/utils/onboardingConfig.cjs');
 const packageJson = require('./package.json');
+let buildInfo = {};
+try {
+    buildInfo = require('./build-info.json');
+} catch {
+    buildInfo = {};
+}
 
 const projectRoot = path.join(__dirname, '..', '..');
 const runtimePaths = resolveRuntimePaths({
@@ -166,6 +172,7 @@ function getSettingsStatePayload() {
         runtimePaths,
         projectRoot,
         appVersion: packageJson.version,
+        appBuildInfo: buildInfo,
         appMode: runtimePaths.appMode,
         systemLocale: app.getLocale(),
     });
@@ -242,6 +249,7 @@ ipcMain.handle('settings:save', async (event, payload) => {
         payload: payload || {},
         projectRoot,
         appVersion: packageJson.version,
+        appBuildInfo: buildInfo,
         appMode: runtimePaths.appMode,
         systemLocale: app.getLocale(),
     });

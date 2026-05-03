@@ -45,6 +45,13 @@ test('App preserves voice provider settings when saving the header theme toggle'
   assert.ok(appSource.includes('voiceBaseUrl: currentState.settings?.voiceBaseUrl'));
   assert.ok(appSource.includes('voiceApiKey: currentState.settings?.voiceApiKey'));
   assert.ok(appSource.includes('voiceModel: currentState.settings?.voiceModel'));
+  assert.ok(appSource.includes('voiceProviderMode: currentState.settings?.voiceProviderMode'));
+  assert.ok(appSource.includes('voiceModels: currentState.settings?.voiceModels'));
+  assert.ok(appSource.includes('imageBaseUrl: currentState.settings?.imageBaseUrl'));
+  assert.ok(appSource.includes('imageApiKey: currentState.settings?.imageApiKey'));
+  assert.ok(appSource.includes('imageModel: currentState.settings?.imageModel'));
+  assert.ok(appSource.includes('imageProviderMode: currentState.settings?.imageProviderMode'));
+  assert.ok(appSource.includes('imageModels: currentState.settings?.imageModels'));
 });
 
 test('App renders the header theme toggle as a labelled pill instead of a blank circle', () => {
@@ -94,6 +101,15 @@ test('App wires the display language provider and header switcher into the shell
   assert.ok(appSource.includes('useDisplayLanguage'));
   assert.ok(appSource.includes('app-language-select'));
   assert.ok(appSource.includes('displayLanguage'));
+});
+
+test('App initializes and syncs the active tab from the URL hash', () => {
+  assert.ok(appSource.includes('const TAB_HASH_TO_KEY'));
+  assert.ok(appSource.includes('function getTabKeyFromHash'));
+  assert.ok(appSource.includes("useState(() => getTabKeyFromHash(window.location.hash) || 'action plan')"));
+  assert.ok(appSource.includes("window.addEventListener('hashchange'"));
+  assert.ok(appSource.includes('window.history.pushState'));
+  assert.ok(appSource.includes('handleNavTabChange'));
 });
 
 test('App only reapplies onboarding language when the saved onboarding value changes', () => {

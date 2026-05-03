@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3,
   CalendarRange,
   ClipboardList,
   Coins,
+  Copy,
   Clock,
   HandCoins,
+  Image as ImageIcon,
   RefreshCw,
+  Sparkles,
   TableProperties,
   Wallet,
+  X,
 } from 'lucide-react';
-import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
+import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import './ExpenseSheet.css';
 import { buildExpenseSheetViewModel } from './expenseSheetModel.js';
 import PlotChartCard from './PlotChartCard.jsx';
@@ -30,6 +34,41 @@ const KPI_LABEL_KEYS = {
   requiredBudget: 'expense.kpi.required_budget',
   coverageDays: 'expense.kpi.coverage_days',
 };
+
+const COPY_FEEDBACK_DURATION_MS = 1500;
+
+async function writeTextWithFallback(content) {
+  if (!content) {
+    return false;
+  }
+
+  if (
+    globalThis.navigator?.clipboard
+    && typeof globalThis.navigator.clipboard.writeText === 'function'
+  ) {
+    await globalThis.navigator.clipboard.writeText(content);
+    return true;
+  }
+
+  const documentRef = globalThis.document;
+  if (!documentRef?.createElement || !documentRef.body || typeof documentRef.execCommand !== 'function') {
+    return false;
+  }
+
+  const textarea = documentRef.createElement('textarea');
+  textarea.value = content;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  documentRef.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    return documentRef.execCommand('copy');
+  } finally {
+    documentRef.body.removeChild(textarea);
+  }
+}
 
 function formatNumber(value, locale, digits = 2) {
   if (value === null || value === undefined || Number.isNaN(value)) return '--';
@@ -59,11 +98,43 @@ function formatMetricValue(item, locale, t) {
   return formatNumber(item.value, locale);
 }
 
+function formatDateTime(value, locale) {
+  if (!value) return '--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString(locale, {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 function compactWorkbookPath(fullPath) {
   const value = String(fullPath || '').trim();
   if (!value) return '';
   const parts = value.split(/[\\/]/).filter(Boolean);
   return parts.slice(-2).join(' / ') || value;
+}
+
+function normalizePurchaseItemName(value) {
+  return String(value || '').trim().toLocaleLowerCase();
+}
+
+function removePurchaseItemFromGroups(groups, groupKey, itemName) {
+  const targetName = normalizePurchaseItemName(itemName);
+  return (groups || []).map((group) => {
+    if (group.key !== groupKey || !targetName) {
+      return group;
+    }
+
+    return {
+      ...group,
+      items: (group.items || []).filter((item) => normalizePurchaseItemName(item.name) !== targetName),
+    };
+  });
 }
 
 function SectionHeader({ icon, title, description }) {
@@ -146,6 +217,56 @@ export default function ExpenseSheet({ theme = 'dark' }) {
   const [error, setError] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeRawSheet, setActiveRawSheet] = useState('');
+  const [copyJsonStatus, setCopyJsonStatus] = useState('idle');
+  const [purchaseRecommendations, setPurchaseRecommendations] = useState(null);
+  const [purchaseLoading, setPurchaseLoading] = useState(true);
+  const [purchaseError, setPurchaseError] = useState('');
+  const [purchaseGenerating, setPurchaseGenerating] = useState(false);
+  const [purchaseCopyStatus, setPurchaseCopyStatus] = useState('idle');
+  const [dismissedPurchaseCount, setDismissedPurchaseCount] = useState(0);
+  const copyStatusResetRef = useRef(null);
+  const purchaseCopyStatusResetRef = useRef(null);
+
+  const fetchDismissedPurchaseItems = useCallback(async () => {
+    try {
+      const payload = await fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed', {
+        retryPolicy: 'load',
+      });
+      setDismissedPurchaseCount(Number(payload?.count) || 0);
+    } catch {
+      setDismissedPurchaseCount(0);
+    }
+  }, []);
+
+  const fetchPurchaseRecommendations = useCallback(async ({ regenerate = false } = {}) => {
+    if (regenerate) {
+      setPurchaseGenerating(true);
+    } else {
+      setPurchaseLoading(true);
+    }
+    setPurchaseError('');
+
+    try {
+      const payload = regenerate
+        ? await fetchBackendJson('/api/balance_sheet/purchase_recommendations/regenerate', {
+          method: 'POST',
+          retryPolicy: 'mutation',
+        })
+        : await fetchBackendJson('/api/balance_sheet/purchase_recommendations', {
+          retryPolicy: 'load',
+        });
+      if (payload?.status === 'error') {
+        throw new Error(payload.details || payload.error || t('expense.error.generic'));
+      }
+      setPurchaseRecommendations(payload);
+      setDismissedPurchaseCount(Number(payload?.dismissed_count) || 0);
+    } catch (err) {
+      setPurchaseError(err.message || t('expense.error.generic'));
+    } finally {
+      setPurchaseLoading(false);
+      setPurchaseGenerating(false);
+    }
+  }, [t]);
 
   const fetchData = useCallback(async (refresh = false) => {
     setIsLoading(true);
@@ -204,6 +325,23 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     void fetchData();
   }, [fetchData]);
 
+  useEffect(() => {
+    void fetchPurchaseRecommendations();
+  }, [fetchPurchaseRecommendations]);
+
+  useEffect(() => {
+    void fetchDismissedPurchaseItems();
+  }, [fetchDismissedPurchaseItems]);
+
+  useEffect(() => () => {
+    if (copyStatusResetRef.current) {
+      clearTimeout(copyStatusResetRef.current);
+    }
+    if (purchaseCopyStatusResetRef.current) {
+      clearTimeout(purchaseCopyStatusResetRef.current);
+    }
+  }, []);
+
   const viewModel = useMemo(() => buildExpenseSheetViewModel(data), [data]);
 
   useEffect(() => {
@@ -217,9 +355,147 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     void fetchData(true);
   };
 
+  const scheduleCopyStatusReset = useCallback(() => {
+    if (copyStatusResetRef.current) {
+      clearTimeout(copyStatusResetRef.current);
+    }
+
+    copyStatusResetRef.current = setTimeout(() => {
+      setCopyJsonStatus('idle');
+      copyStatusResetRef.current = null;
+    }, COPY_FEEDBACK_DURATION_MS);
+  }, []);
+
+  const handleCopyJson = useCallback(async () => {
+    if (!data?.prompt_payload) {
+      setCopyJsonStatus('failed');
+      scheduleCopyStatusReset();
+      return;
+    }
+
+    try {
+      const copied = await writeTextWithFallback(JSON.stringify(data.prompt_payload));
+      setCopyJsonStatus(copied ? 'copied' : 'failed');
+    } catch {
+      setCopyJsonStatus('failed');
+    }
+
+    scheduleCopyStatusReset();
+  }, [data, scheduleCopyStatusReset]);
+
+  const schedulePurchaseCopyStatusReset = useCallback(() => {
+    if (purchaseCopyStatusResetRef.current) {
+      clearTimeout(purchaseCopyStatusResetRef.current);
+    }
+
+    purchaseCopyStatusResetRef.current = setTimeout(() => {
+      setPurchaseCopyStatus('idle');
+      purchaseCopyStatusResetRef.current = null;
+    }, COPY_FEEDBACK_DURATION_MS);
+  }, []);
+
+  const handleCopyPurchaseJson = useCallback(async () => {
+    if (!purchaseRecommendations) {
+      setPurchaseCopyStatus('failed');
+      schedulePurchaseCopyStatusReset();
+      return;
+    }
+
+    try {
+      const copied = await writeTextWithFallback(JSON.stringify(purchaseRecommendations));
+      setPurchaseCopyStatus(copied ? 'copied' : 'failed');
+    } catch {
+      setPurchaseCopyStatus('failed');
+    }
+    schedulePurchaseCopyStatusReset();
+  }, [purchaseRecommendations, schedulePurchaseCopyStatusReset]);
+
+  const handleCopyCoverPrompt = useCallback(async () => {
+    const prompt = purchaseRecommendations?.cover_image?.prompt;
+    if (!prompt) {
+      setPurchaseCopyStatus('failed');
+      schedulePurchaseCopyStatusReset();
+      return;
+    }
+
+    try {
+      const copied = await writeTextWithFallback(prompt);
+      setPurchaseCopyStatus(copied ? 'copied' : 'failed');
+    } catch {
+      setPurchaseCopyStatus('failed');
+    }
+    schedulePurchaseCopyStatusReset();
+  }, [purchaseRecommendations, schedulePurchaseCopyStatusReset]);
+
+  const handleDismissPurchaseItem = useCallback(async (groupKey, item) => {
+    if (!purchaseRecommendations || !item?.name) {
+      return;
+    }
+
+    try {
+      const payload = await fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismiss', {
+        method: 'POST',
+        retryPolicy: 'mutation',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cache_key: purchaseRecommendations.cache_key,
+          group_key: groupKey,
+          item,
+        }),
+      });
+      const nextCount = Number(payload?.count ?? purchaseRecommendations.dismissed_count ?? dismissedPurchaseCount) || 0;
+      setDismissedPurchaseCount(nextCount);
+      setPurchaseRecommendations((current) => {
+        if (!current) {
+          return current;
+        }
+        return {
+          ...current,
+          dismissed_count: nextCount,
+          recommendation_groups: removePurchaseItemFromGroups(
+            current.recommendation_groups,
+            groupKey,
+            item.name,
+          ),
+        };
+      });
+    } catch (err) {
+      setPurchaseError(err.message || t('expense.error.generic'));
+    }
+  }, [dismissedPurchaseCount, purchaseRecommendations, t]);
+
+  const handleClearDismissedPurchaseItems = useCallback(async () => {
+    try {
+      await fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed', {
+        method: 'DELETE',
+        retryPolicy: 'mutation',
+      });
+      setDismissedPurchaseCount(0);
+      await fetchPurchaseRecommendations();
+    } catch (err) {
+      setPurchaseError(err.message || t('expense.error.generic'));
+    }
+  }, [fetchPurchaseRecommendations, t]);
+
   const selectedRawSheet =
     viewModel.rawSheets.find((sheet) => sheet.name === activeRawSheet) || viewModel.rawSheets[0] || null;
   const compactSourcePath = compactWorkbookPath(viewModel.meta.fullPath);
+  const copyJsonLabel = copyJsonStatus === 'copied'
+    ? t('expense.copy_json_copied')
+    : copyJsonStatus === 'failed'
+      ? t('expense.copy_json_failed')
+      : t('expense.copy_json');
+  const purchaseCopyLabel = purchaseCopyStatus === 'copied'
+    ? t('expense.purchase.copied')
+    : purchaseCopyStatus === 'failed'
+      ? t('expense.purchase.copy_failed')
+      : t('expense.purchase.copy_json');
+  const coverPromptCopyLabel = purchaseCopyStatus === 'copied'
+    ? t('expense.purchase.copied')
+    : purchaseCopyStatus === 'failed'
+      ? t('expense.purchase.copy_failed')
+      : t('expense.purchase.copy_cover_prompt');
+  const purchaseDismissedCount = Number(purchaseRecommendations?.dismissed_count ?? dismissedPurchaseCount) || 0;
 
   const balanceChartCard = balanceChart || {
     id: 'balance',
@@ -259,10 +535,161 @@ export default function ExpenseSheet({ theme = 'dark' }) {
           </div>
         </div>
 
-        <button className="expense-refresh-button" onClick={handleRefresh} disabled={isRefreshing}>
-          <RefreshCw size={16} className={isRefreshing ? 'spin-animation' : ''} />
-          {isRefreshing ? t('expense.refreshing') : t('expense.refresh')}
-        </button>
+        <div className="expense-toolbar-actions">
+          <button
+            type="button"
+            className={`expense-copy-json-button ${copyJsonStatus === 'copied' ? 'is-copied' : ''}`.trim()}
+            onClick={handleCopyJson}
+            disabled={isLoading || !data?.prompt_payload}
+            title={data?.prompt_payload ? t('expense.copy_json') : t('expense.copy_json_unavailable')}
+          >
+            <Copy size={16} />
+            {copyJsonLabel}
+          </button>
+
+          <button className="expense-refresh-button" onClick={handleRefresh} disabled={isRefreshing}>
+            <RefreshCw size={16} className={isRefreshing ? 'spin-animation' : ''} />
+            {isRefreshing ? t('expense.refreshing') : t('expense.refresh')}
+          </button>
+        </div>
+      </section>
+
+      <section className="glass-panel expense-purchase-card">
+        <div className="expense-purchase-head">
+          <div className="expense-section-heading">
+            <span className="expense-section-icon">
+              <Sparkles size={16} />
+            </span>
+            <div>
+              <h3>{t('expense.purchase.title')}</h3>
+              <p>{t('expense.purchase.subtitle')}</p>
+            </div>
+          </div>
+          <div className="expense-purchase-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={handleCopyPurchaseJson}
+              disabled={!purchaseRecommendations}
+            >
+              <Copy size={15} />
+              {purchaseCopyLabel}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={handleCopyCoverPrompt}
+              disabled={!purchaseRecommendations?.cover_image?.prompt}
+            >
+              <Copy size={15} />
+              {coverPromptCopyLabel}
+            </button>
+            <button
+              type="button"
+              className="expense-refresh-button"
+              onClick={() => fetchPurchaseRecommendations({ regenerate: true })}
+              disabled={purchaseGenerating}
+            >
+              <RefreshCw size={16} className={purchaseGenerating ? 'spin-animation' : ''} />
+              {purchaseGenerating ? t('expense.purchase.generating') : t('expense.purchase.regenerate')}
+            </button>
+          </div>
+        </div>
+
+        {purchaseLoading ? (
+          <div className="expense-purchase-state">{t('expense.purchase.loading')}</div>
+        ) : null}
+
+        {!purchaseLoading && purchaseError ? (
+          <div className="expense-purchase-state expense-error-panel">
+            {t('expense.purchase.error', { error: purchaseError })}
+          </div>
+        ) : null}
+
+        {!purchaseLoading && !purchaseError && purchaseRecommendations ? (
+          <div className="expense-purchase-body">
+            <div className="expense-purchase-cover">
+              {purchaseRecommendations.cover_image?.url ? (
+                <img
+                  src={buildBackendUrl(purchaseRecommendations.cover_image.url)}
+                  alt={t('expense.purchase.title')}
+                />
+              ) : (
+                <div className="expense-purchase-cover-empty">
+                  <ImageIcon size={24} />
+                  <span>{purchaseRecommendations.cover_image?.error || t('expense.purchase.cover_unavailable')}</span>
+                </div>
+              )}
+            </div>
+            <div className="expense-purchase-content">
+              <div className="expense-purchase-meta">
+                <span>{purchaseRecommendations.from_cache ? t('expense.purchase.cached') : t('expense.purchase.fresh')}</span>
+                <span>{t('expense.purchase.generated_at', {
+                  value: formatDateTime(purchaseRecommendations.generated_at, effectiveLanguage),
+                })}</span>
+                {purchaseRecommendations.text_model ? (
+                  <span>{t('expense.purchase.text_model', { value: purchaseRecommendations.text_model })}</span>
+                ) : null}
+                {purchaseRecommendations.image_model ? (
+                  <span>{t('expense.purchase.image_model', { value: purchaseRecommendations.image_model })}</span>
+                ) : null}
+                <span>{t('expense.purchase.dismissed_count', { count: purchaseDismissedCount })}</span>
+                <button
+                  type="button"
+                  className="expense-purchase-clear-dismissed"
+                  onClick={handleClearDismissedPurchaseItems}
+                  disabled={purchaseDismissedCount <= 0}
+                  title={t('expense.purchase.clear_dismissed_title')}
+                >
+                  {t('expense.purchase.clear_dismissed')}
+                </button>
+              </div>
+              <div className="expense-purchase-groups">
+                {(purchaseRecommendations.recommendation_groups || []).map((group) => (
+                  <section key={group.key} className="expense-purchase-group">
+                    <h4>{group.title}</h4>
+                    {group.items?.length ? (
+                      <div className="expense-purchase-items">
+                        {group.items.map((item) => (
+                          <article key={`${group.key}-${item.name}`} className="expense-purchase-item">
+                            <button
+                              type="button"
+                              className="expense-purchase-dismiss-button"
+                              onClick={() => handleDismissPurchaseItem(group.key, item)}
+                              title={t('expense.purchase.dismiss')}
+                              aria-label={t('expense.purchase.dismiss')}
+                            >
+                              <X size={14} />
+                            </button>
+                            <div className="expense-purchase-item-head">
+                              <strong>{item.name}</strong>
+                              {item.category ? <span>{item.category}</span> : null}
+                            </div>
+                            {item.estimated_price ? (
+                              <p><b>{t('expense.purchase.estimated_price')}:</b> {item.estimated_price}</p>
+                            ) : null}
+                            {item.reason ? <p>{item.reason}</p> : null}
+                            {item.evidence ? (
+                              <p><b>{t('expense.purchase.evidence')}:</b> {item.evidence}</p>
+                            ) : null}
+                            {item.duplicate_check ? (
+                              <p><b>{t('expense.purchase.duplicate_check')}:</b> {item.duplicate_check}</p>
+                            ) : null}
+                            {item.impulse_risk ? (
+                              <p><b>{t('expense.purchase.impulse_risk')}:</b> {item.impulse_risk}</p>
+                            ) : null}
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="expense-empty-copy">{t('expense.purchase.no_items')}</p>
+                    )}
+                  </section>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       {isLoading ? (
@@ -352,17 +779,12 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                           <span>{formatCurrency(group.total, effectiveLanguage)} {t('expense.per_month')}</span>
                         </div>
                         <div className="expense-budget-items">
-                          {group.items.slice(0, 4).map((item) => (
+                          {group.items.map((item) => (
                             <div key={`${group.name}-${item.name}`} className="expense-budget-item">
                               <span>{item.name}</span>
                               <span>{formatCurrency(item.monthlyValue, effectiveLanguage)}</span>
                             </div>
                           ))}
-                          {group.items.length > 4 ? (
-                            <div className="expense-budget-more">
-                              {t('expense.more_items', { count: group.items.length - 4 })}
-                            </div>
-                          ) : null}
                         </div>
                       </section>
                     ))}

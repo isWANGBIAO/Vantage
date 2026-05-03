@@ -21,6 +21,7 @@ const SECTION_ORDER = [
   { key: 'general', labelKey: 'settings.section.general' },
   { key: 'ai_provider', labelKey: 'settings.section.ai_provider' },
   { key: 'voice_provider', labelKey: 'settings.section.voice_provider' },
+  { key: 'image_provider', labelKey: 'settings.section.image_provider' },
   { key: 'data_logs', labelKey: 'settings.section.data_logs' },
   { key: 'performance', labelKey: 'settings.section.performance' },
   { key: 'about', labelKey: 'settings.section.about' },
@@ -39,6 +40,10 @@ const THEME_OPTIONS = [
 ];
 
 const DEFAULT_VOICE_MODEL = 'FunAudioLLM/SenseVoiceSmall';
+const PROVIDER_MODE_OPTIONS = [
+  { value: 'inherit_ai', labelKey: 'settings.provider.mode.inherit_ai' },
+  { value: 'custom', labelKey: 'settings.provider.mode.custom' },
+];
 
 const BACKGROUND_MODE_OPTIONS = [
   { value: 'balanced', labelKey: 'settings.performance.balanced' },
@@ -90,6 +95,10 @@ function createProviderEntry(route, entry = {}) {
     last_refreshed_at: typeof entry.last_refreshed_at === 'string' ? entry.last_refreshed_at : null,
     has_api_key: Boolean(entry.has_api_key),
   };
+}
+
+function normalizeModelList(models, model) {
+  return normalizeProviderModels({ model, models });
 }
 
 function normalizeProviderConfigForForm(providerConfig) {
@@ -159,16 +168,28 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     launchAtLogin: false,
     backgroundMode: 'balanced',
     actionPlanAutoGenerate: true,
+    voiceProviderMode: 'inherit_ai',
     voiceBaseUrl: '',
     voiceApiKey: '',
     voiceModel: DEFAULT_VOICE_MODEL,
+    voiceModels: [DEFAULT_VOICE_MODEL],
+    voiceLastRefreshedAt: null,
     voiceHasApiKey: false,
+    imageProviderMode: 'inherit_ai',
+    imageBaseUrl: '',
+    imageApiKey: '',
+    imageModel: '',
+    imageModels: [],
+    imageLastRefreshedAt: null,
+    imageHasApiKey: false,
     providerConfig: normalizeProviderConfigForForm(null),
   });
   const [showApiKey, setShowApiKey] = useState(false);
   const [showVoiceApiKey, setShowVoiceApiKey] = useState(false);
+  const [showImageApiKey, setShowImageApiKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refreshingModels, setRefreshingModels] = useState(false);
+  const [refreshingSpecialModels, setRefreshingSpecialModels] = useState(null);
   const [saveStatus, setSaveStatus] = useState('');
 
   useEffect(() => {
@@ -202,10 +223,20 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         launchAtLogin: Boolean(nextState.settings.launchAtLogin),
         backgroundMode: nextState.settings.backgroundMode || 'balanced',
         actionPlanAutoGenerate: nextState.settings.actionPlanAutoGenerate !== false,
+        voiceProviderMode: nextState.settings.voiceProviderMode || 'inherit_ai',
         voiceBaseUrl: nextState.settings.voiceBaseUrl || '',
         voiceApiKey: nextState.settings.voiceApiKey || '',
         voiceModel: nextState.settings.voiceModel || DEFAULT_VOICE_MODEL,
+        voiceModels: normalizeModelList(nextState.settings.voiceModels, nextState.settings.voiceModel || DEFAULT_VOICE_MODEL),
+        voiceLastRefreshedAt: nextState.settings.voiceLastRefreshedAt || null,
         voiceHasApiKey: Boolean(nextState.settings.voiceHasApiKey),
+        imageProviderMode: nextState.settings.imageProviderMode || 'inherit_ai',
+        imageBaseUrl: nextState.settings.imageBaseUrl || '',
+        imageApiKey: nextState.settings.imageApiKey || '',
+        imageModel: nextState.settings.imageModel || '',
+        imageModels: normalizeModelList(nextState.settings.imageModels, nextState.settings.imageModel || ''),
+        imageLastRefreshedAt: nextState.settings.imageLastRefreshedAt || null,
+        imageHasApiKey: Boolean(nextState.settings.imageHasApiKey),
         providerConfig,
       });
     }
@@ -230,6 +261,8 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
 
     return [
       `Vantage ${state.app.version}`,
+      `buildDate=${state.app.buildDate || ''}`,
+      `buildCommit=${state.app.buildCommit || ''}`,
       `mode=${state.app.mode}`,
       `backendRuntime=${state.app.backendRuntimePath || ''}`,
       `dataDir=${state.app.dataDir || ''}`,
@@ -238,8 +271,12 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       `themeMode=${form.themeMode}`,
       `backgroundMode=${form.backgroundMode}`,
       `actionPlanAutoGenerate=${form.actionPlanAutoGenerate}`,
+      `voiceProviderMode=${form.voiceProviderMode}`,
       `voiceBaseUrl=${form.voiceBaseUrl || ''}`,
       `voiceModel=${form.voiceModel || ''}`,
+      `imageProviderMode=${form.imageProviderMode}`,
+      `imageBaseUrl=${form.imageBaseUrl || ''}`,
+      `imageModel=${form.imageModel || ''}`,
       `provider=${form.providerConfig.selected_provider || ''}`,
     ].join('\n');
   }, [
@@ -249,8 +286,12 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     form.providerConfig.selected_provider,
     form.theme,
     form.themeMode,
+    form.voiceProviderMode,
     form.voiceBaseUrl,
     form.voiceModel,
+    form.imageProviderMode,
+    form.imageBaseUrl,
+    form.imageModel,
     state,
   ]);
 
@@ -426,6 +467,53 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     }
   };
 
+  const refreshSpecialProviderModels = async (kind) => {
+    const isVoice = kind === 'voice';
+    const mode = isVoice ? form.voiceProviderMode : form.imageProviderMode;
+    setRefreshingSpecialModels(kind);
+    setSaveStatus('');
+    try {
+      const payload = await fetchBackendJson('/api/provider_models/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind,
+          mode,
+          route: mode === 'inherit_ai' ? currentProviderRoute : kind,
+          base_url: isVoice ? form.voiceBaseUrl : form.imageBaseUrl,
+          api_key: isVoice ? form.voiceApiKey : form.imageApiKey,
+          type: currentProvider.type,
+        }),
+        retryPolicy: 'mutation',
+      });
+      const discoveredModels = Array.isArray(payload?.models) ? payload.models : [];
+      const refreshedAt = new Date().toISOString();
+      setForm((prev) => {
+        if (isVoice) {
+          const nextModel = prev.voiceModel || discoveredModels[0] || DEFAULT_VOICE_MODEL;
+          return {
+            ...prev,
+            voiceModel: nextModel,
+            voiceModels: discoveredModels.length > 0 ? discoveredModels : prev.voiceModels,
+            voiceLastRefreshedAt: refreshedAt,
+          };
+        }
+        const nextModel = prev.imageModel || discoveredModels[0] || '';
+        return {
+          ...prev,
+          imageModel: nextModel,
+          imageModels: discoveredModels.length > 0 ? discoveredModels : prev.imageModels,
+          imageLastRefreshedAt: refreshedAt,
+        };
+      });
+      setSaveStatus(t('settings.provider.refresh_success', { count: discoveredModels.length }));
+    } catch (error) {
+      setSaveStatus(t('settings.provider.refresh_failed', { error: error.message || String(error) }));
+    } finally {
+      setRefreshingSpecialModels(null);
+    }
+  };
+
   const updateThemeMode = (themeMode) => {
     const nextTheme = themeMode === 'auto' ? currentTheme : themeMode;
     setForm((prev) => ({ ...prev, themeMode, theme: nextTheme }));
@@ -449,10 +537,20 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         launchAtLogin: Boolean(savedState.settings.launchAtLogin),
         backgroundMode: savedState.settings.backgroundMode,
         actionPlanAutoGenerate: savedState.settings.actionPlanAutoGenerate !== false,
+        voiceProviderMode: savedState.settings.voiceProviderMode || 'inherit_ai',
         voiceBaseUrl: savedState.settings.voiceBaseUrl || '',
         voiceApiKey: savedState.settings.voiceApiKey || '',
         voiceModel: savedState.settings.voiceModel || DEFAULT_VOICE_MODEL,
+        voiceModels: normalizeModelList(savedState.settings.voiceModels, savedState.settings.voiceModel || DEFAULT_VOICE_MODEL),
+        voiceLastRefreshedAt: savedState.settings.voiceLastRefreshedAt || null,
         voiceHasApiKey: Boolean(savedState.settings.voiceHasApiKey),
+        imageProviderMode: savedState.settings.imageProviderMode || 'inherit_ai',
+        imageBaseUrl: savedState.settings.imageBaseUrl || '',
+        imageApiKey: savedState.settings.imageApiKey || '',
+        imageModel: savedState.settings.imageModel || '',
+        imageModels: normalizeModelList(savedState.settings.imageModels, savedState.settings.imageModel || ''),
+        imageLastRefreshedAt: savedState.settings.imageLastRefreshedAt || null,
+        imageHasApiKey: Boolean(savedState.settings.imageHasApiKey),
         providerConfig,
       }));
       await setDisplayLanguage(savedState.settings.displayLanguage);
@@ -697,56 +795,215 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     </section>
   );
 
-  const renderVoiceProvider = () => (
-    <section className="settings-section">
-      <SettingsRow label={t('settings.voice_provider.base_url')}>
-        <input
-          className="settings-input"
-          value={form.voiceBaseUrl}
-          placeholder="https://api.example.com/v1"
-          onChange={(event) => setForm((prev) => ({ ...prev, voiceBaseUrl: event.target.value }))}
-        />
+  const renderProviderModeControl = (kind) => {
+    const field = kind === 'voice' ? 'voiceProviderMode' : 'imageProviderMode';
+    return (
+      <SettingsRow label={t('settings.provider.mode')}>
+        <div className="settings-segmented">
+          {PROVIDER_MODE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={form[field] === option.value ? 'is-active' : ''}
+              onClick={() => setForm((prev) => ({ ...prev, [field]: option.value }))}
+            >
+              {t(option.labelKey)}
+            </button>
+          ))}
+        </div>
       </SettingsRow>
-      <SettingsRow label={t('settings.voice_provider.api_key')}>
-        <span className="settings-secret-input">
+    );
+  };
+
+  const renderVoiceProvider = () => {
+    const inheritAi = form.voiceProviderMode === 'inherit_ai';
+    const effectiveBaseUrl = inheritAi ? currentProvider.base_url : form.voiceBaseUrl;
+    const effectiveApiKey = inheritAi
+      ? (currentProvider.api_key || currentProvider.has_api_key ? '********' : '')
+      : form.voiceApiKey;
+
+    return (
+      <section className="settings-section">
+        {renderProviderModeControl('voice')}
+        {inheritAi ? (
+          <div className="settings-status-line">
+            <Info size={16} />
+            {t('settings.provider.inherited_from_ai', { name: currentProvider.name || currentProviderRoute })}
+          </div>
+        ) : null}
+        <SettingsRow label={t('settings.voice_provider.base_url')}>
           <input
             className="settings-input"
-            type={showVoiceApiKey ? 'text' : 'password'}
-            value={form.voiceApiKey}
-            onChange={(event) => setForm((prev) => ({
-              ...prev,
-              voiceApiKey: event.target.value,
-              voiceHasApiKey: Boolean(event.target.value),
-            }))}
+            value={effectiveBaseUrl}
+            disabled={inheritAi}
+            placeholder="https://api.example.com/v1"
+            onChange={(event) => setForm((prev) => ({ ...prev, voiceBaseUrl: event.target.value }))}
           />
-          <button
-            type="button"
-            className="settings-icon-button"
-            onClick={() => setShowVoiceApiKey((prev) => !prev)}
-            title={t(showVoiceApiKey ? 'settings.provider.hide_key' : 'settings.provider.show_key')}
-          >
-            {showVoiceApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-          </button>
-        </span>
-      </SettingsRow>
-      <SettingsRow label={t('settings.voice_provider.model')}>
-        <input
-          className="settings-input"
-          value={form.voiceModel}
-          placeholder={DEFAULT_VOICE_MODEL}
-          onChange={(event) => setForm((prev) => ({ ...prev, voiceModel: event.target.value }))}
-        />
-      </SettingsRow>
-      <div className="settings-status-line">
-        <Info size={16} />
-        {t('settings.voice_provider.endpoint_hint')}
-      </div>
-      <div className="settings-status-line">
-        <Info size={16} />
-        {t('settings.voice_provider.test_hint')}
-      </div>
-    </section>
-  );
+        </SettingsRow>
+        <SettingsRow label={t('settings.voice_provider.api_key')}>
+          <span className="settings-secret-input">
+            <input
+              className="settings-input"
+              type={showVoiceApiKey ? 'text' : 'password'}
+              value={effectiveApiKey}
+              disabled={inheritAi}
+              onChange={(event) => setForm((prev) => ({
+                ...prev,
+                voiceApiKey: event.target.value,
+                voiceHasApiKey: Boolean(event.target.value),
+              }))}
+            />
+            <button
+              type="button"
+              className="settings-icon-button"
+              onClick={() => setShowVoiceApiKey((prev) => !prev)}
+              title={t(showVoiceApiKey ? 'settings.provider.hide_key' : 'settings.provider.show_key')}
+            >
+              {showVoiceApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </span>
+        </SettingsRow>
+        <SettingsRow label={t('settings.voice_provider.model')}>
+          <span className="settings-secret-input">
+            <input
+              className="settings-input settings-provider-model-select"
+              list="settings-voice-models"
+              value={form.voiceModel}
+              placeholder={DEFAULT_VOICE_MODEL}
+              onChange={(event) => setForm((prev) => ({
+                ...prev,
+                voiceModel: event.target.value,
+                voiceModels: normalizeModelList(prev.voiceModels, event.target.value),
+              }))}
+            />
+            <datalist id="settings-voice-models">
+              {form.voiceModels.map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+            <button
+              type="button"
+              className="settings-icon-button"
+              onClick={() => refreshSpecialProviderModels('voice')}
+              disabled={refreshingSpecialModels === 'voice'}
+              title={t('settings.provider.refresh_models')}
+            >
+              <RefreshCw size={16} />
+            </button>
+          </span>
+        </SettingsRow>
+        <div className="settings-status-line">
+          <Info size={16} />
+          {form.voiceLastRefreshedAt
+            ? t('settings.provider.last_refreshed', { value: form.voiceLastRefreshedAt })
+            : t('settings.provider.not_refreshed')}
+        </div>
+        <div className="settings-status-line">
+          <Info size={16} />
+          {t(inheritAi ? 'settings.provider.inherited_key_available' : 'settings.voice_provider.endpoint_hint')}
+        </div>
+        <div className="settings-status-line">
+          <Info size={16} />
+          {t('settings.voice_provider.test_hint')}
+        </div>
+      </section>
+    );
+  };
+
+  const renderImageProvider = () => {
+    const inheritAi = form.imageProviderMode === 'inherit_ai';
+    const effectiveBaseUrl = inheritAi ? currentProvider.base_url : form.imageBaseUrl;
+    const effectiveApiKey = inheritAi
+      ? (currentProvider.api_key || currentProvider.has_api_key ? '********' : '')
+      : form.imageApiKey;
+
+    return (
+      <section className="settings-section">
+        {renderProviderModeControl('image')}
+        {inheritAi ? (
+          <div className="settings-status-line">
+            <Info size={16} />
+            {t('settings.provider.inherited_from_ai', { name: currentProvider.name || currentProviderRoute })}
+          </div>
+        ) : null}
+        <SettingsRow label={t('settings.image_provider.base_url')}>
+          <input
+            className="settings-input"
+            value={effectiveBaseUrl}
+            disabled={inheritAi}
+            placeholder="https://api.example.com/v1"
+            onChange={(event) => setForm((prev) => ({ ...prev, imageBaseUrl: event.target.value }))}
+          />
+        </SettingsRow>
+        <SettingsRow label={t('settings.image_provider.api_key')}>
+          <span className="settings-secret-input">
+            <input
+              className="settings-input"
+              type={showImageApiKey ? 'text' : 'password'}
+              value={effectiveApiKey}
+              disabled={inheritAi}
+              onChange={(event) => setForm((prev) => ({
+                ...prev,
+                imageApiKey: event.target.value,
+                imageHasApiKey: Boolean(event.target.value),
+              }))}
+            />
+            <button
+              type="button"
+              className="settings-icon-button"
+              onClick={() => setShowImageApiKey((prev) => !prev)}
+              title={t(showImageApiKey ? 'settings.provider.hide_key' : 'settings.provider.show_key')}
+            >
+              {showImageApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </span>
+        </SettingsRow>
+        <SettingsRow label={t('settings.image_provider.model')}>
+          <span className="settings-secret-input">
+            <input
+              className="settings-input settings-provider-model-select"
+              list="settings-image-models"
+              value={form.imageModel}
+              placeholder="gpt-image-1"
+              onChange={(event) => setForm((prev) => ({
+                ...prev,
+                imageModel: event.target.value,
+                imageModels: normalizeModelList(prev.imageModels, event.target.value),
+              }))}
+            />
+            <datalist id="settings-image-models">
+              {form.imageModels.map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+            <button
+              type="button"
+              className="settings-icon-button"
+              onClick={() => refreshSpecialProviderModels('image')}
+              disabled={refreshingSpecialModels === 'image'}
+              title={t('settings.provider.refresh_models')}
+            >
+              <RefreshCw size={16} />
+            </button>
+          </span>
+        </SettingsRow>
+        <div className="settings-status-line">
+          <Info size={16} />
+          {form.imageLastRefreshedAt
+            ? t('settings.provider.last_refreshed', { value: form.imageLastRefreshedAt })
+            : t('settings.provider.not_refreshed')}
+        </div>
+        <div className="settings-status-line">
+          <Info size={16} />
+          {t(inheritAi ? 'settings.provider.inherited_key_available' : 'settings.image_provider.endpoint_hint')}
+        </div>
+        <div className="settings-status-line">
+          <Info size={16} />
+          {t('settings.image_provider.test_hint')}
+        </div>
+      </section>
+    );
+  };
 
   const renderDataLogs = () => (
     <section className="settings-section">
@@ -819,6 +1076,10 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       <div className="settings-about-grid">
         <div>{t('settings.about.version')}</div>
         <strong>{state?.app?.version || '--'}</strong>
+        <div>{t('settings.about.build_date')}</div>
+        <strong>{state?.app?.buildDate || '--'}</strong>
+        <div>{t('settings.about.build_commit')}</div>
+        <strong>{state?.app?.buildCommit || '--'}</strong>
         <div>{t('settings.about.mode')}</div>
         <strong>{state?.app?.mode || '--'}</strong>
         <div>{t('settings.about.backend_runtime')}</div>
@@ -848,6 +1109,9 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     }
     if (activeSection === 'voice_provider') {
       return renderVoiceProvider();
+    }
+    if (activeSection === 'image_provider') {
+      return renderImageProvider();
     }
     if (activeSection === 'data_logs') {
       return renderDataLogs();

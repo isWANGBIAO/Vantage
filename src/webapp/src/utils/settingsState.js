@@ -6,10 +6,20 @@ const DEFAULT_SETTINGS_STATE = {
     themeMode: 'dark',
     launchAtLogin: false,
     backgroundMode: 'balanced',
+    voiceProviderMode: 'inherit_ai',
     voiceBaseUrl: '',
     voiceApiKey: '',
     voiceHasApiKey: false,
     voiceModel: 'FunAudioLLM/SenseVoiceSmall',
+    voiceModels: ['FunAudioLLM/SenseVoiceSmall'],
+    voiceLastRefreshedAt: null,
+    imageProviderMode: 'inherit_ai',
+    imageBaseUrl: '',
+    imageApiKey: '',
+    imageHasApiKey: false,
+    imageModel: '',
+    imageModels: [],
+    imageLastRefreshedAt: null,
     actionPlanAutoGenerate: true,
   },
   provider: {
@@ -25,6 +35,8 @@ const DEFAULT_SETTINGS_STATE = {
   },
   app: {
     version: '0.0.0',
+    buildDate: null,
+    buildCommit: null,
     mode: 'browser',
     backendRuntimePath: null,
     dataDir: null,
@@ -76,6 +88,8 @@ function normalizeSettings(payload, mode) {
         ['balanced', 'prewarm', 'power_saver'].includes(safeSettings.backgroundMode)
           ? safeSettings.backgroundMode
           : defaults.settings.backgroundMode,
+      voiceProviderMode:
+        safeSettings.voiceProviderMode === 'custom' ? 'custom' : defaults.settings.voiceProviderMode,
       voiceBaseUrl:
         typeof safeSettings.voiceBaseUrl === 'string'
           ? safeSettings.voiceBaseUrl
@@ -92,6 +106,40 @@ function normalizeSettings(payload, mode) {
         typeof safeSettings.voiceModel === 'string' && safeSettings.voiceModel.trim()
           ? safeSettings.voiceModel
           : defaults.settings.voiceModel,
+      voiceModels:
+        Array.isArray(safeSettings.voiceModels)
+          ? [...new Set(safeSettings.voiceModels.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim()))]
+          : defaults.settings.voiceModels,
+      voiceLastRefreshedAt:
+        typeof safeSettings.voiceLastRefreshedAt === 'string'
+          ? safeSettings.voiceLastRefreshedAt
+          : null,
+      imageProviderMode:
+        safeSettings.imageProviderMode === 'custom' ? 'custom' : defaults.settings.imageProviderMode,
+      imageBaseUrl:
+        typeof safeSettings.imageBaseUrl === 'string'
+          ? safeSettings.imageBaseUrl
+          : defaults.settings.imageBaseUrl,
+      imageApiKey:
+        typeof safeSettings.imageApiKey === 'string'
+          ? safeSettings.imageApiKey
+          : defaults.settings.imageApiKey,
+      imageHasApiKey:
+        typeof safeSettings.imageHasApiKey === 'boolean'
+          ? safeSettings.imageHasApiKey
+          : Boolean(safeSettings.imageApiKey),
+      imageModel:
+        typeof safeSettings.imageModel === 'string'
+          ? safeSettings.imageModel
+          : defaults.settings.imageModel,
+      imageModels:
+        Array.isArray(safeSettings.imageModels)
+          ? [...new Set(safeSettings.imageModels.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim()))]
+          : defaults.settings.imageModels,
+      imageLastRefreshedAt:
+        typeof safeSettings.imageLastRefreshedAt === 'string'
+          ? safeSettings.imageLastRefreshedAt
+          : null,
       actionPlanAutoGenerate:
         typeof safeSettings.actionPlanAutoGenerate === 'boolean'
           ? safeSettings.actionPlanAutoGenerate
@@ -111,7 +159,18 @@ function normalizeSettings(payload, mode) {
         : defaults.migration,
     app:
       safePayload.app && typeof safePayload.app === 'object'
-        ? { ...defaults.app, ...safePayload.app }
+        ? {
+          ...defaults.app,
+          ...safePayload.app,
+          buildDate:
+            typeof safePayload.app.buildDate === 'string'
+              ? safePayload.app.buildDate
+              : null,
+          buildCommit:
+            typeof safePayload.app.buildCommit === 'string'
+              ? safePayload.app.buildCommit
+              : null,
+        }
         : defaults.app,
     systemLocale:
       typeof safePayload.systemLocale === 'string'
@@ -155,10 +214,20 @@ export async function saveSettingsState(submission, electronAPI) {
           themeMode: submission?.themeMode,
           launchAtLogin: Boolean(submission?.launchAtLogin),
           backgroundMode: submission?.backgroundMode,
+          voiceProviderMode: submission?.voiceProviderMode,
           voiceBaseUrl: submission?.voiceBaseUrl,
           voiceApiKey: submission?.voiceApiKey,
           voiceHasApiKey: Boolean(submission?.voiceApiKey),
           voiceModel: submission?.voiceModel,
+          voiceModels: submission?.voiceModels,
+          voiceLastRefreshedAt: submission?.voiceLastRefreshedAt,
+          imageProviderMode: submission?.imageProviderMode,
+          imageBaseUrl: submission?.imageBaseUrl,
+          imageApiKey: submission?.imageApiKey,
+          imageHasApiKey: Boolean(submission?.imageApiKey),
+          imageModel: submission?.imageModel,
+          imageModels: submission?.imageModels,
+          imageLastRefreshedAt: submission?.imageLastRefreshedAt,
           actionPlanAutoGenerate:
             typeof submission?.actionPlanAutoGenerate === 'boolean'
               ? submission.actionPlanAutoGenerate
