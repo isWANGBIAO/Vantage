@@ -89,6 +89,15 @@ test('Settings renders multi-provider controls and discover refresh', () => {
   assert.equal(settingsSource.includes("onChange={(event) => updateProvider('model', event.target.value)}\n        />"), false);
 });
 
+test('Settings uses real select controls for discovered model lists instead of filtered datalists', () => {
+  assert.ok(settingsSource.includes('ModelSelectControl'));
+  assert.ok(settingsSource.includes('<select'));
+  assert.ok(settingsSource.includes('models.length > 0'));
+  assert.equal(settingsSource.includes('<datalist'), false);
+  assert.equal(settingsSource.includes('list="settings-image-models"'), false);
+  assert.equal(settingsSource.includes('list="settings-voice-models"'), false);
+});
+
 test('Settings about page shows version build date and commit', () => {
   assert.ok(settingsSource.includes('settings.about.build_date'));
   assert.ok(settingsSource.includes('settings.about.build_commit'));

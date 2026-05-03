@@ -3185,6 +3185,7 @@ PURCHASE_RECOMMENDATION_GROUPS = [
 ]
 PURCHASE_RECOMMENDATION_CACHE_DIR = "balance_sheet_purchase_recommendations"
 PURCHASE_RECOMMENDATION_IMAGE_TIMEOUT_SECONDS = 120
+PURCHASE_RECOMMENDATION_PROMPT_VERSION = 2
 
 
 def _purchase_recommendation_cache_dir():
@@ -3195,7 +3196,11 @@ def _purchase_recommendation_cache_dir():
 
 
 def _purchase_recommendation_cache_key(prompt_payload):
-    encoded = json.dumps(prompt_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    cache_payload = {
+        "prompt_version": PURCHASE_RECOMMENDATION_PROMPT_VERSION,
+        "balance_sheet": prompt_payload,
+    }
+    encoded = json.dumps(cache_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -3488,7 +3493,9 @@ def _build_purchase_recommendation_messages(prompt_payload, dismissed_items=None
         "每个 item 包含 name、category、estimated_price、reason、evidence、duplicate_check、impulse_risk。\n"
         "已排除购物推荐 JSON 表示用户已经打叉、不想再看到的方向。请不要推荐同名、近似同类、功能重复的物品；"
         "如果某个排除项是一个品类，也要避开同用途替代品。\n"
-        "cover_prompt 用英文描述一张适合这个推荐面板的简洁封面图，不要出现文字。\n\n"
+        "cover_prompt 必须用英文描述一张高质量封面图，画面要围绕具体推荐物品，"
+        "不要生成泛泛的极简桌面静物，避免 stock photo、米色样板间、空泛 notebook/plant/wallet 摆拍，"
+        "不要出现文字、logo、品牌名或 UI 截图。\n\n"
         f"已排除购物推荐 JSON:\n{dismissed_json}\n\n"
         f"Balance Sheet JSON:\n{balance_json}"
     )
@@ -3529,6 +3536,45 @@ def _image_bytes_from_generation_response(image_payload):
         return response.content
 
     raise ValueError("Image provider response did not include b64_json or url.")
+
+
+def _build_purchase_cover_prompt(raw_prompt, recommendation_groups):
+    item_labels = []
+    for group in recommendation_groups or []:
+        for item in group.get("items") or []:
+            name = str(item.get("name") or "").strip()
+            category = str(item.get("category") or "").strip()
+            if name:
+                item_labels.append(f"{name} ({category})" if category else name)
+            if len(item_labels) >= 6:
+                break
+        if len(item_labels) >= 6:
+            break
+
+    item_text = ", ".join(item_labels) if item_labels else "practical purchase recommendations"
+    concept_hint = str(raw_prompt or "").strip()
+    if concept_hint:
+        concept_hint = re.sub(r"muted beige(?: and gray)? palette", "", concept_hint, flags=re.IGNORECASE)
+        concept_hint = re.sub(
+            r"clean minimalist shopping recommendation (?:panel |dashboard )?cover",
+            "",
+            concept_hint,
+            flags=re.IGNORECASE,
+        )
+        concept_hint = re.sub(r"\s+", " ", concept_hint).strip(" ,.;")
+
+    prompt_parts = [
+        "High-quality editorial product photograph for a personal shopping recommendation panel",
+        f"featuring these specific recommended objects: {item_text}",
+        "clear hero composition, realistic materials, premium lighting, crisp focus, tactile details",
+        "modern practical lifestyle scene with depth, contrast, and visual hierarchy",
+        "avoid generic beige desk, avoid bland stock photo, avoid empty notebook-and-plant still life",
+        "no text, no logos, no UI, no watermark, no brand names",
+        "1024x1024 square composition",
+    ]
+    if concept_hint:
+        prompt_parts.insert(2, f"concept hint: {concept_hint}")
+    return "; ".join(prompt_parts)
 
 
 def _generate_purchase_cover_image(cache_key, prompt):
@@ -3595,9 +3641,9 @@ def _build_purchase_recommendations_payload(force_regenerate=False):
     )
     raw_content = llm_result.get("content") if isinstance(llm_result, dict) else ""
     parsed = _extract_json_object_from_text(raw_content)
-    cover_prompt = str(parsed.get("cover_prompt") or "").strip() or (
-        "A clean editorial shopping recommendation mood board, no text, soft realistic lighting"
-    )
+    recommendation_groups = _normalize_purchase_recommendation_groups(parsed.get("recommendation_groups"))
+    raw_cover_prompt = str(parsed.get("cover_prompt") or "").strip()
+    cover_prompt = _build_purchase_cover_prompt(raw_cover_prompt, recommendation_groups)
     cover_image, image_model = _generate_purchase_cover_image(cache_key, cover_prompt)
     payload = {
         "status": "ready",
@@ -3607,7 +3653,7 @@ def _build_purchase_recommendations_payload(force_regenerate=False):
         "text_model": llm_result.get("model") if isinstance(llm_result, dict) else None,
         "image_model": image_model,
         "cover_image": cover_image,
-        "recommendation_groups": _normalize_purchase_recommendation_groups(parsed.get("recommendation_groups")),
+        "recommendation_groups": recommendation_groups,
         "usage": llm_result.get("usage") if isinstance(llm_result, dict) else None,
         "response_raw": llm_result,
     }

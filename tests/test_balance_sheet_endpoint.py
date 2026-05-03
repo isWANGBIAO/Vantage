@@ -255,6 +255,47 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertIn("同名", user_prompt)
         self.assertIn("功能重复", user_prompt)
 
+    def test_purchase_recommendation_prompt_demands_specific_cover_prompt(self):
+        messages = server._build_purchase_recommendation_messages(
+            {"file_name": "Balance Sheet.xlsx", "sheet_count": 1, "total_rows": 0, "sheets": []},
+            dismissed_items=[],
+        )
+
+        user_prompt = messages[1]["content"]
+        self.assertIn("具体推荐物品", user_prompt)
+        self.assertIn("不要生成泛泛的极简桌面静物", user_prompt)
+        self.assertIn("避免 stock photo", user_prompt)
+
+    def test_purchase_cover_prompt_is_rebuilt_from_recommendation_items(self):
+        groups = [
+            {
+                "key": "practical",
+                "title": "实用补缺",
+                "items": [
+                    {"name": "轻量通勤双肩包", "category": "通勤/出差"},
+                    {"name": "证件票据收纳包", "category": "出差报销"},
+                ],
+            },
+            {
+                "key": "night_guard",
+                "title": "夜间防冲动",
+                "items": [
+                    {"name": "手机定时锁盒", "category": "夜间防冲动"},
+                ],
+            },
+        ]
+
+        prompt = server._build_purchase_cover_prompt(
+            "A clean minimalist shopping recommendation panel cover, muted beige and gray palette, a tidy desk",
+            groups,
+        )
+
+        self.assertIn("editorial product photograph", prompt)
+        self.assertIn("轻量通勤双肩包", prompt)
+        self.assertIn("手机定时锁盒", prompt)
+        self.assertIn("avoid generic beige desk", prompt)
+        self.assertNotIn("muted beige", prompt)
+
     def test_purchase_recommendations_filter_dismissed_items_from_cached_payload(self):
         route = next(
             (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
@@ -414,7 +455,8 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertTrue(payload["cover_image"]["url"].startswith("/api/balance_sheet/purchase_recommendations/cover/"))
         post.assert_called_once()
         self.assertEqual(post.call_args.kwargs["json"]["model"], "image-model")
-        self.assertEqual(post.call_args.kwargs["json"]["prompt"], "A concise shopping recommendation cover")
+        self.assertIn("A concise shopping recommendation cover", post.call_args.kwargs["json"]["prompt"])
+        self.assertIn("editorial product photograph", post.call_args.kwargs["json"]["prompt"])
         cover_file = Path(self.temp_dir.name) / "balance_sheet_purchase_recommendations" / "covers" / Path(payload["cover_image"]["url"]).name
         self.assertEqual(cover_file.read_bytes(), b"png-bytes")
 

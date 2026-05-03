@@ -101,6 +101,41 @@ function normalizeModelList(models, model) {
   return normalizeProviderModels({ model, models });
 }
 
+function ModelSelectControl({
+  value,
+  models = [],
+  placeholder,
+  onChange,
+}) {
+  const hasDiscoveredModels = models.length > 0;
+  const options = normalizeModelList(models, value);
+
+  if (hasDiscoveredModels && options.length > 0) {
+    return (
+      <select
+        className="settings-input settings-provider-model-select"
+        value={value || options[0]}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map((model) => (
+          <option key={model} value={model}>
+            {model}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  return (
+    <input
+      className="settings-input settings-provider-model-select"
+      value={value}
+      placeholder={placeholder}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
 function normalizeProviderConfigForForm(providerConfig) {
   const providers = {};
   const rawProviders = providerConfig?.providers && typeof providerConfig.providers === 'object'
@@ -762,17 +797,12 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           </SettingsRow>
           <SettingsRow label={t('settings.provider.model')}>
             <span className="settings-secret-input">
-              <input
-                className="settings-input settings-provider-model-select"
-                list={`settings-models-${currentProviderRoute}`}
+              <ModelSelectControl
                 value={currentProvider.model}
-                onChange={(event) => updateProvider('model', event.target.value)}
+                models={currentProvider.models}
+                placeholder="gpt-5.5"
+                onChange={(model) => updateProvider('model', model)}
               />
-              <datalist id={`settings-models-${currentProviderRoute}`}>
-                {currentProvider.models.map((model) => (
-                  <option key={model} value={model} />
-                ))}
-              </datalist>
               <button
                 type="button"
                 className="settings-icon-button"
@@ -865,22 +895,16 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         </SettingsRow>
         <SettingsRow label={t('settings.voice_provider.model')}>
           <span className="settings-secret-input">
-            <input
-              className="settings-input settings-provider-model-select"
-              list="settings-voice-models"
+            <ModelSelectControl
               value={form.voiceModel}
+              models={form.voiceModels}
               placeholder={DEFAULT_VOICE_MODEL}
-              onChange={(event) => setForm((prev) => ({
+              onChange={(model) => setForm((prev) => ({
                 ...prev,
-                voiceModel: event.target.value,
-                voiceModels: normalizeModelList(prev.voiceModels, event.target.value),
+                voiceModel: model,
+                voiceModels: normalizeModelList(prev.voiceModels, model),
               }))}
             />
-            <datalist id="settings-voice-models">
-              {form.voiceModels.map((model) => (
-                <option key={model} value={model} />
-              ))}
-            </datalist>
             <button
               type="button"
               className="settings-icon-button"
@@ -960,22 +984,16 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         </SettingsRow>
         <SettingsRow label={t('settings.image_provider.model')}>
           <span className="settings-secret-input">
-            <input
-              className="settings-input settings-provider-model-select"
-              list="settings-image-models"
+            <ModelSelectControl
               value={form.imageModel}
+              models={form.imageModels}
               placeholder="gpt-image-1"
-              onChange={(event) => setForm((prev) => ({
+              onChange={(model) => setForm((prev) => ({
                 ...prev,
-                imageModel: event.target.value,
-                imageModels: normalizeModelList(prev.imageModels, event.target.value),
+                imageModel: model,
+                imageModels: normalizeModelList(prev.imageModels, model),
               }))}
             />
-            <datalist id="settings-image-models">
-              {form.imageModels.map((model) => (
-                <option key={model} value={model} />
-              ))}
-            </datalist>
             <button
               type="button"
               className="settings-icon-button"
