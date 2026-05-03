@@ -173,17 +173,13 @@
 }
 
 .expense-workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.95fr);
-  gap: 1.2rem;
-  align-items: start;
+  column-count: 2;
+  column-gap: 1.2rem;
 }
 
 .expense-primary-column,
 .expense-secondary-column {
-  display: flex;
-  flex-direction: column;
-  gap: 1.2rem;
+  display: contents;
 }
 
 .expense-section {
@@ -191,6 +187,13 @@
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+.expense-workspace .expense-section {
+  break-inside: avoid;
+  page-break-inside: avoid;
+  margin: 0 0 1.2rem;
+  width: 100%;
 }
 
 .expense-section-header {
@@ -497,7 +500,7 @@
   }
 
   .expense-workspace {
-    grid-template-columns: 1fr;
+    column-count: 1;
   }
 }
 

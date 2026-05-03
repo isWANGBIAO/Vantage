@@ -62,3 +62,12 @@ test('Expense Sheet lays out full budget groups without grid row gaps', () => {
   assert.match(cssSource, /\.expense-budget-group\s*{[\s\S]*break-inside:\s*avoid;/);
   assert.equal(cssSource.includes('grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));'), false);
 });
+
+test('Expense Sheet balances dashboard cards across columns instead of pinning them to one side', () => {
+  assert.match(cssSource, /\.expense-workspace\s*{[\s\S]*column-count:\s*2;/);
+  assert.match(cssSource, /\.expense-workspace\s*{[\s\S]*column-gap:\s*1\.2rem;/);
+  assert.match(cssSource, /\.expense-primary-column,\s*\n\.expense-secondary-column\s*{[\s\S]*display:\s*contents;/);
+  assert.match(cssSource, /\.expense-workspace \.expense-section\s*{[\s\S]*break-inside:\s*avoid;/);
+  assert.match(cssSource, /@media \(max-width:\s*1100px\)\s*{[\s\S]*\.expense-workspace\s*{[\s\S]*column-count:\s*1;/);
+  assert.equal(cssSource.includes('grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.95fr);'), false);
+});
