@@ -96,6 +96,15 @@ test('App wires the display language provider and header switcher into the shell
   assert.ok(appSource.includes('displayLanguage'));
 });
 
+test('App initializes and syncs the active tab from the URL hash', () => {
+  assert.ok(appSource.includes('const TAB_HASH_TO_KEY'));
+  assert.ok(appSource.includes('function getTabKeyFromHash'));
+  assert.ok(appSource.includes("useState(() => getTabKeyFromHash(window.location.hash) || 'action plan')"));
+  assert.ok(appSource.includes("window.addEventListener('hashchange'"));
+  assert.ok(appSource.includes('window.history.pushState'));
+  assert.ok(appSource.includes('handleNavTabChange'));
+});
+
 test('App only reapplies onboarding language when the saved onboarding value changes', () => {
   assert.ok(appSource.includes('lastAppliedOnboardingLanguageRef'));
   assert.ok(appSource.includes('lastAppliedOnboardingLanguageRef.current === onboardingState.displayLanguage'));

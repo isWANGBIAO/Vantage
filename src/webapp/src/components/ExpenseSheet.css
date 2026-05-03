@@ -307,12 +307,14 @@
 }
 
 .expense-budget-groups {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 1rem 1.2rem;
+  column-width: 260px;
+  column-gap: 1.2rem;
 }
 
 .expense-budget-group {
+  break-inside: avoid;
+  page-break-inside: avoid;
+  margin: 0 0 1rem;
   padding-top: 0.25rem;
 }
 

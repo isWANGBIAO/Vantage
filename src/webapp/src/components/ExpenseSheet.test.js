@@ -55,3 +55,10 @@ test('Expense Sheet renders every budget item instead of a truncated preview', (
   assert.equal(jsxSource.includes('expense-budget-more'), false);
   assert.equal(jsxSource.includes("t('expense.more_items'"), false);
 });
+
+test('Expense Sheet lays out full budget groups without grid row gaps', () => {
+  assert.match(cssSource, /\.expense-budget-groups\s*{[\s\S]*column-width:\s*260px;/);
+  assert.match(cssSource, /\.expense-budget-groups\s*{[\s\S]*column-gap:\s*1\.2rem;/);
+  assert.match(cssSource, /\.expense-budget-group\s*{[\s\S]*break-inside:\s*avoid;/);
+  assert.equal(cssSource.includes('grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));'), false);
+});
