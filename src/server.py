@@ -3672,7 +3672,9 @@ def _build_purchase_recommendations_payload(force_regenerate=False, request_conf
     if not force_regenerate:
         cached = _load_purchase_recommendation_cache(cache_key)
         if cached:
-            return _with_dismissed_purchase_filter(cached, dismissed_items)
+            filtered_cached = _with_dismissed_purchase_filter(cached, dismissed_items)
+            if not filtered_cached.get("recommendation_count_underfilled"):
+                return filtered_cached
 
     messages = _build_purchase_recommendation_messages(
         context_prompt,

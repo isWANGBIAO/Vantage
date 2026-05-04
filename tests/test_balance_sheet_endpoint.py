@@ -317,6 +317,47 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertFalse(payload["recommendation_count_underfilled"])
         self.assertEqual(payload["generation_attempts"], 2)
 
+    def test_purchase_recommendations_regenerate_underfilled_cache(self):
+        fake_sheets = {"Asset": pd.DataFrame({"name": ["keyboard"], "amount": [399.0]})}
+        underfilled_cached = {
+            "status": "ready",
+            "from_cache": False,
+            "cache_key": "cached-underfilled",
+            "request_config": {"recommendation_count": 6},
+            "recommendation_groups": [
+                {"key": "practical", "title": "Practical", "items": [{"name": "desk tray"}]},
+                {"key": "night_guard", "title": "Night guard", "items": [{"name": "cooldown list"}]},
+                {"key": "wishlist", "title": "Wishlist", "items": [{"name": "travel backpack"}]},
+            ],
+        }
+        full_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "Practical", "items": [{"name": f"p-{index}"} for index in range(2)]},
+                {"key": "night_guard", "title": "Night guard", "items": [{"name": f"n-{index}"} for index in range(2)]},
+                {"key": "wishlist", "title": "Wishlist", "items": [{"name": f"w-{index}"} for index in range(2)]},
+            ],
+        }
+
+        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)
+        ), patch.object(server.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)), patch.object(
+            server.DataLoader, "load_excel_sheets", return_value=fake_sheets
+        ), patch.object(
+            server.DataLoader,
+            "construct_prompt",
+            return_value="## Time Series Data (JSON)\n{}\n\n## Balance Sheet Data (JSON)\n{}",
+        ), patch.object(server, "_load_purchase_recommendation_cache", return_value=underfilled_cached), patch.object(
+            server.LLMClient,
+            "chat",
+            return_value={"content": server.json.dumps(full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
+        ) as chat:
+            payload = server._build_purchase_recommendations_payload(request_config={"recommendation_count": 6})
+
+        self.assertEqual(chat.call_count, 1)
+        self.assertFalse(payload["from_cache"])
+        self.assertEqual(sum(len(group["items"]) for group in payload["recommendation_groups"]), 6)
+        self.assertFalse(payload["recommendation_count_underfilled"])
+
     def test_purchase_recommendation_prompt_uses_context_and_does_not_request_cover_prompt(self):
         messages = server._build_purchase_recommendation_messages(
             "## Time Series Data (JSON)\n\n```json\n{}\n```\n\n## Balance Sheet Data (JSON)\n\n```json\n{}\n```",
