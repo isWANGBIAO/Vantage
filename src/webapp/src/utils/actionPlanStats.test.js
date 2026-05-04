@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   computeDisplayedDurationSeconds,
+  formatActionPlanCacheBreakdown,
   formatActionPlanTokenBreakdown,
   formatThinkingTitleWithDuration,
   formatPoweredByLabel,
@@ -108,6 +109,32 @@ test('getActionPlanRoundStats returns the matching request section', () => {
   assert.equal(getActionPlanRoundStats(stats, 'missing'), null);
 });
 
+test('getActionPlanRoundStats treats completed calls without usage as unrecorded instead of zero', () => {
+  const stats = {
+    requests: [
+      {
+        section: 'analysis',
+        duration: 266.0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+        prompt_cache_hit_tokens: 0,
+        prompt_cache_miss_tokens: 0,
+        prompt_cache_hit_rate: null,
+        completion_tokens_per_second: 0,
+        total_tokens_per_second: 0,
+      },
+    ],
+  };
+
+  const roundStats = getActionPlanRoundStats(stats, 'analysis');
+
+  assert.equal(roundStats.usage_recorded, false);
+  assert.equal(roundStats.total_tokens, null);
+  assert.equal(roundStats.prompt_cache_hit_tokens, null);
+  assert.equal(roundStats.completion_tokens_per_second, null);
+});
+
 test('formatActionPlanTokenBreakdown includes total, prompt, and completion tokens', () => {
   assert.equal(
     formatActionPlanTokenBreakdown({
@@ -116,6 +143,32 @@ test('formatActionPlanTokenBreakdown includes total, prompt, and completion toke
       total_tokens: 237100,
     }),
     '237.1k (P 180.0k / C 57.1k)',
+  );
+});
+
+test('formatActionPlanTokenBreakdown and cache breakdown do not render fake zeroes for unrecorded usage', () => {
+  const stats = {
+    usage_recorded: false,
+    prompt_tokens: null,
+    completion_tokens: null,
+    total_tokens: null,
+    prompt_cache_hit_tokens: null,
+    prompt_cache_miss_tokens: null,
+    prompt_cache_hit_rate: null,
+  };
+
+  assert.equal(formatActionPlanTokenBreakdown(stats), '-');
+  assert.equal(formatActionPlanCacheBreakdown(stats), null);
+});
+
+test('formatActionPlanCacheBreakdown does not turn a null cache rate into 0 percent', () => {
+  assert.equal(
+    formatActionPlanCacheBreakdown({
+      prompt_cache_hit_tokens: 0,
+      prompt_cache_miss_tokens: 225614,
+      prompt_cache_hit_rate: null,
+    }),
+    'H 0 / M 225.6k',
   );
 });
 

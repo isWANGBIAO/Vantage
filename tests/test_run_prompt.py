@@ -100,6 +100,30 @@ class _CapturingLLMClient:
         return response
 
 
+class ActionPlanRequestStatsTests(unittest.TestCase):
+    def test_missing_usage_is_marked_unrecorded_instead_of_zero(self):
+        stats = run_prompt.build_action_plan_request_stats(
+            "analysis",
+            {
+                "content": "partial stream reply",
+                "usage": {},
+                "duration": 266.0,
+                "first_token_latency": 14.5,
+                "completed_at": "2026-05-04T10:59:27+08:00",
+                "model": "gpt-5.5",
+            },
+        )
+
+        self.assertFalse(stats["usage_recorded"])
+        self.assertIsNone(stats["prompt_tokens"])
+        self.assertIsNone(stats["completion_tokens"])
+        self.assertIsNone(stats["total_tokens"])
+        self.assertIsNone(stats["prompt_cache_hit_tokens"])
+        self.assertIsNone(stats["completion_tokens_per_second"])
+        self.assertEqual(stats["duration"], 266.0)
+        self.assertEqual(stats["first_token_latency"], 14.5)
+
+
 class RunPromptTests(unittest.TestCase):
     def test_format_chat_message_with_timestamp_prefixes_sent_time(self):
         formatted = run_prompt.format_chat_message_with_timestamp(

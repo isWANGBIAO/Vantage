@@ -3447,6 +3447,10 @@ def _filter_dismissed_purchase_groups(groups, dismissed_items):
     return filtered_groups
 
 
+def _count_purchase_recommendation_items(groups):
+    return sum(len(group.get("items") or []) for group in (groups or []))
+
+
 def _with_dismissed_purchase_filter(payload, dismissed_items=None):
     dismissed_items = dismissed_items if dismissed_items is not None else _list_dismissed_purchase_items()
     next_payload = copy.deepcopy(payload)
@@ -3455,6 +3459,15 @@ def _with_dismissed_purchase_filter(payload, dismissed_items=None):
         next_payload.get("recommendation_groups") or [],
         dismissed_items,
     )
+    requested_count = _normalize_purchase_recommendation_count(
+        next_payload.get("recommendation_count_requested")
+        or (next_payload.get("request_config") or {}).get("recommendation_count")
+        or next_payload.get("recommendation_count")
+    )
+    actual_count = _count_purchase_recommendation_items(next_payload.get("recommendation_groups") or [])
+    next_payload["recommendation_count_requested"] = requested_count
+    next_payload["recommendation_count_actual"] = actual_count
+    next_payload["recommendation_count_underfilled"] = actual_count < requested_count
     return next_payload
 
 
@@ -3596,6 +3609,21 @@ def _build_purchase_recommendation_messages(context_prompt, dismissed_items=None
     ]
 
 
+def _build_purchase_recommendation_retry_messages(messages, raw_content, requested_count, actual_count):
+    retry_prompt = (
+        f"The previous response only returned {actual_count} recommendation items, "
+        f"but the user requested exactly {requested_count}. "
+        f"Return a complete replacement JSON object with exactly {requested_count} total items across "
+        "practical, night_guard, and wishlist. Keep all three groups present, do not include markdown, "
+        "and do not repeat dismissed, same-name, same-category, or same-function items."
+    )
+    return [
+        *messages,
+        {"role": "assistant", "content": str(raw_content or "").strip()},
+        {"role": "user", "content": retry_prompt},
+    ]
+
+
 def _build_purchase_context_prompt(prompt_payload):
     try:
         return DataLoader.construct_prompt(
@@ -3651,28 +3679,47 @@ def _build_purchase_recommendations_payload(force_regenerate=False, request_conf
         dismissed_items=dismissed_items,
         recommendation_count=request_config["recommendation_count"],
     )
-    llm_result = LLMClient().chat(
-        messages=messages,
-        stream=False,
-        model=request_config["model"],
-        provider_route=request_config["provider_route"],
-        reasoning_effort=request_config["reasoning_effort"],
-        service_tier=request_config["service_tier"],
-        source="expense_purchase_recommendations",
-        entrypoint="src/server.py",
-        metadata={
-            "balance_sheet_cache_key": cache_key,
-            "purchase_recommendation_count": request_config["recommendation_count"],
-            "purchase_context_hash": context_metadata["prompt_hash"],
-            "purchase_dismissed_hash": dismissed_hash,
-        },
-    )
-    raw_content = llm_result.get("content") if isinstance(llm_result, dict) else ""
-    parsed = _extract_json_object_from_text(raw_content)
-    recommendation_groups = _normalize_purchase_recommendation_groups(
-        parsed.get("recommendation_groups"),
-        recommendation_count=request_config["recommendation_count"],
-    )
+    llm_client = LLMClient()
+    generation_attempts = 0
+    llm_result = {}
+    raw_content = ""
+    recommendation_groups = []
+    requested_count = request_config["recommendation_count"]
+    for attempt in range(1, 3):
+        generation_attempts = attempt
+        llm_result = llm_client.chat(
+            messages=messages,
+            stream=False,
+            model=request_config["model"],
+            provider_route=request_config["provider_route"],
+            reasoning_effort=request_config["reasoning_effort"],
+            service_tier=request_config["service_tier"],
+            source="expense_purchase_recommendations",
+            entrypoint="src/server.py",
+            metadata={
+                "balance_sheet_cache_key": cache_key,
+                "purchase_recommendation_count": requested_count,
+                "purchase_context_hash": context_metadata["prompt_hash"],
+                "purchase_dismissed_hash": dismissed_hash,
+                "purchase_generation_attempt": attempt,
+            },
+        )
+        raw_content = llm_result.get("content") if isinstance(llm_result, dict) else ""
+        parsed = _extract_json_object_from_text(raw_content)
+        recommendation_groups = _normalize_purchase_recommendation_groups(
+            parsed.get("recommendation_groups"),
+            recommendation_count=requested_count,
+        )
+        actual_count = _count_purchase_recommendation_items(recommendation_groups)
+        if actual_count >= requested_count or attempt >= 2:
+            break
+        messages = _build_purchase_recommendation_retry_messages(
+            messages,
+            raw_content,
+            requested_count,
+            actual_count,
+        )
+    actual_count = _count_purchase_recommendation_items(recommendation_groups)
     payload = {
         "status": "ready",
         "from_cache": False,
@@ -3682,6 +3729,10 @@ def _build_purchase_recommendations_payload(force_regenerate=False, request_conf
         "request_config": request_config,
         "context": context_metadata,
         "recommendation_groups": recommendation_groups,
+        "recommendation_count_requested": requested_count,
+        "recommendation_count_actual": actual_count,
+        "recommendation_count_underfilled": actual_count < requested_count,
+        "generation_attempts": generation_attempts,
         "usage": llm_result.get("usage") if isinstance(llm_result, dict) else None,
         "response_raw": llm_result,
     }

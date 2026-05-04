@@ -274,14 +274,21 @@
   right: 0.5rem;
   width: 1.55rem;
   height: 1.55rem;
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  line-height: 0;
   border: 1px solid var(--border-color);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.05);
   color: var(--text-muted);
   cursor: pointer;
+}
+
+.expense-purchase-dismiss-button svg {
+  display: block;
+  flex: 0 0 auto;
 }
 
 .expense-purchase-dismiss-button:hover {
@@ -406,13 +413,18 @@
 }
 
 .expense-workspace {
-  column-count: 2;
-  column-gap: 1.2rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.2rem;
+  align-items: start;
 }
 
 .expense-primary-column,
 .expense-secondary-column {
-  display: contents;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1.2rem;
 }
 
 .expense-section {
@@ -423,10 +435,8 @@
 }
 
 .expense-workspace .expense-section {
-  break-inside: avoid;
-  page-break-inside: avoid;
-  margin: 0 0 1.2rem;
-  width: 100%;
+  margin: 0;
+  width: auto;
 }
 
 .expense-section-header {
@@ -498,6 +508,16 @@
   justify-content: space-between;
   gap: 1rem;
   align-items: baseline;
+}
+
+.expense-asset-item > div,
+.expense-social-item > div {
+  min-width: 0;
+}
+
+.expense-asset-item strong,
+.expense-social-item strong {
+  overflow-wrap: anywhere;
 }
 
 .expense-ledger-values {
@@ -596,6 +616,13 @@
 .expense-asset-total strong,
 .expense-metric-row strong {
   font-variant-numeric: tabular-nums;
+}
+
+.expense-asset-item > span,
+.expense-social-item > span {
+  flex: 0 0 auto;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .expense-asset-total {
@@ -738,7 +765,7 @@
   }
 
   .expense-workspace {
-    column-count: 1;
+    grid-template-columns: 1fr;
   }
 }
 

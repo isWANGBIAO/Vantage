@@ -96,6 +96,63 @@ export function formatCompactTokenValue(value) {
   return `${Math.round(number)}`;
 }
 
+function hasRecordedUsage(stats) {
+  if (!stats) {
+    return false;
+  }
+  if (stats.usage_recorded === false) {
+    return false;
+  }
+  if (stats.usage_recorded === true) {
+    return true;
+  }
+
+  const cacheValues = [stats.prompt_cache_hit_tokens, stats.prompt_cache_miss_tokens];
+  if (cacheValues.some((value) => Number(value) > 0)) {
+    return true;
+  }
+
+  const tokenValues = [
+    stats.prompt_tokens,
+    stats.completion_tokens,
+    stats.total_tokens,
+  ];
+  if (tokenValues.some((value) => Number(value) > 0)) {
+    return true;
+  }
+  if (tokenValues.every((value) => value === null || value === undefined)) {
+    return false;
+  }
+
+  const duration = Number(stats.duration ?? stats.total_duration);
+  if (Number.isFinite(duration) && duration > 0 && tokenValues.every((value) => Number(value || 0) === 0)) {
+    return false;
+  }
+
+  return tokenValues.some((value) => value !== null && value !== undefined);
+}
+
+function normalizeUnrecordedUsageStats(stats) {
+  if (!stats || hasRecordedUsage(stats)) {
+    return stats;
+  }
+  return {
+    ...stats,
+    usage_recorded: false,
+    prompt_tokens: null,
+    completion_tokens: null,
+    total_tokens: null,
+    prompt_cache_hit_tokens: null,
+    prompt_cache_miss_tokens: null,
+    prompt_cache_hit_rate: null,
+    completion_reasoning_tokens: null,
+    completion_tokens_per_second: null,
+    total_tokens_per_second: null,
+    output_tokens_per_second: null,
+    average_tokens_per_second: null,
+  };
+}
+
 export function formatSecondsValue(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) {
@@ -129,6 +186,10 @@ export function formatThinkingTitleWithDuration(title, durationSeconds, reasonin
 }
 
 export function formatActionPlanTokenBreakdown(stats) {
+  if (!hasRecordedUsage(stats)) {
+    return '-';
+  }
+
   const totalTokens = Number(stats?.total_tokens || 0);
   const promptTokens = Number(stats?.prompt_tokens || 0);
   const completionTokens = Number(stats?.completion_tokens || 0);
@@ -142,6 +203,10 @@ export function formatActionPlanTokenBreakdown(stats) {
 }
 
 export function formatActionPlanCacheBreakdown(stats) {
+  if (!hasRecordedUsage(stats)) {
+    return null;
+  }
+
   const cacheHit = stats?.prompt_cache_hit_tokens;
   const cacheMiss = stats?.prompt_cache_miss_tokens;
 
@@ -154,14 +219,17 @@ export function formatActionPlanCacheBreakdown(stats) {
 
   const hitValue = Number(cacheHit || 0);
   const missValue = Number(cacheMiss || 0);
-  const rate = Number(stats?.prompt_cache_hit_rate);
+  const rawRate = stats?.prompt_cache_hit_rate;
+  const rate = Number(rawRate);
   const rateText = Number.isFinite(rate) ? ` / ${rate.toFixed(1)}%` : '';
-  return `H ${formatCompactTokenValue(hitValue)} / M ${formatCompactTokenValue(missValue)}${rateText}`;
+  const shouldShowRate = rawRate !== null && rawRate !== undefined && Number.isFinite(rate);
+  return `H ${formatCompactTokenValue(hitValue)} / M ${formatCompactTokenValue(missValue)}${shouldShowRate ? rateText : ''}`;
 }
 
 export function getActionPlanRoundStats(stats, section) {
   if (!Array.isArray(stats?.requests)) {
     return null;
   }
-  return stats.requests.find((request) => request?.section === section) || null;
+  const request = stats.requests.find((item) => item?.section === section) || null;
+  return normalizeUnrecordedUsageStats(request);
 }

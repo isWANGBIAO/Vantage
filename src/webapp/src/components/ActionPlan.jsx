@@ -1149,7 +1149,11 @@ function formatGeneratedAtChipValue(value, language) {
 }
 
 function formatRoundSpeedValue(stats) {
-  const value = Number(stats?.completion_tokens_per_second ?? stats?.output_tokens_per_second);
+  const rawValue = stats?.completion_tokens_per_second ?? stats?.output_tokens_per_second;
+  if (rawValue === null || rawValue === undefined) {
+    return '-';
+  }
+  const value = Number(rawValue);
   if (!Number.isFinite(value)) {
     return '-';
   }

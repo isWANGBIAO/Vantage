@@ -93,6 +93,12 @@ test('Expense Sheet lets users dismiss purchase recommendation items', () => {
   assert.ok(cssSource.includes('.expense-purchase-dismiss-button'));
 });
 
+test('Expense Sheet icon-only dismiss buttons reset global button padding', () => {
+  assert.match(cssSource, /\.expense-purchase-dismiss-button\s*{[\s\S]*padding:\s*0;/);
+  assert.match(cssSource, /\.expense-purchase-dismiss-button\s*{[\s\S]*line-height:\s*0;/);
+  assert.match(cssSource, /\.expense-purchase-dismiss-button svg\s*{[\s\S]*display:\s*block;/);
+});
+
 test('Expense Sheet shows and clears dismissed purchase recommendation count', () => {
   assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed'"));
   assert.ok(jsxSource.includes("method: 'DELETE'"));
@@ -122,10 +128,18 @@ test('Expense Sheet lays out full budget groups without grid row gaps', () => {
 });
 
 test('Expense Sheet balances dashboard cards across columns instead of pinning them to one side', () => {
-  assert.match(cssSource, /\.expense-workspace\s*{[\s\S]*column-count:\s*2;/);
-  assert.match(cssSource, /\.expense-workspace\s*{[\s\S]*column-gap:\s*1\.2rem;/);
-  assert.match(cssSource, /\.expense-primary-column,\s*\n\.expense-secondary-column\s*{[\s\S]*display:\s*contents;/);
-  assert.match(cssSource, /\.expense-workspace \.expense-section\s*{[\s\S]*break-inside:\s*avoid;/);
-  assert.match(cssSource, /@media \(max-width:\s*1100px\)\s*{[\s\S]*\.expense-workspace\s*{[\s\S]*column-count:\s*1;/);
+  assert.match(cssSource, /\.expense-workspace\s*{[\s\S]*display:\s*grid;/);
+  assert.match(cssSource, /\.expense-workspace\s*{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
+  assert.match(cssSource, /\.expense-primary-column,\s*\n\.expense-secondary-column\s*{[\s\S]*display:\s*flex;/);
+  assert.match(cssSource, /\.expense-primary-column,\s*\n\.expense-secondary-column\s*{[\s\S]*min-width:\s*0;/);
+  assert.match(cssSource, /@media \(max-width:\s*1100px\)\s*{[\s\S]*\.expense-workspace\s*{[\s\S]*grid-template-columns:\s*1fr;/);
+  assert.equal(cssSource.includes('column-count: 2;'), false);
+  assert.equal(cssSource.includes('display: contents;'), false);
   assert.equal(cssSource.includes('grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.95fr);'), false);
+});
+
+test('Expense Sheet keeps long asset names from pushing the asset column off screen', () => {
+  assert.match(cssSource, /\.expense-asset-item > div,\s*\n\.expense-social-item > div\s*{[\s\S]*min-width:\s*0;/);
+  assert.match(cssSource, /\.expense-asset-item strong,\s*\n\.expense-social-item strong\s*{[\s\S]*overflow-wrap:\s*anywhere;/);
+  assert.match(cssSource, /\.expense-asset-item > span,\s*\n\.expense-social-item > span\s*{[\s\S]*white-space:\s*nowrap;/);
 });

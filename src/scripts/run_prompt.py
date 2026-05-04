@@ -157,9 +157,20 @@ def build_action_plan_request_stats(section, result):
     payload = dict(result or {})
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     duration = float(payload.get("duration", 0) or 0)
-    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
-    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
-    total_tokens = int(usage.get("total_tokens", 0) or 0)
+    usage_recorded = any(
+        usage.get(key) is not None
+        for key in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "prompt_cache_hit_tokens",
+            "prompt_cache_miss_tokens",
+            "completion_reasoning_tokens",
+        )
+    ) or isinstance(usage.get("prompt_tokens_details"), dict) or isinstance(usage.get("completion_tokens_details"), dict)
+    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0) if usage_recorded else None
+    completion_tokens = int(usage.get("completion_tokens", 0) or 0) if usage_recorded else None
+    total_tokens = int(usage.get("total_tokens", 0) or 0) if usage_recorded else None
     prompt_cache_hit_tokens = usage.get("prompt_cache_hit_tokens")
     if prompt_cache_hit_tokens is None:
         prompt_details = usage.get("prompt_tokens_details")
@@ -167,21 +178,27 @@ def build_action_plan_request_stats(section, result):
             prompt_cache_hit_tokens = prompt_details.get("cached_tokens")
     prompt_cache_miss_tokens = usage.get("prompt_cache_miss_tokens")
     if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None:
-        prompt_cache_miss_tokens = max(prompt_tokens - int(prompt_cache_hit_tokens or 0), 0)
+        prompt_cache_miss_tokens = max(int(prompt_tokens or 0) - int(prompt_cache_hit_tokens or 0), 0)
     completion_reasoning_tokens = usage.get("completion_reasoning_tokens")
     if completion_reasoning_tokens is None:
         completion_details = usage.get("completion_tokens_details")
         if isinstance(completion_details, dict):
             completion_reasoning_tokens = completion_details.get("reasoning_tokens")
     cache_total = int(prompt_cache_hit_tokens or 0) + int(prompt_cache_miss_tokens or 0)
-    completion_rate = completion_tokens / duration if duration > 0 else 0.0
-    total_rate = total_tokens / duration if duration > 0 else 0.0
+    if not usage_recorded:
+        prompt_cache_hit_tokens = None
+        prompt_cache_miss_tokens = None
+        completion_reasoning_tokens = None
+        cache_total = 0
+    completion_rate = int(completion_tokens or 0) / duration if usage_recorded and duration > 0 else None
+    total_rate = int(total_tokens or 0) / duration if usage_recorded and duration > 0 else None
 
     return {
         "section": section,
         "duration": duration,
         "completed_at": payload.get("completed_at"),
         "first_token_latency": _as_float_or_none(payload.get("first_token_latency")),
+        "usage_recorded": usage_recorded,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,

@@ -102,9 +102,9 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         fake_sheets = {"Asset": pd.DataFrame({"名称": ["护眼台灯"], "金额": [199.0]})}
         llm_payload = {
             "recommendation_groups": [
-                {"key": "practical", "title": "实用补缺", "items": []},
-                {"key": "night_guard", "title": "夜间防冲动", "items": []},
-                {"key": "wishlist", "title": "愿望清单", "items": []},
+                {"key": "practical", "title": "实用补缺", "items": [{"name": f"p-{index}"} for index in range(4)]},
+                {"key": "night_guard", "title": "夜间防冲动", "items": [{"name": f"n-{index}"} for index in range(4)]},
+                {"key": "wishlist", "title": "愿望清单", "items": [{"name": f"w-{index}"} for index in range(4)]},
             ],
         }
 
@@ -276,6 +276,47 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(sum(len(group["items"]) for group in groups), 7)
         self.assertTrue(all(len(group["items"]) >= 2 for group in groups))
 
+    def test_purchase_recommendations_retry_when_model_underfills_requested_total(self):
+        fake_sheets = {"Asset": pd.DataFrame({"name": ["keyboard"], "amount": [399.0]})}
+        underfilled_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "Practical", "items": [{"name": "desk tray"}]},
+                {"key": "night_guard", "title": "Night guard", "items": [{"name": "cooldown list"}]},
+                {"key": "wishlist", "title": "Wishlist", "items": [{"name": "travel backpack"}]},
+            ],
+        }
+        full_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "Practical", "items": [{"name": f"p-{index}"} for index in range(2)]},
+                {"key": "night_guard", "title": "Night guard", "items": [{"name": f"n-{index}"} for index in range(2)]},
+                {"key": "wishlist", "title": "Wishlist", "items": [{"name": f"w-{index}"} for index in range(2)]},
+            ],
+        }
+
+        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)
+        ), patch.object(server.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)), patch.object(
+            server.DataLoader, "load_excel_sheets", return_value=fake_sheets
+        ), patch.object(
+            server.DataLoader,
+            "construct_prompt",
+            return_value="## Time Series Data (JSON)\n{}\n\n## Balance Sheet Data (JSON)\n{}",
+        ), patch.object(server.LLMClient, "chat", side_effect=[
+            {"content": server.json.dumps(underfilled_payload), "usage": {"total_tokens": 30}, "model": "gpt-5.5"},
+            {"content": server.json.dumps(full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
+        ]) as chat:
+            payload = server._build_purchase_recommendations_payload(request_config={"recommendation_count": 6})
+
+        self.assertEqual(chat.call_count, 2)
+        retry_messages = chat.call_args_list[1].kwargs["messages"]
+        self.assertIn("only returned 3", retry_messages[-1]["content"])
+        self.assertIn("exactly 6", retry_messages[-1]["content"])
+        self.assertEqual(sum(len(group["items"]) for group in payload["recommendation_groups"]), 6)
+        self.assertEqual(payload["recommendation_count_requested"], 6)
+        self.assertEqual(payload["recommendation_count_actual"], 6)
+        self.assertFalse(payload["recommendation_count_underfilled"])
+        self.assertEqual(payload["generation_attempts"], 2)
+
     def test_purchase_recommendation_prompt_uses_context_and_does_not_request_cover_prompt(self):
         messages = server._build_purchase_recommendation_messages(
             "## Time Series Data (JSON)\n\n```json\n{}\n```\n\n## Balance Sheet Data (JSON)\n\n```json\n{}\n```",
@@ -358,9 +399,9 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         fake_sheets = {"Asset": pd.DataFrame({"名称": ["鼠标"], "金额": [129.0]})}
         llm_payload = {
             "recommendation_groups": [
-                {"key": "practical", "title": "实用补缺", "items": []},
-                {"key": "night_guard", "title": "夜间防冲动", "items": []},
-                {"key": "wishlist", "title": "愿望清单", "items": []},
+                {"key": "practical", "title": "实用补缺", "items": [{"name": f"p-{index}"} for index in range(4)]},
+                {"key": "night_guard", "title": "夜间防冲动", "items": [{"name": f"n-{index}"} for index in range(4)]},
+                {"key": "wishlist", "title": "愿望清单", "items": [{"name": f"w-{index}"} for index in range(4)]},
             ],
         }
 
