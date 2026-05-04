@@ -13,7 +13,7 @@ from src.core.config import Config
 from src.core import user_config
 from src.services.model_call_recorder import SessionRecorder
 
-SYNC_REQUEST_TIMEOUT_SECONDS = 120
+SYNC_REQUEST_TIMEOUT_SECONDS = 1200
 STREAM_REQUEST_TIMEOUT_SECONDS = 600
 PRIMARY_TRANSIENT_RETRY_COUNT = 5
 LOCAL_PROVIDER_RETRY_DELAY_SECONDS = 1.0

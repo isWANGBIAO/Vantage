@@ -496,6 +496,31 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual(mock_post.call_args.kwargs["json"]["reasoning_effort"], "xhigh")
 
+    def test_non_streaming_chat_uses_long_timeout_for_slow_large_prompts(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            client.chat([{"role": "user", "content": "ping"}], stream=False)
+
+        self.assertEqual(llm_client.SYNC_REQUEST_TIMEOUT_SECONDS, 1200)
+        self.assertEqual(mock_post.call_args.kwargs["timeout"], 1200)
+
     def test_chat_includes_priority_service_tier_for_supported_gpt_proxy_model(self):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None
