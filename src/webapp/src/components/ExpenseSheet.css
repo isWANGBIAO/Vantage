@@ -413,10 +413,10 @@
 }
 
 .expense-workspace {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 1.2rem;
-  align-items: start;
+  min-width: 0;
 }
 
 .expense-primary-column,
@@ -477,10 +477,15 @@
 }
 
 .expense-ledger-list,
-.expense-asset-list,
 .expense-social-list {
   display: flex;
   flex-direction: column;
+}
+
+.expense-asset-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  column-gap: 1.2rem;
 }
 
 .expense-ledger-item,
@@ -626,6 +631,7 @@
 }
 
 .expense-asset-total {
+  grid-column: 1 / -1;
   padding-top: 0.9rem;
   border-top: 1px solid var(--border-color);
 }
@@ -764,7 +770,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .expense-workspace {
+  .expense-asset-list {
     grid-template-columns: 1fr;
   }
 }

@@ -127,18 +127,22 @@ test('Expense Sheet lays out full budget groups without grid row gaps', () => {
   assert.equal(cssSource.includes('grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));'), false);
 });
 
-test('Expense Sheet balances dashboard cards across columns instead of pinning them to one side', () => {
-  assert.match(cssSource, /\.expense-workspace\s*{[\s\S]*display:\s*grid;/);
-  assert.match(cssSource, /\.expense-workspace\s*{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
-  assert.match(cssSource, /\.expense-primary-column,\s*\n\.expense-secondary-column\s*{[\s\S]*display:\s*flex;/);
-  assert.match(cssSource, /\.expense-primary-column,\s*\n\.expense-secondary-column\s*{[\s\S]*min-width:\s*0;/);
-  assert.match(cssSource, /@media \(max-width:\s*1100px\)\s*{[\s\S]*\.expense-workspace\s*{[\s\S]*grid-template-columns:\s*1fr;/);
+test('Expense Sheet stacks long detail sections instead of using fixed side columns', () => {
+  assert.match(cssSource, /\.expense-workspace\s*{[^}]*display:\s*flex;/);
+  assert.match(cssSource, /\.expense-workspace\s*{[^}]*flex-direction:\s*column;/);
+  assert.match(cssSource, /\.expense-primary-column,\s*\n\.expense-secondary-column\s*{[^}]*display:\s*flex;/);
+  assert.match(cssSource, /\.expense-primary-column,\s*\n\.expense-secondary-column\s*{[^}]*min-width:\s*0;/);
+  assert.doesNotMatch(cssSource, /\.expense-workspace\s*{[^}]*grid-template-columns:/);
+  assert.doesNotMatch(cssSource, /@media \(max-width:\s*1100px\)\s*{[^}]*\.expense-workspace\s*{[^}]*grid-template-columns:/);
   assert.equal(cssSource.includes('column-count: 2;'), false);
   assert.equal(cssSource.includes('display: contents;'), false);
   assert.equal(cssSource.includes('grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.95fr);'), false);
 });
 
 test('Expense Sheet keeps long asset names from pushing the asset column off screen', () => {
+  assert.match(cssSource, /\.expense-asset-list\s*{[\s\S]*display:\s*grid;/);
+  assert.match(cssSource, /\.expense-asset-list\s*{[\s\S]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(320px,\s*1fr\)\);/);
+  assert.match(cssSource, /\.expense-asset-total\s*{[\s\S]*grid-column:\s*1\s*\/\s*-1;/);
   assert.match(cssSource, /\.expense-asset-item > div,\s*\n\.expense-social-item > div\s*{[\s\S]*min-width:\s*0;/);
   assert.match(cssSource, /\.expense-asset-item strong,\s*\n\.expense-social-item strong\s*{[\s\S]*overflow-wrap:\s*anywhere;/);
   assert.match(cssSource, /\.expense-asset-item > span,\s*\n\.expense-social-item > span\s*{[\s\S]*white-space:\s*nowrap;/);
