@@ -1,7 +1,6 @@
 import os
 import sys
 import logging
-import base64
 import sqlite3
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -2495,6 +2494,14 @@ class PurchaseRecommendationDismissRequest(BaseModel):
     item: Optional[dict] = None
 
 
+class PurchaseRecommendationRequest(BaseModel):
+    recommendation_count: Optional[int] = None
+    model: Optional[str] = None
+    provider_route: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    service_tier: Optional[str] = None
+
+
 @app.get("/api/chat/context")
 async def get_chat_context():
     return _build_chat_context_payload()
@@ -3184,10 +3191,11 @@ PURCHASE_RECOMMENDATION_GROUPS = [
     ("wishlist", "愿望清单"),
 ]
 PURCHASE_RECOMMENDATION_CACHE_DIR = "balance_sheet_purchase_recommendations"
-PURCHASE_RECOMMENDATION_IMAGE_TIMEOUT_SECONDS = 300
-PURCHASE_RECOMMENDATION_PROMPT_VERSION = 2
-_purchase_cover_generation_lock = threading.Lock()
-_purchase_cover_generation_jobs = set()
+PURCHASE_RECOMMENDATION_PROMPT_VERSION = 3
+DEFAULT_PURCHASE_RECOMMENDATION_COUNT = 12
+MIN_PURCHASE_RECOMMENDATION_COUNT = 3
+MAX_PURCHASE_RECOMMENDATION_COUNT = 30
+PURCHASE_CONTEXT_TIME_SERIES_START_DATE = "earliest"
 
 
 def _purchase_recommendation_cache_dir():
@@ -3197,13 +3205,20 @@ def _purchase_recommendation_cache_dir():
     return cache_dir
 
 
-def _purchase_recommendation_cache_key(prompt_payload):
+def _stable_json_hash(payload):
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _purchase_recommendation_cache_key(prompt_payload, request_config=None, context_hash=None, dismissed_hash=None):
     cache_payload = {
         "prompt_version": PURCHASE_RECOMMENDATION_PROMPT_VERSION,
         "balance_sheet": prompt_payload,
+        "request_config": request_config or {},
+        "context_hash": context_hash or "",
+        "dismissed_hash": dismissed_hash or "",
     }
-    encoded = json.dumps(cache_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return _stable_json_hash(cache_payload)
 
 
 def _purchase_recommendation_cache_file(cache_key):
@@ -3224,6 +3239,42 @@ def _purchase_dismissal_key(group_key, item_name):
     group_part = _normalize_purchase_text_key(group_key)
     name_part = _normalize_purchase_text_key(item_name)
     return hashlib.sha256(f"{group_part}|{name_part}".encode("utf-8")).hexdigest()
+
+
+def _normalize_purchase_recommendation_count(value=None):
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        count = DEFAULT_PURCHASE_RECOMMENDATION_COUNT
+    return max(MIN_PURCHASE_RECOMMENDATION_COUNT, min(MAX_PURCHASE_RECOMMENDATION_COUNT, count))
+
+
+def _normalize_purchase_request_config(config=None):
+    source = config if isinstance(config, dict) else {}
+    model = str(source.get("model") or "").strip() or None
+    provider_route = str(source.get("provider_route") or "").strip() or None
+    reasoning_effort = _normalize_reasoning_effort(source.get("reasoning_effort"))
+    service_tier = _normalize_service_tier(source.get("service_tier"))
+    return {
+        "recommendation_count": _normalize_purchase_recommendation_count(source.get("recommendation_count")),
+        "model": model,
+        "provider_route": provider_route,
+        "reasoning_effort": reasoning_effort,
+        "service_tier": service_tier,
+    }
+
+
+def _purchase_dismissed_hash(dismissed_items):
+    simplified = [
+        {
+            "id": item.get("id"),
+            "group_key": item.get("group_key", ""),
+            "name": item.get("name", ""),
+            "category": item.get("category", ""),
+        }
+        for item in (dismissed_items or [])
+    ]
+    return _stable_json_hash(simplified)
 
 
 def _ensure_purchase_recommendation_schema(conn):
@@ -3344,8 +3395,17 @@ def _record_purchase_recommendation_dismissal(cache_key, group_key, item):
         )
         created = conn.total_changes > before
         conn.commit()
+        row = conn.execute(
+            """
+            SELECT *
+            FROM purchase_recommendation_dismissals
+            WHERE dismissal_key = ?
+            """,
+            (dismissal_key,),
+        ).fetchone()
     payload = _build_purchase_dismissed_payload()
-    return {"ok": True, "created": created, "count": payload["count"], "item": {**normalized_item, "group_key": normalized_group}}
+    item_payload = _dismissed_purchase_row_to_item(row) if row else {**normalized_item, "group_key": normalized_group}
+    return {"ok": True, "created": created, "count": payload["count"], "item": item_payload}
 
 
 def _clear_purchase_recommendation_dismissals():
@@ -3353,6 +3413,18 @@ def _clear_purchase_recommendation_dismissals():
         conn.execute("DELETE FROM purchase_recommendation_dismissals")
         conn.commit()
     return {"ok": True, "items": [], "count": 0}
+
+
+def _delete_purchase_recommendation_dismissal(item_id):
+    try:
+        normalized_id = int(item_id)
+    except (TypeError, ValueError):
+        raise ValueError("Dismissed recommendation id must be an integer.")
+    with closing(_connect_purchase_recommendation_db()) as conn:
+        conn.execute("DELETE FROM purchase_recommendation_dismissals WHERE id = ?", (normalized_id,))
+        conn.commit()
+    payload = _build_purchase_dismissed_payload()
+    return {"ok": True, "items": payload["items"], "count": payload["count"]}
 
 
 def _filter_dismissed_purchase_groups(groups, dismissed_items):
@@ -3384,16 +3456,6 @@ def _with_dismissed_purchase_filter(payload, dismissed_items=None):
         dismissed_items,
     )
     return next_payload
-
-
-def _purchase_recommendation_cover_path(filename):
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+", filename or ""):
-        return None
-    cover_dir = _purchase_recommendation_cache_dir() / "covers"
-    candidate = (cover_dir / filename).resolve()
-    if cover_dir.resolve() not in candidate.parents and candidate != cover_dir.resolve():
-        return None
-    return candidate
 
 
 def _read_purchase_recommendation_cache_payload(cache_key):
@@ -3448,7 +3510,22 @@ def _normalize_purchase_item(item):
     }
 
 
-def _normalize_purchase_recommendation_groups(raw_groups):
+def _trim_purchase_groups_to_total(groups, recommendation_count):
+    target_count = _normalize_purchase_recommendation_count(recommendation_count)
+    while sum(len(group.get("items") or []) for group in groups) > target_count:
+        removable = [
+            (len(group.get("items") or []), index)
+            for index, group in enumerate(groups)
+            if group.get("items")
+        ]
+        if not removable:
+            break
+        _size, group_index = max(removable, key=lambda item: (item[0], item[1]))
+        groups[group_index]["items"].pop()
+    return groups
+
+
+def _normalize_purchase_recommendation_groups(raw_groups, recommendation_count=None):
     by_key = {}
     if isinstance(raw_groups, list):
         for group in raw_groups:
@@ -3469,13 +3546,18 @@ def _normalize_purchase_recommendation_groups(raw_groups):
         groups.append({
             "key": key,
             "title": str(group.get("title") or title).strip(),
-            "items": normalized_items[:5],
+            "items": [item for item in normalized_items if item.get("name")],
         })
-    return groups
+    return _trim_purchase_groups_to_total(groups, recommendation_count)
 
 
-def _build_purchase_recommendation_messages(prompt_payload, dismissed_items=None):
-    balance_json = json.dumps(prompt_payload, ensure_ascii=False, separators=(",", ":"))
+def _build_purchase_recommendation_messages(context_prompt, dismissed_items=None, recommendation_count=None):
+    if not isinstance(context_prompt, str):
+        context_prompt = (
+            "## Balance Sheet Data (JSON)\n\n```json\n"
+            f"{json.dumps(context_prompt, ensure_ascii=False, separators=(',', ':'), default=str)}\n```"
+        )
+    total_count = _normalize_purchase_recommendation_count(recommendation_count)
     dismissed_payload = [
         {
             "name": item.get("name", ""),
@@ -3490,23 +3572,23 @@ def _build_purchase_recommendation_messages(prompt_payload, dismissed_items=None
     ]
     dismissed_json = json.dumps(dismissed_payload, ensure_ascii=False, separators=(",", ":"))
     system_prompt = (
-        "你是一个克制但有品味的个人购物建议助手。必须基于用户的 Balance Sheet JSON，"
-        "同时给出实用补缺、夜间防冲动、愿望清单三类推荐。不要推荐已经明显买过、资产中已有、"
-        "或用户已明确打叉排除的重复物品。"
+        "你是一个克制、具体、讲证据的个人购物建议助手。"
+        "必须同时使用 Time.xlsx 行为/健康/计划上下文、Balance Sheet 财务数据、个人目标、库存和已排除推荐。"
+        "不要推荐已明显买过、资产中已有、功能重复，或用户已经打叉排除的物品。"
         "只输出 JSON，不要 Markdown。"
     )
     user_prompt = (
-        "请根据下面的 Balance Sheet JSON 生成购物推荐。\n"
-        "输出结构必须是 JSON object，包含 recommendation_groups 和 cover_prompt。\n"
-        "recommendation_groups 必须包含 key=practical/night_guard/wishlist 三组，每组 3-5 个 items。"
-        "每个 item 包含 name、category、estimated_price、reason、evidence、duplicate_check、impulse_risk。\n"
-        "已排除购物推荐 JSON 表示用户已经打叉、不想再看到的方向。请不要推荐同名、近似同类、功能重复的物品；"
-        "如果某个排除项是一个品类，也要避开同用途替代品。\n"
-        "cover_prompt 必须用英文描述一张高质量封面图，画面要围绕具体推荐物品，"
-        "不要生成泛泛的极简桌面静物，避免 stock photo、米色样板间、空泛 notebook/plant/wallet 摆拍，"
-        "不要出现文字、logo、品牌名或 UI 截图。\n\n"
-        f"已排除购物推荐 JSON:\n{dismissed_json}\n\n"
-        f"Balance Sheet JSON:\n{balance_json}"
+        f"Generate a total of {total_count} purchase recommendations across exactly three groups: "
+        "practical, night_guard, wishlist. Keep all three groups present; distribute the total sensibly based on evidence.\n"
+        "输出结构必须是 JSON object，只包含 recommendation_groups。"
+        "recommendation_groups 必须包含 key=practical/night_guard/wishlist 三组。"
+        "每个 item 必须包含 name、category、estimated_price、reason、evidence、duplicate_check、impulse_risk。\n"
+        "已排除购物推荐 / dismissed purchase recommendations JSON 表示用户已经打叉、不想再看到的方向。"
+        "不要推荐同名、近似同类、功能重复的物品；如果排除项是一个品类，也要避开同用途替代品。\n"
+        "购物策略：实用补缺优先找已有资产和预算结构中的缺口；夜间防冲动优先给低价、延迟消费、减少失眠冲动的工具；"
+        "愿望清单可以更贵，但必须说明为什么不是重复购买，并给出冲动风险。\n\n"
+        f"Dismissed purchase recommendations JSON:\n{dismissed_json}\n\n"
+        f"Context bundle from Action Plan data sources:\n{context_prompt}"
     )
     return [
         {"role": "system", "content": system_prompt},
@@ -3514,230 +3596,120 @@ def _build_purchase_recommendation_messages(prompt_payload, dismissed_items=None
     ]
 
 
-def _load_image_generation_config():
-    return _resolve_special_provider_config(kind="image")
-
-
-def _save_cover_bytes(cache_key, image_bytes):
-    filename = f"{cache_key[:16]}.png"
-    cover_path = _purchase_recommendation_cache_dir() / "covers" / filename
-    cover_path.write_bytes(image_bytes)
-    return f"/api/balance_sheet/purchase_recommendations/cover/{filename}"
-
-
-def _image_bytes_from_generation_response(image_payload):
-    data = image_payload.get("data") if isinstance(image_payload, dict) else None
-    first = data[0] if isinstance(data, list) and data else None
-    if not isinstance(first, dict):
-        raise ValueError("Image provider response did not include data[0].")
-
-    b64_json = first.get("b64_json")
-    if isinstance(b64_json, str) and b64_json.strip():
-        return base64.b64decode(b64_json)
-
-    url = first.get("url")
-    if isinstance(url, str) and url.startswith("data:image"):
-        _, encoded = url.split(",", 1)
-        return base64.b64decode(encoded)
-    if isinstance(url, str) and url.strip():
-        response = requests.get(url, timeout=PURCHASE_RECOMMENDATION_IMAGE_TIMEOUT_SECONDS)
-        response.raise_for_status()
-        return response.content
-
-    raise ValueError("Image provider response did not include b64_json or url.")
-
-
-def _build_purchase_cover_prompt(raw_prompt, recommendation_groups):
-    item_labels = []
-    for group in recommendation_groups or []:
-        for item in group.get("items") or []:
-            name = str(item.get("name") or "").strip()
-            category = str(item.get("category") or "").strip()
-            if name:
-                item_labels.append(f"{name} ({category})" if category else name)
-            if len(item_labels) >= 6:
-                break
-        if len(item_labels) >= 6:
-            break
-
-    item_text = ", ".join(item_labels) if item_labels else "practical purchase recommendations"
-    concept_hint = str(raw_prompt or "").strip()
-    if concept_hint:
-        concept_hint = re.sub(r"muted beige(?: and gray)? palette", "", concept_hint, flags=re.IGNORECASE)
-        concept_hint = re.sub(
-            r"clean minimalist shopping recommendation (?:panel |dashboard )?cover",
-            "",
-            concept_hint,
-            flags=re.IGNORECASE,
-        )
-        concept_hint = re.sub(r"\s+", " ", concept_hint).strip(" ,.;")
-
-    prompt_parts = [
-        "High-quality editorial product photograph for a personal shopping recommendation panel",
-        f"featuring these specific recommended objects: {item_text}",
-        "clear hero composition, realistic materials, premium lighting, crisp focus, tactile details",
-        "modern practical lifestyle scene with depth, contrast, and visual hierarchy",
-        "avoid generic beige desk, avoid bland stock photo, avoid empty notebook-and-plant still life",
-        "no text, no logos, no UI, no watermark, no brand names",
-        "1024x1024 square composition",
-    ]
-    if concept_hint:
-        prompt_parts.insert(2, f"concept hint: {concept_hint}")
-    return "; ".join(prompt_parts)
-
-
-def _generate_purchase_cover_image(cache_key, prompt):
-    image_config = _load_image_generation_config()
-    base_cover = {
-        "url": None,
-        "prompt": prompt,
-        "error": None,
-        "configuration_error": False,
-        "status": "ready",
-    }
-    if not image_config["complete"]:
-        return {
-            **base_cover,
-            "status": "error",
-            "error": "Image generation provider is not configured.",
-            "configuration_error": True,
-            "missing": image_config["missing"],
-            "provider_mode": image_config.get("mode"),
-            "provider_route": image_config.get("route"),
-        }, None
-
+def _build_purchase_context_prompt(prompt_payload):
     try:
-        response = requests.post(
-            f"{image_config['base_url'].rstrip('/')}/images/generations",
-            headers={
-                "Authorization": f"Bearer {image_config['api_key']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": image_config["model"],
-                "prompt": prompt,
-                "n": 1,
-                "size": "1024x1024",
-            },
-            timeout=PURCHASE_RECOMMENDATION_IMAGE_TIMEOUT_SECONDS,
+        return DataLoader.construct_prompt(
+            DataLoader.resolve_data_path("Prompt_Personal_Info.md"),
+            DataLoader.resolve_data_path("Time.xlsx"),
+            start_date=PURCHASE_CONTEXT_TIME_SERIES_START_DATE,
         )
-        response.raise_for_status()
-        image_bytes = _image_bytes_from_generation_response(response.json())
-        return {**base_cover, "url": _save_cover_bytes(cache_key, image_bytes)}, image_config["model"]
-    except Exception as error:
-        return {**base_cover, "status": "error", "error": str(error)}, image_config["model"]
+    except Exception as exc:
+        logging.warning("Failed to build purchase recommendation Action Plan context: %s", exc)
+        balance_json = json.dumps(prompt_payload, ensure_ascii=False, separators=(",", ":"), default=str)
+        fallback_payload = {"unavailable": True, "reason": str(exc)}
+        return (
+            "## Time Series Data (JSON)\n\n```json\n"
+            f"{json.dumps(fallback_payload, ensure_ascii=False, separators=(',', ':'))}\n```\n\n"
+            "## Balance Sheet Data (JSON)\n\n```json\n"
+            f"{balance_json}\n```"
+        )
 
 
-def _build_pending_purchase_cover_image(prompt):
-    image_config = _load_image_generation_config()
-    base_cover = {
-        "url": None,
-        "prompt": prompt,
-        "error": None,
-        "configuration_error": False,
-        "status": "generating",
+def _build_purchase_context_metadata(context_prompt):
+    return {
+        "time_xlsx_included": "Time Series Data (JSON)" in str(context_prompt or ""),
+        "balance_sheet_included": "Balance Sheet Data (JSON)" in str(context_prompt or ""),
+        "prompt_hash": hashlib.sha256(str(context_prompt or "").encode("utf-8")).hexdigest(),
     }
-    if not image_config["complete"]:
-        return {
-            **base_cover,
-            "status": "error",
-            "error": "Image generation provider is not configured.",
-            "configuration_error": True,
-            "missing": image_config["missing"],
-            "provider_mode": image_config.get("mode"),
-            "provider_route": image_config.get("route"),
-        }, None, False
-    return base_cover, image_config["model"], True
 
 
-def _update_purchase_recommendation_cache_cover(cache_key, cover_image, image_model):
-    payload = _read_purchase_recommendation_cache_payload(cache_key)
-    if not payload:
-        return
-    payload["cover_image"] = cover_image
-    payload["image_model"] = image_model
-    _save_purchase_recommendation_cache(payload)
-
-
-def _run_purchase_cover_generation(cache_key, prompt):
-    try:
-        cover_image, image_model = _generate_purchase_cover_image(cache_key, prompt)
-        _update_purchase_recommendation_cache_cover(cache_key, cover_image, image_model)
-    finally:
-        with _purchase_cover_generation_lock:
-            _purchase_cover_generation_jobs.discard(cache_key)
-
-
-def _start_purchase_cover_generation(cache_key, prompt):
-    if not cache_key or not prompt:
-        return False
-    with _purchase_cover_generation_lock:
-        if cache_key in _purchase_cover_generation_jobs:
-            return False
-        _purchase_cover_generation_jobs.add(cache_key)
-    worker = threading.Thread(
-        target=_run_purchase_cover_generation,
-        args=(cache_key, prompt),
-        name=f"purchase-cover-{cache_key[:8]}",
-        daemon=True,
-    )
-    worker.start()
-    return True
-
-
-def _build_purchase_recommendations_payload(force_regenerate=False):
+def _build_purchase_recommendations_payload(force_regenerate=False, request_config=None):
+    request_config = _normalize_purchase_request_config(request_config)
     path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
     sheets = DataLoader.load_excel_sheets(path)
     if not sheets:
         return JSONResponse(status_code=404, content={"error": "No sheets found in Balance Sheet.xlsx"})
 
     prompt_payload = DataLoader.build_balance_sheet_prompt_payload_from_sheets(sheets, file_name=path.name)
-    cache_key = _purchase_recommendation_cache_key(prompt_payload)
     dismissed_items = _list_dismissed_purchase_items()
+    dismissed_hash = _purchase_dismissed_hash(dismissed_items)
+    context_prompt = _build_purchase_context_prompt(prompt_payload)
+    context_metadata = _build_purchase_context_metadata(context_prompt)
+    cache_key = _purchase_recommendation_cache_key(
+        prompt_payload,
+        request_config=request_config,
+        context_hash=context_metadata["prompt_hash"],
+        dismissed_hash=dismissed_hash,
+    )
     if not force_regenerate:
         cached = _load_purchase_recommendation_cache(cache_key)
         if cached:
-            cover_image = cached.get("cover_image") if isinstance(cached.get("cover_image"), dict) else {}
-            if cover_image.get("status") == "generating" and cover_image.get("prompt"):
-                _start_purchase_cover_generation(cache_key, cover_image.get("prompt"))
             return _with_dismissed_purchase_filter(cached, dismissed_items)
 
-    messages = _build_purchase_recommendation_messages(prompt_payload, dismissed_items=dismissed_items)
+    messages = _build_purchase_recommendation_messages(
+        context_prompt,
+        dismissed_items=dismissed_items,
+        recommendation_count=request_config["recommendation_count"],
+    )
     llm_result = LLMClient().chat(
         messages=messages,
         stream=False,
+        model=request_config["model"],
+        provider_route=request_config["provider_route"],
+        reasoning_effort=request_config["reasoning_effort"],
+        service_tier=request_config["service_tier"],
         source="expense_purchase_recommendations",
         entrypoint="src/server.py",
-        metadata={"balance_sheet_cache_key": cache_key},
+        metadata={
+            "balance_sheet_cache_key": cache_key,
+            "purchase_recommendation_count": request_config["recommendation_count"],
+            "purchase_context_hash": context_metadata["prompt_hash"],
+            "purchase_dismissed_hash": dismissed_hash,
+        },
     )
     raw_content = llm_result.get("content") if isinstance(llm_result, dict) else ""
     parsed = _extract_json_object_from_text(raw_content)
-    recommendation_groups = _normalize_purchase_recommendation_groups(parsed.get("recommendation_groups"))
-    raw_cover_prompt = str(parsed.get("cover_prompt") or "").strip()
-    cover_prompt = _build_purchase_cover_prompt(raw_cover_prompt, recommendation_groups)
-    cover_image, image_model, should_generate_cover = _build_pending_purchase_cover_image(cover_prompt)
+    recommendation_groups = _normalize_purchase_recommendation_groups(
+        parsed.get("recommendation_groups"),
+        recommendation_count=request_config["recommendation_count"],
+    )
     payload = {
         "status": "ready",
         "from_cache": False,
         "cache_key": cache_key,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "text_model": llm_result.get("model") if isinstance(llm_result, dict) else None,
-        "image_model": image_model,
-        "cover_image": cover_image,
+        "request_config": request_config,
+        "context": context_metadata,
         "recommendation_groups": recommendation_groups,
         "usage": llm_result.get("usage") if isinstance(llm_result, dict) else None,
         "response_raw": llm_result,
     }
     _save_purchase_recommendation_cache(payload)
-    if should_generate_cover:
-        _start_purchase_cover_generation(cache_key, cover_prompt)
     return _with_dismissed_purchase_filter(payload, dismissed_items)
 
 
 @app.get("/api/balance_sheet/purchase_recommendations")
-async def get_balance_sheet_purchase_recommendations():
+async def get_balance_sheet_purchase_recommendations(
+    recommendation_count: Optional[int] = None,
+    model: Optional[str] = None,
+    provider_route: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+    service_tier: Optional[str] = None,
+):
+    request_config = _normalize_purchase_request_config({
+        "recommendation_count": recommendation_count,
+        "model": model,
+        "provider_route": provider_route,
+        "reasoning_effort": reasoning_effort,
+        "service_tier": service_tier,
+    })
     try:
-        return await asyncio.to_thread(_build_purchase_recommendations_payload, force_regenerate=False)
+        return await asyncio.to_thread(
+            _build_purchase_recommendations_payload,
+            force_regenerate=False,
+            request_config=request_config,
+        )
     except FileNotFoundError as exc:
         return JSONResponse(status_code=404, content={"error": str(exc)})
     except Exception as exc:
@@ -3752,9 +3724,17 @@ async def get_balance_sheet_purchase_recommendations():
 
 
 @app.post("/api/balance_sheet/purchase_recommendations/regenerate")
-async def regenerate_balance_sheet_purchase_recommendations():
+async def regenerate_balance_sheet_purchase_recommendations(request: Optional[PurchaseRecommendationRequest] = None):
+    request_payload = None
+    if request is not None:
+        request_payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    request_config = _normalize_purchase_request_config(request_payload)
     try:
-        return await asyncio.to_thread(_build_purchase_recommendations_payload, force_regenerate=True)
+        return await asyncio.to_thread(
+            _build_purchase_recommendations_payload,
+            force_regenerate=True,
+            request_config=request_config,
+        )
     except FileNotFoundError as exc:
         return JSONResponse(status_code=404, content={"error": str(exc)})
     except Exception as exc:
@@ -3807,12 +3787,17 @@ async def clear_dismissed_balance_sheet_purchase_recommendations():
         )
 
 
-@app.get("/api/balance_sheet/purchase_recommendations/cover/{filename}")
-async def get_balance_sheet_purchase_recommendation_cover(filename: str):
-    cover_path = _purchase_recommendation_cover_path(filename)
-    if cover_path is None or not cover_path.exists():
-        return JSONResponse(status_code=404, content={"error": "Cover image not found"})
-    return FileResponse(cover_path, media_type="image/png")
+@app.delete("/api/balance_sheet/purchase_recommendations/dismissed/{item_id}")
+async def delete_dismissed_balance_sheet_purchase_recommendation(item_id: int):
+    try:
+        return _delete_purchase_recommendation_dismissal(item_id)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": "Failed to restore dismissed recommendation.", "details": str(exc)},
+        )
 
 
 @app.get("/api/balance_sheet")

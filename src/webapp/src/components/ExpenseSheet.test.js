@@ -50,40 +50,38 @@ test('Expense Sheet provides a toolbar action for copying the full prompt JSON',
 });
 
 test('Expense Sheet loads AI purchase recommendations and renders the top recommendation card', () => {
-  assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations'"));
+  assert.ok(jsxSource.includes('buildPurchaseRecommendationUrl'));
+  assert.ok(jsxSource.includes('recommendation_count'));
   assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations/regenerate'"));
   assert.ok(jsxSource.includes('purchaseRecommendations'));
   assert.ok(jsxSource.includes('expense-purchase-card'));
   assert.ok(jsxSource.includes("t('expense.purchase.title')"));
   assert.ok(jsxSource.includes("t('expense.purchase.regenerate')"));
   assert.ok(jsxSource.includes("t('expense.purchase.copy_json')"));
-  assert.ok(jsxSource.includes("t('expense.purchase.copy_cover_prompt')"));
   assert.ok(cssSource.includes('.expense-purchase-card'));
-  assert.ok(cssSource.includes('.expense-purchase-cover'));
   assert.ok(cssSource.includes('.expense-purchase-groups'));
+  assert.equal(jsxSource.includes("t('expense.purchase.copy_cover_prompt')"), false);
+  assert.equal(cssSource.includes('.expense-purchase-cover'), false);
 });
 
-test('Expense Sheet polls while purchase cover image is generating in the background', () => {
-  assert.ok(jsxSource.includes("purchaseRecommendations?.cover_image?.status === 'generating'"));
-  assert.ok(jsxSource.includes("t('expense.purchase.cover_generating')"));
-  assert.ok(jsxSource.includes('purchaseCoverPollTimeoutRef'));
-  assert.ok(jsxSource.includes('setTimeout(() => {'));
-  assert.ok(jsxSource.includes('void fetchPurchaseRecommendations({ silent: true });'));
-});
-
-test('Expense Sheet purchase cover shows the full image without stretching to recommendation height', () => {
-  assert.ok(cssSource.includes('align-items: start;'));
-  assert.ok(cssSource.includes('aspect-ratio: 1 / 1;'));
-  assert.ok(cssSource.includes('object-fit: contain;'));
-  assert.equal(cssSource.includes('object-fit: cover;'), false);
+test('Expense Sheet exposes Action Plan style purchase recommendation model controls', () => {
+  assert.ok(jsxSource.includes('purchaseRecommendationCount'));
+  assert.ok(jsxSource.includes('expense-purchase-controls'));
+  assert.ok(jsxSource.includes('getReasoningOptionsForModel'));
+  assert.ok(jsxSource.includes('resolveFastServiceTier'));
+  assert.ok(jsxSource.includes('buildModelOptionsFromCatalog'));
+  assert.ok(jsxSource.includes("t('expense.purchase.recommendation_count')"));
+  assert.ok(jsxSource.includes("t('common.reasoning')"));
+  assert.ok(jsxSource.includes("t('common.fast_mode')"));
+  assert.ok(cssSource.includes('.expense-purchase-controls'));
 });
 
 test('Expense Sheet purchase recommendation copy actions use fallback clipboard support', () => {
   assert.ok(jsxSource.includes('JSON.stringify(purchaseRecommendations)'));
-  assert.ok(jsxSource.includes('purchaseRecommendations?.cover_image?.prompt'));
   assert.ok(jsxSource.includes('handleCopyPurchaseJson'));
-  assert.ok(jsxSource.includes('handleCopyCoverPrompt'));
   assert.ok(jsxSource.includes('writeTextWithFallback'));
+  assert.equal(jsxSource.includes('handleCopyCoverPrompt'), false);
+  assert.equal(jsxSource.includes('purchaseRecommendations?.cover_image?.prompt'), false);
 });
 
 test('Expense Sheet lets users dismiss purchase recommendation items', () => {
@@ -99,6 +97,12 @@ test('Expense Sheet shows and clears dismissed purchase recommendation count', (
   assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed'"));
   assert.ok(jsxSource.includes("method: 'DELETE'"));
   assert.ok(jsxSource.includes('handleClearDismissedPurchaseItems'));
+  assert.ok(jsxSource.includes('showDismissedPurchaseItems'));
+  assert.ok(jsxSource.includes('handleRestoreDismissedPurchaseItem'));
+  assert.ok(jsxSource.includes("`/api/balance_sheet/purchase_recommendations/dismissed/${itemId}`"));
+  assert.ok(jsxSource.includes("t('expense.purchase.show_dismissed')"));
+  assert.ok(jsxSource.includes("t('expense.purchase.hide_dismissed')"));
+  assert.ok(jsxSource.includes("t('expense.purchase.restore_dismissed')"));
   assert.ok(jsxSource.includes("t('expense.purchase.dismissed_count'"));
   assert.ok(jsxSource.includes("t('expense.purchase.clear_dismissed')"));
 });

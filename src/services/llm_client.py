@@ -854,6 +854,7 @@ class LLMClient:
         context_file=None,
         history_dir=None,
         metadata=None,
+        reasoning_effort=None,
         service_tier=None,
     ):
         """
@@ -869,7 +870,7 @@ class LLMClient:
         if isinstance(model, dict):
             raise TypeError("model override must be a string when provided")
 
-        reasoning_effort = Config.get("AI_REASONING_EFFORT") or "medium"
+        reasoning_effort = reasoning_effort or Config.get("AI_REASONING_EFFORT") or "medium"
         request_metadata = dict(metadata or {})
         stable_prefix_messages = messages[:-1] if messages else []
         request_metadata.setdefault("sent_context_message_count", len(messages))

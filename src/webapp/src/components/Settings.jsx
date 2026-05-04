@@ -21,7 +21,6 @@ const SECTION_ORDER = [
   { key: 'general', labelKey: 'settings.section.general' },
   { key: 'ai_provider', labelKey: 'settings.section.ai_provider' },
   { key: 'voice_provider', labelKey: 'settings.section.voice_provider' },
-  { key: 'image_provider', labelKey: 'settings.section.image_provider' },
   { key: 'data_logs', labelKey: 'settings.section.data_logs' },
   { key: 'performance', labelKey: 'settings.section.performance' },
   { key: 'about', labelKey: 'settings.section.about' },
@@ -221,7 +220,6 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
   });
   const [showApiKey, setShowApiKey] = useState(false);
   const [showVoiceApiKey, setShowVoiceApiKey] = useState(false);
-  const [showImageApiKey, setShowImageApiKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [refreshingSpecialModels, setRefreshingSpecialModels] = useState(null);
@@ -934,95 +932,6 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     );
   };
 
-  const renderImageProvider = () => {
-    const inheritAi = form.imageProviderMode === 'inherit_ai';
-    const effectiveBaseUrl = inheritAi ? currentProvider.base_url : form.imageBaseUrl;
-    const effectiveApiKey = inheritAi
-      ? (currentProvider.api_key || currentProvider.has_api_key ? '********' : '')
-      : form.imageApiKey;
-
-    return (
-      <section className="settings-section">
-        {renderProviderModeControl('image')}
-        {inheritAi ? (
-          <div className="settings-status-line">
-            <Info size={16} />
-            {t('settings.provider.inherited_from_ai', { name: currentProvider.name || currentProviderRoute })}
-          </div>
-        ) : null}
-        <SettingsRow label={t('settings.image_provider.base_url')}>
-          <input
-            className="settings-input"
-            value={effectiveBaseUrl}
-            disabled={inheritAi}
-            placeholder="https://api.example.com/v1"
-            onChange={(event) => setForm((prev) => ({ ...prev, imageBaseUrl: event.target.value }))}
-          />
-        </SettingsRow>
-        <SettingsRow label={t('settings.image_provider.api_key')}>
-          <span className="settings-secret-input">
-            <input
-              className="settings-input"
-              type={showImageApiKey ? 'text' : 'password'}
-              value={effectiveApiKey}
-              disabled={inheritAi}
-              onChange={(event) => setForm((prev) => ({
-                ...prev,
-                imageApiKey: event.target.value,
-                imageHasApiKey: Boolean(event.target.value),
-              }))}
-            />
-            <button
-              type="button"
-              className="settings-icon-button"
-              onClick={() => setShowImageApiKey((prev) => !prev)}
-              title={t(showImageApiKey ? 'settings.provider.hide_key' : 'settings.provider.show_key')}
-            >
-              {showImageApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </span>
-        </SettingsRow>
-        <SettingsRow label={t('settings.image_provider.model')}>
-          <span className="settings-secret-input">
-            <ModelSelectControl
-              value={form.imageModel}
-              models={form.imageModels}
-              placeholder="gpt-image-1"
-              onChange={(model) => setForm((prev) => ({
-                ...prev,
-                imageModel: model,
-                imageModels: normalizeModelList(prev.imageModels, model),
-              }))}
-            />
-            <button
-              type="button"
-              className="settings-icon-button"
-              onClick={() => refreshSpecialProviderModels('image')}
-              disabled={refreshingSpecialModels === 'image'}
-              title={t('settings.provider.refresh_models')}
-            >
-              <RefreshCw size={16} />
-            </button>
-          </span>
-        </SettingsRow>
-        <div className="settings-status-line">
-          <Info size={16} />
-          {form.imageLastRefreshedAt
-            ? t('settings.provider.last_refreshed', { value: form.imageLastRefreshedAt })
-            : t('settings.provider.not_refreshed')}
-        </div>
-        <div className="settings-status-line">
-          <Info size={16} />
-          {t(inheritAi ? 'settings.provider.inherited_key_available' : 'settings.image_provider.endpoint_hint')}
-        </div>
-        <div className="settings-status-line">
-          <Info size={16} />
-          {t('settings.image_provider.test_hint')}
-        </div>
-      </section>
-    );
-  };
-
   const renderDataLogs = () => (
     <section className="settings-section">
       <div className="settings-path-grid">
@@ -1127,9 +1036,6 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     }
     if (activeSection === 'voice_provider') {
       return renderVoiceProvider();
-    }
-    if (activeSection === 'image_provider') {
-      return renderImageProvider();
     }
     if (activeSection === 'data_logs') {
       return renderDataLogs();

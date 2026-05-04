@@ -115,47 +115,47 @@
   gap: 0.45rem;
 }
 
+.expense-purchase-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.expense-purchase-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.expense-purchase-controls input[type="number"],
+.expense-purchase-controls select {
+  min-height: 2.2rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.expense-purchase-controls input[type="number"] {
+  width: 5.5rem;
+}
+
+.expense-purchase-fast-mode input {
+  margin: 0;
+}
+
 .expense-purchase-state {
   color: var(--text-muted);
   font-size: 0.9rem;
 }
 
 .expense-purchase-body {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.36fr) minmax(0, 1fr);
-  gap: 1rem;
-  align-items: start;
-}
-
-.expense-purchase-cover {
-  aspect-ratio: 1 / 1;
-  min-height: 0;
-  max-height: 420px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-  background:
-    linear-gradient(135deg, rgba(116, 185, 255, 0.16), rgba(0, 184, 148, 0.08)),
-    rgba(255, 255, 255, 0.03);
-}
-
-.expense-purchase-cover img {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: contain;
-}
-
-.expense-purchase-cover-empty {
-  min-height: 260px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
   gap: 0.65rem;
-  padding: 1rem;
-  color: var(--text-muted);
-  text-align: center;
+  min-width: 0;
 }
 
 .expense-purchase-content {
@@ -180,7 +180,8 @@
   background: rgba(255, 255, 255, 0.03);
 }
 
-.expense-purchase-clear-dismissed {
+.expense-purchase-clear-dismissed,
+.expense-purchase-show-dismissed {
   padding: 0.22rem 0.55rem;
   border: 1px solid var(--border-color);
   border-radius: 999px;
@@ -191,9 +192,50 @@
   cursor: pointer;
 }
 
-.expense-purchase-clear-dismissed:disabled {
+.expense-purchase-clear-dismissed:disabled,
+.expense-purchase-show-dismissed:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.expense-purchase-dismissed-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.expense-purchase-dismissed-item {
+  min-width: min(100%, 220px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.expense-purchase-dismissed-item div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.expense-purchase-dismissed-item strong,
+.expense-purchase-dismissed-item span {
+  overflow-wrap: anywhere;
+}
+
+.expense-purchase-dismissed-item span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.expense-purchase-dismissed-item .expense-purchase-dismiss-button {
+  position: static;
+  flex: 0 0 auto;
 }
 
 .expense-purchase-groups {

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const settingsSource = readFileSync(new URL('./Settings.jsx', import.meta.url), 'utf8');
 
-test('Settings exposes the five formal settings sections', () => {
+test('Settings exposes the six formal settings sections without image generation', () => {
   for (const sectionKey of [
     'settings.section.general',
     'settings.section.ai_provider',
@@ -16,6 +16,7 @@ test('Settings exposes the five formal settings sections', () => {
     assert.ok(settingsSource.includes(sectionKey), `${sectionKey} should be defined`);
   }
   assert.ok(settingsSource.includes('t(section.labelKey)'));
+  assert.equal(settingsSource.includes('settings.section.image_provider'), false);
 });
 
 test('Settings exposes automatic theme mode and independent voice provider controls', () => {
@@ -36,20 +37,12 @@ test('Settings exposes automatic theme mode and independent voice provider contr
   assert.ok(settingsSource.includes('/api/provider_models/discover'));
 });
 
-test('Settings exposes independent image generation provider controls', () => {
-  assert.ok(settingsSource.includes('settings.section.image_provider'));
-  assert.ok(settingsSource.includes('renderImageProvider'));
-  assert.ok(settingsSource.includes('imageBaseUrl'));
-  assert.ok(settingsSource.includes('imageApiKey'));
-  assert.ok(settingsSource.includes('imageModel'));
-  assert.ok(settingsSource.includes('imageProviderMode'));
-  assert.ok(settingsSource.includes('imageModels'));
-  assert.ok(settingsSource.includes('settings.image_provider.base_url'));
-  assert.ok(settingsSource.includes('settings.image_provider.api_key'));
-  assert.ok(settingsSource.includes('settings.image_provider.model'));
-  assert.ok(settingsSource.includes('showImageApiKey'));
-  assert.ok(settingsSource.includes('settings.provider.mode.custom'));
-  assert.ok(settingsSource.includes('settings-provider-model-select'));
+test('Settings no longer exposes image generation provider controls', () => {
+  assert.equal(settingsSource.includes('renderImageProvider'), false);
+  assert.equal(settingsSource.includes('settings.image_provider.base_url'), false);
+  assert.equal(settingsSource.includes('settings.image_provider.api_key'), false);
+  assert.equal(settingsSource.includes('settings.image_provider.model'), false);
+  assert.equal(settingsSource.includes('showImageApiKey'), false);
 });
 
 test('Settings masks provider API key until the user reveals it', () => {
@@ -94,7 +87,6 @@ test('Settings uses real select controls for discovered model lists instead of f
   assert.ok(settingsSource.includes('<select'));
   assert.ok(settingsSource.includes('models.length > 0'));
   assert.equal(settingsSource.includes('<datalist'), false);
-  assert.equal(settingsSource.includes('list="settings-image-models"'), false);
   assert.equal(settingsSource.includes('list="settings-voice-models"'), false);
 });
 

@@ -7,14 +7,31 @@ import {
   Copy,
   Clock,
   HandCoins,
-  Image as ImageIcon,
   RefreshCw,
   Sparkles,
   TableProperties,
   Wallet,
   X,
 } from 'lucide-react';
-import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
+import {
+  getReasoningOptionsForModel,
+  loadStoredActionPlanReasoningEffort,
+  normalizeReasoningEffortForModel,
+  saveActionPlanReasoningEffort,
+} from '../utils/actionPlanReasoning';
+import {
+  buildModelOptionsFromCatalog,
+  findModelOption,
+  persistPreferredModelOption,
+  resolvePreferredModelOption,
+} from '../utils/llmModelCatalog';
+import {
+  isFastModeSupportedForModel,
+  loadStoredFastModeEnabled,
+  resolveFastServiceTier,
+  saveFastModeEnabled,
+} from '../utils/modelServiceTier';
+import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import './ExpenseSheet.css';
 import { buildExpenseSheetViewModel } from './expenseSheetModel.js';
 import PlotChartCard from './PlotChartCard.jsx';
@@ -36,6 +53,28 @@ const KPI_LABEL_KEYS = {
 };
 
 const COPY_FEEDBACK_DURATION_MS = 1500;
+const PURCHASE_RECOMMENDATION_COUNT_STORAGE_KEY = 'expense_purchase_recommendation_count';
+const DEFAULT_PURCHASE_RECOMMENDATION_COUNT = 12;
+const MIN_PURCHASE_RECOMMENDATION_COUNT = 3;
+const MAX_PURCHASE_RECOMMENDATION_COUNT = 30;
+
+function normalizePurchaseRecommendationCount(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_PURCHASE_RECOMMENDATION_COUNT;
+  }
+  return Math.min(MAX_PURCHASE_RECOMMENDATION_COUNT, Math.max(MIN_PURCHASE_RECOMMENDATION_COUNT, parsed));
+}
+
+function loadStoredPurchaseRecommendationCount(storage = globalThis.localStorage) {
+  return normalizePurchaseRecommendationCount(storage?.getItem?.(PURCHASE_RECOMMENDATION_COUNT_STORAGE_KEY));
+}
+
+function savePurchaseRecommendationCount(value, storage = globalThis.localStorage) {
+  const normalized = normalizePurchaseRecommendationCount(value);
+  storage?.setItem?.(PURCHASE_RECOMMENDATION_COUNT_STORAGE_KEY, String(normalized));
+  return normalized;
+}
 
 async function writeTextWithFallback(content) {
   if (!content) {
@@ -223,21 +262,120 @@ export default function ExpenseSheet({ theme = 'dark' }) {
   const [purchaseError, setPurchaseError] = useState('');
   const [purchaseGenerating, setPurchaseGenerating] = useState(false);
   const [purchaseCopyStatus, setPurchaseCopyStatus] = useState('idle');
+  const [purchaseRecommendationCount, setPurchaseRecommendationCount] = useState(() => loadStoredPurchaseRecommendationCount());
+  const [availableModels, setAvailableModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState(() => loadStoredActionPlanReasoningEffort());
+  const [fastModeEnabled, setFastModeEnabled] = useState(() => loadStoredFastModeEnabled());
+  const [dismissedPurchaseItems, setDismissedPurchaseItems] = useState([]);
+  const [showDismissedPurchaseItems, setShowDismissedPurchaseItems] = useState(false);
   const [dismissedPurchaseCount, setDismissedPurchaseCount] = useState(0);
   const copyStatusResetRef = useRef(null);
   const purchaseCopyStatusResetRef = useRef(null);
-  const purchaseCoverPollTimeoutRef = useRef(null);
+  const selectedModelOption = findModelOption(availableModels, selectedModel);
+  const reasoningOptions = getReasoningOptionsForModel(selectedModelOption?.model);
+  const displayedReasoningEffort = normalizeReasoningEffortForModel(
+    selectedReasoningEffort,
+    selectedModelOption?.model,
+  );
+  const fastModeSupported = isFastModeSupportedForModel(selectedModelOption?.model);
 
   const fetchDismissedPurchaseItems = useCallback(async () => {
     try {
       const payload = await fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed', {
         retryPolicy: 'load',
       });
+      setDismissedPurchaseItems(Array.isArray(payload?.items) ? payload.items : []);
       setDismissedPurchaseCount(Number(payload?.count) || 0);
     } catch {
+      setDismissedPurchaseItems([]);
       setDismissedPurchaseCount(0);
     }
   }, []);
+
+  const applyModelCatalog = useCallback((payload) => {
+    const options = buildModelOptionsFromCatalog(payload);
+    setAvailableModels(options);
+    if (options.length === 0) {
+      setSelectedModel('');
+      return;
+    }
+    const nextModel = (
+      resolvePreferredModelOption(options)
+      || findModelOption(options, payload?.default_model)
+      || options[0]
+    );
+    setSelectedModel(nextModel.id);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadModels = async () => {
+      try {
+        const payload = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load' });
+        if (!cancelled) {
+          applyModelCatalog(payload);
+        }
+      } catch {
+        if (!cancelled) {
+          setAvailableModels([]);
+          setSelectedModel('');
+        }
+      }
+    };
+
+    void loadModels();
+    const handleModelCatalogUpdated = (event) => {
+      applyModelCatalog(event.detail);
+    };
+    window.addEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
+    };
+  }, [applyModelCatalog]);
+
+  const buildPurchaseRequestConfig = useCallback(() => {
+    const normalizedCount = normalizePurchaseRecommendationCount(purchaseRecommendationCount);
+    const effectiveFastMode = fastModeEnabled && isFastModeSupportedForModel(selectedModelOption?.model);
+    const serviceTier = resolveFastServiceTier({
+      fastModeEnabled: effectiveFastMode,
+      model: selectedModelOption?.model,
+    });
+    const config = {
+      recommendation_count: normalizedCount,
+      reasoning_effort: displayedReasoningEffort,
+    };
+    if (selectedModelOption?.model) {
+      config.model = selectedModelOption.model;
+    }
+    if (selectedModelOption?.provider_route) {
+      config.provider_route = selectedModelOption.provider_route;
+    }
+    if (serviceTier) {
+      config.service_tier = serviceTier;
+    }
+    return config;
+  }, [
+    displayedReasoningEffort,
+    fastModeEnabled,
+    purchaseRecommendationCount,
+    selectedModelOption,
+  ]);
+
+  const buildPurchaseRecommendationUrl = useCallback(() => {
+    const config = buildPurchaseRequestConfig();
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(config)) {
+      if (value !== null && value !== undefined && value !== '') {
+        params.set(key, String(value));
+      }
+    }
+    const query = params.toString();
+    return query
+      ? `/api/balance_sheet/purchase_recommendations?${query}`
+      : '/api/balance_sheet/purchase_recommendations';
+  }, [buildPurchaseRequestConfig]);
 
   const fetchPurchaseRecommendations = useCallback(async ({ regenerate = false, silent = false } = {}) => {
     if (regenerate) {
@@ -252,8 +390,10 @@ export default function ExpenseSheet({ theme = 'dark' }) {
         ? await fetchBackendJson('/api/balance_sheet/purchase_recommendations/regenerate', {
           method: 'POST',
           retryPolicy: 'mutation',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(buildPurchaseRequestConfig()),
         })
-        : await fetchBackendJson('/api/balance_sheet/purchase_recommendations', {
+        : await fetchBackendJson(buildPurchaseRecommendationUrl(), {
           retryPolicy: 'load',
         });
       if (payload?.status === 'error') {
@@ -267,7 +407,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
       setPurchaseLoading(false);
       setPurchaseGenerating(false);
     }
-  }, [t]);
+  }, [buildPurchaseRecommendationUrl, buildPurchaseRequestConfig, t]);
 
   const fetchData = useCallback(async (refresh = false) => {
     setIsLoading(true);
@@ -334,36 +474,12 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     void fetchDismissedPurchaseItems();
   }, [fetchDismissedPurchaseItems]);
 
-  useEffect(() => {
-    if (purchaseRecommendations?.cover_image?.status === 'generating' && !purchaseLoading && !purchaseError) {
-      purchaseCoverPollTimeoutRef.current = setTimeout(() => {
-        purchaseCoverPollTimeoutRef.current = null;
-        void fetchPurchaseRecommendations({ silent: true });
-      }, 5000);
-      return () => {
-        if (purchaseCoverPollTimeoutRef.current) {
-          clearTimeout(purchaseCoverPollTimeoutRef.current);
-          purchaseCoverPollTimeoutRef.current = null;
-        }
-      };
-    }
-    return undefined;
-  }, [
-    fetchPurchaseRecommendations,
-    purchaseError,
-    purchaseLoading,
-    purchaseRecommendations?.cover_image?.status,
-  ]);
-
   useEffect(() => () => {
     if (copyStatusResetRef.current) {
       clearTimeout(copyStatusResetRef.current);
     }
     if (purchaseCopyStatusResetRef.current) {
       clearTimeout(purchaseCopyStatusResetRef.current);
-    }
-    if (purchaseCoverPollTimeoutRef.current) {
-      clearTimeout(purchaseCoverPollTimeoutRef.current);
     }
   }, []);
 
@@ -435,22 +551,28 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     schedulePurchaseCopyStatusReset();
   }, [purchaseRecommendations, schedulePurchaseCopyStatusReset]);
 
-  const handleCopyCoverPrompt = useCallback(async () => {
-    const prompt = purchaseRecommendations?.cover_image?.prompt;
-    if (!prompt) {
-      setPurchaseCopyStatus('failed');
-      schedulePurchaseCopyStatusReset();
-      return;
-    }
+  const handlePurchaseRecommendationCountChange = useCallback((event) => {
+    setPurchaseRecommendationCount(savePurchaseRecommendationCount(event.target.value));
+  }, []);
 
-    try {
-      const copied = await writeTextWithFallback(prompt);
-      setPurchaseCopyStatus(copied ? 'copied' : 'failed');
-    } catch {
-      setPurchaseCopyStatus('failed');
-    }
-    schedulePurchaseCopyStatusReset();
-  }, [purchaseRecommendations, schedulePurchaseCopyStatusReset]);
+  const handlePurchaseModelChange = useCallback((event) => {
+    const nextModel = event.target.value;
+    setSelectedModel(nextModel);
+    persistPreferredModelOption(findModelOption(availableModels, nextModel));
+  }, [availableModels]);
+
+  const handlePurchaseReasoningEffortChange = useCallback((event) => {
+    const nextValue = saveActionPlanReasoningEffort(
+      event.target.value,
+      globalThis.localStorage,
+      selectedModelOption?.model,
+    );
+    setSelectedReasoningEffort(nextValue);
+  }, [selectedModelOption?.model]);
+
+  const handlePurchaseFastModeChange = useCallback((event) => {
+    setFastModeEnabled(saveFastModeEnabled(event.target.checked));
+  }, []);
 
   const handleDismissPurchaseItem = useCallback(async (groupKey, item) => {
     if (!purchaseRecommendations || !item?.name) {
@@ -470,6 +592,15 @@ export default function ExpenseSheet({ theme = 'dark' }) {
       });
       const nextCount = Number(payload?.count ?? purchaseRecommendations.dismissed_count ?? dismissedPurchaseCount) || 0;
       setDismissedPurchaseCount(nextCount);
+      if (payload?.item) {
+        setDismissedPurchaseItems((current) => {
+          const itemId = payload.item.id;
+          if (itemId && current.some((item) => item.id === itemId)) {
+            return current;
+          }
+          return [payload.item, ...current];
+        });
+      }
       setPurchaseRecommendations((current) => {
         if (!current) {
           return current;
@@ -489,12 +620,34 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     }
   }, [dismissedPurchaseCount, purchaseRecommendations, t]);
 
+  const handleRestoreDismissedPurchaseItem = useCallback(async (itemId) => {
+    if (!itemId) {
+      return;
+    }
+    try {
+      const payload = await fetchBackendJson(`/api/balance_sheet/purchase_recommendations/dismissed/${itemId}`, {
+        method: 'DELETE',
+        retryPolicy: 'mutation',
+      });
+      setDismissedPurchaseItems((current) => current.filter((item) => item.id !== itemId));
+      setDismissedPurchaseCount(Number(payload?.count) || 0);
+      setPurchaseRecommendations((current) => (
+        current
+          ? { ...current, dismissed_count: Number(payload?.count) || 0 }
+          : current
+      ));
+    } catch (err) {
+      setPurchaseError(err.message || t('expense.error.generic'));
+    }
+  }, [t]);
+
   const handleClearDismissedPurchaseItems = useCallback(async () => {
     try {
       await fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed', {
         method: 'DELETE',
         retryPolicy: 'mutation',
       });
+      setDismissedPurchaseItems([]);
       setDismissedPurchaseCount(0);
       await fetchPurchaseRecommendations();
     } catch (err) {
@@ -515,11 +668,6 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     : purchaseCopyStatus === 'failed'
       ? t('expense.purchase.copy_failed')
       : t('expense.purchase.copy_json');
-  const coverPromptCopyLabel = purchaseCopyStatus === 'copied'
-    ? t('expense.purchase.copied')
-    : purchaseCopyStatus === 'failed'
-      ? t('expense.purchase.copy_failed')
-      : t('expense.purchase.copy_cover_prompt');
   const purchaseDismissedCount = Number(purchaseRecommendations?.dismissed_count ?? dismissedPurchaseCount) || 0;
 
   const balanceChartCard = balanceChart || {
@@ -602,15 +750,6 @@ export default function ExpenseSheet({ theme = 'dark' }) {
             </button>
             <button
               type="button"
-              className="secondary-button"
-              onClick={handleCopyCoverPrompt}
-              disabled={!purchaseRecommendations?.cover_image?.prompt}
-            >
-              <Copy size={15} />
-              {coverPromptCopyLabel}
-            </button>
-            <button
-              type="button"
               className="expense-refresh-button"
               onClick={() => fetchPurchaseRecommendations({ regenerate: true })}
               disabled={purchaseGenerating}
@@ -619,6 +758,59 @@ export default function ExpenseSheet({ theme = 'dark' }) {
               {purchaseGenerating ? t('expense.purchase.generating') : t('expense.purchase.regenerate')}
             </button>
           </div>
+        </div>
+
+        <div className="expense-purchase-controls">
+          <label>
+            <span>{t('expense.purchase.recommendation_count')}</span>
+            <input
+              type="number"
+              min={MIN_PURCHASE_RECOMMENDATION_COUNT}
+              max={MAX_PURCHASE_RECOMMENDATION_COUNT}
+              value={purchaseRecommendationCount}
+              onChange={handlePurchaseRecommendationCountChange}
+              disabled={purchaseGenerating}
+            />
+          </label>
+          <label>
+            <span>{t('common.model')}</span>
+            <select
+              value={selectedModel}
+              onChange={handlePurchaseModelChange}
+              disabled={purchaseGenerating || availableModels.length === 0}
+            >
+              {availableModels.map((modelOption) => (
+                <option key={modelOption.id} value={modelOption.id}>
+                  {modelOption.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>{t('common.reasoning')}</span>
+            <select
+              value={displayedReasoningEffort}
+              onChange={handlePurchaseReasoningEffortChange}
+              disabled={purchaseGenerating}
+            >
+              {reasoningOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {t(option.labelKey) || option.fallbackLabel}
+                </option>
+              ))}
+            </select>
+          </label>
+          {fastModeSupported ? (
+            <label className="expense-purchase-fast-mode" title={t('common.fast_mode_tooltip')}>
+              <input
+                type="checkbox"
+                checked={fastModeEnabled}
+                onChange={handlePurchaseFastModeChange}
+                disabled={purchaseGenerating}
+              />
+              <span>{t('common.fast_mode')}</span>
+            </label>
+          ) : null}
         </div>
 
         {purchaseLoading ? (
@@ -633,23 +825,6 @@ export default function ExpenseSheet({ theme = 'dark' }) {
 
         {!purchaseLoading && !purchaseError && purchaseRecommendations ? (
           <div className="expense-purchase-body">
-            <div className="expense-purchase-cover">
-              {purchaseRecommendations.cover_image?.url ? (
-                <img
-                  src={buildBackendUrl(purchaseRecommendations.cover_image.url)}
-                  alt={t('expense.purchase.title')}
-                />
-              ) : (
-                <div className="expense-purchase-cover-empty">
-                  <ImageIcon size={24} />
-                  <span>
-                    {purchaseRecommendations.cover_image?.status === 'generating'
-                      ? t('expense.purchase.cover_generating')
-                      : purchaseRecommendations.cover_image?.error || t('expense.purchase.cover_unavailable')}
-                  </span>
-                </div>
-              )}
-            </div>
             <div className="expense-purchase-content">
               <div className="expense-purchase-meta">
                 <span>{purchaseRecommendations.from_cache ? t('expense.purchase.cached') : t('expense.purchase.fresh')}</span>
@@ -659,10 +834,17 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                 {purchaseRecommendations.text_model ? (
                   <span>{t('expense.purchase.text_model', { value: purchaseRecommendations.text_model })}</span>
                 ) : null}
-                {purchaseRecommendations.image_model ? (
-                  <span>{t('expense.purchase.image_model', { value: purchaseRecommendations.image_model })}</span>
-                ) : null}
                 <span>{t('expense.purchase.dismissed_count', { count: purchaseDismissedCount })}</span>
+                <button
+                  type="button"
+                  className="expense-purchase-show-dismissed"
+                  onClick={() => setShowDismissedPurchaseItems((current) => !current)}
+                  disabled={purchaseDismissedCount <= 0}
+                >
+                  {showDismissedPurchaseItems
+                    ? t('expense.purchase.hide_dismissed')
+                    : t('expense.purchase.show_dismissed')}
+                </button>
                 <button
                   type="button"
                   className="expense-purchase-clear-dismissed"
@@ -673,6 +855,27 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                   {t('expense.purchase.clear_dismissed')}
                 </button>
               </div>
+              {showDismissedPurchaseItems && purchaseDismissedCount > 0 ? (
+                <div className="expense-purchase-dismissed-list">
+                  {dismissedPurchaseItems.map((item) => (
+                    <article key={item.id || `${item.group_key}-${item.name}`} className="expense-purchase-dismissed-item">
+                      <div>
+                        <strong>{item.name}</strong>
+                        {item.category ? <span>{item.category}</span> : null}
+                      </div>
+                      <button
+                        type="button"
+                        className="expense-purchase-dismiss-button"
+                        onClick={() => handleRestoreDismissedPurchaseItem(item.id)}
+                        title={t('expense.purchase.restore_dismissed')}
+                        aria-label={t('expense.purchase.restore_dismissed')}
+                      >
+                        <X size={14} />
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
               <div className="expense-purchase-groups">
                 {(purchaseRecommendations.recommendation_groups || []).map((group) => (
                   <section key={group.key} className="expense-purchase-group">
