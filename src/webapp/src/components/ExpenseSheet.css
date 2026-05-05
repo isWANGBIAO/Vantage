@@ -296,6 +296,34 @@
   border-color: rgba(108, 92, 231, 0.42);
 }
 
+.expense-purchase-mode-badge {
+  position: absolute;
+  top: 0.55rem;
+  left: 0.75rem;
+  max-width: calc(100% - 3.2rem);
+  padding: 0.16rem 0.45rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.expense-purchase-mode-random {
+  border-color: rgba(46, 204, 113, 0.36);
+  color: #75d99b;
+  background: rgba(46, 204, 113, 0.08);
+}
+
+.expense-purchase-mode-contextual {
+  border-color: rgba(99, 102, 241, 0.34);
+  color: #a8b0ff;
+  background: rgba(99, 102, 241, 0.08);
+}
+
 .expense-purchase-item-head {
   display: flex;
   justify-content: space-between;

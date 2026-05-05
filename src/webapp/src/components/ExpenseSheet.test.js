@@ -52,14 +52,21 @@ test('Expense Sheet provides a toolbar action for copying the full prompt JSON',
 test('Expense Sheet loads AI purchase recommendations and renders the top recommendation card', () => {
   assert.ok(jsxSource.includes('buildPurchaseRecommendationUrl'));
   assert.ok(jsxSource.includes('recommendation_count'));
+  assert.ok(jsxSource.includes('recommendation_mix'));
+  assert.ok(jsxSource.includes('recommendation_mode'));
   assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations/regenerate'"));
   assert.ok(jsxSource.includes('purchaseRecommendations'));
   assert.ok(jsxSource.includes('expense-purchase-card'));
+  assert.ok(jsxSource.includes('expense-purchase-mode-badge'));
   assert.ok(jsxSource.includes("t('expense.purchase.title')"));
   assert.ok(jsxSource.includes("t('expense.purchase.regenerate')"));
   assert.ok(jsxSource.includes("t('expense.purchase.copy_json')"));
+  assert.ok(jsxSource.includes("t('expense.purchase.mode_random')"));
+  assert.ok(jsxSource.includes("t('expense.purchase.mode_contextual')"));
+  assert.ok(jsxSource.includes("t('expense.purchase.mix_summary'"));
   assert.ok(cssSource.includes('.expense-purchase-card'));
   assert.ok(cssSource.includes('.expense-purchase-groups'));
+  assert.ok(cssSource.includes('.expense-purchase-mode-badge'));
   assert.equal(jsxSource.includes("t('expense.purchase.copy_cover_prompt')"), false);
   assert.equal(cssSource.includes('.expense-purchase-cover'), false);
 });

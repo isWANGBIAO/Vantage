@@ -107,21 +107,29 @@ class BalanceSheetEndpointTests(unittest.TestCase):
                 {"key": "wishlist", "title": "愿望清单", "items": [{"name": f"w-{index}"} for index in range(4)]},
             ],
         }
+        random_llm_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "实用补缺", "items": [{"name": f"rp-{index}"} for index in range(4)]},
+                {"key": "night_guard", "title": "夜间防冲动", "items": [{"name": f"rn-{index}"} for index in range(4)]},
+                {"key": "wishlist", "title": "愿望清单", "items": [{"name": f"rw-{index}"} for index in range(4)]},
+            ],
+        }
 
         with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
             server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")
-        ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(server.LLMClient, "chat", return_value={
-            "content": server.json.dumps(llm_payload, ensure_ascii=False),
-            "usage": {"total_tokens": 50},
-            "model": "gpt-5.5",
-        }) as chat:
+        ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(server.LLMClient, "chat", side_effect=[
+            {"content": server.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+            {"content": server.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+        ]) as chat:
             first_payload = asyncio.run(route.endpoint())
             second_payload = asyncio.run(route.endpoint())
 
         self.assertFalse(first_payload["from_cache"])
         self.assertTrue(second_payload["from_cache"])
         self.assertEqual(first_payload["cache_key"], second_payload["cache_key"])
-        self.assertEqual(chat.call_count, 1)
+        self.assertEqual(chat.call_count, 2)
+        self.assertEqual(first_payload["recommendation_mix"]["random"]["requested"], 6)
+        self.assertEqual(first_payload["recommendation_mix"]["contextual"]["requested"], 6)
 
     def test_purchase_recommendation_dismissal_persists_and_deduplicates(self):
         dismiss_route = next(
@@ -221,9 +229,16 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         fake_sheets = {"Asset": pd.DataFrame({"name": ["keyboard"], "amount": [399.0]})}
         llm_payload = {
             "recommendation_groups": [
-                {"key": "practical", "title": "Practical", "items": [{"name": "desk tray"}]},
-                {"key": "night_guard", "title": "Night guard", "items": [{"name": "cooldown list"}]},
-                {"key": "wishlist", "title": "Wishlist", "items": [{"name": "travel backpack"}]},
+                {"key": "practical", "title": "Practical", "items": [{"name": f"p-{index}"} for index in range(3)]},
+                {"key": "night_guard", "title": "Night guard", "items": [{"name": f"n-{index}"} for index in range(3)]},
+                {"key": "wishlist", "title": "Wishlist", "items": [{"name": f"w-{index}"} for index in range(3)]},
+            ],
+        }
+        random_llm_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "Practical", "items": [{"name": f"rp-{index}"} for index in range(3)]},
+                {"key": "night_guard", "title": "Night guard", "items": [{"name": f"rn-{index}"} for index in range(3)]},
+                {"key": "wishlist", "title": "Wishlist", "items": [{"name": f"rw-{index}"} for index in range(3)]},
             ],
         }
         context_prompt = (
@@ -235,11 +250,10 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             server.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)
         ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(
             server.DataLoader, "construct_prompt", return_value=context_prompt
-        ), patch.object(server.LLMClient, "chat", return_value={
-            "content": server.json.dumps(llm_payload, ensure_ascii=False),
-            "usage": {"total_tokens": 123},
-            "model": "gpt-5.5",
-        }) as chat:
+        ), patch.object(server.LLMClient, "chat", side_effect=[
+            {"content": server.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 123}, "model": "gpt-5.5"},
+            {"content": server.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 123}, "model": "gpt-5.5"},
+        ]) as chat:
             payload = server._build_purchase_recommendations_payload(
                 request_config={
                     "recommendation_count": 9,
@@ -253,16 +267,30 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertNotIn("cover_image", payload)
         self.assertNotIn("image_model", payload)
         self.assertEqual(payload["request_config"]["recommendation_count"], 9)
+        self.assertEqual(payload["recommendation_mix"]["random"]["requested"], 5)
+        self.assertEqual(payload["recommendation_mix"]["contextual"]["requested"], 4)
         self.assertEqual(payload["context"]["time_xlsx_included"], True)
         self.assertEqual(payload["context"]["balance_sheet_included"], True)
-        call_kwargs = chat.call_args.kwargs
-        self.assertEqual(call_kwargs["model"], "gpt-5.5")
-        self.assertEqual(call_kwargs["provider_route"], "custom")
-        self.assertEqual(call_kwargs["reasoning_effort"], "xhigh")
-        self.assertEqual(call_kwargs["service_tier"], "priority")
-        self.assertIn("Time Series Data (JSON)", call_kwargs["messages"][1]["content"])
-        self.assertIn("Balance Sheet Data (JSON)", call_kwargs["messages"][1]["content"])
-        self.assertIn("total of 9", call_kwargs["messages"][1]["content"])
+        self.assertEqual(chat.call_count, 2)
+        contextual_call = chat.call_args_list[0].kwargs
+        random_call = chat.call_args_list[1].kwargs
+        for call_kwargs in (contextual_call, random_call):
+            self.assertEqual(call_kwargs["model"], "gpt-5.5")
+            self.assertEqual(call_kwargs["provider_route"], "custom")
+            self.assertEqual(call_kwargs["reasoning_effort"], "xhigh")
+            self.assertEqual(call_kwargs["service_tier"], "priority")
+        self.assertEqual(contextual_call["source"], "expense_purchase_recommendations_contextual")
+        self.assertEqual(random_call["source"], "expense_purchase_recommendations_random")
+        self.assertIn("Time Series Data (JSON)", contextual_call["messages"][1]["content"])
+        self.assertIn("Balance Sheet Data (JSON)", contextual_call["messages"][1]["content"])
+        self.assertIn("total of 4", contextual_call["messages"][1]["content"])
+        self.assertNotIn("Time Series Data (JSON)", random_call["messages"][1]["content"])
+        self.assertNotIn("Balance Sheet Data (JSON)", random_call["messages"][1]["content"])
+        self.assertIn("total of 5", random_call["messages"][1]["content"])
+
+    def test_purchase_recommendation_mix_uses_random_half_rounded_up(self):
+        self.assertEqual(server._purchase_recommendation_mode_counts(12), {"random": 6, "contextual": 6})
+        self.assertEqual(server._purchase_recommendation_mode_counts(7), {"random": 4, "contextual": 3})
 
     def test_purchase_recommendation_groups_are_trimmed_to_total_count(self):
         raw_groups = [
@@ -292,6 +320,20 @@ class BalanceSheetEndpointTests(unittest.TestCase):
                 {"key": "wishlist", "title": "Wishlist", "items": [{"name": f"w-{index}"} for index in range(2)]},
             ],
         }
+        random_full_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "Practical", "items": [{"name": f"rp-{index}"} for index in range(2)]},
+                {"key": "night_guard", "title": "Night guard", "items": [{"name": f"rn-{index}"} for index in range(2)]},
+                {"key": "wishlist", "title": "Wishlist", "items": [{"name": f"rw-{index}"} for index in range(2)]},
+            ],
+        }
+        random_full_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "Practical", "items": [{"name": f"rp-{index}"} for index in range(2)]},
+                {"key": "night_guard", "title": "Night guard", "items": [{"name": f"rn-{index}"} for index in range(2)]},
+                {"key": "wishlist", "title": "Wishlist", "items": [{"name": f"rw-{index}"} for index in range(2)]},
+            ],
+        }
 
         with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
             server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)
@@ -304,16 +346,17 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         ), patch.object(server.LLMClient, "chat", side_effect=[
             {"content": server.json.dumps(underfilled_payload), "usage": {"total_tokens": 30}, "model": "gpt-5.5"},
             {"content": server.json.dumps(full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
+            {"content": server.json.dumps(random_full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
         ]) as chat:
-            payload = server._build_purchase_recommendations_payload(request_config={"recommendation_count": 6})
+            payload = server._build_purchase_recommendations_payload(request_config={"recommendation_count": 8})
 
-        self.assertEqual(chat.call_count, 2)
+        self.assertEqual(chat.call_count, 3)
         retry_messages = chat.call_args_list[1].kwargs["messages"]
         self.assertIn("only returned 3", retry_messages[-1]["content"])
-        self.assertIn("exactly 6", retry_messages[-1]["content"])
-        self.assertEqual(sum(len(group["items"]) for group in payload["recommendation_groups"]), 6)
-        self.assertEqual(payload["recommendation_count_requested"], 6)
-        self.assertEqual(payload["recommendation_count_actual"], 6)
+        self.assertIn("exactly 4", retry_messages[-1]["content"])
+        self.assertEqual(sum(len(group["items"]) for group in payload["recommendation_groups"]), 8)
+        self.assertEqual(payload["recommendation_count_requested"], 8)
+        self.assertEqual(payload["recommendation_count_actual"], 8)
         self.assertFalse(payload["recommendation_count_underfilled"])
         self.assertEqual(payload["generation_attempts"], 2)
 
@@ -337,6 +380,13 @@ class BalanceSheetEndpointTests(unittest.TestCase):
                 {"key": "wishlist", "title": "Wishlist", "items": [{"name": f"w-{index}"} for index in range(2)]},
             ],
         }
+        random_full_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "Practical", "items": [{"name": f"rp-{index}"} for index in range(2)]},
+                {"key": "night_guard", "title": "Night guard", "items": [{"name": f"rn-{index}"} for index in range(2)]},
+                {"key": "wishlist", "title": "Wishlist", "items": [{"name": f"rw-{index}"} for index in range(2)]},
+            ],
+        }
 
         with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
             server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)
@@ -349,11 +399,14 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         ), patch.object(server, "_load_purchase_recommendation_cache", return_value=underfilled_cached), patch.object(
             server.LLMClient,
             "chat",
-            return_value={"content": server.json.dumps(full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
+            side_effect=[
+                {"content": server.json.dumps(full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
+                {"content": server.json.dumps(random_full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
+            ],
         ) as chat:
             payload = server._build_purchase_recommendations_payload(request_config={"recommendation_count": 6})
 
-        self.assertEqual(chat.call_count, 1)
+        self.assertEqual(chat.call_count, 2)
         self.assertFalse(payload["from_cache"])
         self.assertEqual(sum(len(group["items"]) for group in payload["recommendation_groups"]), 6)
         self.assertFalse(payload["recommendation_count_underfilled"])
@@ -371,9 +424,49 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertIn("practical", user_prompt)
         self.assertIn("night_guard", user_prompt)
         self.assertIn("wishlist", user_prompt)
+        self.assertIn("recommendation_mode", user_prompt)
+        self.assertIn("contextual", user_prompt)
         self.assertIn("restore-me", user_prompt)
         self.assertIn("dismissed purchase recommendations", user_prompt)
         self.assertNotIn("cover_prompt", user_prompt)
+
+    def test_random_purchase_recommendation_prompt_excludes_context_bundle(self):
+        messages = server._build_purchase_random_recommendation_messages(
+            dismissed_items=[{"name": "blocked thing", "category": "blocked category"}],
+            recommendation_count=5,
+            random_seed="seed-123",
+        )
+
+        user_prompt = messages[1]["content"]
+        self.assertIn("total of 5", user_prompt)
+        self.assertIn("seed-123", user_prompt)
+        self.assertIn("blocked thing", user_prompt)
+        self.assertIn("recommendation_mode", user_prompt)
+        self.assertIn("random", user_prompt)
+        self.assertNotIn("Time Series Data (JSON)", user_prompt)
+        self.assertNotIn("Balance Sheet Data (JSON)", user_prompt)
+
+    def test_purchase_recommendation_dismissal_filters_random_and_contextual_modes(self):
+        groups = [
+            {
+                "key": "practical",
+                "items": [
+                    {"name": "blocked exact", "category": "tools", "recommendation_mode": "random"},
+                    {"name": "fresh idea", "category": "blocked category", "recommendation_mode": "contextual"},
+                    {"name": "safe idea", "category": "new", "recommendation_mode": "random"},
+                ],
+            }
+        ]
+
+        filtered = server._filter_dismissed_purchase_groups(
+            groups,
+            [
+                {"name": "blocked exact", "category": "other"},
+                {"name": "old item", "category": "blocked category"},
+            ],
+        )
+
+        self.assertEqual([item["name"] for item in filtered[0]["items"]], ["safe idea"])
 
     def test_purchase_recommendation_dismissal_can_be_deleted_by_id(self):
         dismiss_route = next(route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations/dismiss")
@@ -445,20 +538,28 @@ class BalanceSheetEndpointTests(unittest.TestCase):
                 {"key": "wishlist", "title": "愿望清单", "items": [{"name": f"w-{index}"} for index in range(4)]},
             ],
         }
+        random_llm_payload = {
+            "recommendation_groups": [
+                {"key": "practical", "title": "实用补缺", "items": [{"name": f"rp-{index}"} for index in range(4)]},
+                {"key": "night_guard", "title": "夜间防冲动", "items": [{"name": f"rn-{index}"} for index in range(4)]},
+                {"key": "wishlist", "title": "愿望清单", "items": [{"name": f"rw-{index}"} for index in range(4)]},
+            ],
+        }
 
         with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
             server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")
-        ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(server.LLMClient, "chat", return_value={
-            "content": server.json.dumps(llm_payload, ensure_ascii=False),
-            "usage": {"total_tokens": 50},
-            "model": "gpt-5.5",
-        }) as chat:
+        ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(server.LLMClient, "chat", side_effect=[
+            {"content": server.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+            {"content": server.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+            {"content": server.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+            {"content": server.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+        ]) as chat:
             first_payload = asyncio.run(route.endpoint())
             second_payload = asyncio.run(route.endpoint())
 
         self.assertFalse(first_payload["from_cache"])
         self.assertFalse(second_payload["from_cache"])
-        self.assertEqual(chat.call_count, 2)
+        self.assertEqual(chat.call_count, 4)
 
     def test_balance_sheet_route_returns_full_trend_points_when_sheet_rows_are_truncated(self):
         route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)

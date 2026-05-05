@@ -35,6 +35,7 @@ import math
 import calendar
 import tempfile
 import copy
+import uuid
 from collections import deque
 from contextlib import closing, suppress
 from contextlib import asynccontextmanager
@@ -3191,11 +3192,17 @@ PURCHASE_RECOMMENDATION_GROUPS = [
     ("wishlist", "愿望清单"),
 ]
 PURCHASE_RECOMMENDATION_CACHE_DIR = "balance_sheet_purchase_recommendations"
-PURCHASE_RECOMMENDATION_PROMPT_VERSION = 3
+PURCHASE_RECOMMENDATION_PROMPT_VERSION = 4
 DEFAULT_PURCHASE_RECOMMENDATION_COUNT = 12
 MIN_PURCHASE_RECOMMENDATION_COUNT = 3
 MAX_PURCHASE_RECOMMENDATION_COUNT = 30
 PURCHASE_CONTEXT_TIME_SERIES_START_DATE = "earliest"
+PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL = "contextual"
+PURCHASE_RECOMMENDATION_MODE_RANDOM = "random"
+PURCHASE_RECOMMENDATION_MODES = {
+    PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL,
+    PURCHASE_RECOMMENDATION_MODE_RANDOM,
+}
 
 
 def _purchase_recommendation_cache_dir():
@@ -3247,6 +3254,30 @@ def _normalize_purchase_recommendation_count(value=None):
     except (TypeError, ValueError):
         count = DEFAULT_PURCHASE_RECOMMENDATION_COUNT
     return max(MIN_PURCHASE_RECOMMENDATION_COUNT, min(MAX_PURCHASE_RECOMMENDATION_COUNT, count))
+
+
+def _normalize_purchase_group_limit(value=None):
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        count = DEFAULT_PURCHASE_RECOMMENDATION_COUNT
+    return max(0, min(MAX_PURCHASE_RECOMMENDATION_COUNT, count))
+
+
+def _purchase_recommendation_mode_counts(recommendation_count):
+    total_count = _normalize_purchase_group_limit(recommendation_count)
+    random_count = math.ceil(total_count / 2)
+    return {
+        PURCHASE_RECOMMENDATION_MODE_RANDOM: random_count,
+        PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL: total_count - random_count,
+    }
+
+
+def _normalize_purchase_recommendation_mode(value=None, default=PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL):
+    mode = str(value or default or PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL).strip().lower()
+    if mode not in PURCHASE_RECOMMENDATION_MODES:
+        return PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL
+    return mode
 
 
 def _normalize_purchase_request_config(config=None):
@@ -3315,6 +3346,10 @@ def _connect_purchase_recommendation_db():
 
 
 def _dismissed_purchase_row_to_item(row):
+    try:
+        item_json = json.loads(row["item_json"] or "{}")
+    except (TypeError, json.JSONDecodeError):
+        item_json = {}
     return {
         "id": row["id"],
         "cache_key": row["cache_key"] or "",
@@ -3326,6 +3361,7 @@ def _dismissed_purchase_row_to_item(row):
         "evidence": row["evidence"] or "",
         "duplicate_check": row["duplicate_check"] or "",
         "impulse_risk": row["impulse_risk"] or "",
+        "recommendation_mode": _normalize_purchase_recommendation_mode(item_json.get("recommendation_mode")),
         "created_at": row["created_at"] or "",
     }
 
@@ -3433,22 +3469,73 @@ def _filter_dismissed_purchase_groups(groups, dismissed_items):
         for item in (dismissed_items or [])
         if item.get("name")
     }
-    if not dismissed_name_keys:
+    dismissed_category_keys = {
+        _normalize_purchase_text_key(item.get("category"))
+        for item in (dismissed_items or [])
+        if item.get("category")
+    }
+    if not dismissed_name_keys and not dismissed_category_keys:
         return groups
     filtered_groups = []
     for group in groups or []:
         next_group = copy.deepcopy(group)
-        next_group["items"] = [
-            item
-            for item in (next_group.get("items") or [])
-            if _normalize_purchase_text_key(item.get("name")) not in dismissed_name_keys
-        ]
+        kept_items = []
+        for item in next_group.get("items") or []:
+            name_key = _normalize_purchase_text_key(item.get("name"))
+            category_key = _normalize_purchase_text_key(item.get("category"))
+            same_name = name_key in dismissed_name_keys
+            similar_name = any(
+                dismissed_name
+                and name_key
+                and (dismissed_name in name_key or name_key in dismissed_name)
+                for dismissed_name in dismissed_name_keys
+            )
+            same_category = category_key in dismissed_category_keys
+            if same_name or similar_name or same_category:
+                continue
+            kept_items.append(item)
+        next_group["items"] = kept_items
         filtered_groups.append(next_group)
     return filtered_groups
 
 
 def _count_purchase_recommendation_items(groups):
     return sum(len(group.get("items") or []) for group in (groups or []))
+
+
+def _count_purchase_recommendation_items_by_mode(groups):
+    counts = {
+        PURCHASE_RECOMMENDATION_MODE_RANDOM: 0,
+        PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL: 0,
+    }
+    for group in groups or []:
+        for item in group.get("items") or []:
+            mode = _normalize_purchase_recommendation_mode(item.get("recommendation_mode"))
+            counts[mode] += 1
+    return counts
+
+
+def _build_purchase_recommendation_mix(requested_counts, groups):
+    requested_counts = requested_counts if isinstance(requested_counts, dict) else {}
+    actual_counts = _count_purchase_recommendation_items_by_mode(groups)
+    return {
+        PURCHASE_RECOMMENDATION_MODE_RANDOM: {
+            "requested": int(requested_counts.get(PURCHASE_RECOMMENDATION_MODE_RANDOM) or 0),
+            "actual": actual_counts[PURCHASE_RECOMMENDATION_MODE_RANDOM],
+        },
+        PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL: {
+            "requested": int(requested_counts.get(PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL) or 0),
+            "actual": actual_counts[PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL],
+        },
+    }
+
+
+def _purchase_recommendation_mix_underfilled(mix):
+    return any(
+        (entry.get("actual") or 0) < (entry.get("requested") or 0)
+        for entry in (mix or {}).values()
+        if isinstance(entry, dict)
+    )
 
 
 def _with_dismissed_purchase_filter(payload, dismissed_items=None):
@@ -3465,9 +3552,16 @@ def _with_dismissed_purchase_filter(payload, dismissed_items=None):
         or next_payload.get("recommendation_count")
     )
     actual_count = _count_purchase_recommendation_items(next_payload.get("recommendation_groups") or [])
+    requested_mix = next_payload.get("recommendation_mix_requested") or _purchase_recommendation_mode_counts(requested_count)
+    next_payload["recommendation_mix"] = _build_purchase_recommendation_mix(
+        requested_mix,
+        next_payload.get("recommendation_groups") or [],
+    )
     next_payload["recommendation_count_requested"] = requested_count
     next_payload["recommendation_count_actual"] = actual_count
-    next_payload["recommendation_count_underfilled"] = actual_count < requested_count
+    next_payload["recommendation_count_underfilled"] = (
+        actual_count < requested_count or _purchase_recommendation_mix_underfilled(next_payload["recommendation_mix"])
+    )
     return next_payload
 
 
@@ -3510,8 +3604,12 @@ def _extract_json_object_from_text(text):
     return json.loads(value)
 
 
-def _normalize_purchase_item(item):
+def _normalize_purchase_item(item, recommendation_mode=None):
     source = item if isinstance(item, dict) else {}
+    item_mode = _normalize_purchase_recommendation_mode(
+        source.get("recommendation_mode") or source.get("mode"),
+        default=recommendation_mode or PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL,
+    )
     return {
         "name": str(source.get("name") or "").strip(),
         "category": str(source.get("category") or "").strip(),
@@ -3520,11 +3618,12 @@ def _normalize_purchase_item(item):
         "evidence": str(source.get("evidence") or "").strip(),
         "duplicate_check": str(source.get("duplicate_check") or "").strip(),
         "impulse_risk": str(source.get("impulse_risk") or "").strip(),
+        "recommendation_mode": item_mode,
     }
 
 
 def _trim_purchase_groups_to_total(groups, recommendation_count):
-    target_count = _normalize_purchase_recommendation_count(recommendation_count)
+    target_count = _normalize_purchase_group_limit(recommendation_count)
     while sum(len(group.get("items") or []) for group in groups) > target_count:
         removable = [
             (len(group.get("items") or []), index)
@@ -3538,7 +3637,7 @@ def _trim_purchase_groups_to_total(groups, recommendation_count):
     return groups
 
 
-def _normalize_purchase_recommendation_groups(raw_groups, recommendation_count=None):
+def _normalize_purchase_recommendation_groups(raw_groups, recommendation_count=None, recommendation_mode=None):
     by_key = {}
     if isinstance(raw_groups, list):
         for group in raw_groups:
@@ -3555,7 +3654,10 @@ def _normalize_purchase_recommendation_groups(raw_groups, recommendation_count=N
     for key, title in PURCHASE_RECOMMENDATION_GROUPS:
         group = by_key.get(key) or {}
         items = group.get("items") if isinstance(group, dict) else []
-        normalized_items = [_normalize_purchase_item(item) for item in (items if isinstance(items, list) else [])]
+        normalized_items = [
+            _normalize_purchase_item(item, recommendation_mode=recommendation_mode)
+            for item in (items if isinstance(items, list) else [])
+        ]
         groups.append({
             "key": key,
             "title": str(group.get("title") or title).strip(),
@@ -3570,7 +3672,7 @@ def _build_purchase_recommendation_messages(context_prompt, dismissed_items=None
             "## Balance Sheet Data (JSON)\n\n```json\n"
             f"{json.dumps(context_prompt, ensure_ascii=False, separators=(',', ':'), default=str)}\n```"
         )
-    total_count = _normalize_purchase_recommendation_count(recommendation_count)
+    total_count = _normalize_purchase_group_limit(recommendation_count)
     dismissed_payload = [
         {
             "name": item.get("name", ""),
@@ -3595,13 +3697,56 @@ def _build_purchase_recommendation_messages(context_prompt, dismissed_items=None
         "practical, night_guard, wishlist. Keep all three groups present; distribute the total sensibly based on evidence.\n"
         "输出结构必须是 JSON object，只包含 recommendation_groups。"
         "recommendation_groups 必须包含 key=practical/night_guard/wishlist 三组。"
-        "每个 item 必须包含 name、category、estimated_price、reason、evidence、duplicate_check、impulse_risk。\n"
+        "每个 item 必须包含 name、category、estimated_price、reason、evidence、duplicate_check、impulse_risk、recommendation_mode。"
+        "recommendation_mode 必须固定为 contextual。\n"
         "已排除购物推荐 / dismissed purchase recommendations JSON 表示用户已经打叉、不想再看到的方向。"
         "不要推荐同名、近似同类、功能重复的物品；如果排除项是一个品类，也要避开同用途替代品。\n"
         "购物策略：实用补缺优先找已有资产和预算结构中的缺口；夜间防冲动优先给低价、延迟消费、减少失眠冲动的工具；"
         "愿望清单可以更贵，但必须说明为什么不是重复购买，并给出冲动风险。\n\n"
         f"Dismissed purchase recommendations JSON:\n{dismissed_json}\n\n"
         f"Context bundle from Action Plan data sources:\n{context_prompt}"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _build_purchase_random_recommendation_messages(dismissed_items=None, recommendation_count=None, random_seed=None):
+    total_count = _normalize_purchase_group_limit(recommendation_count)
+    dismissed_payload = [
+        {
+            "name": item.get("name", ""),
+            "category": item.get("category", ""),
+            "group_key": item.get("group_key", ""),
+            "reason": item.get("reason", ""),
+            "evidence": item.get("evidence", ""),
+            "duplicate_check": item.get("duplicate_check", ""),
+            "impulse_risk": item.get("impulse_risk", ""),
+        }
+        for item in (dismissed_items or [])
+    ]
+    dismissed_json = json.dumps(dismissed_payload, ensure_ascii=False, separators=(",", ":"))
+    seed = str(random_seed or uuid.uuid4()).strip()
+    system_prompt = (
+        "你是一个购物灵感随机探索助手。你的任务是产生用户没有明确排除的随机购物想法，"
+        "不要读取、推断或引用用户的财务表格、健康记录、库存、个人计划或历史行为上下文。"
+        "只输出 JSON，不要 Markdown。"
+    )
+    user_prompt = (
+        f"Generate a total of {total_count} random purchase recommendations across exactly three groups: "
+        "practical, night_guard, wishlist. Keep all three groups present.\n"
+        "输出结构必须是 JSON object，只包含 recommendation_groups。"
+        "recommendation_groups 必须包含 key=practical/night_guard/wishlist 三组。"
+        "每个 item 必须包含 name、category、estimated_price、reason、evidence、duplicate_check、impulse_risk、recommendation_mode。"
+        "recommendation_mode 必须固定为 random。\n"
+        f"Random seed: {seed}. 按这个种子发散到彼此差异明显的品类，不要总是围绕同一批常见答案。\n"
+        "随机探索边界：可以跨生活工具、桌面收纳、户外通勤、厨房小物、学习爱好、旅行、维护保养、数字生活等方向。"
+        "不要推荐违法、成人、赌博、金融投资、处方药、医疗诊断、危险武器、活体动物或明显成瘾消费。"
+        "价格可以从低价小物到中等愿望清单，但每项必须写清楚它为什么只是随机探索而不是基于个人表格证据。\n"
+        "已排除购物推荐 / dismissed purchase recommendations JSON 表示用户已经打叉、不想再看到的方向。"
+        "不要推荐同名、近似同类、功能重复的物品；如果排除项是一个品类，也要避开同用途替代品。\n\n"
+        f"Dismissed purchase recommendations JSON:\n{dismissed_json}"
     )
     return [
         {"role": "system", "content": system_prompt},
@@ -3651,6 +3796,100 @@ def _build_purchase_context_metadata(context_prompt):
     }
 
 
+def _dedupe_purchase_recommendation_groups(groups):
+    seen_name_keys = set()
+    deduped_groups = []
+    for group in groups or []:
+        next_group = copy.deepcopy(group)
+        next_items = []
+        for item in next_group.get("items") or []:
+            name_key = _normalize_purchase_text_key(item.get("name"))
+            if not name_key or name_key in seen_name_keys:
+                continue
+            seen_name_keys.add(name_key)
+            next_items.append(item)
+        next_group["items"] = next_items
+        deduped_groups.append(next_group)
+    return deduped_groups
+
+
+def _merge_purchase_recommendation_groups(*group_sets):
+    merged = []
+    for key, title in PURCHASE_RECOMMENDATION_GROUPS:
+        next_group = {"key": key, "title": title, "items": []}
+        for groups in group_sets:
+            for group in groups or []:
+                if group.get("key") != key:
+                    continue
+                next_group["title"] = str(group.get("title") or next_group["title"]).strip()
+                next_group["items"].extend(copy.deepcopy(group.get("items") or []))
+                break
+        merged.append(next_group)
+    return _dedupe_purchase_recommendation_groups(merged)
+
+
+def _generate_purchase_recommendation_groups(
+    llm_client,
+    messages,
+    requested_count,
+    recommendation_mode,
+    request_config,
+    metadata,
+    dismissed_items=None,
+):
+    generation_attempts = 0
+    llm_result = {}
+    raw_content = ""
+    recommendation_groups = []
+    requested_count = _normalize_purchase_group_limit(requested_count)
+    mode = _normalize_purchase_recommendation_mode(recommendation_mode)
+
+    for attempt in range(1, 3):
+        generation_attempts = attempt
+        llm_result = llm_client.chat(
+            messages=messages,
+            stream=False,
+            model=request_config["model"],
+            provider_route=request_config["provider_route"],
+            reasoning_effort=request_config["reasoning_effort"],
+            service_tier=request_config["service_tier"],
+            source=f"expense_purchase_recommendations_{mode}",
+            entrypoint="src/server.py",
+            metadata={
+                **metadata,
+                "purchase_recommendation_mode": mode,
+                "purchase_recommendation_count": requested_count,
+                "purchase_generation_attempt": attempt,
+            },
+        )
+        raw_content = llm_result.get("content") if isinstance(llm_result, dict) else ""
+        parsed = _extract_json_object_from_text(raw_content)
+        recommendation_groups = _normalize_purchase_recommendation_groups(
+            parsed.get("recommendation_groups"),
+            recommendation_count=requested_count,
+            recommendation_mode=mode,
+        )
+        recommendation_groups = _filter_dismissed_purchase_groups(recommendation_groups, dismissed_items or [])
+        recommendation_groups = _dedupe_purchase_recommendation_groups(recommendation_groups)
+        actual_count = _count_purchase_recommendation_items(recommendation_groups)
+        if actual_count >= requested_count or attempt >= 2:
+            break
+        messages = _build_purchase_recommendation_retry_messages(
+            messages,
+            raw_content,
+            requested_count,
+            actual_count,
+        )
+
+    return {
+        "groups": recommendation_groups,
+        "attempts": generation_attempts,
+        "result": llm_result,
+        "raw_content": raw_content,
+        "actual_count": _count_purchase_recommendation_items(recommendation_groups),
+    }
+
+
 def _build_purchase_recommendations_payload(force_regenerate=False, request_config=None):
     request_config = _normalize_purchase_request_config(request_config)
     path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
@@ -3676,67 +3915,79 @@ def _build_purchase_recommendations_payload(force_regenerate=False, request_conf
             if not filtered_cached.get("recommendation_count_underfilled"):
                 return filtered_cached
 
-    messages = _build_purchase_recommendation_messages(
+    requested_count = request_config["recommendation_count"]
+    mode_counts = _purchase_recommendation_mode_counts(requested_count)
+    random_seed = str(uuid.uuid4())
+    base_metadata = {
+        "balance_sheet_cache_key": cache_key,
+        "purchase_context_hash": context_metadata["prompt_hash"],
+        "purchase_dismissed_hash": dismissed_hash,
+        "purchase_random_seed": random_seed,
+    }
+
+    contextual_messages = _build_purchase_recommendation_messages(
         context_prompt,
         dismissed_items=dismissed_items,
-        recommendation_count=request_config["recommendation_count"],
+        recommendation_count=mode_counts[PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL],
+    )
+    random_messages = _build_purchase_random_recommendation_messages(
+        dismissed_items=dismissed_items,
+        recommendation_count=mode_counts[PURCHASE_RECOMMENDATION_MODE_RANDOM],
+        random_seed=random_seed,
     )
     llm_client = LLMClient()
-    generation_attempts = 0
-    llm_result = {}
-    raw_content = ""
-    recommendation_groups = []
-    requested_count = request_config["recommendation_count"]
-    for attempt in range(1, 3):
-        generation_attempts = attempt
-        llm_result = llm_client.chat(
-            messages=messages,
-            stream=False,
-            model=request_config["model"],
-            provider_route=request_config["provider_route"],
-            reasoning_effort=request_config["reasoning_effort"],
-            service_tier=request_config["service_tier"],
-            source="expense_purchase_recommendations",
-            entrypoint="src/server.py",
-            metadata={
-                "balance_sheet_cache_key": cache_key,
-                "purchase_recommendation_count": requested_count,
-                "purchase_context_hash": context_metadata["prompt_hash"],
-                "purchase_dismissed_hash": dismissed_hash,
-                "purchase_generation_attempt": attempt,
-            },
-        )
-        raw_content = llm_result.get("content") if isinstance(llm_result, dict) else ""
-        parsed = _extract_json_object_from_text(raw_content)
-        recommendation_groups = _normalize_purchase_recommendation_groups(
-            parsed.get("recommendation_groups"),
-            recommendation_count=requested_count,
-        )
-        actual_count = _count_purchase_recommendation_items(recommendation_groups)
-        if actual_count >= requested_count or attempt >= 2:
-            break
-        messages = _build_purchase_recommendation_retry_messages(
-            messages,
-            raw_content,
-            requested_count,
-            actual_count,
-        )
+    contextual_generation = _generate_purchase_recommendation_groups(
+        llm_client,
+        contextual_messages,
+        mode_counts[PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL],
+        PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL,
+        request_config,
+        base_metadata,
+        dismissed_items=dismissed_items,
+    )
+    random_generation = _generate_purchase_recommendation_groups(
+        llm_client,
+        random_messages,
+        mode_counts[PURCHASE_RECOMMENDATION_MODE_RANDOM],
+        PURCHASE_RECOMMENDATION_MODE_RANDOM,
+        request_config,
+        base_metadata,
+        dismissed_items=dismissed_items,
+    )
+    recommendation_groups = _merge_purchase_recommendation_groups(
+        contextual_generation["groups"],
+        random_generation["groups"],
+    )
     actual_count = _count_purchase_recommendation_items(recommendation_groups)
+    recommendation_mix = _build_purchase_recommendation_mix(mode_counts, recommendation_groups)
+    generation_attempts = max(contextual_generation["attempts"], random_generation["attempts"])
+    contextual_result = contextual_generation["result"] if isinstance(contextual_generation["result"], dict) else {}
+    random_result = random_generation["result"] if isinstance(random_generation["result"], dict) else {}
     payload = {
         "status": "ready",
         "from_cache": False,
         "cache_key": cache_key,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "text_model": llm_result.get("model") if isinstance(llm_result, dict) else None,
+        "text_model": contextual_result.get("model") or random_result.get("model"),
         "request_config": request_config,
         "context": context_metadata,
+        "recommendation_mix_requested": mode_counts,
+        "recommendation_mix": recommendation_mix,
         "recommendation_groups": recommendation_groups,
         "recommendation_count_requested": requested_count,
         "recommendation_count_actual": actual_count,
-        "recommendation_count_underfilled": actual_count < requested_count,
+        "recommendation_count_underfilled": (
+            actual_count < requested_count or _purchase_recommendation_mix_underfilled(recommendation_mix)
+        ),
         "generation_attempts": generation_attempts,
-        "usage": llm_result.get("usage") if isinstance(llm_result, dict) else None,
-        "response_raw": llm_result,
+        "usage": {
+            PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL: contextual_result.get("usage"),
+            PURCHASE_RECOMMENDATION_MODE_RANDOM: random_result.get("usage"),
+        },
+        "response_raw": {
+            PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL: contextual_result,
+            PURCHASE_RECOMMENDATION_MODE_RANDOM: random_result,
+        },
     }
     _save_purchase_recommendation_cache(payload)
     return _with_dismissed_purchase_filter(payload, dismissed_items)

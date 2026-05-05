@@ -76,6 +76,10 @@ function savePurchaseRecommendationCount(value, storage = globalThis.localStorag
   return normalized;
 }
 
+function getPurchaseRecommendationMode(item) {
+  return item?.recommendation_mode === 'random' ? 'random' : 'contextual';
+}
+
 async function writeTextWithFallback(content) {
   if (!content) {
     return false;
@@ -669,6 +673,9 @@ export default function ExpenseSheet({ theme = 'dark' }) {
       ? t('expense.purchase.copy_failed')
       : t('expense.purchase.copy_json');
   const purchaseDismissedCount = Number(purchaseRecommendations?.dismissed_count ?? dismissedPurchaseCount) || 0;
+  const purchaseRecommendationMix = purchaseRecommendations?.recommendation_mix;
+  const purchaseRandomActual = Number(purchaseRecommendationMix?.random?.actual) || 0;
+  const purchaseContextualActual = Number(purchaseRecommendationMix?.contextual?.actual) || 0;
 
   const balanceChartCard = balanceChart || {
     id: 'balance',
@@ -834,6 +841,12 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                 {purchaseRecommendations.text_model ? (
                   <span>{t('expense.purchase.text_model', { value: purchaseRecommendations.text_model })}</span>
                 ) : null}
+                {purchaseRecommendationMix ? (
+                  <span>{t('expense.purchase.mix_summary', {
+                    random: purchaseRandomActual,
+                    contextual: purchaseContextualActual,
+                  })}</span>
+                ) : null}
                 <span>{t('expense.purchase.dismissed_count', { count: purchaseDismissedCount })}</span>
                 <button
                   type="button"
@@ -893,6 +906,11 @@ export default function ExpenseSheet({ theme = 'dark' }) {
                             >
                               <X size={14} />
                             </button>
+                            <span className={`expense-purchase-mode-badge expense-purchase-mode-${getPurchaseRecommendationMode(item)}`}>
+                              {getPurchaseRecommendationMode(item) === 'random'
+                                ? t('expense.purchase.mode_random')
+                                : t('expense.purchase.mode_contextual')}
+                            </span>
                             <div className="expense-purchase-item-head">
                               <strong>{item.name}</strong>
                               {item.category ? <span>{item.category}</span> : null}
