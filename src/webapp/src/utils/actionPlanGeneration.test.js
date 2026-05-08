@@ -77,6 +77,26 @@ test('buildActionPlanGenerationPayload maps reasoning for DeepSeek V4 models', (
   );
 });
 
+test('buildActionPlanGenerationPayload can request provider readiness wait for startup auto generation', () => {
+  assert.deepEqual(
+    buildActionPlanGenerationPayload('xhigh', {
+      replaceToday: true,
+      model: 'gpt-5.5',
+      providerRoute: 'custom',
+      startupAutoGenerate: true,
+      fastModeEnabled: true,
+    }),
+    {
+      reasoning_effort: 'xhigh',
+      replace_today: true,
+      model: 'gpt-5.5',
+      provider_route: 'custom',
+      service_tier: 'priority',
+      wait_for_provider_ready: true,
+    },
+  );
+});
+
 test('shouldAutogenerateActionPlan only allows startup runs when the setting is enabled', () => {
   assert.equal(
     shouldAutogenerateActionPlan({

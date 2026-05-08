@@ -56,6 +56,7 @@ from src.core.config import Config
 from src.core.user_config import (
     DEFAULT_LOCAL_PROXY_BASE_URL,
     LOCAL_PROXY_PROVIDER_ROUTES,
+    get_provider_chain_config,
     load_provider_config,
     load_settings,
 )
@@ -87,6 +88,9 @@ app = FastAPI()
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
 DEFAULT_BACKEND_BIND_HOST = "127.0.0.1"
 TRANSCRIBE_TIMEOUT_SECONDS = 60
+ACTION_PLAN_PROVIDER_READY_TIMEOUT_SECONDS = 300
+ACTION_PLAN_PROVIDER_READY_POLL_SECONDS = 2.0
+ACTION_PLAN_PROVIDER_READY_REQUEST_TIMEOUT_SECONDS = 3
 STORAGE_SCAN_MAX_SECONDS = 3.0
 STORAGE_SCAN_MAX_ENTRIES = 20000
 LATEST_MEDIA_SCAN_MAX_SECONDS = 3.0
@@ -226,6 +230,104 @@ def _build_run_prompt_subprocess(run_prompt_args=None):
 
     script_path = _resolve_run_prompt_script_path()
     return [sys.executable, script_path, *resolved_args], os.path.dirname(script_path)
+
+
+def _is_local_provider_base_url(base_url: str | None) -> bool:
+    normalized = str(base_url or "").strip().lower()
+    return (
+        "://127.0.0.1" in normalized
+        or "://localhost" in normalized
+        or "://[::1]" in normalized
+    )
+
+
+def _resolve_action_plan_ready_provider(provider_route: str | None = None) -> dict | None:
+    providers = get_provider_chain_config()
+    if not providers:
+        return None
+
+    normalized_route = str(provider_route or "").strip()
+    if normalized_route:
+        for provider in providers:
+            if provider.get("route") == normalized_route:
+                return provider
+
+    return providers[0]
+
+
+def _probe_provider_models_endpoint(provider: dict) -> dict:
+    base_url = str(provider.get("base_url") or "").rstrip("/")
+    api_key = str(provider.get("api_key") or "").strip()
+    if not base_url:
+        return {"ready": False, "error": "provider base URL is empty"}
+
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    url = f"{base_url}/models"
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=ACTION_PLAN_PROVIDER_READY_REQUEST_TIMEOUT_SECONDS,
+        )
+        return {
+            "ready": True,
+            "status_code": response.status_code,
+            "url": url,
+        }
+    except requests.RequestException as exc:
+        return {
+            "ready": False,
+            "error": str(exc),
+            "url": url,
+        }
+
+
+async def _wait_for_action_plan_provider_ready(provider_route: str | None = None) -> dict:
+    provider = _resolve_action_plan_ready_provider(provider_route)
+    if not provider:
+        return {
+            "ready": False,
+            "route": str(provider_route or "").strip(),
+            "base_url": "",
+            "error": "No configured AI provider is available.",
+        }
+
+    base_url = str(provider.get("base_url") or "").rstrip("/")
+    route = provider.get("route") or provider_route or ""
+    if not _is_local_provider_base_url(base_url):
+        return {
+            "ready": True,
+            "route": route,
+            "base_url": base_url,
+            "skipped": True,
+        }
+
+    deadline = time.monotonic() + ACTION_PLAN_PROVIDER_READY_TIMEOUT_SECONDS
+    last_probe = {
+        "ready": False,
+        "error": "provider readiness was not checked",
+    }
+    while True:
+        last_probe = await asyncio.to_thread(_probe_provider_models_endpoint, provider)
+        if last_probe.get("ready"):
+            return {
+                **last_probe,
+                "route": route,
+                "base_url": base_url,
+            }
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {
+                **last_probe,
+                "route": route,
+                "base_url": base_url,
+            }
+
+        await asyncio.sleep(min(ACTION_PLAN_PROVIDER_READY_POLL_SECONDS, remaining))
 
 
 def _get_face_analysis_db_file():
@@ -2471,6 +2573,7 @@ class ActionPlanRequest(BaseModel):
     model: Optional[str] = None
     provider_route: Optional[str] = None
     replace_today: bool = False
+    wait_for_provider_ready: bool = False
 
 
 class LLMModelDiscoverRequest(BaseModel):
@@ -2921,11 +3024,34 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
         env["AI_SERVICE_TIER"] = selected_service_tier
     cmd, run_prompt_cwd = _build_run_prompt_subprocess(run_prompt_args)
     replace_today = request.replace_today if request else False
+    wait_for_provider_ready = bool(request.wait_for_provider_ready) if request else False
     previous_today_files = _list_today_action_plan_files() if replace_today else []
     
     async def process_stream():
         stderr_task = None
         stderr_lines = []
+        if wait_for_provider_ready:
+            waiting_message = "等待本地反代启动，准备好后会自动开始生成行动计划。"
+            yield json.dumps(
+                {"log": f"STREAM_ANALYSIS_CONTENT:{json.dumps(waiting_message, ensure_ascii=False)}"},
+                ensure_ascii=False,
+            ) + "\n"
+            readiness = await _wait_for_action_plan_provider_ready(selected_provider_route)
+            if not readiness.get("ready"):
+                route = readiness.get("route") or selected_provider_route or "<auto>"
+                base_url = readiness.get("base_url") or ""
+                error = readiness.get("error") or "unknown error"
+                error_message = (
+                    f"本地反代还没准备好，已等待 {ACTION_PLAN_PROVIDER_READY_TIMEOUT_SECONDS} 秒。"
+                    f" provider={route} base_url={base_url} error={error}"
+                )
+                logging.warning("Action plan provider readiness wait failed: %s", error_message)
+                yield json.dumps(
+                    {"log": f"STREAM_ANALYSIS_ERROR:{json.dumps(error_message, ensure_ascii=False)}"},
+                    ensure_ascii=False,
+                ) + "\n"
+                return
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,

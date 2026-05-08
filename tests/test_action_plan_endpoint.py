@@ -818,6 +818,72 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertIn("--service_tier=priority", cmd)
         self.assertEqual(mock_create.await_args.kwargs["env"]["AI_SERVICE_TIER"], "priority")
 
+    def test_generate_action_plan_waits_for_provider_ready_when_requested(self):
+        fake_process = _FakeProcess()
+
+        with patch.object(
+            server,
+            "_wait_for_action_plan_provider_ready",
+            AsyncMock(
+                return_value={
+                    "ready": True,
+                    "route": "custom",
+                    "base_url": "http://127.0.0.1:8317/v1",
+                }
+            ),
+        ) as mock_wait, patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=fake_process),
+        ) as mock_create:
+            response = asyncio.run(
+                server.generate_action_plan(
+                    server.ActionPlanRequest(
+                        model="gpt-5.5",
+                        provider_route="custom",
+                        wait_for_provider_ready=True,
+                    ),
+                ),
+            )
+            chunks = asyncio.run(_read_all_stream_chunks(response))
+
+        combined = "".join(chunks)
+        self.assertIn("STREAM_ANALYSIS_CONTENT", combined)
+        mock_wait.assert_awaited_once_with("custom")
+        mock_create.assert_awaited_once()
+
+    def test_generate_action_plan_does_not_spawn_when_waited_provider_stays_unready(self):
+        with patch.object(
+            server,
+            "_wait_for_action_plan_provider_ready",
+            AsyncMock(
+                return_value={
+                    "ready": False,
+                    "route": "custom",
+                    "base_url": "http://127.0.0.1:8317/v1",
+                    "error": "connection refused",
+                }
+            ),
+        ), patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(),
+        ) as mock_create:
+            response = asyncio.run(
+                server.generate_action_plan(
+                    server.ActionPlanRequest(
+                        model="gpt-5.5",
+                        provider_route="custom",
+                        wait_for_provider_ready=True,
+                    ),
+                ),
+            )
+            chunks = asyncio.run(_read_all_stream_chunks(response))
+
+        combined = "".join(chunks)
+        self.assertIn("本地反代还没准备好", combined)
+        mock_create.assert_not_called()
+
     def test_list_llm_models_includes_provider_aware_options(self):
         fake_client = unittest.mock.Mock()
         fake_client.get_model_catalog.return_value = [

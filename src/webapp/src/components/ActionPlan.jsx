@@ -423,7 +423,11 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     }
   }, []);
 
-  const startGeneration = useCallback(async ({ replaceToday = false, modelOverride = null } = {}) => {
+  const startGeneration = useCallback(async ({
+    replaceToday = false,
+    modelOverride = null,
+    waitForProviderReady = false,
+  } = {}) => {
     if (isGeneratingRef.current) {
       stopGeneration();
     }
@@ -487,6 +491,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             model: effectiveModelOption?.model,
             providerRoute: effectiveModelOption?.provider_route,
             fastModeEnabled: effectiveFastModeEnabled,
+            startupAutoGenerate: waitForProviderReady,
           }),
         ),
         signal,
@@ -769,7 +774,11 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       }
 
       startupGenerationTriggeredRef.current = true;
-      await startGeneration({ replaceToday: true, modelOverride: initialModel });
+      await startGeneration({
+        replaceToday: true,
+        modelOverride: initialModel,
+        waitForProviderReady: true,
+      });
     };
 
     void initializeActionPlan();

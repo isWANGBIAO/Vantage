@@ -6,6 +6,7 @@ export function buildActionPlanGenerationPayload(reasoningEffort, {
   model = null,
   providerRoute = null,
   fastModeEnabled = false,
+  startupAutoGenerate = false,
 } = {}) {
   const payload = {
     reasoning_effort: normalizeReasoningEffortForModel(reasoningEffort, model),
@@ -21,6 +22,9 @@ export function buildActionPlanGenerationPayload(reasoningEffort, {
   const serviceTier = resolveFastServiceTier({ fastModeEnabled, model });
   if (serviceTier) {
     payload.service_tier = serviceTier;
+  }
+  if (startupAutoGenerate) {
+    payload.wait_for_provider_ready = true;
   }
 
   return payload;

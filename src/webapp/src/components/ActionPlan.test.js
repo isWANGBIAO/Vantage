@@ -115,6 +115,7 @@ test('ActionPlan uses the startup autogenerate setting but does not replace an e
   assert.ok(actionPlanSource.includes('const loadResult = await loadTodaysPlan(controller.signal);'));
   assert.ok(actionPlanSource.includes('hasExistingPlan: loadResult?.exists === true'));
   assert.ok(actionPlanSource.includes('loadFailed: Boolean(loadResult?.error)'));
+  assert.ok(actionPlanSource.includes('waitForProviderReady: true'));
 });
 
 test('ActionPlan supports stacked reading mode without card-level scrolling', () => {
