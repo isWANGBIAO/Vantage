@@ -25,6 +25,7 @@ ACTIVE_CACHE_REQUEST_KEYS = {
 FAST_SERVICE_TIER_VALUE = "priority"
 FAST_SERVICE_TIER_ALIASES = {"priority", "fast"}
 FAST_SERVICE_TIER_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
+NORMAL_STREAM_FINISH_REASONS = {"stop", "tool_calls", "function_call"}
 
 
 def _hash_json_payload(value):
@@ -48,6 +49,10 @@ def _drop_active_cache_fields(value):
     if isinstance(value, list):
         return [_drop_active_cache_fields(item) for item in value]
     return value
+
+
+class StreamIncompleteError(RuntimeError):
+    """Raised when an SSE model stream ends without a trustworthy terminal event."""
 
 
 class LLMClient:
@@ -1142,6 +1147,9 @@ class LLMClient:
         used_model = requested_model
         used_route = requested_route
         first_token_latency = None
+        saw_done_event = False
+        finish_reasons = []
+        native_finish_reasons = []
 
         def mark_first_token():
             nonlocal first_token_latency
@@ -1198,6 +1206,7 @@ class LLMClient:
                 if line_str.startswith("data: "):
                     data_str = line_str[6:]
                     if data_str.strip() == "[DONE]":
+                        saw_done_event = True
                         if print_callback:
                             print_callback("done", "")
                         break
@@ -1214,7 +1223,15 @@ class LLMClient:
                             usage_data = data["usage"]
 
                         if "choices" in data and len(data["choices"]) > 0:
-                            delta = data["choices"][0].get("delta", {})
+                            choice = data["choices"][0]
+                            finish_reason = choice.get("finish_reason")
+                            native_finish_reason = choice.get("native_finish_reason")
+                            if finish_reason:
+                                finish_reasons.append(str(finish_reason))
+                            if native_finish_reason:
+                                native_finish_reasons.append(str(native_finish_reason))
+
+                            delta = choice.get("delta", {})
 
                             reasoning = delta.get("reasoning_content", "")
                             if reasoning:
@@ -1229,6 +1246,31 @@ class LLMClient:
                                 output("content", content)
                     except json.JSONDecodeError:
                         continue
+
+            observed_finish_reasons = [
+                str(reason).strip().lower()
+                for reason in [*finish_reasons, *native_finish_reasons]
+                if str(reason).strip()
+            ]
+            abnormal_finish_reasons = [
+                reason
+                for reason in observed_finish_reasons
+                if reason not in NORMAL_STREAM_FINISH_REASONS
+            ]
+            has_normal_finish_reason = any(
+                reason in NORMAL_STREAM_FINISH_REASONS
+                for reason in observed_finish_reasons
+            )
+            if abnormal_finish_reasons:
+                raise StreamIncompleteError(
+                    "Streaming response ended with incomplete finish_reason="
+                    + ",".join(abnormal_finish_reasons)
+                )
+            if not saw_done_event and not has_normal_finish_reason:
+                raise StreamIncompleteError(
+                    "Streaming response ended without a terminal event "
+                    f"(content_chars={len(full_content)}, thinking_chars={len(full_thinking)})"
+                )
 
         except Exception as error:
             self._safe_record(

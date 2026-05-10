@@ -14,7 +14,7 @@ sys.path.append(str(project_root))
 
 from src.core.config import Config
 from src.core.context import ContextManager
-from src.services.llm_client import LLMClient
+from src.services.llm_client import LLMClient, StreamIncompleteError
 from src.services.audio_service import AudioService, AudioTranscriptionError
 from src.services.model_call_recorder import get_session_usage_summary
 from src.utils.data_loader import DataLoader
@@ -258,19 +258,35 @@ def run_action_plan_round(
         if emit_start_before_first_attempt or attempt > 1:
             emit_action_plan_stream_event(section, "start", "")
 
-        result = client.chat(
-            messages,
-            stream=True,
-            print_callback=build_action_plan_stream_printer(section),
-            model=model_override,
-            provider_route=provider_route,
-            service_tier=service_tier,
-            session_id=session_id,
-            source=source,
-            entrypoint=entrypoint,
-            context_file=context_file,
-            metadata=metadata,
-        )
+        try:
+            result = client.chat(
+                messages,
+                stream=True,
+                print_callback=build_action_plan_stream_printer(section),
+                model=model_override,
+                provider_route=provider_route,
+                service_tier=service_tier,
+                session_id=session_id,
+                source=source,
+                entrypoint=entrypoint,
+                context_file=context_file,
+                metadata=metadata,
+            )
+        except StreamIncompleteError:
+            if attempt < total_attempts:
+                logging.warning(
+                    "Action plan %s round stream ended incomplete on attempt %s/%s; retrying same round",
+                    section,
+                    attempt,
+                    total_attempts,
+                )
+                continue
+            logging.error(
+                "Action plan %s round stream ended incomplete after %s attempts",
+                section,
+                total_attempts,
+            )
+            raise
         last_result = dict(result or {})
         total_usage = _sum_usage_totals(total_usage, last_result.get("usage"))
         total_duration += float(last_result.get("duration", 0) or 0)

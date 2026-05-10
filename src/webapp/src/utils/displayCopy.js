@@ -151,6 +151,7 @@ const EN_US_COPY = {
   'action_plan.placeholder.plan_unavailable.body': 'No saved plan content was returned for today.',
   'action_plan.placeholder.stopped': 'Generation stopped. You can start again at any time.',
   'action_plan.render.corrupted': 'The markdown output is partially corrupted. Showing plain text fallback.',
+  'action_plan.render.incomplete': 'This saved reply may be incomplete because the stream ended without final usage or a normal stop signal. Regenerate this Action Plan.',
   'action_plan.render.empty': 'No content yet.',
 
   'chat.header.title': 'Chat',
@@ -733,6 +734,7 @@ const ZH_CN_COPY = {
   'action_plan.placeholder.plan_unavailable.body': '今天没有返回可读取的计划内容。',
   'action_plan.placeholder.stopped': '生成已停止，你可以随时重新开始。',
   'action_plan.render.corrupted': 'Markdown 输出有残缺，已改为纯文本回退显示。',
+  'action_plan.render.incomplete': '这份已保存回复可能不完整：模型流没有返回最终用量或正常结束信号。请重新生成行动计划。',
   'action_plan.render.empty': '暂无内容。',
 
   'chat.header.title': '聊天',

@@ -226,6 +226,32 @@ export function formatActionPlanCacheBreakdown(stats) {
   return `H ${formatCompactTokenValue(hitValue)} / M ${formatCompactTokenValue(missValue)}${shouldShowRate ? rateText : ''}`;
 }
 
+export function isActionPlanRoundPossiblyIncomplete(stats, section, content) {
+  if (!content || !Array.isArray(stats?.requests)) {
+    return false;
+  }
+
+  const request = stats.requests.find((item) => item?.section === section);
+  if (!request) {
+    return false;
+  }
+
+  const duration = Number(request.duration || 0);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return false;
+  }
+
+  const tokenValues = [
+    request.prompt_tokens,
+    request.completion_tokens,
+    request.total_tokens,
+  ];
+  const hasTokenFields = tokenValues.some((value) => value !== null && value !== undefined);
+  const allTokenFieldsZero = tokenValues.every((value) => Number(value || 0) === 0);
+
+  return hasTokenFields && allTokenFieldsZero;
+}
+
 export function getActionPlanRoundStats(stats, section) {
   if (!Array.isArray(stats?.requests)) {
     return null;

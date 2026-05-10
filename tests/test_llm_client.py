@@ -1174,6 +1174,79 @@ class LLMClientTests(unittest.TestCase):
         self.assertIsNotNone(completed_kwargs["first_token_latency"])
         self.assertIsNotNone(result["first_token_latency"])
 
+    def test_streaming_chat_marks_stream_without_terminal_event_as_failed(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.iter_lines.return_value = [
+            b'data: {"id":"chunk-1","choices":[{"delta":{"content":"partial"}}]}',
+        ]
+        recorder = Mock()
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response),
+            patch.object(llm_client, "SessionRecorder", return_value=recorder),
+        ):
+            client = llm_client.LLMClient()
+            with self.assertRaises(llm_client.StreamIncompleteError):
+                client.chat(
+                    [{"role": "user", "content": "ping"}],
+                    stream=True,
+                    print_callback=lambda *_: None,
+                    source="chat",
+                    entrypoint="src/scripts/run_prompt.py",
+                )
+
+        recorder.record_request_completed.assert_not_called()
+        recorder.record_token_count.assert_not_called()
+        recorder.record_request_failed.assert_called_once()
+        failed_kwargs = recorder.record_request_failed.call_args.kwargs
+        self.assertIn("terminal event", str(failed_kwargs["error"]))
+
+    def test_streaming_chat_marks_length_finish_reason_as_failed(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.iter_lines.return_value = [
+            b'data: {"id":"chunk-1","choices":[{"delta":{"content":"partial"}}]}',
+            b'data: {"id":"chunk-2","choices":[{"delta":{},"finish_reason":"length"}]}',
+            b'data: [DONE]',
+        ]
+        recorder = Mock()
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response),
+            patch.object(llm_client, "SessionRecorder", return_value=recorder),
+        ):
+            client = llm_client.LLMClient()
+            with self.assertRaises(llm_client.StreamIncompleteError):
+                client.chat(
+                    [{"role": "user", "content": "ping"}],
+                    stream=True,
+                    print_callback=lambda *_: None,
+                    source="chat",
+                    entrypoint="src/scripts/run_prompt.py",
+                )
+
+        recorder.record_request_completed.assert_not_called()
+        recorder.record_request_failed.assert_called_once()
+        failed_kwargs = recorder.record_request_failed.call_args.kwargs
+        self.assertIn("finish_reason=length", str(failed_kwargs["error"]))
+
     def test_sync_chat_records_failed_call_with_session_recorder(self):
         recorder = Mock()
 

@@ -52,6 +52,11 @@ test('ActionPlan renders per-round first token, generated time, duration, token,
   assert.equal(actionPlanSource.includes('historical_total_tokens'), false);
 });
 
+test('ActionPlan warns when a loaded round looks like an incomplete stream save', () => {
+  assert.ok(actionPlanSource.includes('isActionPlanRoundPossiblyIncomplete'));
+  assert.ok(actionPlanSource.includes("t('action_plan.render.incomplete')"));
+});
+
 test('ActionPlan no longer depends on delimiter parsing or thinking-as-reply fallback', () => {
   assert.equal(actionPlanSource.includes('splitActionPlanContent'), false);
   assert.equal(actionPlanSource.includes('coalesceActionPlanReplyContent'), false);

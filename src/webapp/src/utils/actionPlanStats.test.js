@@ -9,6 +9,7 @@ import {
   formatPoweredByLabel,
   formatReasoningEffortLabel,
   getActionPlanRoundStats,
+  isActionPlanRoundPossiblyIncomplete,
   isFallbackExecution,
 } from './actionPlanStats.js';
 
@@ -133,6 +134,26 @@ test('getActionPlanRoundStats treats completed calls without usage as unrecorded
   assert.equal(roundStats.total_tokens, null);
   assert.equal(roundStats.prompt_cache_hit_tokens, null);
   assert.equal(roundStats.completion_tokens_per_second, null);
+});
+
+test('isActionPlanRoundPossiblyIncomplete flags streamed content with no recorded usage', () => {
+  const stats = {
+    requests: [
+      {
+        section: 'analysis',
+        duration: 189.1,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+      },
+    ],
+  };
+
+  assert.equal(isActionPlanRoundPossiblyIncomplete(stats, 'analysis', 'partial body'), true);
+  assert.equal(isActionPlanRoundPossiblyIncomplete(stats, 'analysis', ''), false);
+  assert.equal(isActionPlanRoundPossiblyIncomplete({
+    requests: [{ section: 'analysis', duration: 10, total_tokens: 42 }],
+  }, 'analysis', 'complete body'), false);
 });
 
 test('formatActionPlanTokenBreakdown includes total, prompt, and completion tokens', () => {

@@ -25,6 +25,7 @@ import {
   formatThinkingTitleWithDuration,
   formatPoweredByLabel,
   getActionPlanRoundStats,
+  isActionPlanRoundPossiblyIncomplete,
   isFallbackExecution,
 } from '../utils/actionPlanStats';
 import {
@@ -816,6 +817,16 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const cacheBreakdown = formatActionPlanCacheBreakdown(stats);
   const analysisRoundStats = getActionPlanRoundStats(stats, 'analysis');
   const planRoundStats = getActionPlanRoundStats(stats, 'plan');
+  const analysisPossiblyIncomplete = isActionPlanRoundPossiblyIncomplete(
+    stats,
+    'analysis',
+    analysisContent,
+  );
+  const planPossiblyIncomplete = isActionPlanRoundPossiblyIncomplete(
+    stats,
+    'plan',
+    planContent,
+  );
   const analysisThinkingTitle = formatThinkingTitleWithDuration(
     t('action_plan.thinking_title'),
     analysisRoundStats?.duration,
@@ -1071,6 +1082,11 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             }}
           >
             {analysisThinking && <ThinkingBlock text={analysisThinking} title={analysisThinkingTitle} />}
+            {analysisPossiblyIncomplete && (
+              <div className="action-plan-warning">
+                {t('action_plan.render.incomplete')}
+              </div>
+            )}
             {renderMarkdownOrText(analysisRender, t)}
             <div ref={analysisEndRef} />
           </div>
@@ -1125,6 +1141,11 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             }}
           >
             {planThinking && <ThinkingBlock text={planThinking} title={planThinkingTitle} />}
+            {planPossiblyIncomplete && (
+              <div className="action-plan-warning">
+                {t('action_plan.render.incomplete')}
+              </div>
+            )}
             {renderMarkdownOrText(planRender, t)}
             <div ref={planEndRef} />
           </div>

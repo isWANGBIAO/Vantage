@@ -80,6 +80,37 @@ class _RetryingFakeLLMClient:
         }
 
 
+class _IncompleteThenSuccessfulLLMClient:
+    def __init__(self):
+        self.call_count = 0
+
+    def chat(self, messages, stream=False, print_callback=None, model=None, **kwargs):
+        self.call_count += 1
+        if self.call_count == 1:
+            if print_callback:
+                print_callback("content", "partial analysis")
+            raise run_prompt.StreamIncompleteError("Streaming response ended without a terminal event")
+
+        if print_callback:
+            print_callback("content", "complete analysis")
+        return {
+            "content": "complete analysis",
+            "usage": {"prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18},
+            "duration": 2.0,
+            "first_token_latency": 0.7,
+            "completed_at": "2026-05-10T13:30:00+08:00",
+        }
+
+
+class _AlwaysIncompleteLLMClient:
+    def __init__(self):
+        self.call_count = 0
+
+    def chat(self, messages, stream=False, print_callback=None, model=None, **kwargs):
+        self.call_count += 1
+        raise run_prompt.StreamIncompleteError("Streaming response ended without a terminal event")
+
+
 class _CapturingLLMClient:
     def __init__(self, responses):
         self.responses = list(responses)
@@ -188,6 +219,44 @@ class RunPromptTests(unittest.TestCase):
 
         self.assertEqual(messages, full_history)
         self.assertEqual(messages[-1]["content"], "current message")
+
+    def test_run_action_plan_round_retries_incomplete_stream_before_accepting_content(self):
+        client = _IncompleteThenSuccessfulLLMClient()
+
+        result, content = run_prompt.run_action_plan_round(
+            client=client,
+            messages=[{"role": "user", "content": "analysis"}],
+            section="analysis",
+            model_override="gpt-5.5",
+            provider_route="custom",
+            service_tier="priority",
+            emit_start_before_first_attempt=False,
+            max_empty_content_retries=1,
+            metadata={},
+        )
+
+        self.assertEqual(content, "complete analysis")
+        self.assertEqual(result["attempts"], 2)
+        self.assertEqual(client.call_count, 2)
+        self.assertEqual(result["usage"]["total_tokens"], 18)
+
+    def test_run_action_plan_round_raises_when_incomplete_stream_retries_are_exhausted(self):
+        client = _AlwaysIncompleteLLMClient()
+
+        with self.assertRaises(run_prompt.StreamIncompleteError):
+            run_prompt.run_action_plan_round(
+                client=client,
+                messages=[{"role": "user", "content": "analysis"}],
+                section="analysis",
+                model_override="gpt-5.5",
+                provider_route="custom",
+                service_tier="priority",
+                emit_start_before_first_attempt=False,
+                max_empty_content_retries=1,
+                metadata={},
+            )
+
+        self.assertEqual(client.call_count, 2)
 
     def test_transcribe_mode_exits_nonzero_when_audio_service_fails(self):
         stdout = io.StringIO()
