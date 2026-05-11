@@ -3816,6 +3816,8 @@ def _build_purchase_recommendation_messages(context_prompt, dismissed_items=None
         "你是一个克制、具体、讲证据的个人购物建议助手。"
         "必须同时使用 Time.xlsx 行为/健康/计划上下文、Balance Sheet 财务数据、个人目标、库存和已排除推荐。"
         "不要推荐已明显买过、资产中已有、功能重复，或用户已经打叉排除的物品。"
+        "如果个人资源、项目资源或历史记录中出现了某个设备/资产，但 Balance Sheet 的 Asset 表未记录，"
+        "必须把它视为“Asset 可能缺漏/待核实补录”，而不是新的购买需求。"
         "只输出 JSON，不要 Markdown。"
     )
     user_prompt = (
@@ -3829,6 +3831,10 @@ def _build_purchase_recommendation_messages(context_prompt, dismissed_items=None
         "不要推荐同名、近似同类、功能重复的物品；如果排除项是一个品类，也要避开同用途替代品。\n"
         "购物策略：实用补缺优先找已有资产和预算结构中的缺口；夜间防冲动优先给低价、延迟消费、减少失眠冲动的工具；"
         "愿望清单可以更贵，但必须说明为什么不是重复购买，并给出冲动风险。\n\n"
+        "Asset 可能缺漏标记规则：如果上下文显示某项资产已经存在于个人资源、项目资源或历史记录中，"
+        "但 Balance Sheet 的 Asset 表没有对应记录，只能在 duplicate_check 或 evidence 中标记为“待核实补录”。"
+        "不要把这类项目作为购买推荐；它们应被理解为需要补充价格、购买日期、归属和是否个人资产的台账补录项。"
+        "例如宿舍台式机、已有笔记本、实验室/老师资产，都必须先区分个人资产还是非个人资产，不能编造成待购买物品。\n\n"
         f"Dismissed purchase recommendations JSON:\n{dismissed_json}\n\n"
         f"Context bundle from Action Plan data sources:\n{context_prompt}"
     )

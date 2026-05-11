@@ -428,6 +428,9 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertIn("contextual", user_prompt)
         self.assertIn("restore-me", user_prompt)
         self.assertIn("dismissed purchase recommendations", user_prompt)
+        self.assertIn("Asset 可能缺漏", user_prompt)
+        self.assertIn("待核实补录", user_prompt)
+        self.assertIn("不要把这类项目作为购买推荐", user_prompt)
         self.assertNotIn("cover_prompt", user_prompt)
 
     def test_random_purchase_recommendation_prompt_excludes_context_bundle(self):
