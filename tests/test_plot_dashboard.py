@@ -155,6 +155,40 @@ class SleepScheduleDashboardTests(unittest.TestCase):
         self.assertEqual(chart["summary"][0]["value"], "1")
         self.assertEqual(chart["summary"][1]["value"], "3")
 
+    def test_hhh_interval_chart_uses_event_dates_and_independent_axes(self):
+        data_frame = pd.DataFrame(
+            {
+                "\u65e5\u671f": pd.to_datetime(
+                    [
+                        "2025-06-01",
+                        "2025-06-03",
+                        "2025-06-04",
+                        "2026-03-04",
+                        "2026-03-05",
+                        "2026-03-08",
+                    ]
+                ),
+                "HHH": ["+1", "-1", "-1", "+1", "-1", "-1"],
+            }
+        )
+
+        chart = plot_dashboard._build_hhh_interval_dashboard_chart(data_frame)
+
+        self.assertEqual(chart["option"]["xAxis"]["type"], "time")
+        self.assertNotIn("name", chart["option"]["xAxis"])
+        self.assertEqual(len(chart["option"]["yAxis"]), 2)
+
+        intercourse_series = next(item for item in chart["option"]["series"] if item["name"] == "\u6027\u751f\u6d3b\u95f4\u9694\uff08\u5929\uff09")
+        masturbation_series = next(item for item in chart["option"]["series"] if item["name"] == "\u81ea\u6170\u95f4\u9694\uff08\u5929\uff09")
+
+        self.assertEqual(intercourse_series["yAxisIndex"], 0)
+        self.assertEqual(masturbation_series["yAxisIndex"], 1)
+        self.assertEqual(intercourse_series["data"], [["2026-03-04", 276.0]])
+        self.assertEqual(
+            masturbation_series["data"],
+            [["2025-06-04", 1.0], ["2026-03-05", 274.0], ["2026-03-08", 3.0]],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

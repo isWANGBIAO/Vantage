@@ -26,6 +26,8 @@ const ENGLISH_TEXT = {
   'HHH 间隔趋势': 'HHH Interval Trend',
   '把每次间隔天数直接拉成可对比折线，更适合看节奏是否在收敛或发散。':
     'Plot interval days as comparable lines to show whether the rhythm is tightening or spreading out.',
+  '按真实日期展示每次间隔，左右轴分别承载两类节奏，避免小间隔被长间隔压扁。':
+    'Plot each interval on its actual date, with separate axes for the two rhythms so long gaps do not flatten short intervals.',
   '资产与支出': 'Assets and Spending',
   '把总资产、分账户资产和日均支出放进同一张可筛选图，而不是只看一张静态资金曲线。':
     'Combine total assets, account-level assets, and daily spending into one filterable chart instead of one static balance curve.',

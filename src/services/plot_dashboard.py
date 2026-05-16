@@ -387,6 +387,16 @@ def _calculate_date_intervals(date_series):
     return dates.diff().dt.days.dropna().tolist()
 
 
+def _calculate_date_interval_points(date_series):
+    dates = pd.to_datetime(date_series).sort_values().dropna()
+    if len(dates) < 2:
+        return [], []
+
+    intervals = dates.diff().dt.days.dropna().tolist()
+    interval_dates = dates.iloc[1:].tolist()
+    return _series_points(interval_dates, intervals, digits=1), intervals
+
+
 def _build_weight_bodyfat_dashboard_chart(data_frame):
     filtered_df_weight = data_frame.dropna(subset=['体重']).copy().sort_values('日期')
     if filtered_df_weight.empty:
@@ -911,26 +921,35 @@ def _build_hhh_interval_dashboard_chart(data_frame):
     sexual_intercourse = hhh_data[hhh_data['HHH'] > 0].sort_values('日期')
     masturbation = hhh_data[hhh_data['HHH'] < 0].sort_values('日期')
 
-    intercourse_intervals = _calculate_date_intervals(sexual_intercourse['日期']) if not sexual_intercourse.empty else []
-    masturbation_intervals = _calculate_date_intervals(masturbation['日期']) if not masturbation.empty else []
+    intercourse_points, intercourse_intervals = (
+        _calculate_date_interval_points(sexual_intercourse['日期'])
+        if not sexual_intercourse.empty
+        else ([], [])
+    )
+    masturbation_points, masturbation_intervals = (
+        _calculate_date_interval_points(masturbation['日期'])
+        if not masturbation.empty
+        else ([], [])
+    )
 
     if not intercourse_intervals and not masturbation_intervals:
         raise ValueError('HHH 间隔数据不足')
-
-    max_length = max(len(intercourse_intervals), len(masturbation_intervals))
-    categories = list(range(1, max_length + 1))
 
     option = {
         'color': [plot_module.COLORS['blue'], plot_module.COLORS['red']],
         'tooltip': {'trigger': 'axis'},
         'legend': {'top': 8},
         'toolbox': {'right': 12, 'feature': {'saveAsImage': {}}},
-        'grid': {'top': 72, 'left': 56, 'right': 24, 'bottom': 72, 'containLabel': True},
-        'xAxis': {'type': 'category', 'name': '第 N 次行为', 'data': categories},
-        'yAxis': {'type': 'value', 'name': '间隔天数'},
+        'dataZoom': [{'type': 'inside'}, {'type': 'slider', 'bottom': 8}],
+        'grid': {'top': 72, 'left': 64, 'right': 70, 'bottom': 72, 'containLabel': True},
+        'xAxis': {'type': 'time'},
+        'yAxis': [
+            {'type': 'value', 'name': '性生活间隔（天）', 'min': 0},
+            {'type': 'value', 'name': '自慰间隔（天）', 'min': 0},
+        ],
         'series': [
-            {'name': '性生活间隔（天）', 'type': 'line', 'showSymbol': True, 'data': _category_values(intercourse_intervals)},
-            {'name': '自慰间隔（天）', 'type': 'line', 'showSymbol': True, 'data': _category_values(masturbation_intervals)},
+            {'name': '性生活间隔（天）', 'type': 'line', 'showSymbol': True, 'yAxisIndex': 0, 'data': intercourse_points},
+            {'name': '自慰间隔（天）', 'type': 'line', 'showSymbol': True, 'yAxisIndex': 1, 'data': masturbation_points},
         ],
     }
 
@@ -943,7 +962,7 @@ def _build_hhh_interval_dashboard_chart(data_frame):
     return _build_chart(
         'hhh-interval',
         'HHH 间隔趋势',
-        '把每次间隔天数直接拉成可对比折线，更适合看节奏是否在收敛或发散。',
+        '按真实日期展示每次间隔，左右轴分别承载两类节奏，避免小间隔被长间隔压扁。',
         option,
         formatter='days',
         height=400,
@@ -1398,7 +1417,7 @@ def build_plot_dashboard_data():
         _safe_chart(
             'hhh-interval',
             'HHH 间隔趋势',
-            '把每次间隔天数直接拉成可对比折线，更适合看节奏是否在收敛或发散。',
+            '按真实日期展示每次间隔，左右轴分别承载两类节奏，避免小间隔被长间隔压扁。',
             lambda: _build_hhh_interval_dashboard_chart(data_frame),
             formatter='days',
             height=400,
