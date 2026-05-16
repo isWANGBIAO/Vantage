@@ -6,6 +6,8 @@ from src.scripts import plot as plot_module
 
 SLEEP_SCHEDULE_WRAP_HOUR = 12
 SLEEP_TIME_PATTERN = re.compile(r'(\d{1,2})\s*[.:：]\s*(\d{1,2})')
+HHH_SIGNED_COUNT_PATTERN = re.compile(r'([+-])\s*(\d+(?:\.\d+)?)')
+HHH_DIRECT_COUNT_PATTERN = re.compile(r'[+-]?\s*\d+(?:\.0+)?')
 
 TIME_WARNING_CHART_IDS = [
     'time-allocation',
@@ -306,23 +308,78 @@ def _compute_time_trend_payload(data_frame):
     }
 
 
-def _parse_hhh_value_for_dashboard(value):
-    if isinstance(value, (int, float)):
-        return value
-    if not isinstance(value, str):
-        return None
+def _normalize_hhh_event_count(value):
     try:
-        return float(value)
+        numeric = float(value)
     except (TypeError, ValueError):
-        pass
+        return None
 
-    parts = value.strip().split()
-    for part in reversed(parts):
-        try:
-            return float(part)
-        except (TypeError, ValueError):
-            continue
-    return None
+    if np.isnan(numeric) or np.isinf(numeric):
+        return None
+
+    rounded = round(numeric)
+    if abs(numeric - rounded) > 1e-9:
+        return None
+    if rounded == 0 or abs(rounded) > 10:
+        return None
+    return float(rounded)
+
+
+def _extract_hhh_values_for_dashboard(value):
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        normalized = _normalize_hhh_event_count(value)
+        return [normalized] if normalized is not None else []
+    if not isinstance(value, str):
+        return []
+
+    text = value.strip()
+    if not text:
+        return []
+
+    if HHH_DIRECT_COUNT_PATTERN.fullmatch(text):
+        normalized = _normalize_hhh_event_count(text.replace(' ', ''))
+        return [normalized] if normalized is not None else []
+
+    events = []
+    for match in HHH_SIGNED_COUNT_PATTERN.finditer(text):
+        normalized = _normalize_hhh_event_count(f"{match.group(1)}{match.group(2)}")
+        if normalized is not None:
+            events.append(normalized)
+    return events
+
+
+def _parse_hhh_value_for_dashboard(value):
+    events = _extract_hhh_values_for_dashboard(value)
+    if not events:
+        return None
+    if all(event > 0 for event in events) or all(event < 0 for event in events):
+        return sum(events)
+    return events[-1]
+
+
+def _build_hhh_event_frame_for_dashboard(data_frame):
+    hhh_data = data_frame[['日期', 'HHH']].dropna().copy()
+    records = []
+    for _, row in hhh_data.iterrows():
+        totals = {}
+        for event_count in _extract_hhh_values_for_dashboard(row.get('HHH')):
+            sign = 1 if event_count > 0 else -1
+            totals[sign] = totals.get(sign, 0.0) + event_count
+        for sign in (-1, 1):
+            total = totals.get(sign)
+            if total:
+                records.append({'日期': row['日期'], 'HHH': total})
+
+    if not records:
+        return pd.DataFrame(columns=['日期', 'HHH'])
+    return pd.DataFrame(records)
+
+
+def _format_hhh_count_total(series):
+    if series.empty:
+        return '0'
+    total = int(round(float(np.abs(series.to_numpy(dtype=float)).sum())))
+    return str(total)
 
 
 def _calculate_date_intervals(date_series):
@@ -793,9 +850,7 @@ def _build_hhh_frequency_dashboard_chart(data_frame):
     if 'HHH' not in data_frame.columns:
         raise ValueError('未找到 HHH 列')
 
-    hhh_data = data_frame[['日期', 'HHH']].dropna().copy()
-    hhh_data['HHH'] = hhh_data['HHH'].apply(_parse_hhh_value_for_dashboard)
-    hhh_data = hhh_data.dropna(subset=['HHH'])
+    hhh_data = _build_hhh_event_frame_for_dashboard(data_frame)
     if hhh_data.empty:
         raise ValueError('HHH 数据为空')
 
@@ -841,8 +896,8 @@ def _build_hhh_frequency_dashboard_chart(data_frame):
         formatter='count',
         height=400,
         summary=[
-            {'label': '性生活总次数', 'value': str(len(sexual_intercourse))},
-            {'label': '自慰总次数', 'value': str(len(masturbation))},
+            {'label': '性生活总次数', 'value': _format_hhh_count_total(sexual_intercourse['HHH'])},
+            {'label': '自慰总次数', 'value': _format_hhh_count_total(masturbation['HHH'])},
         ],
     )
 
@@ -851,9 +906,7 @@ def _build_hhh_interval_dashboard_chart(data_frame):
     if 'HHH' not in data_frame.columns:
         raise ValueError('未找到 HHH 列')
 
-    hhh_data = data_frame[['日期', 'HHH']].dropna().copy()
-    hhh_data['HHH'] = hhh_data['HHH'].apply(_parse_hhh_value_for_dashboard)
-    hhh_data = hhh_data.dropna(subset=['HHH'])
+    hhh_data = _build_hhh_event_frame_for_dashboard(data_frame)
 
     sexual_intercourse = hhh_data[hhh_data['HHH'] > 0].sort_values('日期')
     masturbation = hhh_data[hhh_data['HHH'] < 0].sort_values('日期')

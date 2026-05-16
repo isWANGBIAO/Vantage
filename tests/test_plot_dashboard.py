@@ -114,6 +114,47 @@ class SleepScheduleDashboardTests(unittest.TestCase):
         self.assertTrue(all(zoom["start"] == 0 for zoom in chart["option"]["dataZoom"]))
         self.assertTrue(all(zoom["end"] == 100 for zoom in chart["option"]["dataZoom"]))
 
+    def test_hhh_parser_handles_compact_markers_and_ignores_time_ranges(self):
+        self.assertEqual(plot_dashboard._extract_hhh_values_for_dashboard("10.40-1"), [-1.0])
+        self.assertEqual(
+            plot_dashboard._extract_hhh_values_for_dashboard(
+                "9.50 \u64b8\u4e0d\u51fa\u6765\uff1b14.45\u81ea\u5df1\u770b\u7247\u4e24\u5206\u949f-1\uff1b"
+            ),
+            [-1.0],
+        )
+        self.assertEqual(
+            plot_dashboard._extract_hhh_values_for_dashboard(
+                "\u65e9\u4e0a-1\uff1b20.47-22.42 \u548c\u9676\u4e9a\u4e39 +1"
+            ),
+            [-1.0, 1.0],
+        )
+        self.assertEqual(plot_dashboard._extract_hhh_values_for_dashboard("20.47-22.42"), [])
+
+    def test_hhh_frequency_chart_keeps_mixed_same_day_events(self):
+        data_frame = pd.DataFrame(
+            {
+                "\u65e5\u671f": pd.to_datetime(["2026-03-24", "2026-05-02", "2026-05-14"]),
+                "HHH": [
+                    "\u65e9\u4e0a-1\uff1b20.47-22.42 \u548c\u9676\u4e9a\u4e39 +1",
+                    "9.50 \u64b8\u4e0d\u51fa\u6765\uff1b14.45\u81ea\u5df1\u770b\u7247\u4e24\u5206\u949f-1\uff1b",
+                    "10.40-1",
+                ],
+            }
+        )
+
+        chart = plot_dashboard._build_hhh_frequency_dashboard_chart(data_frame)
+
+        intercourse_series = next(item for item in chart["option"]["series"] if item["name"] == "\u6027\u751f\u6d3b")
+        masturbation_series = next(item for item in chart["option"]["series"] if item["name"] == "\u81ea\u6170")
+
+        self.assertEqual(intercourse_series["data"], [["2026-03-24", 1.0]])
+        self.assertEqual(
+            masturbation_series["data"],
+            [["2026-03-24", 1.0], ["2026-05-02", 1.0], ["2026-05-14", 1.0]],
+        )
+        self.assertEqual(chart["summary"][0]["value"], "1")
+        self.assertEqual(chart["summary"][1]["value"], "3")
+
 
 if __name__ == "__main__":
     unittest.main()
