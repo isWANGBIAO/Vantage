@@ -3322,7 +3322,8 @@ PURCHASE_RECOMMENDATION_PROMPT_VERSION = 4
 DEFAULT_PURCHASE_RECOMMENDATION_COUNT = 12
 MIN_PURCHASE_RECOMMENDATION_COUNT = 3
 MAX_PURCHASE_RECOMMENDATION_COUNT = 30
-PURCHASE_CONTEXT_TIME_SERIES_START_DATE = "earliest"
+PURCHASE_CONTEXT_TIME_SERIES_DAYS = 90
+PURCHASE_CONTEXT_TIME_SERIES_START_DATE = None
 PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL = "contextual"
 PURCHASE_RECOMMENDATION_MODE_RANDOM = "random"
 PURCHASE_RECOMMENDATION_MODES = {
@@ -3906,6 +3907,7 @@ def _build_purchase_context_prompt(prompt_payload):
         return DataLoader.construct_prompt(
             DataLoader.resolve_data_path("Prompt_Personal_Info.md"),
             DataLoader.resolve_data_path("Time.xlsx"),
+            days=PURCHASE_CONTEXT_TIME_SERIES_DAYS,
             start_date=PURCHASE_CONTEXT_TIME_SERIES_START_DATE,
         )
     except Exception as exc:

@@ -14,6 +14,11 @@ import {
   Trash2,
 } from 'lucide-react';
 import { fetchBackendJson } from '../utils/backendRequest';
+import {
+  normalizeModelList,
+  normalizeProviderModels,
+  resolveRefreshedModelSelection,
+} from '../utils/providerModels';
 import { loadSettingsState, openSettingsPath, saveSettingsState } from '../utils/settingsState';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
@@ -60,25 +65,6 @@ const PATH_LABELS = [
   ['data', 'settings.paths.data'],
 ];
 
-function normalizeProviderModels(provider) {
-  const seen = new Set();
-  const models = [];
-  const pushModel = (value) => {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    if (!normalized || seen.has(normalized)) {
-      return;
-    }
-    seen.add(normalized);
-    models.push(normalized);
-  };
-
-  pushModel(provider?.model);
-  if (Array.isArray(provider?.models)) {
-    provider.models.forEach(pushModel);
-  }
-  return models;
-}
-
 function createProviderEntry(route, entry = {}) {
   const normalizedRoute = typeof route === 'string' && route.trim() ? route.trim() : 'custom';
   const model = typeof entry.model === 'string' ? entry.model.trim() : '';
@@ -94,10 +80,6 @@ function createProviderEntry(route, entry = {}) {
     last_refreshed_at: typeof entry.last_refreshed_at === 'string' ? entry.last_refreshed_at : null,
     has_api_key: Boolean(entry.has_api_key),
   };
-}
-
-function normalizeModelList(models, model) {
-  return normalizeProviderModels({ model, models });
 }
 
 function ModelSelectControl({
@@ -478,15 +460,19 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       const discoveredModels = Array.isArray(payload?.models) ? payload.models : [];
       updateProviderConfig((providerConfig) => {
         const provider = createProviderEntry(currentProviderRoute, providerConfig.providers[currentProviderRoute]);
-        const nextModel = provider.model || discoveredModels[0] || '';
+        const nextSelection = resolveRefreshedModelSelection({
+          currentModel: provider.model,
+          currentModels: provider.models,
+          discoveredModels,
+        });
         return {
           ...providerConfig,
           providers: {
             ...providerConfig.providers,
             [currentProviderRoute]: createProviderEntry(currentProviderRoute, {
               ...provider,
-              model: nextModel,
-              models: discoveredModels.length > 0 ? discoveredModels : provider.models,
+              model: nextSelection.model,
+              models: nextSelection.models,
               last_refreshed_at: new Date().toISOString(),
             }),
           },
@@ -523,19 +509,28 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       const refreshedAt = new Date().toISOString();
       setForm((prev) => {
         if (isVoice) {
-          const nextModel = prev.voiceModel || discoveredModels[0] || DEFAULT_VOICE_MODEL;
+          const nextSelection = resolveRefreshedModelSelection({
+            currentModel: prev.voiceModel,
+            currentModels: prev.voiceModels,
+            discoveredModels,
+            fallbackModel: DEFAULT_VOICE_MODEL,
+          });
           return {
             ...prev,
-            voiceModel: nextModel,
-            voiceModels: discoveredModels.length > 0 ? discoveredModels : prev.voiceModels,
+            voiceModel: nextSelection.model,
+            voiceModels: nextSelection.models,
             voiceLastRefreshedAt: refreshedAt,
           };
         }
-        const nextModel = prev.imageModel || discoveredModels[0] || '';
+        const nextSelection = resolveRefreshedModelSelection({
+          currentModel: prev.imageModel,
+          currentModels: prev.imageModels,
+          discoveredModels,
+        });
         return {
           ...prev,
-          imageModel: nextModel,
-          imageModels: discoveredModels.length > 0 ? discoveredModels : prev.imageModels,
+          imageModel: nextSelection.model,
+          imageModels: nextSelection.models,
           imageLastRefreshedAt: refreshedAt,
         };
       });

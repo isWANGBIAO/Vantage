@@ -288,6 +288,18 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertNotIn("Balance Sheet Data (JSON)", random_call["messages"][1]["content"])
         self.assertIn("total of 5", random_call["messages"][1]["content"])
 
+    def test_purchase_context_prompt_uses_bounded_time_window(self):
+        with patch.object(server.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)), patch.object(
+            server.DataLoader,
+            "construct_prompt",
+            return_value="bounded context",
+        ) as construct_prompt:
+            context = server._build_purchase_context_prompt({"sheet_count": 1})
+
+        self.assertEqual(context, "bounded context")
+        self.assertEqual(construct_prompt.call_args.kwargs["days"], server.PURCHASE_CONTEXT_TIME_SERIES_DAYS)
+        self.assertIsNone(construct_prompt.call_args.kwargs["start_date"])
+
     def test_purchase_recommendation_mix_uses_random_half_rounded_up(self):
         self.assertEqual(server._purchase_recommendation_mode_counts(12), {"random": 6, "contextual": 6})
         self.assertEqual(server._purchase_recommendation_mode_counts(7), {"random": 4, "contextual": 3})
