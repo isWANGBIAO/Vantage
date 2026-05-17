@@ -41,6 +41,53 @@ test('localizePlotChart translates backend chart metadata and option labels for 
   assert.deepEqual(localized.option.series.map((series) => series.name), ['Sleep Duration', 'Phone Screen Time']);
 });
 
+test('localizePlotChart translates radar goal comparison windows for English', () => {
+  const chart = {
+    id: 'radar-goal',
+    title: '\u76ee\u6807\u8fbe\u6210\u7387\u96f7\u8fbe\u56fe',
+    description:
+      '\u540c\u65f6\u5bf9\u6bd4\u5168\u90e8\u5386\u53f2\u3001\u8fd130\u5929\u548c\u6700\u65b0\u4e00\u5929\u7684\u76ee\u6807\u8fbe\u6210\u7387\uff0c\u907f\u514d\u628a\u957f\u671f\u5e73\u5747\u8bef\u770b\u6210\u5f53\u5929\u8868\u73b0\u3002',
+    summary: [
+      { label: '\u5386\u53f2\u7efc\u5408\u8fbe\u6210\u7387', value: '65 %' },
+      { label: '\u8fd130\u5929\u7efc\u5408\u8fbe\u6210\u7387', value: '72 %' },
+      { label: '\u6700\u65b0\u4e00\u5929\u7efc\u5408\u8fbe\u6210\u7387', value: '85 %' },
+    ],
+    option: {
+      legend: {
+        data: ['\u5168\u90e8\u5386\u53f2\u5e73\u5747', '\u8fd130\u5929\u5e73\u5747', '\u6700\u65b0\u4e00\u5929'],
+      },
+      series: [
+        {
+          name: '\u76ee\u6807\u8fbe\u6210\u7387',
+          data: [
+            { name: '\u5168\u90e8\u5386\u53f2\u5e73\u5747', value: [65, 72] },
+            { name: '\u8fd130\u5929\u5e73\u5747', value: [72, 80] },
+            { name: '\u6700\u65b0\u4e00\u5929', value: [85, 90] },
+          ],
+        },
+      ],
+    },
+  };
+
+  const localized = localizePlotChart(chart, 'en-US');
+
+  assert.equal(
+    localized.description,
+    'Compare all-history, last-30-day, and latest-day goal achievement so long-term averages are not mistaken for daily performance.',
+  );
+  assert.deepEqual(localized.summary.map((item) => item.label), [
+    'Historical Overall Achievement',
+    'Last 30 Days Overall Achievement',
+    'Latest Day Overall Achievement',
+  ]);
+  assert.deepEqual(localized.option.legend.data, ['All-History Average', 'Last 30 Days Average', 'Latest Day']);
+  assert.deepEqual(localized.option.series[0].data.map((item) => item.name), [
+    'All-History Average',
+    'Last 30 Days Average',
+    'Latest Day',
+  ]);
+});
+
 test('buildChartOption localizes tooltip labels and duration units for English plots', () => {
   const option = buildChartOption(
     {

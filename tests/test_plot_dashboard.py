@@ -189,6 +189,56 @@ class SleepScheduleDashboardTests(unittest.TestCase):
             [["2025-06-04", 1.0], ["2026-03-05", 274.0], ["2026-03-08", 3.0]],
         )
 
+    def test_radar_goal_chart_compares_history_month_and_latest_windows(self):
+        dates = pd.date_range("2026-04-01", periods=35, freq="D")
+        data_frame = pd.DataFrame(
+            {
+                "\u65e5\u671f": dates,
+                "\u7761\u7720\u65f6\u95f4": ["7\u5c0f\u65f6"] * 34 + ["9\u5c0f\u65f6"],
+                "\u624b\u673a\u5c4f\u5e55\n\u4f7f\u7528\u65f6\u95f4": ["5\u5c0f\u65f6"] * 34 + ["2\u5c0f\u65f6"],
+                "\u4f53\u91cd": [70.0] * 34 + [64.0],
+                "\u4f53\u8102\u7387": [24.0] * 34 + [14.0],
+            }
+        )
+        trend = plot_dashboard._compute_time_trend_payload(data_frame)
+
+        chart = plot_dashboard._build_radar_goal_dashboard_chart(data_frame, trend)
+
+        radar_data = chart["option"]["series"][0]["data"]
+        self.assertEqual(
+            [item["name"] for item in radar_data],
+            ["\u5168\u90e8\u5386\u53f2\u5e73\u5747", "\u8fd130\u5929\u5e73\u5747", "\u6700\u65b0\u4e00\u5929"],
+        )
+        self.assertEqual(chart["option"]["legend"]["data"], [item["name"] for item in radar_data])
+        self.assertEqual(len(radar_data[0]["value"]), 5)
+        self.assertGreater(radar_data[1]["value"][0], radar_data[0]["value"][0])
+        self.assertEqual(radar_data[2]["value"], [100.0, 100.0, 100.0, 100.0, 100.0])
+        self.assertEqual(
+            [item["label"] for item in chart["summary"]],
+            ["\u5386\u53f2\u7efc\u5408\u8fbe\u6210\u7387", "\u8fd130\u5929\u7efc\u5408\u8fbe\u6210\u7387", "\u6700\u65b0\u4e00\u5929\u7efc\u5408\u8fbe\u6210\u7387"],
+        )
+
+    def test_radar_goal_body_windows_ignore_blank_future_measurement_rows(self):
+        dates = list(pd.date_range("2026-04-01", periods=35, freq="D")) + [
+            pd.Timestamp("2026-06-01"),
+            pd.Timestamp("2026-06-02"),
+        ]
+        data_frame = pd.DataFrame(
+            {
+                "\u65e5\u671f": dates,
+                "\u7761\u7720\u65f6\u95f4": ["7\u5c0f\u65f6"] * 34 + ["9\u5c0f\u65f6", None, None],
+                "\u624b\u673a\u5c4f\u5e55\n\u4f7f\u7528\u65f6\u95f4": ["5\u5c0f\u65f6"] * 34 + ["2\u5c0f\u65f6", None, None],
+                "\u4f53\u91cd": [70.0] * 34 + [64.0, None, None],
+                "\u4f53\u8102\u7387": [24.0] * 34 + [14.0, None, None],
+            }
+        )
+        trend = plot_dashboard._compute_time_trend_payload(data_frame)
+
+        chart = plot_dashboard._build_radar_goal_dashboard_chart(data_frame, trend)
+
+        latest_values = chart["option"]["series"][0]["data"][2]["value"]
+        self.assertEqual(latest_values[3:], [100.0, 100.0])
+
 
 if __name__ == "__main__":
     unittest.main()

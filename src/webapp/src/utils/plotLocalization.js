@@ -20,6 +20,8 @@ const ENGLISH_TEXT = {
   '目标达成率雷达图': 'Goal Achievement Radar',
   '保留原来的达成率口径，但把它做成交互式雷达图，便于一眼看结构性短板。':
     'Keep the existing achievement scoring method, but render it as an interactive radar chart to expose structural gaps.',
+  '同时对比全部历史、近30天和最新一天的目标达成率，避免把长期平均误看成当天表现。':
+    'Compare all-history, last-30-day, and latest-day goal achievement so long-term averages are not mistaken for daily performance.',
   'HHH 频率分布': 'HHH Frequency Distribution',
   '把历史散点直接做成交互式频率图，悬浮即可看具体时间点和强度。':
     'Render historical points as an interactive frequency chart so each timestamp and intensity is available on hover.',
@@ -68,6 +70,12 @@ const ENGLISH_TEXT = {
   '起床时间': 'Wake Time',
   '目标达成率': 'Goal Achievement',
   '目标雷达': 'Goal Radar',
+  '全部历史平均': 'All-History Average',
+  '近30天平均': 'Last 30 Days Average',
+  '最新一天': 'Latest Day',
+  '历史综合达成率': 'Historical Overall Achievement',
+  '近30天综合达成率': 'Last 30 Days Overall Achievement',
+  '最新一天综合达成率': 'Latest Day Overall Achievement',
   '频次': 'Count',
   '性生活': 'Sex',
   '自慰': 'Masturbation',

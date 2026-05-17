@@ -805,27 +805,134 @@ def _build_time_delta_dashboard_chart(trend):
     )
 
 
-def _build_radar_goal_dashboard_chart(data_frame, trend):
-    nearest_days = trend['nearest_days']
-    score_index = -nearest_days
+def _find_date_column(data_frame):
+    if '日期' in data_frame.columns:
+        return '日期'
+    for column in data_frame.columns:
+        if pd.api.types.is_datetime64_any_dtype(data_frame[column]):
+            return column
+    return None
 
-    average_weight = np.average(data_frame['体重'].dropna().to_numpy())
-    average_body_fat_rate = np.average(data_frame['体脂率'].dropna().to_numpy())
 
-    values = [
-        plot_module.compute_score(trend['y1'][score_index], compare_mode='bigger_than', goal=8, min=5),
-        plot_module.compute_score(trend['y2'][score_index], compare_mode='smaller_than', goal=4, max=24),
-        plot_module.compute_score(trend['y3'][score_index], compare_mode='bigger_than', goal=12, min=4),
-        plot_module.compute_score(average_weight, compare_mode='smaller_than', goal=65, max=75),
-        plot_module.compute_score(average_body_fat_rate, compare_mode='smaller_than', goal=15, max=30),
+def _prepare_radar_time_frame(trend):
+    frame = trend['filtered_df'].copy().reset_index(drop=True)
+    frame['_sleep_hours'] = np.asarray(trend['valid_sleep_hours'], dtype=float)
+    frame['_screen_hours'] = np.asarray(trend['valid_screen_hours'], dtype=float)
+    frame['_remaining_hours'] = np.asarray(trend['remaining_hours'], dtype=float)
+
+    date_column = _find_date_column(frame)
+    if date_column is None:
+        return frame
+
+    frame['_window_date'] = pd.to_datetime(frame[date_column], errors='coerce')
+    return frame.dropna(subset=['_window_date']).sort_values('_window_date')
+
+
+def _prepare_radar_body_frame(data_frame):
+    frame = data_frame.copy()
+    measurement_columns = [column for column in ['体重', '体脂率'] if column in frame.columns]
+    if measurement_columns:
+        for column in measurement_columns:
+            frame[column] = pd.to_numeric(frame[column], errors='coerce')
+        frame = frame.dropna(subset=measurement_columns, how='all')
+
+    date_column = _find_date_column(frame)
+    if date_column is None:
+        return frame
+
+    frame['_window_date'] = pd.to_datetime(frame[date_column], errors='coerce')
+    return frame.dropna(subset=['_window_date']).sort_values('_window_date')
+
+
+def _select_goal_window(frame, window_name, days=30):
+    if frame.empty:
+        return frame
+
+    if '_window_date' not in frame.columns:
+        if window_name == 'month':
+            return frame.tail(days)
+        if window_name == 'latest':
+            return frame.tail(1)
+        return frame
+
+    sorted_frame = frame.sort_values('_window_date')
+    if window_name == 'month':
+        anchor_date = sorted_frame['_window_date'].max()
+        cutoff_date = anchor_date - pd.Timedelta(days=days - 1)
+        return sorted_frame[
+            (sorted_frame['_window_date'] >= cutoff_date)
+            & (sorted_frame['_window_date'] <= anchor_date)
+        ]
+    if window_name == 'latest':
+        anchor_date = sorted_frame['_window_date'].max()
+        return sorted_frame[sorted_frame['_window_date'] == anchor_date].tail(1)
+    return sorted_frame
+
+
+def _numeric_mean(frame, column_name):
+    if column_name not in frame.columns:
+        return None
+    values = pd.to_numeric(frame[column_name], errors='coerce').dropna()
+    if values.empty:
+        return None
+    return float(values.mean())
+
+
+def _goal_score(value, *, compare_mode, goal, min=None, max=None):
+    if value is None:
+        return None
+    kwargs = {'compare_mode': compare_mode, 'goal': goal}
+    if min is not None:
+        kwargs['min'] = min
+    if max is not None:
+        kwargs['max'] = max
+    return plot_module.compute_score(value, **kwargs)
+
+
+def _build_goal_score_values(time_window, body_window):
+    return [
+        _goal_score(_numeric_mean(time_window, '_sleep_hours'), compare_mode='bigger_than', goal=8, min=5),
+        _goal_score(_numeric_mean(time_window, '_screen_hours'), compare_mode='smaller_than', goal=4, max=24),
+        _goal_score(_numeric_mean(time_window, '_remaining_hours'), compare_mode='bigger_than', goal=12, min=4),
+        _goal_score(_numeric_mean(body_window, '体重'), compare_mode='smaller_than', goal=65, max=75),
+        _goal_score(_numeric_mean(body_window, '体脂率'), compare_mode='smaller_than', goal=15, max=30),
     ]
 
+
+def _average_goal_score(values):
+    valid_values = [value for value in values if value is not None]
+    if not valid_values:
+        return None
+    return float(np.mean(valid_values))
+
+
+def _build_radar_goal_dashboard_chart(data_frame, trend):
+    time_frame = _prepare_radar_time_frame(trend)
+    body_frame = _prepare_radar_body_frame(data_frame)
     labels = ['睡眠时间', '手机屏幕时间', '剩余时间', '体重', '体脂率']
+    window_specs = [
+        ('全部历史平均', '历史综合达成率', 'all'),
+        ('近30天平均', '近30天综合达成率', 'month'),
+        ('最新一天', '最新一天综合达成率', 'latest'),
+    ]
+    radar_items = []
+    summary = []
+    for series_name, summary_label, window_name in window_specs:
+        values = _build_goal_score_values(
+            _select_goal_window(time_frame, window_name),
+            _select_goal_window(body_frame, window_name),
+        )
+        rounded_values = _category_values(values, 1)
+        radar_items.append({'value': rounded_values, 'name': series_name})
+
+        average_score = _average_goal_score(values)
+        summary_value = '--' if average_score is None else f"{_to_chart_number(average_score, 0)} %"
+        summary.append({'label': summary_label, 'value': summary_value})
 
     option = {
-        'color': [plot_module.COLORS['green']],
+        'color': [plot_module.COLORS['green'], plot_module.COLORS['blue'], plot_module.COLORS['orange']],
         'tooltip': {'trigger': 'item'},
-        'legend': {'top': 8},
+        'legend': {'top': 8, 'data': [item['name'] for item in radar_items]},
         'toolbox': {'right': 12, 'feature': {'saveAsImage': {}}},
         'radar': {
             'radius': '62%',
@@ -834,10 +941,10 @@ def _build_radar_goal_dashboard_chart(data_frame, trend):
         },
         'series': [
             {
-                'name': f'近 {nearest_days} 天达成率',
+                'name': '目标达成率',
                 'type': 'radar',
-                'areaStyle': {'opacity': 0.2},
-                'data': [{'value': _category_values(values, 1), 'name': '目标达成率'}],
+                'areaStyle': {'opacity': 0.12},
+                'data': radar_items,
             }
         ],
     }
@@ -845,14 +952,11 @@ def _build_radar_goal_dashboard_chart(data_frame, trend):
     return _build_chart(
         'radar-goal',
         '目标达成率雷达图',
-        '保留原来的达成率口径，但把它做成交互式雷达图，便于一眼看结构性短板。',
+        '同时对比全部历史、近30天和最新一天的目标达成率，避免把长期平均误看成当天表现。',
         option,
         formatter='percent',
         height=400,
-        summary=[
-            {'label': label, 'value': f"{_to_chart_number(value, 0)} %"}
-            for label, value in zip(labels, values)
-        ],
+        summary=summary,
     )
 
 
