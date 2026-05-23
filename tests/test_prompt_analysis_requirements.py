@@ -26,3 +26,21 @@ def test_improvement_tables_require_current_scores():
     assert "目前分数（0-100）" in content
     assert "健康改善分数（0-100）" in content
     assert "时间改善分数（0-100）" in content
+
+
+def test_thin_fit_clothing_goal_is_explicit():
+    goals = (PROJECT_ROOT / "Prompt_Goals.md").read_text(encoding="utf-8")
+    instructions = (PROJECT_ROOT / "Prompt_AI_Instructions.md").read_text(encoding="utf-8")
+    combined = goals + "\n" + instructions
+
+    for phrase in [
+        "穿衣好看",
+        "肩背挺",
+        "腰不粗",
+        "有点胸和手臂",
+        "能跑能跳",
+        "身体轻",
+        "有线条但不夸张",
+        "穿衣好看薄肌目标",
+    ]:
+        assert phrase in combined
