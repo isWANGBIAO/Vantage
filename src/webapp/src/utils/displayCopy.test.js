@@ -113,3 +113,14 @@ test('displayCopy includes provider mode and build info labels in both languages
     assert.ok(DISPLAY_COPY['zh-CN'][key], `${key} should exist in Chinese copy`);
   }
 });
+
+test('displayCopy includes Action Plan context limit warning labels in both languages', () => {
+  for (const key of [
+    'action_plan.context_limit.title',
+    'action_plan.context_limit.message',
+    'action_plan.context_limit.estimated_message',
+  ]) {
+    assert.ok(DISPLAY_COPY['en-US'][key], `${key} should exist in English copy`);
+    assert.ok(DISPLAY_COPY['zh-CN'][key], `${key} should exist in Chinese copy`);
+  }
+});

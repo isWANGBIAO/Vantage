@@ -57,6 +57,15 @@ test('ActionPlan warns when a loaded round looks like an incomplete stream save'
   assert.ok(actionPlanSource.includes("t('action_plan.render.incomplete')"));
 });
 
+test('ActionPlan warns when prompt size exceeds the proxy context limit', () => {
+  assert.ok(actionPlanSource.includes('prompt_token_limit_exceeded'));
+  assert.ok(actionPlanSource.includes('prompt_context_warning'));
+  assert.ok(actionPlanSource.includes('action-plan-context-warning'));
+  assert.ok(actionPlanSource.includes("t('action_plan.context_limit.title')"));
+  assert.ok(actionPlanSource.includes("'action_plan.context_limit.message'"));
+  assert.ok(actionPlanSource.includes("'action_plan.context_limit.estimated_message'"));
+});
+
 test('ActionPlan no longer depends on delimiter parsing or thinking-as-reply fallback', () => {
   assert.equal(actionPlanSource.includes('splitActionPlanContent'), false);
   assert.equal(actionPlanSource.includes('coalesceActionPlanReplyContent'), false);

@@ -154,6 +154,24 @@ class ActionPlanRequestStatsTests(unittest.TestCase):
         self.assertEqual(stats["duration"], 266.0)
         self.assertEqual(stats["first_token_latency"], 14.5)
 
+    def test_prompt_context_limit_warning_is_recorded_for_large_requests(self):
+        stats = run_prompt.build_action_plan_request_stats(
+            "analysis",
+            {
+                "usage": {
+                    "prompt_tokens": 250001,
+                    "completion_tokens": 42,
+                    "total_tokens": 250043,
+                },
+                "duration": 10.0,
+            },
+        )
+
+        self.assertEqual(stats["prompt_token_limit"], 250000)
+        self.assertTrue(stats["prompt_token_limit_exceeded"])
+        self.assertEqual(stats["prompt_context_warning"]["limit"], 250000)
+        self.assertEqual(stats["prompt_context_warning"]["prompt_tokens"], 250001)
+
 
 class RunPromptTests(unittest.TestCase):
     def test_format_chat_message_with_timestamp_prefixes_sent_time(self):
@@ -436,7 +454,7 @@ class RunPromptTests(unittest.TestCase):
         plan_start_index = output_lines.index('STREAM_PLAN_START:""')
         self.assertLess(plan_prompt_index, plan_start_index)
 
-    def test_analysis_mode_uses_full_time_series_history_for_cache_stability(self):
+    def test_analysis_mode_uses_2024_time_series_start_to_fit_proxy_context(self):
         fake_client = _FakeLLMClient()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -499,7 +517,7 @@ class RunPromptTests(unittest.TestCase):
                 run_prompt.main()
 
         _, kwargs = mock_construct_prompt.call_args
-        self.assertEqual(kwargs["start_date"], "earliest")
+        self.assertEqual(kwargs["start_date"], "2024-01-01")
         self.assertNotIn("days", kwargs)
 
     def test_analysis_mode_persists_structured_json_history(self):

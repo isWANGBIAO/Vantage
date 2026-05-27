@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { RotateCcw, FileText, CheckSquare, Activity } from 'lucide-react';
+import { RotateCcw, FileText, CheckSquare, Activity, AlertTriangle } from 'lucide-react';
 import { getActionPlanRenderState } from '../utils/actionPlanContent';
 import {
   getReasoningOptionsForModel,
@@ -21,6 +21,7 @@ import {
   computeDisplayedDurationSeconds,
   formatActionPlanCacheBreakdown,
   formatActionPlanTokenBreakdown,
+  formatCompactTokenValue,
   formatSecondsValue,
   formatThinkingTitleWithDuration,
   formatPoweredByLabel,
@@ -142,6 +143,65 @@ function buildPlanFullInput(systemPrompt, analysisPrompt, analysisReply, planPro
     '[User - Round 2]',
     planPrompt,
   ].join('\n');
+}
+
+function normalizePromptContextWarning(source) {
+  if (!source || typeof source !== 'object') {
+    return null;
+  }
+
+  const warning = source.prompt_context_warning && typeof source.prompt_context_warning === 'object'
+    ? source.prompt_context_warning
+    : {};
+  const limit = Number(
+    warning.limit
+    ?? source.prompt_token_limit
+    ?? 250000,
+  );
+  const observedPromptTokens = Number(
+    warning.observed_prompt_tokens
+    ?? source.estimated_prompt_tokens
+    ?? source.prompt_tokens,
+  );
+  const exceeded = source.prompt_token_limit_exceeded === true
+    || (
+      Number.isFinite(observedPromptTokens)
+      && Number.isFinite(limit)
+      && observedPromptTokens > limit
+    );
+
+  if (!exceeded) {
+    return null;
+  }
+
+  return {
+    limit,
+    observedPromptTokens,
+    estimated: warning.prompt_tokens === null
+      || warning.prompt_tokens === undefined
+      || (
+        warning.estimated_prompt_tokens !== null
+        && warning.estimated_prompt_tokens !== undefined
+        && warning.observed_prompt_tokens === warning.estimated_prompt_tokens
+      ),
+  };
+}
+
+function getActionPlanPromptContextWarning(stats) {
+  const candidates = [
+    normalizePromptContextWarning(stats),
+    ...(Array.isArray(stats?.requests)
+      ? stats.requests.map((request) => normalizePromptContextWarning(request))
+      : []),
+  ].filter(Boolean);
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return candidates.sort((left, right) => (
+    Number(right.observedPromptTokens || 0) - Number(left.observedPromptTokens || 0)
+  ))[0];
 }
 
 export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
@@ -843,6 +903,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     selectedReasoningEffort,
     selectedModelOption?.model,
   );
+  const promptContextWarning = getActionPlanPromptContextWarning(stats);
 
   return (
     <div
@@ -1031,6 +1092,23 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
           </button>
         </div>
       </div>
+
+      {promptContextWarning && (
+        <div className="action-plan-context-warning" role="alert">
+          <AlertTriangle size={18} />
+          <div>
+            <strong>{t('action_plan.context_limit.title')}</strong>
+            <span>
+              {t(promptContextWarning.estimated
+                ? 'action_plan.context_limit.estimated_message'
+                : 'action_plan.context_limit.message', {
+                tokens: formatCompactTokenValue(promptContextWarning.observedPromptTokens),
+                limit: formatCompactTokenValue(promptContextWarning.limit),
+              })}
+            </span>
+          </div>
+        </div>
+      )}
 
       <div className={layoutMode === 'stacked' ? 'action-plan-stack' : 'action-plan-grid'}>
         <div

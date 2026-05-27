@@ -28,7 +28,8 @@ from src.utils.generation_stats import build_generation_metadata
 
 ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT = 1
 RUN_PROMPT_ENTRYPOINT = "src/scripts/run_prompt.py"
-ACTION_PLAN_TIME_SERIES_START_DATE = "earliest"
+ACTION_PLAN_TIME_SERIES_START_DATE = "2024-01-01"
+ACTION_PLAN_PROXY_PROMPT_TOKEN_LIMIT = 250_000
 
 
 def _load_session_usage_summary(history_dir, session_id):
@@ -153,6 +154,37 @@ def _as_float_or_none(value):
         return None
 
 
+def _build_prompt_context_limit_metadata(*, prompt_tokens=None, estimated_prompt_tokens=None):
+    observed_values = []
+    for value in (prompt_tokens, estimated_prompt_tokens):
+        if value is None:
+            continue
+        try:
+            observed_values.append(int(float(value)))
+        except (TypeError, ValueError):
+            continue
+    observed_prompt_tokens = max(observed_values) if observed_values else None
+    exceeded = (
+        observed_prompt_tokens is not None
+        and observed_prompt_tokens > ACTION_PLAN_PROXY_PROMPT_TOKEN_LIMIT
+    )
+    warning = None
+    if exceeded:
+        warning = {
+            "code": "prompt_context_limit_exceeded",
+            "limit": ACTION_PLAN_PROXY_PROMPT_TOKEN_LIMIT,
+            "prompt_tokens": prompt_tokens,
+            "estimated_prompt_tokens": estimated_prompt_tokens,
+            "observed_prompt_tokens": observed_prompt_tokens,
+        }
+
+    return {
+        "prompt_token_limit": ACTION_PLAN_PROXY_PROMPT_TOKEN_LIMIT,
+        "prompt_token_limit_exceeded": exceeded,
+        "prompt_context_warning": warning,
+    }
+
+
 def build_action_plan_request_stats(section, result):
     payload = dict(result or {})
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
@@ -193,7 +225,7 @@ def build_action_plan_request_stats(section, result):
     completion_rate = int(completion_tokens or 0) / duration if usage_recorded and duration > 0 else None
     total_rate = int(total_tokens or 0) / duration if usage_recorded and duration > 0 else None
 
-    return {
+    stats = {
         "section": section,
         "duration": duration,
         "completed_at": payload.get("completed_at"),
@@ -219,6 +251,8 @@ def build_action_plan_request_stats(section, result):
         "service_tier": payload.get("service_tier"),
         "attempts": int(payload.get("attempts", 1) or 1),
     }
+    stats.update(_build_prompt_context_limit_metadata(prompt_tokens=prompt_tokens))
+    return stats
 
 
 def _first_non_null(*values):
@@ -638,9 +672,11 @@ def main():
             print("正在生成初始分析报告，请稍候...")
             # === ROUND 1: General Analysis ===
             # Emit initial stats
+            estimated_prompt_tokens = max(len(prompt_text), len(prompt_text) // 4)
             initial_stats = {
                 "turns": len(analysis_messages), # Estimate
                 "prompt_tokens": len(prompt_text) // 4, # Rough estimate
+                "estimated_prompt_tokens": estimated_prompt_tokens,
                 "completion_tokens": 0,
                 "total_tokens": 0,
                 "total_duration": 0,
@@ -648,6 +684,9 @@ def main():
                 "first_token_latency": None,
                 "requests": [],
             }
+            initial_stats.update(_build_prompt_context_limit_metadata(
+                estimated_prompt_tokens=estimated_prompt_tokens,
+            ))
 
             print(f"STATS_JSON:{json.dumps(initial_stats)}")
             emit_action_plan_stream_event("analysis", "start", "")
@@ -855,6 +894,9 @@ def main():
                         ),
                         "requests": request_stats,
                     }
+                    stats_output.update(_build_prompt_context_limit_metadata(
+                        prompt_tokens=summary_prompt_tokens,
+                    ))
                     metadata = build_generation_metadata(result, result_round_2)
                     stats_output.update(metadata)
                     print(f"STATS_JSON:{json.dumps(stats_output)}")
