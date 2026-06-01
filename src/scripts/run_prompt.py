@@ -185,6 +185,27 @@ def _build_prompt_context_limit_metadata(*, prompt_tokens=None, estimated_prompt
     }
 
 
+def _build_prompt_context_limit_summary(request_stats):
+    request_warnings = [
+        request.get("prompt_context_warning")
+        for request in request_stats or []
+        if request.get("prompt_token_limit_exceeded")
+    ]
+    request_warnings = [warning for warning in request_warnings if isinstance(warning, dict)]
+    warning = None
+    if request_warnings:
+        warning = max(
+            request_warnings,
+            key=lambda item: int(item.get("observed_prompt_tokens") or 0),
+        )
+
+    return {
+        "prompt_token_limit": ACTION_PLAN_PROXY_PROMPT_TOKEN_LIMIT,
+        "prompt_token_limit_exceeded": warning is not None,
+        "prompt_context_warning": warning,
+    }
+
+
 def build_action_plan_request_stats(section, result):
     payload = dict(result or {})
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
@@ -894,9 +915,7 @@ def main():
                         ),
                         "requests": request_stats,
                     }
-                    stats_output.update(_build_prompt_context_limit_metadata(
-                        prompt_tokens=summary_prompt_tokens,
-                    ))
+                    stats_output.update(_build_prompt_context_limit_summary(request_stats))
                     metadata = build_generation_metadata(result, result_round_2)
                     stats_output.update(metadata)
                     print(f"STATS_JSON:{json.dumps(stats_output)}")

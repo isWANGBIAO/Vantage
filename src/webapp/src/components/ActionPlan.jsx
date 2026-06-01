@@ -25,6 +25,7 @@ import {
   formatSecondsValue,
   formatThinkingTitleWithDuration,
   formatPoweredByLabel,
+  getActionPlanPromptContextWarning,
   getActionPlanRoundStats,
   isActionPlanRoundPossiblyIncomplete,
   isFallbackExecution,
@@ -143,65 +144,6 @@ function buildPlanFullInput(systemPrompt, analysisPrompt, analysisReply, planPro
     '[User - Round 2]',
     planPrompt,
   ].join('\n');
-}
-
-function normalizePromptContextWarning(source) {
-  if (!source || typeof source !== 'object') {
-    return null;
-  }
-
-  const warning = source.prompt_context_warning && typeof source.prompt_context_warning === 'object'
-    ? source.prompt_context_warning
-    : {};
-  const limit = Number(
-    warning.limit
-    ?? source.prompt_token_limit
-    ?? 250000,
-  );
-  const observedPromptTokens = Number(
-    warning.observed_prompt_tokens
-    ?? source.estimated_prompt_tokens
-    ?? source.prompt_tokens,
-  );
-  const exceeded = source.prompt_token_limit_exceeded === true
-    || (
-      Number.isFinite(observedPromptTokens)
-      && Number.isFinite(limit)
-      && observedPromptTokens > limit
-    );
-
-  if (!exceeded) {
-    return null;
-  }
-
-  return {
-    limit,
-    observedPromptTokens,
-    estimated: warning.prompt_tokens === null
-      || warning.prompt_tokens === undefined
-      || (
-        warning.estimated_prompt_tokens !== null
-        && warning.estimated_prompt_tokens !== undefined
-        && warning.observed_prompt_tokens === warning.estimated_prompt_tokens
-      ),
-  };
-}
-
-function getActionPlanPromptContextWarning(stats) {
-  const candidates = [
-    normalizePromptContextWarning(stats),
-    ...(Array.isArray(stats?.requests)
-      ? stats.requests.map((request) => normalizePromptContextWarning(request))
-      : []),
-  ].filter(Boolean);
-
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  return candidates.sort((left, right) => (
-    Number(right.observedPromptTokens || 0) - Number(left.observedPromptTokens || 0)
-  ))[0];
 }
 
 export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {

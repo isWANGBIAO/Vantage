@@ -8,6 +8,7 @@ import {
   formatThinkingTitleWithDuration,
   formatPoweredByLabel,
   formatReasoningEffortLabel,
+  getActionPlanPromptContextWarning,
   getActionPlanRoundStats,
   isActionPlanRoundPossiblyIncomplete,
   isFallbackExecution,
@@ -108,6 +109,67 @@ test('getActionPlanRoundStats returns the matching request section', () => {
 
   assert.deepEqual(getActionPlanRoundStats(stats, 'plan'), { section: 'plan', total_tokens: 28 });
   assert.equal(getActionPlanRoundStats(stats, 'missing'), null);
+});
+
+test('getActionPlanPromptContextWarning ignores aggregate prompt totals when request prompts fit', () => {
+  const warning = getActionPlanPromptContextWarning({
+    prompt_tokens: 345800,
+    prompt_token_limit: 250000,
+    prompt_token_limit_exceeded: true,
+    prompt_context_warning: {
+      limit: 250000,
+      prompt_tokens: 345800,
+      observed_prompt_tokens: 345800,
+    },
+    requests: [
+      {
+        section: 'analysis',
+        prompt_tokens: 166400,
+        prompt_token_limit: 250000,
+        prompt_token_limit_exceeded: false,
+        prompt_context_warning: null,
+      },
+      {
+        section: 'plan',
+        prompt_tokens: 179400,
+        prompt_token_limit: 250000,
+        prompt_token_limit_exceeded: false,
+        prompt_context_warning: null,
+      },
+    ],
+  });
+
+  assert.equal(warning, null);
+});
+
+test('getActionPlanPromptContextWarning reports the largest per-request prompt overflow', () => {
+  const warning = getActionPlanPromptContextWarning({
+    requests: [
+      {
+        section: 'analysis',
+        prompt_tokens: 180000,
+        prompt_token_limit: 250000,
+        prompt_token_limit_exceeded: false,
+      },
+      {
+        section: 'plan',
+        prompt_tokens: 260793,
+        prompt_token_limit: 250000,
+        prompt_token_limit_exceeded: true,
+        prompt_context_warning: {
+          limit: 250000,
+          prompt_tokens: 260793,
+          observed_prompt_tokens: 260793,
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(warning, {
+    limit: 250000,
+    observedPromptTokens: 260793,
+    estimated: false,
+  });
 });
 
 test('getActionPlanRoundStats treats completed calls without usage as unrecorded instead of zero', () => {

@@ -58,8 +58,7 @@ test('ActionPlan warns when a loaded round looks like an incomplete stream save'
 });
 
 test('ActionPlan warns when prompt size exceeds the proxy context limit', () => {
-  assert.ok(actionPlanSource.includes('prompt_token_limit_exceeded'));
-  assert.ok(actionPlanSource.includes('prompt_context_warning'));
+  assert.ok(actionPlanSource.includes('getActionPlanPromptContextWarning'));
   assert.ok(actionPlanSource.includes('action-plan-context-warning'));
   assert.ok(actionPlanSource.includes("t('action_plan.context_limit.title')"));
   assert.ok(actionPlanSource.includes("'action_plan.context_limit.message'"));

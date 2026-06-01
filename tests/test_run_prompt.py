@@ -40,6 +40,43 @@ class _FakeLLMClient:
         }
 
 
+class _HighButPerRequestSafeLLMClient:
+    def __init__(self):
+        self.call_count = 0
+
+    def chat(self, messages, stream=False, print_callback=None, model=None, **kwargs):
+        self.call_count += 1
+
+        if self.call_count == 1:
+            if print_callback:
+                print_callback("content", "analysis reply")
+            return {
+                "content": "analysis reply",
+                "usage": {
+                    "prompt_tokens": 166400,
+                    "completion_tokens": 17400,
+                    "total_tokens": 183800,
+                },
+                "duration": 317.5,
+                "first_token_latency": 22.5,
+                "completed_at": "2026-06-01T13:12:29+08:00",
+            }
+
+        if print_callback:
+            print_callback("content", "plan reply")
+        return {
+            "content": "plan reply",
+            "usage": {
+                "prompt_tokens": 179400,
+                "completion_tokens": 6100,
+                "total_tokens": 185500,
+            },
+            "duration": 114.3,
+            "first_token_latency": 8.1,
+            "completed_at": "2026-06-01T13:14:23+08:00",
+        }
+
+
 class _RetryingFakeLLMClient:
     def __init__(self):
         self.call_count = 0
@@ -590,6 +627,77 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(saved_payload["meta"]["reasoning_effort"], "medium")
         self.assertIn("generated_at", saved_payload["meta"])
         self.assertEqual(saved_payload["meta"]["stats"]["total_tokens"], 43)
+
+    def test_analysis_mode_does_not_warn_on_combined_prompt_tokens_when_each_request_fits(self):
+        fake_client = _HighButPerRequestSafeLLMClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history_dir = temp_path / "history"
+            history_dir.mkdir()
+            (temp_path / "Prompt_Action_Plan.md").write_text(
+                "Now {current_time}\nPast {past_7_days_rows}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
+                encoding="utf-8",
+            )
+            (temp_path / "Prompt_Personal_Info.md").write_text("personal info", encoding="utf-8")
+            (temp_path / "Time.xlsx").write_text("placeholder", encoding="utf-8")
+
+            def fake_resolve_data_path(filename):
+                return temp_path / filename
+
+            with patch.object(run_prompt.Config, "load_env"), patch.object(
+                run_prompt.Config,
+                "get_history_dir",
+                return_value=history_dir,
+            ), patch.object(
+                run_prompt,
+                "LLMClient",
+                return_value=fake_client,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "construct_prompt",
+                return_value="analysis prompt",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_system_prompt_content",
+                return_value="system prompt",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_past_seven_days_rows",
+                return_value="past seven rows",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_today_data_row",
+                return_value="today row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_yesterday_data_row",
+                return_value="yesterday row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_future_planned_rows",
+                return_value="future rows",
+            ), patch.object(
+                sys,
+                "argv",
+                ["run_prompt.py"],
+            ):
+                run_prompt.main()
+
+            output_files = sorted(history_dir.glob("action_plan_*.json"))
+            saved_payload = json.loads(output_files[0].read_text(encoding="utf-8"))
+
+        stats = saved_payload["meta"]["stats"]
+        self.assertEqual(stats["prompt_tokens"], 345800)
+        self.assertFalse(stats["prompt_token_limit_exceeded"])
+        self.assertIsNone(stats["prompt_context_warning"])
+        for request in stats["requests"]:
+            self.assertLess(request["prompt_tokens"], 250000)
+            self.assertFalse(request["prompt_token_limit_exceeded"])
 
     def test_analysis_mode_retries_plan_round_when_stream_ends_without_content(self):
         fake_client = _RetryingFakeLLMClient()
