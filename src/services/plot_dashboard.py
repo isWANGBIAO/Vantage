@@ -5,6 +5,7 @@ import re
 from src.scripts import plot as plot_module
 
 SLEEP_SCHEDULE_WRAP_HOUR = 12
+SLEEP_SCHEDULE_SUMMARY_POINTS = 45
 SLEEP_TIME_PATTERN = re.compile(r'(\d{1,2})\s*[.:：]\s*(\d{1,2})')
 HHH_SIGNED_COUNT_PATTERN = re.compile(r'([+-])\s*(\d+(?:\.\d+)?)')
 HHH_DIRECT_COUNT_PATTERN = re.compile(r'[+-]?\s*\d+(?:\.0+)?')
@@ -534,6 +535,7 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
     dates = parsed_frame['日期'].tolist()
     bedtime_wrapped = parsed_frame['bedtime_wrapped_hour'].to_numpy(dtype=float)
     wake_wrapped = parsed_frame['wake_wrapped_hour'].to_numpy(dtype=float)
+    summary_frame = parsed_frame.tail(SLEEP_SCHEDULE_SUMMARY_POINTS)
 
     option = {
         'color': [
@@ -544,8 +546,13 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
         'legend': {'top': 8},
         'toolbox': {'right': 12, 'feature': {'saveAsImage': {}}},
         'dataZoom': [
-            {'type': 'inside', 'start': _zoom_start(len(dates), 45), 'end': 100},
-            {'type': 'slider', 'start': _zoom_start(len(dates), 45), 'end': 100, 'bottom': 8},
+            {'type': 'inside', 'start': _zoom_start(len(dates), SLEEP_SCHEDULE_SUMMARY_POINTS), 'end': 100},
+            {
+                'type': 'slider',
+                'start': _zoom_start(len(dates), SLEEP_SCHEDULE_SUMMARY_POINTS),
+                'end': 100,
+                'bottom': 8,
+            },
         ],
         'grid': {'top': 72, 'left': 56, 'right': 36, 'bottom': 72, 'containLabel': True},
         'xAxis': {'type': 'time'},
@@ -582,8 +589,8 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
         summary=[
             {'label': '最近入睡', 'value': _format_clock_text(parsed_frame['bedtime_hour'].iloc[-1])},
             {'label': '最近起床', 'value': _format_clock_text(parsed_frame['wake_hour'].iloc[-1])},
-            {'label': '平均入睡', 'value': _format_clock_text(parsed_frame['bedtime_wrapped_hour'].mean())},
-            {'label': '平均起床', 'value': _format_clock_text(parsed_frame['wake_wrapped_hour'].mean())},
+            {'label': '平均入睡', 'value': _format_clock_text(summary_frame['bedtime_wrapped_hour'].mean())},
+            {'label': '平均起床', 'value': _format_clock_text(summary_frame['wake_wrapped_hour'].mean())},
             {'label': '样本天数', 'value': str(len(parsed_frame))},
         ],
     )

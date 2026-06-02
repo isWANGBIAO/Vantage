@@ -59,6 +59,22 @@ class SleepScheduleDashboardTests(unittest.TestCase):
         self.assertAlmostEqual(chart["option"]["series"][0]["data"][0][1], 22 + 28 / 60, places=4)
         self.assertAlmostEqual(chart["option"]["series"][1]["data"][0][1], 24 + 10 + 40 / 60, places=4)
 
+    def test_sleep_schedule_summary_averages_default_visible_window(self):
+        dates = pd.date_range("2026-04-01", periods=46, freq="D")
+        data_frame = pd.DataFrame(
+            {
+                "日期": dates,
+                "起床时间": ["22.00-4.00"] + ["2.00-10.00"] * 45,
+            }
+        )
+
+        chart = plot_dashboard._build_sleep_schedule_dashboard_chart(data_frame)
+        summary = {item["label"]: item["value"] for item in chart["summary"]}
+
+        self.assertEqual(summary["平均入睡"], "02:00")
+        self.assertEqual(summary["平均起床"], "10:00")
+        self.assertEqual(summary["样本天数"], "46")
+
     def test_balance_dashboard_splits_actual_assets_from_forecast_path(self):
         data_frame = pd.DataFrame(
             {
