@@ -6,7 +6,14 @@ from src.scripts import plot as plot_module
 
 SLEEP_SCHEDULE_WRAP_HOUR = 12
 SLEEP_SCHEDULE_SUMMARY_POINTS = 45
+SLEEP_SCHEDULE_DEFAULT_AXIS_MAX = 36
+SLEEP_SCHEDULE_AXIS_INTERVAL = 2
+SLEEP_SESSION_SEPARATOR_PATTERN = re.compile(r'[\uFF1B;]+')
 SLEEP_TIME_PATTERN = re.compile(r'(\d{1,2})\s*[.:：]\s*(\d{1,2})')
+SLEEP_AFTERNOON_MARKERS = ('\u4E0B\u5348', '\u665A\u4E0A')
+SLEEP_NOON_MARKER = '\u4E2D\u5348'
+SLEEP_MIN_PRIMARY_DURATION_HOURS = 2
+SLEEP_MAX_PRIMARY_DURATION_HOURS = 18
 HHH_SIGNED_COUNT_PATTERN = re.compile(r'([+-])\s*(\d+(?:\.\d+)?)')
 HHH_DIRECT_COUNT_PATTERN = re.compile(r'[+-]?\s*\d+(?:\.0+)?')
 
@@ -124,6 +131,29 @@ def _normalize_clock_hour(value, wrap_hour=SLEEP_SCHEDULE_WRAP_HOUR):
     return wrapped
 
 
+def _parse_sleep_clock_match(segment, match):
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour < 0 or hour >= 24 or minute < 0 or minute >= 60:
+        return None
+
+    context = segment[max(0, match.start() - 4) : match.end() + 2]
+    if hour < 12 and any(marker in context for marker in SLEEP_AFTERNOON_MARKERS):
+        hour += 12
+    elif hour < 11 and SLEEP_NOON_MARKER in context:
+        hour += 12
+
+    return hour + minute / 60.0
+
+
+def _wrap_sleep_session_hours(bedtime_hour, wake_hour):
+    bedtime_wrapped_hour = _normalize_clock_hour(bedtime_hour)
+    wake_wrapped_hour = _normalize_clock_hour(wake_hour)
+    if wake_wrapped_hour <= bedtime_wrapped_hour:
+        wake_wrapped_hour += 24
+    return bedtime_wrapped_hour, wake_wrapped_hour
+
+
 def _parse_primary_sleep_session(value):
     if value is None or pd.isna(value):
         return None
@@ -132,26 +162,47 @@ def _parse_primary_sleep_session(value):
     if not text:
         return None
 
-    first_segment = re.split(r'[；;]', text, maxsplit=1)[0].strip()
-    matches = SLEEP_TIME_PATTERN.findall(first_segment)
-    if len(matches) < 2:
+    candidates = []
+    for segment in SLEEP_SESSION_SEPARATOR_PATTERN.split(text):
+        segment = segment.strip()
+        matches = list(SLEEP_TIME_PATTERN.finditer(segment))
+        if len(matches) < 2:
+            continue
+
+        bedtime_hour = _parse_sleep_clock_match(segment, matches[0])
+        wake_hour = _parse_sleep_clock_match(segment, matches[1])
+        if bedtime_hour is None or wake_hour is None:
+            continue
+
+        bedtime_wrapped_hour, wake_wrapped_hour = _wrap_sleep_session_hours(bedtime_hour, wake_hour)
+        duration_hours = wake_wrapped_hour - bedtime_wrapped_hour
+        if duration_hours <= 0 or duration_hours > SLEEP_MAX_PRIMARY_DURATION_HOURS:
+            continue
+
+        candidates.append(
+            {
+                'bedtime_hour': bedtime_hour,
+                'wake_hour': wake_hour,
+                'bedtime_wrapped_hour': bedtime_wrapped_hour,
+                'wake_wrapped_hour': wake_wrapped_hour,
+                'duration_hours': duration_hours,
+                'segment': segment,
+            }
+        )
+
+    if not candidates:
         return None
 
-    parsed_hours = []
-    for hour_text, minute_text in matches[:2]:
-        hour = int(hour_text)
-        minute = int(minute_text)
-        if hour < 0 or hour >= 24 or minute < 0 or minute >= 60:
-            return None
-        parsed_hours.append(hour + minute / 60.0)
-
-    bedtime_hour, wake_hour = parsed_hours
+    plausible_candidates = [
+        candidate for candidate in candidates if candidate['duration_hours'] >= SLEEP_MIN_PRIMARY_DURATION_HOURS
+    ]
+    primary = max(plausible_candidates or candidates, key=lambda candidate: candidate['duration_hours'])
     return {
-        'bedtime_hour': bedtime_hour,
-        'wake_hour': wake_hour,
-        'bedtime_wrapped_hour': _normalize_clock_hour(bedtime_hour),
-        'wake_wrapped_hour': _normalize_clock_hour(wake_hour),
-        'segment': first_segment,
+        'bedtime_hour': primary['bedtime_hour'],
+        'wake_hour': primary['wake_hour'],
+        'bedtime_wrapped_hour': primary['bedtime_wrapped_hour'],
+        'wake_wrapped_hour': primary['wake_wrapped_hour'],
+        'segment': primary['segment'],
     }
 
 
@@ -536,6 +587,11 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
     bedtime_wrapped = parsed_frame['bedtime_wrapped_hour'].to_numpy(dtype=float)
     wake_wrapped = parsed_frame['wake_wrapped_hour'].to_numpy(dtype=float)
     summary_frame = parsed_frame.tail(SLEEP_SCHEDULE_SUMMARY_POINTS)
+    axis_max = max(
+        SLEEP_SCHEDULE_DEFAULT_AXIS_MAX,
+        int(np.ceil(max(float(bedtime_wrapped.max()), float(wake_wrapped.max())) / SLEEP_SCHEDULE_AXIS_INTERVAL))
+        * SLEEP_SCHEDULE_AXIS_INTERVAL,
+    )
 
     option = {
         'color': [
@@ -560,8 +616,8 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
             'type': 'value',
             'name': '时间',
             'min': 12,
-            'max': 36,
-            'interval': 2,
+            'max': axis_max,
+            'interval': SLEEP_SCHEDULE_AXIS_INTERVAL,
         },
         'series': [
             {

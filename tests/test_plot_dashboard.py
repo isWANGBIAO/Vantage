@@ -19,7 +19,7 @@ class SleepScheduleDashboardTests(unittest.TestCase):
         self.assertAlmostEqual(parsed["bedtime_hour"], 22 + 28 / 60, places=4)
         self.assertAlmostEqual(parsed["wake_hour"], 10 + 40 / 60, places=4)
 
-    def test_parse_primary_sleep_session_uses_first_segment_for_multi_sleep_rows(self):
+    def test_parse_primary_sleep_session_keeps_longer_first_segment_for_multi_sleep_rows(self):
         self.assertTrue(
             hasattr(plot_dashboard, "_parse_primary_sleep_session"),
             "expected _parse_primary_sleep_session() helper to exist",
@@ -30,6 +30,34 @@ class SleepScheduleDashboardTests(unittest.TestCase):
         self.assertIsNotNone(parsed)
         self.assertAlmostEqual(parsed["bedtime_hour"], 2 + 45 / 60, places=4)
         self.assertAlmostEqual(parsed["wake_hour"], 7 + 49 / 60, places=4)
+
+    def test_parse_primary_sleep_session_uses_longest_segment_for_fragmented_sleep(self):
+        parsed = plot_dashboard._parse_primary_sleep_session("23.14睡，00.08起；01.06睡，08.31起")
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["segment"], "01.06睡，08.31起")
+        self.assertAlmostEqual(parsed["bedtime_hour"], 1 + 6 / 60, places=4)
+        self.assertAlmostEqual(parsed["wake_hour"], 8 + 31 / 60, places=4)
+        self.assertAlmostEqual(parsed["wake_wrapped_hour"] - parsed["bedtime_wrapped_hour"], 7 + 25 / 60, places=4)
+
+    def test_parse_primary_sleep_session_understands_afternoon_and_evening_markers(self):
+        parsed = plot_dashboard._parse_primary_sleep_session(
+            "早上9.28睡，下午3.12醒；晚上7.00睡，晚上10.07醒"
+        )
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["segment"], "早上9.28睡，下午3.12醒")
+        self.assertAlmostEqual(parsed["bedtime_hour"], 9 + 28 / 60, places=4)
+        self.assertAlmostEqual(parsed["wake_hour"], 15 + 12 / 60, places=4)
+        self.assertAlmostEqual(parsed["wake_wrapped_hour"] - parsed["bedtime_wrapped_hour"], 5 + 44 / 60, places=4)
+
+    def test_parse_primary_sleep_session_wraps_noon_wake_after_morning_sleep(self):
+        parsed = plot_dashboard._parse_primary_sleep_session("11.34-15.25")
+
+        self.assertIsNotNone(parsed)
+        self.assertAlmostEqual(parsed["bedtime_hour"], 11 + 34 / 60, places=4)
+        self.assertAlmostEqual(parsed["wake_hour"], 15 + 25 / 60, places=4)
+        self.assertAlmostEqual(parsed["wake_wrapped_hour"] - parsed["bedtime_wrapped_hour"], 3 + 51 / 60, places=4)
 
     def test_sleep_schedule_chart_contains_bedtime_and_wake_series(self):
         self.assertTrue(
@@ -74,6 +102,19 @@ class SleepScheduleDashboardTests(unittest.TestCase):
         self.assertEqual(summary["平均入睡"], "02:00")
         self.assertEqual(summary["平均起床"], "10:00")
         self.assertEqual(summary["样本天数"], "46")
+
+    def test_sleep_schedule_axis_expands_for_afternoon_wake_points(self):
+        data_frame = pd.DataFrame(
+            {
+                "日期": pd.to_datetime(["2026-02-05"]),
+                "起床时间": ["11.34-15.25"],
+            }
+        )
+
+        chart = plot_dashboard._build_sleep_schedule_dashboard_chart(data_frame)
+
+        self.assertAlmostEqual(chart["option"]["series"][1]["data"][0][1], 24 + 15 + 25 / 60, places=4)
+        self.assertGreaterEqual(chart["option"]["yAxis"]["max"], 40)
 
     def test_balance_dashboard_splits_actual_assets_from_forecast_path(self):
         data_frame = pd.DataFrame(
