@@ -94,6 +94,7 @@ test('build version script bumps patch and writes build metadata', async () => {
     build_date: '2026-05-03T04:00:00.000Z',
     build_commit: 'abcdef1',
   });
+  assert.equal(result.bumped, true);
 });
 
 test('build version script runs from the CLI on Windows-style relative paths', () => {
@@ -113,7 +114,57 @@ test('build version script runs from the CLI on Windows-style relative paths', (
   assert.equal(JSON.parse(readFileSync(buildInfoPath, 'utf8')).version, '2.3.5');
 });
 
-test('RUN.bat prepares build version but does not commit automatically', () => {
-  assert.ok(runBatSource.includes('prepare-build-version.mjs'));
+test('build version script auto mode keeps committed versions unchanged on a clean tree', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-version-auto-clean-'));
+  const packagePath = path.join(root, 'package.json');
+  const lockPath = path.join(root, 'package-lock.json');
+  const buildInfoPath = path.join(root, 'build-info.json');
+  const packagePayload = { name: 'vantage', version: '3.4.5' };
+  const buildInfoPayload = {
+    version: '3.4.5',
+    build_date: '2026-05-03T04:00:00.000Z',
+    build_commit: 'clean123',
+  };
+  writeFileSync(packagePath, JSON.stringify(packagePayload, null, 2), 'utf8');
+  writeFileSync(lockPath, JSON.stringify({ name: 'vantage', version: '3.4.5', packages: { '': packagePayload } }, null, 2), 'utf8');
+  writeFileSync(buildInfoPath, JSON.stringify(buildInfoPayload, null, 2), 'utf8');
+
+  const { prepareBuildVersion } = await import('./scripts/prepare-build-version.mjs');
+  const result = prepareBuildVersion({
+    webappRoot: root,
+    mode: 'auto',
+    commit: 'ignored999',
+    gitClean: true,
+  });
+
+  assert.equal(result.bumped, false);
+  assert.equal(result.version, '3.4.5');
+  assert.equal(JSON.parse(readFileSync(packagePath, 'utf8')).version, '3.4.5');
+  assert.equal(JSON.parse(readFileSync(lockPath, 'utf8')).version, '3.4.5');
+  assert.deepEqual(JSON.parse(readFileSync(buildInfoPath, 'utf8')), buildInfoPayload);
+});
+
+test('build version script auto mode bumps when tracked changes are present', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-version-auto-dirty-'));
+  const packagePath = path.join(root, 'package.json');
+  const buildInfoPath = path.join(root, 'build-info.json');
+  writeFileSync(packagePath, JSON.stringify({ name: 'vantage', version: '4.0.0' }, null, 2), 'utf8');
+
+  const { prepareBuildVersion } = await import('./scripts/prepare-build-version.mjs');
+  const result = prepareBuildVersion({
+    webappRoot: root,
+    mode: 'auto',
+    now: new Date('2026-05-03T12:00:00+08:00'),
+    commit: 'dirty123',
+    gitClean: false,
+  });
+
+  assert.equal(result.bumped, true);
+  assert.equal(JSON.parse(readFileSync(packagePath, 'utf8')).version, '4.0.1');
+  assert.equal(JSON.parse(readFileSync(buildInfoPath, 'utf8')).version, '4.0.1');
+});
+
+test('RUN.bat prepares build version in auto mode but does not commit automatically', () => {
+  assert.ok(runBatSource.includes('prepare-build-version.mjs --mode auto'));
   assert.equal(/git\s+commit/i.test(runBatSource), false);
 });

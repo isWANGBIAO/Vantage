@@ -78,7 +78,7 @@ call :StepDone "Backend packaging environment ready"
 
 call :StepStart "[3/8] Preparing build version..."
 pushd "%PROJECT_ROOT%src\webapp"
-call node scripts\prepare-build-version.mjs
+call node scripts\prepare-build-version.mjs --mode auto
 if errorlevel 1 (
     popd
     echo       Build version preparation failed
