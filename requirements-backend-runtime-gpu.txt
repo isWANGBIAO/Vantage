@@ -1,6 +1,7 @@
 --extra-index-url https://download.pytorch.org/whl/cu130
 
 APScheduler==3.11.0
+chinese-calendar==1.11.0
 PyInstaller==6.16.0
 SciencePlots==2.1.1
 cv2-enumerate-cameras==1.1.18.2
@@ -26,3 +27,4 @@ tqdm==4.67.1
 ultralytics==8.4.0
 uvicorn==0.40.0
 winsdk==1.0.0b10
+zhdate==0.1

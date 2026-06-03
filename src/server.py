@@ -531,6 +531,7 @@ class SystemState:
         self.photos_size = 0  # Cache for photos storage size
         self.screenshots_size = 0  # Cache for screenshots storage size
         self.storage_scan_truncated = False
+        self.latest_media_scan_truncated = False
         self.show_person_box = True
         self.person_boxes = []
         self.video_stream_client_count = 0
@@ -809,6 +810,9 @@ def _safe_directory_size(directory, *, max_seconds=STORAGE_SCAN_MAX_SECONDS, max
         )
     _safe_directory_size.last_truncated = truncated
     return total_size
+
+
+_safe_directory_size.last_truncated = False
 
 
 def update_legacy_storage_stats():
@@ -1611,6 +1615,7 @@ def find_latest_file_recursive(
     latest_file = None
     latest_time = 0
     visited_count = 0
+    truncated = False
     deadline = time.monotonic() + max_seconds if max_seconds else None
     for root, dirs, files in os.walk(directory):
         dirs.sort(reverse=True)
@@ -1618,10 +1623,14 @@ def find_latest_file_recursive(
         for f in files:
             visited_count += 1
             if max_entries and visited_count > max_entries:
+                truncated = True
                 print(f"Latest media scan budget reached under {directory}; returning best match so far")
+                find_latest_file_recursive.last_truncated = truncated
                 return latest_file
             if deadline and time.monotonic() > deadline:
+                truncated = True
                 print(f"Latest media scan time budget reached under {directory}; returning best match so far")
+                find_latest_file_recursive.last_truncated = truncated
                 return latest_file
             if os.path.splitext(f)[1].lower() in extensions:
                 full_path = os.path.join(root, f)
@@ -1632,23 +1641,35 @@ def find_latest_file_recursive(
                         latest_file = full_path
                 except OSError:
                     pass
+    find_latest_file_recursive.last_truncated = truncated
     return latest_file
+
+
+find_latest_file_recursive.last_truncated = False
 
 
 def initialize_latest_media_state():
     try:
         print("Scanning for latest existing images...")
+        latest_media_scan_truncated = False
         if not state.paths.get('photo') and state.photos_path:
             latest_photo = find_latest_file_recursive(state.photos_path)
+            latest_media_scan_truncated = latest_media_scan_truncated or bool(
+                getattr(find_latest_file_recursive, "last_truncated", False)
+            )
             if latest_photo:
                 state.paths['photo'] = latest_photo
                 print(f"Found latest photo: {latest_photo}")
 
         if not state.paths.get('screenshot') and state.screenshots_path:
             latest_screen = find_latest_file_recursive(state.screenshots_path)
+            latest_media_scan_truncated = latest_media_scan_truncated or bool(
+                getattr(find_latest_file_recursive, "last_truncated", False)
+            )
             if latest_screen:
                 state.paths['screenshot'] = latest_screen
                 print(f"Found latest screenshot: {latest_screen}")
+        state.latest_media_scan_truncated = latest_media_scan_truncated
     except Exception as e:
         print(f"Error finding latest files: {e}")
 
@@ -2158,7 +2179,8 @@ def get_latest_images():
             "photo": photo_url,
             "screenshot": screenshot_url,
             "photo_name": os.path.basename(photo_path) if photo_path else "",
-            "screenshot_name": os.path.basename(screenshot_path) if screenshot_path else ""
+            "screenshot_name": os.path.basename(screenshot_path) if screenshot_path else "",
+            "latest_media_scan_truncated": state.latest_media_scan_truncated,
         }
     except Exception as e:
         print(f"ERROR in get_latest_images: {e}")

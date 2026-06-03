@@ -17,6 +17,10 @@ def detect_person_YOLO(image):
 def take_photo(cam, latitude, longitude, photos_path):
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking photo")
     frame = capture_best_photo(cam)
+    if frame is None:
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Camera capture failed; skipping person detection")
+        return False, None
+
     t1 = cv2.getTickCount()
     results = detect_person_YOLO(frame)
     t2 = cv2.getTickCount()

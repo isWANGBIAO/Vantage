@@ -6,6 +6,7 @@ arrow==1.2.3
 asttokens==2.2.1
 attrs==23.1.0
 APScheduler==3.11.0
+chinese-calendar==1.11.0
 backcall==0.2.0
 beautifulsoup4==4.12.2
 bleach==6.0.0
@@ -150,3 +151,4 @@ websocket-client==1.5.1
 WMI==1.5.1
 winsdk==1.0.0b10
 zipp==3.20.2
+zhdate==0.1
