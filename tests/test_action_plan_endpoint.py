@@ -920,20 +920,20 @@ class ActionPlanEndpointTests(unittest.TestCase):
         request = server.LLMModelDiscoverRequest(
             route="custom",
             base_url="http://127.0.0.1:8317/v1",
-            api_key="sk-test-secret-1234567890",
+            api_key="TEST_API_KEY_SHOULD_BE_REDACTED",
             type="openai-compatible",
         )
 
         with patch.object(
             server.LLMClient,
             "discover_models_for_config",
-            side_effect=RuntimeError("bad key sk-test-secret-1234567890"),
+            side_effect=RuntimeError("bad key TEST_API_KEY_SHOULD_BE_REDACTED"),
         ):
             response = asyncio.run(server.discover_llm_models(request))
 
         payload = json.loads(response.body.decode("utf-8"))
         self.assertEqual(response.status_code, 400)
-        self.assertNotIn("sk-test-secret-1234567890", payload["error"])
+        self.assertNotIn("TEST_API_KEY_SHOULD_BE_REDACTED", payload["error"])
         self.assertIn("[REDACTED_API_KEY]", payload["error"])
 
     def test_discover_llm_models_uses_saved_key_and_local_proxy_default_url(self):
