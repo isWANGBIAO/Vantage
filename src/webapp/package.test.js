@@ -8,6 +8,7 @@ import process from 'node:process';
 
 const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 const preloadSource = readFileSync(new URL('./preload.cjs', import.meta.url), 'utf8');
+const signMacAdHocSource = readFileSync(new URL('./scripts/sign-mac-ad-hoc.cjs', import.meta.url), 'utf8');
 const viteBuildScriptSource = readFileSync(new URL('./scripts/vite-build.mjs', import.meta.url), 'utf8');
 const runBatSource = readFileSync(new URL('../../RUN.bat', import.meta.url), 'utf8');
 
@@ -31,6 +32,7 @@ test('build script normalizes junction paths before invoking Vite', () => {
 
 test('package bundles the backend runtime and installer shortcuts for Windows', () => {
   assert.ok(packageJson.build.files.includes('src/utils/**/*.cjs'));
+  assert.equal(packageJson.build.afterPack, './scripts/sign-mac-ad-hoc.cjs');
   assert.deepEqual(packageJson.build.win.target, ['nsis']);
   assert.deepEqual(packageJson.build.mac.target, ['dmg', 'zip']);
   assert.equal(packageJson.build.mac.category, 'public.app-category.healthcare-fitness');
@@ -57,6 +59,35 @@ test('package bundles the backend runtime and installer shortcuts for Windows', 
 
 test('preload does not emit startup console noise', () => {
   assert.equal(preloadSource.includes("console.log('Electron preload script loaded')"), false);
+});
+
+test('preload can prime renderer camera access for macOS permission prompts', () => {
+  assert.ok(preloadSource.includes("ipcRenderer.on('camera:prime-renderer-access'"));
+  assert.ok(preloadSource.includes("navigator.mediaDevices.getUserMedia({ video: true, audio: false })"));
+  assert.ok(preloadSource.includes("ipcRenderer.send('camera:renderer-access-result'"));
+  assert.ok(preloadSource.includes('track.stop()'));
+});
+
+test('macOS packaging hook ad-hoc signs the finished app bundle from a temp copy', () => {
+  assert.equal(packageJson.build.afterPack, './scripts/sign-mac-ad-hoc.cjs');
+  assert.ok(signMacAdHocSource.includes("context?.electronPlatformName !== 'darwin'"));
+  assert.ok(signMacAdHocSource.includes('walkAsync'));
+  assert.ok(signMacAdHocSource.includes('isMachOFile'));
+  assert.ok(signMacAdHocSource.includes('function commandPath'));
+  assert.ok(signMacAdHocSource.includes('path.relative(process.cwd(), filePath)'));
+  assert.ok(signMacAdHocSource.includes("fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-mac-sign-'))"));
+  assert.ok(signMacAdHocSource.includes("run('ditto', [outputAppPath, appPath])"));
+  assert.ok(signMacAdHocSource.includes("run('ditto', [appPath, outputAppPath])"));
+  assert.ok(signMacAdHocSource.includes('codesignPath'));
+  assert.ok(signMacAdHocSource.includes('codesignPathWithShell'));
+  assert.ok(signMacAdHocSource.includes('codesignTopLevelApp'));
+  assert.ok(signMacAdHocSource.includes('AD_HOC_MAIN_ENTITLEMENTS'));
+  assert.ok(signMacAdHocSource.includes("path.basename(filePath) === 'VantageBackend'"));
+  assert.ok(signMacAdHocSource.includes('com.apple.security.cs.disable-library-validation'));
+  assert.ok(signMacAdHocSource.includes("run('xattr', ['-cr', bundlePath]"));
+  assert.ok(signMacAdHocSource.includes('com.apple.FinderInfo'));
+  assert.ok(signMacAdHocSource.includes('com.apple.fileprovider.fpfs#P'));
+  assert.ok(signMacAdHocSource.includes("'--strict'"));
 });
 
 test('build version script bumps patch and writes build metadata', async () => {

@@ -22,11 +22,23 @@ test('Electron main process exposes Settings IPC and restricts path opening', ()
 
 test('Electron main process requests macOS camera access before bundled backend startup', () => {
   assert.ok(mainSource.includes('systemPreferences'));
+  assert.ok(mainSource.includes('session.defaultSession.setPermissionRequestHandler'));
+  assert.ok(mainSource.includes("permission === 'media'"));
+  assert.ok(mainSource.includes("requestedMediaTypes.includes('video')"));
+  assert.ok(mainSource.includes('Approved renderer media permission request for camera priming'));
+  assert.ok(mainSource.includes("CAMERA_PERMISSION_PRIME_CHANNEL = 'camera:prime-renderer-access'"));
+  assert.ok(mainSource.includes("CAMERA_PERMISSION_RESULT_CHANNEL = 'camera:renderer-access-result'"));
+  assert.ok(mainSource.includes('requestRendererCameraAccess'));
+  assert.ok(mainSource.includes('mainWindow.webContents.send(CAMERA_PERMISSION_PRIME_CHANNEL)'));
   assert.ok(mainSource.includes("systemPreferences.getMediaAccessStatus('camera')"));
   assert.ok(mainSource.includes("systemPreferences.askForMediaAccess('camera')"));
   assert.ok(mainSource.includes('openMacosCameraPrivacySettings'));
   assert.ok(mainSource.includes('Privacy_Camera'));
   assert.ok(mainSource.includes('continuing backend startup'));
+  assert.ok(
+    mainSource.indexOf('configureMediaPermissionHandler();')
+      < mainSource.indexOf('        createWindow();'),
+  );
   assert.ok(
     mainSource.indexOf('        createWindow();')
       < mainSource.indexOf('await requestMacosCameraAccess()'),

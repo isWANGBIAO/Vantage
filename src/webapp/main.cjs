@@ -9,6 +9,7 @@ const {
     dialog,
     shell,
     systemPreferences,
+    session,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -122,6 +123,9 @@ const log = {
     error: (message, error = null) => writeLog('ERROR', message, error),
 };
 
+const CAMERA_PERMISSION_PRIME_CHANNEL = 'camera:prime-renderer-access';
+const CAMERA_PERMISSION_RESULT_CHANNEL = 'camera:renderer-access-result';
+
 function mapLocaleToSupportedLanguage(locale) {
     return typeof locale === 'string' && locale.trim().toLowerCase().startsWith('zh')
         ? 'zh-CN'
@@ -156,8 +160,103 @@ function openMacosCameraPrivacySettings(reason) {
         });
 }
 
+function configureMediaPermissionHandler() {
+    if (process.platform !== 'darwin' || !session?.defaultSession?.setPermissionRequestHandler) {
+        return;
+    }
+
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details = {}) => {
+        const isMainWindowRequest = Boolean(mainWindow && webContents === mainWindow.webContents);
+        const requestedMediaTypes = Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
+        const isCameraMediaRequest = permission === 'media'
+            && (requestedMediaTypes.length === 0 || requestedMediaTypes.includes('video'));
+
+        if (isMainWindowRequest && isCameraMediaRequest) {
+            log.info('Approved renderer media permission request for camera priming');
+            callback(true);
+            return;
+        }
+
+        callback(false);
+    });
+}
+
+function waitForMainWindowLoad({ timeoutMs = 3000 } = {}) {
+    if (!mainWindow || !mainWindow.webContents || typeof mainWindow.webContents.isLoading !== 'function') {
+        return Promise.resolve(false);
+    }
+
+    if (!mainWindow.webContents.isLoading()) {
+        return Promise.resolve(true);
+    }
+
+    return new Promise((resolve) => {
+        let settled = false;
+
+        const finish = (loaded) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            clearTimeout(timer);
+            mainWindow?.webContents?.off('did-finish-load', onFinishLoad);
+            mainWindow?.webContents?.off('did-fail-load', onFailLoad);
+            resolve(loaded);
+        };
+
+        const onFinishLoad = () => finish(true);
+        const onFailLoad = () => finish(false);
+        const timer = setTimeout(() => finish(false), timeoutMs);
+
+        mainWindow.webContents.once('did-finish-load', onFinishLoad);
+        mainWindow.webContents.once('did-fail-load', onFailLoad);
+    });
+}
+
+async function requestRendererCameraAccess({ timeoutMs = 5000 } = {}) {
+    if (process.platform !== 'darwin' || !mainWindow || !mainWindow.webContents) {
+        return null;
+    }
+
+    await waitForMainWindowLoad({ timeoutMs: Math.min(timeoutMs, 3000) });
+
+    return new Promise((resolve) => {
+        let settled = false;
+
+        const finish = (result) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            clearTimeout(timer);
+            ipcMain.off(CAMERA_PERMISSION_RESULT_CHANNEL, onRendererResult);
+            resolve(result);
+        };
+
+        const onRendererResult = (event, result = {}) => {
+            if (event.sender !== mainWindow?.webContents) {
+                return;
+            }
+
+            const granted = result?.granted === true;
+            const errorMessage = typeof result?.error === 'string' ? result.error : null;
+            log.info(`Renderer camera access result: ${JSON.stringify({ granted, error: errorMessage })}`);
+            finish(granted);
+        };
+
+        const timer = setTimeout(() => {
+            log.warn('Renderer camera access request timed out; continuing backend startup');
+            finish(null);
+        }, timeoutMs);
+
+        ipcMain.on(CAMERA_PERMISSION_RESULT_CHANNEL, onRendererResult);
+        log.info('Requesting renderer camera access priming');
+        mainWindow.webContents.send(CAMERA_PERMISSION_PRIME_CHANNEL);
+    });
+}
+
 async function requestMacosCameraAccess({ timeoutMs = 5000 } = {}) {
-    if (process.platform !== 'darwin' || typeof systemPreferences.askForMediaAccess !== 'function') {
+    if (process.platform !== 'darwin') {
         return null;
     }
 
@@ -171,6 +270,15 @@ async function requestMacosCameraAccess({ timeoutMs = 5000 } = {}) {
             openMacosCameraPrivacySettings(status);
             return false;
         }
+    }
+
+    const rendererAccess = await requestRendererCameraAccess({ timeoutMs });
+    if (rendererAccess === true) {
+        return true;
+    }
+
+    if (typeof systemPreferences.askForMediaAccess !== 'function') {
+        return rendererAccess;
     }
 
     const accessRequest = systemPreferences.askForMediaAccess('camera')
@@ -503,6 +611,7 @@ if (!gotTheLock) {
     app.whenReady().then(async () => {
         log.info('App ready, initializing...');
         Menu.setApplicationMenu(null);
+        configureMediaPermissionHandler();
         syncLaunchAtLoginSetting();
 
         const shouldLaunchBundledBackend = runtimePaths.appMode === 'packaged' || app.isPackaged;

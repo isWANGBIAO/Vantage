@@ -44,6 +44,7 @@
   "build": {
     "appId": "com.vantage.app",
     "productName": "Vantage",
+    "afterPack": "./scripts/sign-mac-ad-hoc.cjs",
     "directories": {
       "output": "electron-dist"
     },
