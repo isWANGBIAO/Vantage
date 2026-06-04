@@ -13,6 +13,7 @@ test('resolveRuntimePaths defaults packaged runs to LOCALAPPDATA Vantage directo
     appMode: 'packaged',
     env: { LOCALAPPDATA: localAppData },
     projectRoot: 'C:\\repo\\ai',
+    platform: 'win32',
   });
 
   assert.equal(runtimePaths.appMode, 'packaged');
@@ -34,6 +35,7 @@ test('resolveRuntimePaths keeps history out of the project root in development m
     appMode: 'development',
     env: { LOCALAPPDATA: localAppData },
     projectRoot,
+    platform: 'win32',
   });
 
   assert.equal(runtimePaths.appMode, 'development');
@@ -45,4 +47,20 @@ test('resolveRuntimePaths keeps history out of the project root in development m
   assert.equal(runtimePaths.cacheDir, path.win32.join(projectRoot, 'cache'));
   assert.equal(runtimePaths.runtimeDir, path.win32.join(projectRoot, 'runtime'));
   assert.equal(runtimePaths.migrationDir, path.win32.join(projectRoot, 'migration'));
+});
+
+test('resolveRuntimePaths defaults packaged macOS runs to Application Support', () => {
+  const home = '/Users/biao_macmini';
+  const runtimePaths = resolveRuntimePaths({
+    appMode: 'packaged',
+    env: { HOME: home },
+    projectRoot: '/Users/biao_macmini/Documents/vantange',
+    platform: 'darwin',
+  });
+
+  const dataDir = path.posix.join(home, 'Library', 'Application Support', 'Vantage');
+  assert.equal(runtimePaths.appMode, 'packaged');
+  assert.equal(runtimePaths.dataDir, dataDir);
+  assert.equal(runtimePaths.configDir, path.posix.join(dataDir, 'config'));
+  assert.equal(runtimePaths.historyDir, path.posix.join(dataDir, 'history'));
 });

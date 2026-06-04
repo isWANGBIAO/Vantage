@@ -9,9 +9,24 @@ from src.utils.face_analysis_db import (
     load_face_report_cache as load_face_report_cache_from_db,
     save_face_report_cache as save_face_report_cache_to_db,
 )
-from src.services.face_analysis_pipeline import empty_trend_views
 
 FACE_REPORT_CACHE_FILE = None
+TREND_VIEW_LABELS = {
+    "day": "最近24小时",
+    "week": "最近7天",
+    "month": "最近30天",
+    "all": "全部历史",
+}
+
+
+def empty_trend_views():
+    return {
+        key: {
+            "label": label,
+            "points": [],
+        }
+        for key, label in TREND_VIEW_LABELS.items()
+    }
 
 
 def save_face_report_cache(report: dict, report_file: str | Path = FACE_REPORT_CACHE_FILE) -> Path:

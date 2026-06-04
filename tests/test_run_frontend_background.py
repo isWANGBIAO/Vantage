@@ -55,6 +55,16 @@ def test_build_frontend_env_includes_runtime_path_contract():
     assert production["VANTAGE_LOG_DIR"] == runtime_env["VANTAGE_LOG_DIR"]
 
 
+def test_frontend_launcher_detaches_from_parent_session_on_posix():
+    launcher = _load_launcher_module()
+
+    with patch.object(launcher.os, "name", "posix"):
+        assert launcher._get_start_new_session() is True
+
+    with patch.object(launcher.os, "name", "nt"):
+        assert launcher._get_start_new_session() is False
+
+
 def test_ensure_project_root_on_sys_path_returns_repo_root():
     launcher = _load_launcher_module()
 

@@ -21,17 +21,29 @@ def take_photo(cam, latitude, longitude, photos_path):
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Camera capture failed; skipping person detection")
         return False, None
 
-    t1 = cv2.getTickCount()
-    results = detect_person_YOLO(frame)
-    t2 = cv2.getTickCount()
-    elapsed = (t2 - t1) / cv2.getTickFrequency()
-    fps = 1.0 / elapsed if elapsed else 0.0
-
-    if results:
+    detection_unavailable = False
+    try:
+        t1 = cv2.getTickCount()
+        results = detect_person_YOLO(frame)
+        t2 = cv2.getTickCount()
+        elapsed = (t2 - t1) / cv2.getTickFrequency()
+        fps = 1.0 / elapsed if elapsed else 0.0
+    except Exception as exc:
+        detection_unavailable = True
+        results = 1
+        elapsed = 0.0
+        fps = 0.0
         print(
             f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-            f"Detected {results} person(s) in the photo Time: {elapsed}, FPS: {fps}"
+            f"Person detection unavailable; saving photo without YOLO signal: {exc}"
         )
+
+    if results:
+        if not detection_unavailable:
+            print(
+                f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                f"Detected {results} person(s) in the photo Time: {elapsed}, FPS: {fps}"
+            )
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Saving photo")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         photo_name = f"photo_{timestamp}.jpg"

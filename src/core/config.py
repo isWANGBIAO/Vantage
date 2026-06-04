@@ -43,6 +43,9 @@ class Config:
         if sys.platform == "win32":
             return Path.home() / "AppData" / "Local" / app_name
 
+        if sys.platform == "darwin":
+            return Path.home() / "Library" / "Application Support" / app_name
+
         return Path.home() / ".local" / "share" / app_name
 
     @staticmethod

@@ -3,11 +3,19 @@ import piexif
 import asyncio
 # winrt最高支持到Python 3.9，Python 3.10及以上得使用winsdk，而且不会报com错误
 # from winrt.windows.devices.geolocation import Geolocator
-from winsdk.windows.devices.geolocation import Geolocator
 from datetime import datetime
 import cv2
 import threading
 import platform
+import sys
+
+if sys.platform == "win32":
+    try:
+        from winsdk.windows.devices.geolocation import Geolocator
+    except ImportError:
+        Geolocator = None
+else:
+    Geolocator = None
 
 
 # 同步获取经纬度
@@ -21,6 +29,13 @@ def get_location():
         return latitude, longitude
     else:
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 非指定台式机，需要调用定位服务获取定位信息")
+
+    if Geolocator is None:
+        print(
+            f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+            f"当前平台暂不支持系统定位服务，跳过 GPS 坐标"
+        )
+        return None, None
 
     async def fetch_location():
         try:

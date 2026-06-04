@@ -19,6 +19,8 @@ from src.core.backend_runtime_packaging import (
     build_backend_runtime_size_report,
     build_project_activity_snapshot,
     collect_backend_runtime_resources,
+    get_backend_runtime_executable_name,
+    get_pyinstaller_add_data_separator,
     remove_conflicting_packaging_environment_libraries,
     remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
@@ -67,7 +69,18 @@ def test_collect_backend_runtime_resources_rejects_missing_required_files(tmp_pa
         collect_backend_runtime_resources(tmp_path)
 
     assert "Prompt_Action_Plan.md" in str(excinfo.value)
-    assert "yolo26m.pt" in str(excinfo.value)
+    assert "face_parsing.farl.lapa.int8.onnx" in str(excinfo.value)
+
+
+def test_collect_backend_runtime_resources_allows_missing_optional_yolo_model(tmp_path):
+    _create_required_runtime_resources(tmp_path)
+    (tmp_path / "yolo26m.pt").unlink()
+
+    resources = collect_backend_runtime_resources(tmp_path)
+
+    packaged_paths = {resource.output_relative_path for resource in resources}
+    assert Path("yolo26m.pt") not in packaged_paths
+    assert Path("src") / "scripts" / "models" / "face_parsing.farl.lapa.int8.onnx" in packaged_paths
 
 
 def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_path):
@@ -124,13 +137,14 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         "torchaudio",
     } <= exclude_targets
     assert str(layout["entry_script"]) == args[-1]
-    assert f"{tmp_path / 'yolo26m.pt'};." in args
+    separator = get_pyinstaller_add_data_separator()
+    assert f"{tmp_path / 'yolo26m.pt'}{separator}." in args
     assert (
-        f"{tmp_path / 'src' / 'scripts' / 'models' / 'face_parsing.farl.lapa.int8.onnx'};"
+        f"{tmp_path / 'src' / 'scripts' / 'models' / 'face_parsing.farl.lapa.int8.onnx'}{separator}"
         "src/scripts/models"
     ) in args
     assert any(
-        value.endswith(";scienceplots/styles") and "scienceplots" in value and "styles" in value
+        value.endswith(f"{separator}scienceplots/styles") and "scienceplots" in value and "styles" in value
         for value in args
     )
 
@@ -193,7 +207,7 @@ def test_build_backend_runtime_manifest_records_relative_outputs(tmp_path):
     )
 
     assert manifest["runtime_name"] == RUNTIME_NAME
-    assert manifest["executable"] == f"{RUNTIME_NAME}/{APP_EXE_NAME}"
+    assert manifest["executable"] == f"{RUNTIME_NAME}/{get_backend_runtime_executable_name()}"
     assert manifest["generated_at"] == "2026-04-23T18:00:00"
     assert manifest["entry_script"] == "src/scripts/run_server_background.py"
     assert manifest["app_mode"] == "packaged"
@@ -201,14 +215,32 @@ def test_build_backend_runtime_manifest_records_relative_outputs(tmp_path):
     assert "src/scripts/models/face_parsing.farl.lapa.int8.onnx" in manifest["resource_outputs"]
 
 
+def test_backend_runtime_executable_and_pyinstaller_separator_are_platform_specific():
+    assert get_backend_runtime_executable_name("win32") == APP_EXE_NAME
+    assert get_backend_runtime_executable_name("darwin") == RUNTIME_NAME
+    assert get_pyinstaller_add_data_separator("win32") == ";"
+    assert get_pyinstaller_add_data_separator("darwin") == ":"
+
+
 def test_validate_packaging_environment_requires_clean_runtime_venv(tmp_path):
     dirty_python = tmp_path / "global" / "python.exe"
     clean_python = tmp_path / ".venv-backend-runtime-gpu" / "Scripts" / "python.exe"
+    clean_prefix = tmp_path / ".venv-backend-runtime-gpu"
 
     assert validate_packaging_python_environment(tmp_path, executable=clean_python, environ={}) is None
+    assert (
+        validate_packaging_python_environment(
+            tmp_path,
+            executable=dirty_python,
+            prefix=clean_prefix,
+            environ={},
+        )
+        is None
+    )
     assert "clean packaging venv" in validate_packaging_python_environment(
         tmp_path,
         executable=dirty_python,
+        prefix=tmp_path / "global",
         environ={},
     )
     assert validate_packaging_python_environment(

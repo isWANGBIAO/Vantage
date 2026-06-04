@@ -80,6 +80,15 @@ def _normalize_requirement_name(line):
     return name.strip().lower()
 
 
+def _find_requirement_lines(path, package_name):
+    prefix = package_name.lower()
+    return [
+        line.strip().lower()
+        for line in Path(path).read_text(encoding="utf-8").splitlines()
+        if line.strip().lower().startswith(prefix)
+    ]
+
+
 def test_requirements_cover_backend_runtime_dependencies():
     content = Path("requirements.txt").read_text(encoding="utf-8").splitlines()
     package_names = {
@@ -108,3 +117,29 @@ def test_gpu_runtime_requirements_are_minimal_and_reproducible():
     assert not missing, f"GPU runtime requirements missing packages: {sorted(missing)}"
     assert not forbidden, f"GPU runtime requirements include forbidden packages: {sorted(forbidden)}"
     assert any("download.pytorch.org/whl/cu" in line for line in content)
+
+
+def test_backend_runtime_requirements_keep_macos_opencv_headless():
+    opencv_lines = _find_requirement_lines("requirements-backend-runtime-gpu.txt", "opencv-python")
+    assert any("opencv-python==" in line and 'sys_platform == "win32"' in line for line in opencv_lines)
+    assert any(
+        "opencv-python-headless==" in line and 'sys_platform != "win32"' in line
+        for line in opencv_lines
+    )
+
+    ultralytics_lines = _find_requirement_lines("requirements-backend-runtime-gpu.txt", "ultralytics")
+    assert ultralytics_lines == ['ultralytics==8.4.0; sys_platform == "win32"']
+
+
+def test_backend_runtime_requirements_keep_torch_windows_only():
+    for package_name in ("torch", "torchvision"):
+        lines = _find_requirement_lines("requirements-backend-runtime-gpu.txt", package_name)
+        assert lines, f"requirements-backend-runtime-gpu.txt missing {package_name}"
+        assert all('sys_platform == "win32"' in line for line in lines)
+
+
+def test_development_requirements_mark_windows_only_packages():
+    for package_name in ("pywin32", "pywinpty", "torch", "torchaudio", "torchvision", "ultralytics", "wmi", "winsdk"):
+        lines = _find_requirement_lines("requirements.txt", package_name)
+        assert lines, f"requirements.txt missing {package_name}"
+        assert all('sys_platform == "win32"' in line for line in lines)

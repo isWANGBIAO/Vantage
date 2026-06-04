@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import sys
-import cv2
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -42,8 +41,11 @@ REQUIRED_ROOT_RESOURCE_NAMES = (
 )
 
 REQUIRED_RESOURCE_SPECS = (
-    ("yolo26m.pt", "."),
     ("src/scripts/models/face_parsing.farl.lapa.int8.onnx", "src/scripts/models"),
+)
+
+OPTIONAL_RESOURCE_SPECS = (
+    ("yolo26m.pt", "."),
 )
 
 OPENCV_FACE_CASCADE_NAME = "haarcascade_frontalface_default.xml"
@@ -150,14 +152,25 @@ def resolve_backend_runtime_layout(project_root: str | Path) -> dict[str, Path]:
         "manifest_path": runtime_dir / "runtime-manifest.json",
         "entry_script": resolved_root / "src" / "scripts" / "run_server_background.py",
         "runtime_hook": resolved_root / "src" / "scripts" / "pyinstaller_runtime_hook.py",
-        "executable_path": runtime_dir / APP_EXE_NAME,
+        "executable_path": runtime_dir / get_backend_runtime_executable_name(),
     }
+
+
+def get_backend_runtime_executable_name(platform: str | None = None) -> str:
+    resolved_platform = platform or sys.platform
+    return APP_EXE_NAME if resolved_platform == "win32" else RUNTIME_NAME
+
+
+def get_pyinstaller_add_data_separator(platform: str | None = None) -> str:
+    resolved_platform = platform or sys.platform
+    return ";" if resolved_platform == "win32" else ":"
 
 
 def validate_packaging_python_environment(
     project_root: str | Path,
     *,
     executable: str | Path | None = None,
+    prefix: str | Path | None = None,
     environ: dict[str, str] | None = None,
 ) -> str | None:
     resolved_environ = environ if environ is not None else os.environ
@@ -166,13 +179,24 @@ def validate_packaging_python_environment(
 
     expected_venv = Path(project_root).resolve() / BACKEND_RUNTIME_VENV_NAME
     resolved_executable = Path(executable or sys.executable).resolve()
+    resolved_prefix = Path(prefix or sys.prefix).resolve()
+    if _path_is_relative_to(resolved_executable, expected_venv) or _path_is_relative_to(
+        resolved_prefix,
+        expected_venv,
+    ):
+        return None
+    return (
+        "Backend runtime must be built with the clean packaging venv: "
+        f"{expected_venv}. Set {DIRTY_PACKAGING_ENV_BYPASS}=1 only for emergency local debugging."
+    )
+
+
+def _path_is_relative_to(path: Path, parent: Path) -> bool:
     try:
-        resolved_executable.relative_to(expected_venv)
+        path.relative_to(parent)
     except ValueError:
-        return (
-            "Backend runtime must be built with the clean packaging venv: "
-            f"{expected_venv}. Set {DIRTY_PACKAGING_ENV_BYPASS}=1 only for emergency local debugging."
-        )
+        return False
+    return True
     return None
 
 
@@ -184,7 +208,19 @@ def _normalize_destination(relative_destination: str | Path) -> Path:
 
 
 def resolve_opencv_face_cascade_source() -> Path:
-    cascade_path = Path(cv2.data.haarcascades) / OPENCV_FACE_CASCADE_NAME
+    spec = importlib.util.find_spec("cv2")
+    if spec is None:
+        raise FileNotFoundError("Missing cv2 package")
+
+    search_locations = getattr(spec, "submodule_search_locations", None)
+    if search_locations:
+        cv2_package_path = Path(next(iter(search_locations)))
+    elif spec.origin:
+        cv2_package_path = Path(spec.origin).parent
+    else:
+        raise FileNotFoundError("Missing cv2 package path")
+
+    cascade_path = cv2_package_path / "data" / OPENCV_FACE_CASCADE_NAME
     if not cascade_path.exists():
         raise FileNotFoundError(f"Missing OpenCV face cascade: {cascade_path}")
     return cascade_path.resolve()
@@ -223,6 +259,11 @@ def collect_backend_runtime_resources(
             missing.append(relative_source)
             continue
         resources.append(BundledResource(resource_path, _normalize_destination(relative_destination)))
+
+    for relative_source, relative_destination in OPTIONAL_RESOURCE_SPECS:
+        resource_path = resolved_root / relative_source
+        if resource_path.exists():
+            resources.append(BundledResource(resource_path, _normalize_destination(relative_destination)))
 
     try:
         resources.append(
@@ -456,6 +497,7 @@ def build_pyinstaller_arguments(
     resources: list[BundledResource],
 ) -> list[str]:
     resolved_root = Path(project_root).resolve()
+    add_data_separator = get_pyinstaller_add_data_separator()
     args = [
         "--noconfirm",
         "--clean",
@@ -484,7 +526,7 @@ def build_pyinstaller_arguments(
         args.extend(
             [
                 "--add-data",
-                f"{resource.source};{resource.relative_destination.as_posix()}",
+                f"{resource.source}{add_data_separator}{resource.relative_destination.as_posix()}",
             ]
         )
 
@@ -513,7 +555,7 @@ def build_backend_runtime_manifest(
         "app_mode": "packaged",
         "generated_at": built_at.isoformat(timespec="seconds"),
         "entry_script": layout["entry_script"].resolve().relative_to(project_root).as_posix(),
-        "executable": f"{RUNTIME_NAME}/{APP_EXE_NAME}",
+        "executable": f"{RUNTIME_NAME}/{get_backend_runtime_executable_name()}",
         "resource_root": f"{RUNTIME_NAME}/_internal",
         "resource_outputs": [resource.output_relative_path.as_posix() for resource in resources],
         "resources": [

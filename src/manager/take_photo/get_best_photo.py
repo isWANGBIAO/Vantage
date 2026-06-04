@@ -4,6 +4,9 @@ import cv2
 
 
 def capture_best_photo(cam, frame_count=1, min_focus_change=5):
+    if cam is None or not getattr(cam, "isOpened", lambda: False)():
+        return None
+
     ret, frame = cam.read()
     if ret and frame is not None:
         return frame

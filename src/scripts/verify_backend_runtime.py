@@ -29,6 +29,7 @@ def _ensure_project_root_on_sys_path(
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
 from src.core.backend_runtime_packaging import (
+    get_backend_runtime_executable_name,
     load_backend_runtime_manifest,
     resolve_backend_runtime_layout,
     validate_backend_runtime_bundle,
@@ -39,7 +40,6 @@ from src.scripts.cleanup_vantage_python_processes import iter_vantage_server_pro
 
 
 BLOCKING_RUNTIME_PATTERNS = (
-    "Failed to load YOLO model",
     "c10.dll",
     "DLL load failed",
     "Live face analysis error",
@@ -88,6 +88,7 @@ def _build_smoke_environment(layout: dict[str, Path]) -> dict[str, str]:
     env["VANTAGE_APP_MODE"] = "packaged"
     env["VANTAGE_DATA_DIR"] = str(smoke_data_dir)
     env["VANTAGE_CONFIG_DIR"] = str(config_dir)
+    env["VANTAGE_MACOS_SKIP_CAMERA_AUTH"] = "1"
     env.pop("VANTAGE_PROJECT_ROOT", None)
     return env
 
@@ -153,14 +154,15 @@ def _resolve_runtime_server_log(smoke_data_dir: Path) -> Path | None:
     return target if target.exists() else None
 
 
-def _iter_packaged_backend_processes(executable_name: str = "VantageBackend.exe"):
+def _iter_packaged_backend_processes(executable_name: str | None = None):
+    resolved_executable_name = executable_name or get_backend_runtime_executable_name()
     for process in psutil.process_iter(["pid", "name", "exe"]):
         name = process.info.get("name")
         exe_path = process.info.get("exe")
-        if name == executable_name:
+        if name == resolved_executable_name:
             yield process
             continue
-        if exe_path and Path(exe_path).name == executable_name:
+        if exe_path and Path(exe_path).name == resolved_executable_name:
             yield process
 
 

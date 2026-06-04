@@ -56,6 +56,10 @@ def _get_creationflags() -> int:
     return flags
 
 
+def _get_start_new_session() -> bool:
+    return os.name != "nt"
+
+
 def _prepare_frontend_runtime_logs(logs_dir: Path, mode: str, launched_at: datetime) -> dict[str, Path]:
     runtime_dir = logs_dir / "frontend"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -116,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
             stdout=stdout_handle,
             stderr=stderr_handle,
             creationflags=creationflags,
+            start_new_session=_get_start_new_session(),
             close_fds=True,
         )
 

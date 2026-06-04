@@ -1,0 +1,181 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "========================================"
+echo "   Vantage - macOS Build and Install"
+echo "========================================"
+echo
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+    echo "RUN.sh is the macOS launcher. Use RUN.bat on Windows."
+    exit 1
+fi
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$PROJECT_ROOT"
+
+INSTALL_ROOT="${HOME}/Applications"
+INSTALLED_APP="${INSTALL_ROOT}/Vantage.app"
+BACKEND_RUNTIME_VENV="${PROJECT_ROOT}/.venv-backend-runtime-gpu"
+BACKEND_RUNTIME_PYTHON="${BACKEND_RUNTIME_VENV}/bin/python"
+BACKEND_RUNTIME_REQUIREMENTS="${PROJECT_ROOT}/requirements-backend-runtime-gpu.txt"
+BACKEND_RUNTIME_REQUIREMENTS_STAMP="${BACKEND_RUNTIME_VENV}/.requirements-backend-runtime-gpu.sha256"
+BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.sha256"
+BOOTSTRAP_PYTHON="${BOOTSTRAP_PYTHON:-$(command -v python3)}"
+FRONTEND_ROOT="${PROJECT_ROOT}/src/webapp"
+FRONTEND_PACKAGE_LOCK="${FRONTEND_ROOT}/package-lock.json"
+FRONTEND_NATIVE_CODESIGN_STAMP="${FRONTEND_ROOT}/node_modules/.macos-native-codesign.sha256"
+VANTAGE_BUILD_WORKERS="${VANTAGE_BUILD_WORKERS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
+
+step_start() {
+    STEP_START_SECONDS="$(date +%s)"
+    echo "$1"
+}
+
+step_done() {
+    local step_end_seconds
+    step_end_seconds="$(date +%s)"
+    echo "      $1 ($((step_end_seconds - STEP_START_SECONDS))s)"
+}
+
+codesign_macos_native_libraries() {
+    local stored_codesign_hash=""
+    if [[ -f "$BACKEND_RUNTIME_CODESIGN_STAMP" ]]; then
+        stored_codesign_hash="$(cat "$BACKEND_RUNTIME_CODESIGN_STAMP")"
+    fi
+    if [[ "$requirements_hash" == "$stored_codesign_hash" && "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" != "1" ]]; then
+        echo "      macOS native Python libraries already ad-hoc signed"
+        return 0
+    fi
+
+    echo "      Ad-hoc signing macOS native Python libraries..."
+    find "${BACKEND_RUNTIME_VENV}/lib" -type f \( -name '*.so' -o -name '*.dylib' \) -print0 |
+        while IFS= read -r -d '' native_library; do
+            codesign --force --sign - "$native_library" >/dev/null 2>&1 || true
+        done
+    printf '%s\n' "$requirements_hash" > "$BACKEND_RUNTIME_CODESIGN_STAMP"
+}
+
+codesign_macos_frontend_binaries() {
+    if [[ ! -d "${FRONTEND_ROOT}/node_modules" ]]; then
+        return 0
+    fi
+
+    local package_lock_hash="no-package-lock"
+    if [[ -f "$FRONTEND_PACKAGE_LOCK" ]]; then
+        package_lock_hash="$(shasum -a 256 "$FRONTEND_PACKAGE_LOCK" | awk '{print $1}')"
+    fi
+
+    local stored_frontend_hash=""
+    if [[ -f "$FRONTEND_NATIVE_CODESIGN_STAMP" ]]; then
+        stored_frontend_hash="$(cat "$FRONTEND_NATIVE_CODESIGN_STAMP")"
+    fi
+    if [[ "$package_lock_hash" == "$stored_frontend_hash" && "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" != "1" ]]; then
+        echo "      macOS frontend native binaries already ad-hoc signed"
+        return 0
+    fi
+
+    echo "      Ad-hoc signing macOS frontend native binaries..."
+    xattr -dr com.apple.provenance "${FRONTEND_ROOT}/node_modules/@rollup" "${FRONTEND_ROOT}/node_modules/@esbuild" "${FRONTEND_ROOT}/node_modules/esbuild" "${FRONTEND_ROOT}/node_modules/app-builder-bin" >/dev/null 2>&1 || true
+    find "${FRONTEND_ROOT}/node_modules" -type f \( -name '*.node' -o -name '*.dylib' -o -path '*/@esbuild/*/bin/esbuild' -o -path '*/esbuild/bin/esbuild' -o -path '*/app-builder-bin/mac/app-builder*' -o -path '*/7zip-bin/mac/*/7za' \) -print0 |
+        while IFS= read -r -d '' native_binary; do
+            codesign --force --sign - "$native_binary" >/dev/null 2>&1 || true
+        done
+    printf '%s\n' "$package_lock_hash" > "$FRONTEND_NATIVE_CODESIGN_STAMP"
+}
+
+codesign_macos_backend_runtime_bundle() {
+    local backend_runtime_dir="${PROJECT_ROOT}/build/backend-runtime/stage/VantageBackend"
+    if [[ ! -d "$backend_runtime_dir" ]]; then
+        return 0
+    fi
+
+    echo "      Ad-hoc signing packaged backend runtime binaries..."
+    xattr -dr com.apple.provenance "$backend_runtime_dir" >/dev/null 2>&1 || true
+    find "$backend_runtime_dir" -type f \( -name '*.so' -o -name '*.dylib' \) -print0 |
+        while IFS= read -r -d '' runtime_binary; do
+            codesign --force --sign - "$runtime_binary" >/dev/null 2>&1 || true
+        done
+}
+
+RUN_START_SECONDS="$(date +%s)"
+
+step_start "[0/8] Cleaning residual source processes..."
+"$BOOTSTRAP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
+pkill -f "${INSTALLED_APP}/Contents" >/dev/null 2>&1 || true
+step_done "Source cleanup complete"
+
+step_start "[1/8] Checking frontend dependencies..."
+if [[ ! -d "${FRONTEND_ROOT}/node_modules" ]]; then
+    echo "      Installing dependencies..."
+    npm --prefix "${FRONTEND_ROOT}" install
+else
+    echo "      Dependencies already installed"
+fi
+codesign_macos_frontend_binaries
+step_done "Frontend dependency check complete"
+
+step_start "[2/8] Preparing backend packaging environment..."
+if [[ ! -x "$BACKEND_RUNTIME_PYTHON" ]]; then
+    echo "      Creating clean backend runtime venv..."
+    "$BOOTSTRAP_PYTHON" -m venv "$BACKEND_RUNTIME_VENV"
+else
+    echo "      Backend runtime venv already exists"
+fi
+
+requirements_hash="$(shasum -a 256 "$BACKEND_RUNTIME_REQUIREMENTS" | awk '{print $1}')"
+stored_hash=""
+if [[ -f "$BACKEND_RUNTIME_REQUIREMENTS_STAMP" ]]; then
+    stored_hash="$(cat "$BACKEND_RUNTIME_REQUIREMENTS_STAMP")"
+fi
+
+if [[ "$requirements_hash" == "$stored_hash" && "${VANTAGE_FORCE_BACKEND_DEPS:-0}" != "1" ]]; then
+    echo "      Backend runtime dependencies already synced"
+else
+    echo "      Syncing backend runtime dependencies..."
+    "$BACKEND_RUNTIME_PYTHON" -m pip install --upgrade pip
+    "$BACKEND_RUNTIME_PYTHON" -m pip install -r "$BACKEND_RUNTIME_REQUIREMENTS"
+    printf '%s\n' "$requirements_hash" > "$BACKEND_RUNTIME_REQUIREMENTS_STAMP"
+fi
+codesign_macos_native_libraries
+step_done "Backend packaging environment ready"
+
+step_start "[3/8] Preparing build version..."
+node "${FRONTEND_ROOT}/scripts/prepare-build-version.mjs" --webapp-root "${FRONTEND_ROOT}" --mode auto
+step_done "Build version prepared"
+
+step_start "[4/8] Building frontend and backend runtime in parallel..."
+echo "      Build workers requested: ${VANTAGE_BUILD_WORKERS}"
+"$BACKEND_RUNTIME_PYTHON" src/scripts/run_packaging_builds.py --backend-python "$BACKEND_RUNTIME_PYTHON" --workers "$VANTAGE_BUILD_WORKERS"
+codesign_macos_backend_runtime_bundle
+step_done "Frontend and backend build step complete"
+
+step_start "[5/8] Verifying backend runtime..."
+"$BACKEND_RUNTIME_PYTHON" src/scripts/verify_backend_runtime.py --timeout-seconds 60
+step_done "Backend runtime verification complete"
+
+step_start "[6/8] Building macOS app package..."
+npm --prefix "${FRONTEND_ROOT}" run electron:package -- --mac
+step_done "macOS app package build complete"
+
+step_start "[7/8] Installing app into ~/Applications..."
+app_path="$(find "${FRONTEND_ROOT}/electron-dist" -maxdepth 3 -type d -name 'Vantage.app' | sort | tail -n 1)"
+if [[ -z "$app_path" ]]; then
+    echo "      Built Vantage.app not found in src/webapp/electron-dist"
+    exit 1
+fi
+mkdir -p "$INSTALL_ROOT"
+rm -rf "$INSTALLED_APP"
+ditto "$app_path" "$INSTALLED_APP"
+step_done "App installed to ${INSTALLED_APP}"
+
+step_start "[8/8] Launching Vantage..."
+open "$INSTALLED_APP"
+step_done "Launch command complete"
+
+RUN_END_SECONDS="$(date +%s)"
+echo
+echo "========================================"
+echo "   Build, install, and launch complete"
+echo "   Total elapsed: $((RUN_END_SECONDS - RUN_START_SECONDS))s"
+echo "========================================"

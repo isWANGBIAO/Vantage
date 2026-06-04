@@ -25,3 +25,10 @@ def test_save_image_with_gps_skips_exif_when_location_missing(monkeypatch, tmp_p
     get_location.save_image_with_gps(str(photo_path), frame, None, None)
 
     assert imwrite_calls == [(str(photo_path), frame.shape)]
+
+
+def test_get_location_returns_empty_coordinates_without_platform_geolocator(monkeypatch):
+    monkeypatch.setattr(get_location.platform, "node", lambda: "MacMini")
+    monkeypatch.setattr(get_location, "Geolocator", None)
+
+    assert get_location.get_location() == (None, None)

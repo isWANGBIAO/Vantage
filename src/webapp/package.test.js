@@ -32,6 +32,8 @@ test('build script normalizes junction paths before invoking Vite', () => {
 test('package bundles the backend runtime and installer shortcuts for Windows', () => {
   assert.ok(packageJson.build.files.includes('src/utils/**/*.cjs'));
   assert.deepEqual(packageJson.build.win.target, ['nsis']);
+  assert.deepEqual(packageJson.build.mac.target, ['dmg', 'zip']);
+  assert.equal(packageJson.build.mac.category, 'public.app-category.healthcare-fitness');
   assert.ok(Array.isArray(packageJson.build.extraResources));
   assert.ok(
     packageJson.build.extraResources.some(
@@ -102,10 +104,13 @@ test('build version script runs from the CLI on Windows-style relative paths', (
   const packagePath = path.join(root, 'package.json');
   const buildInfoPath = path.join(root, 'build-info.json');
   writeFileSync(packagePath, JSON.stringify({ name: 'vantage', version: '2.3.4' }, null, 2), 'utf8');
+  const scriptPath = process.platform === 'win32'
+    ? 'scripts\\prepare-build-version.mjs'
+    : 'scripts/prepare-build-version.mjs';
 
   const output = execFileSync(
     process.execPath,
-    ['scripts\\prepare-build-version.mjs', '--webapp-root', root],
+    [scriptPath, '--webapp-root', root],
     { cwd: new URL('.', import.meta.url), encoding: 'utf8' },
   );
 

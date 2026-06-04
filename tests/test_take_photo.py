@@ -48,6 +48,27 @@ class TakePhotoTests(unittest.TestCase):
         mock_save.assert_called_once()
         self.assertEqual(mock_save.call_args[0][1].shape, frame.shape)
 
+    def test_take_photo_saves_photo_when_person_detection_is_unavailable(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "capture_best_photo",
+            return_value=frame,
+        ), patch.object(
+            take_a_photo,
+            "detect_person_YOLO",
+            side_effect=FileNotFoundError("missing model"),
+        ), patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save:
+            success, photo_path = take_a_photo.take_photo(object(), 1.0, 2.0, tmpdir)
+
+        self.assertTrue(success)
+        self.assertIsNotNone(photo_path)
+        mock_save.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

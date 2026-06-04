@@ -31,6 +31,7 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
                 layout["build_root"] / "smoke-data" / "screenshots",
             )
             self.assertEqual(env["VANTAGE_DATA_DIR"], str(layout["build_root"] / "smoke-data"))
+            self.assertEqual(env["VANTAGE_MACOS_SKIP_CAMERA_AUTH"], "1")
 
     def test_status_payload_must_match_current_runtime_layout(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -56,6 +57,7 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
         log_text = "\n".join(
             [
                 "Failed to load YOLO model in thread: [WinError 1114] Error loading c10.dll",
+                "YOLO model unavailable in thread: No module named 'ultralytics'",
                 "Live face analysis error: DLL load failed while importing _framework_bindings",
             ]
         )
@@ -65,7 +67,6 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
         self.assertEqual(
             blockers,
             [
-                "Failed to load YOLO model",
                 "c10.dll",
                 "DLL load failed",
                 "Live face analysis error",

@@ -10,7 +10,15 @@ if current_dir not in sys.path:
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-import cv2
+if sys.platform == "darwin":
+    skip_camera_auth = os.environ.get("VANTAGE_MACOS_SKIP_CAMERA_AUTH")
+    should_skip_camera_auth = (
+        skip_camera_auth != "0"
+        if skip_camera_auth is not None
+        else os.environ.get("VANTAGE_APP_MODE") != "packaged"
+    )
+    os.environ.setdefault("OPENCV_AVFOUNDATION_SKIP_AUTH", "1" if should_skip_camera_auth else "0")
+
 from src.utils.face_analysis_db import (
     clear_face_report_cache,
     initialize_face_analysis_storage,
@@ -62,14 +70,6 @@ from src.core.user_config import (
 )
 from src.core.media_storage import get_media_paths_settings_file, resolve_media_storage_paths
 from src.manager.manager_main import Monitor
-from src.services.face_analysis_pipeline import (
-    AnalysisConfig,
-    FaceParser,
-    MediaPipeFaceDetector,
-    analyze_image_data,
-    analyze_photo_file,
-    build_face_report,
-)
 from src.services.llm_client import LLMClient
 from src.services.model_call_recorder import (
     get_session_usage_summary,
@@ -80,8 +80,38 @@ from src.services.person_detection import (
     PERSON_DETECTION_MODEL,
     get_yolo_model,
 )
-from cv2_enumerate_cameras import enumerate_cameras
 from src.utils.data_loader import DataLoader
+
+
+_cv2_module = None
+_face_analysis_pipeline_module = None
+
+
+def get_cv2_module():
+    global _cv2_module
+    if _cv2_module is None:
+        import cv2 as loaded_cv2
+
+        _cv2_module = loaded_cv2
+    return _cv2_module
+
+
+class _LazyCV2Module:
+    def __getattr__(self, name):
+        return getattr(get_cv2_module(), name)
+
+
+cv2 = _LazyCV2Module()
+
+
+def get_face_analysis_pipeline_module():
+    global _face_analysis_pipeline_module
+    if _face_analysis_pipeline_module is None:
+        from src.services import face_analysis_pipeline
+
+        _face_analysis_pipeline_module = face_analysis_pipeline
+    return _face_analysis_pipeline_module
+
 
 app = FastAPI()
 
@@ -104,6 +134,16 @@ FACE_LIVE_WINDOW_SECONDS = 60
 FACE_LIVE_SAMPLE_INTERVAL_SECONDS = 0.1
 FACE_LIVE_IDLE_INTERVAL_SECONDS = 1.0
 FACE_LIVE_VIEWER_TTL_SECONDS = 5.0
+MONITOR_CAPTURE_INTERVAL_SECONDS = int(os.environ.get("VANTAGE_CAPTURE_INTERVAL_SECONDS", "60"))
+MONITOR_CAMERA_WAIT_INTERVAL_SECONDS = 2.0
+CAMERA_INDEX_OVERRIDE_ENV = "VANTAGE_CAMERA_INDEX"
+MACOS_CAMERA_ENUMERATION_ENV = "VANTAGE_MACOS_ENUMERATE_CAMERAS"
+CAMERA_RETRY_INTERVAL_SECONDS = float(os.environ.get(
+    "VANTAGE_CAMERA_RETRY_INTERVAL_SECONDS",
+    "30" if sys.platform == "darwin" else "2",
+))
+PREWARM_FACE_ON_STARTUP = os.environ.get("VANTAGE_PREWARM_FACE_ON_STARTUP", "0") == "1"
+PREWARM_YOLO_ON_STARTUP = os.environ.get("VANTAGE_PREWARM_YOLO_ON_STARTUP", "0") == "1"
 BACKGROUND_MODE_CACHE_TTL_SECONDS = 2.0
 FACE_OVERLAY_BASE_SCORE_FONT_SCALE = 1.9
 FACE_OVERLAY_SCORE_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
@@ -592,22 +632,30 @@ def get_face_analysis_runtime():
 
     with _face_analysis_runtime_lock:
         if _face_analysis_runtime is None:
-            config = AnalysisConfig()
-            detector = MediaPipeFaceDetector(min_detection_confidence=config.min_detection_confidence)
-            parser = FaceParser(FACE_ANALYSIS_MODEL_PATH)
+            pipeline = get_face_analysis_pipeline_module()
+            config = pipeline.AnalysisConfig()
+            detector = pipeline.MediaPipeFaceDetector(min_detection_confidence=config.min_detection_confidence)
+            parser = pipeline.FaceParser(FACE_ANALYSIS_MODEL_PATH)
             _face_analysis_runtime = (detector, parser, config)
 
     return _face_analysis_runtime
 
 
 def prewarm_runtime_models():
-    try:
-        get_face_analysis_runtime()
-        print("Face analysis runtime warmed up successfully.")
-    except Exception as exc:
-        print(f"Failed to warm face analysis runtime: {exc}")
+    if not PREWARM_FACE_ON_STARTUP:
+        print("Face analysis runtime warmup deferred to first analysis request.")
+    else:
+        try:
+            get_face_analysis_runtime()
+            print("Face analysis runtime warmed up successfully.")
+        except Exception as exc:
+            print(f"Failed to warm face analysis runtime: {exc}")
 
     try:
+        if not PREWARM_YOLO_ON_STARTUP:
+            print("YOLO model warmup deferred to background thread.")
+            return
+
         get_yolo_model()
         print("YOLO model warmed up successfully.")
     except Exception as exc:
@@ -740,7 +788,7 @@ def refresh_face_report_cache(db_file=None, output_dir=None):
     initialize_face_analysis_storage(resolved_db_file)
     with _face_report_refresh_lock:
         records = load_face_analysis_records(resolved_db_file)
-        report = build_face_report(records, resolved_output_dir)
+        report = get_face_analysis_pipeline_module().build_face_report(records, resolved_output_dir)
         if report.get("count", 0) > 0:
             save_face_report_cache(report, resolved_db_file)
         else:
@@ -756,7 +804,12 @@ def process_captured_face_photo(photo_path):
     plot_dir = _get_plot_dir()
     initialize_face_analysis_storage(db_file)
     detector, parser, config = get_face_analysis_runtime()
-    record = analyze_photo_file(photo_path, detector=detector, parser=parser, config=config)
+    record = get_face_analysis_pipeline_module().analyze_photo_file(
+        photo_path,
+        detector=detector,
+        parser=parser,
+        config=config,
+    )
     upsert_face_analysis_record(record, db_file)
 
     try:
@@ -1579,14 +1632,91 @@ def _build_balance_suggestions(summary):
     return suggestions
 # ... (existing imports/functions) ...
 
-def get_camera_index():
+def get_camera_enumeration_backend(platform: str | None = None):
+    resolved_platform = platform or sys.platform
+    if resolved_platform == "win32":
+        return getattr(cv2, "CAP_MSMF", cv2.CAP_ANY)
+    if resolved_platform == "darwin":
+        return getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY)
+    if resolved_platform.startswith("linux"):
+        return getattr(cv2, "CAP_V4L2", cv2.CAP_ANY)
+    return cv2.CAP_ANY
+
+
+def get_camera_capture_backend(platform: str | None = None):
+    resolved_platform = platform or sys.platform
+    if resolved_platform == "win32":
+        return getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY)
+    if resolved_platform == "darwin":
+        return getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY)
+    if resolved_platform.startswith("linux"):
+        return getattr(cv2, "CAP_V4L2", cv2.CAP_ANY)
+    return cv2.CAP_ANY
+
+
+def enumerate_available_cameras(platform: str | None = None):
+    backend = get_camera_enumeration_backend(platform)
+    try:
+        from cv2_enumerate_cameras import enumerate_cameras
+
+        return list(enumerate_cameras(backend))
+    except Exception as exc:
+        print(f"Camera enumeration failed for backend {backend}: {exc}")
+        return []
+
+
+def _camera_name_matches(camera_info, keywords):
+    name = str(getattr(camera_info, "name", "") or "").lower()
+    return any(keyword in name for keyword in keywords)
+
+
+def get_camera_index(platform: str | None = None):
+    resolved_platform = platform or sys.platform
+    override = os.environ.get(CAMERA_INDEX_OVERRIDE_ENV)
+    if override is not None:
+        try:
+            return max(0, int(override))
+        except ValueError:
+            print(f"Ignoring invalid {CAMERA_INDEX_OVERRIDE_ENV}: {override}")
+
+    if (
+        platform is None
+        and resolved_platform == "darwin"
+        and os.environ.get(MACOS_CAMERA_ENUMERATION_ENV) != "1"
+    ):
+        return 0
+
     camera_index = 0
-    # Simple logic to find USB camera, similar to main_window.py
-    for camera_info in enumerate_cameras(cv2.CAP_MSMF):
-        if "USB Camera" in camera_info.name:
+    camera_infos = enumerate_available_cameras(resolved_platform)
+    preferred_keywords = (
+        ("usb camera", "usb") if resolved_platform == "win32" else ("facetime", "camera", "webcam")
+    )
+    for camera_info in camera_infos:
+        if _camera_name_matches(camera_info, preferred_keywords):
             camera_index = camera_info.index
             break
+    else:
+        if camera_infos:
+            camera_index = camera_infos[0].index
     return camera_index
+
+
+def open_camera_capture(camera_index: int, platform: str | None = None):
+    resolved_platform = platform or sys.platform
+    backend = get_camera_capture_backend(resolved_platform)
+    if backend == cv2.CAP_ANY:
+        return cv2.VideoCapture(camera_index)
+
+    camera = cv2.VideoCapture(camera_index, backend)
+    if camera.isOpened():
+        return camera
+
+    camera.release()
+    if resolved_platform == "darwin":
+        return camera
+
+    print(f"Camera backend {backend} failed for index {camera_index}; retrying with CAP_ANY")
+    return cv2.VideoCapture(camera_index)
 
 def identify_logs_folder(
     *,
@@ -1747,16 +1877,26 @@ async def lifespan(_app):
 
 app.router.lifespan_context = lifespan
 
-def monitor_loop():
-    print("Starting monitor loop (10s interval)...")
+def sleep_while_running(seconds: float):
+    deadline = time.monotonic() + max(0.0, seconds)
     while state.is_running:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(1.0, remaining))
+
+
+def monitor_loop():
+    print(f"Starting monitor loop ({MONITOR_CAPTURE_INTERVAL_SECONDS}s interval)...")
+    while state.is_running:
+        cycle_started_at = time.monotonic()
         try:
             if state.monitor:
                 # CRITICAL: Ensure Monitor uses the current active camera instance (initialized in camera_loop)
                 # If camera is not ready yet, skip this cycle to avoid errors or default-init
                 if state.camera is None or not state.camera.isOpened():
                     # print("Monitor skipping: Camera not ready")
-                    time.sleep(2)
+                    sleep_while_running(MONITOR_CAMERA_WAIT_INTERVAL_SECONDS)
                     continue
                 
                 # Update the camera reference in monitor to match the global state (which is 4K)
@@ -1771,16 +1911,26 @@ def monitor_loop():
                         state.last_processed_face_photo_path = photo_path
         except Exception as e:
             print(f"Monitor loop error: {e}")
-        time.sleep(10)
+        elapsed = time.monotonic() - cycle_started_at
+        sleep_while_running(MONITOR_CAPTURE_INTERVAL_SECONDS - elapsed)
 
 def camera_loop():
-    print(f"Starting camera loop... Camera Index: {get_camera_index()}")
+    print(
+        "Starting camera loop... "
+        f"Backend: {get_camera_capture_backend()}"
+    )
     while state.is_running:
         if state.camera is None:
              idx = get_camera_index()
              try:
-                 # Use DirectShow (CAP_DSHOW) on Windows for better resolution control
-                 state.camera = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                 state.camera = open_camera_capture(idx)
+                 if not state.camera or not state.camera.isOpened():
+                     print(f"Camera index {idx} is offline; retrying in {CAMERA_RETRY_INTERVAL_SECONDS:.0f}s")
+                     if state.camera:
+                         state.camera.release()
+                     state.camera = None
+                     sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
+                     continue
                  
                  # Request 4K resolution (16:9)
                  target_w, target_h = 3840, 2160
@@ -1801,7 +1951,7 @@ def camera_loop():
                      
              except Exception as e:
                  print(f"Camera init failed: {e}")
-                 time.sleep(2)
+                 sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
                  continue
 
         if state.camera and state.camera.isOpened():
@@ -1820,8 +1970,10 @@ def camera_loop():
                 time.sleep(1)
         else:
              print("Camera not opened, retrying...")
+             if state.camera:
+                 state.camera.release()
              state.camera = None
-             time.sleep(2)
+             sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
         time.sleep(0.03)
 
 
@@ -1840,7 +1992,12 @@ def face_live_loop():
         if frame_copy is not None:
             try:
                 detector, parser, config = get_face_analysis_runtime()
-                result = analyze_image_data(frame_copy, detector=detector, parser=parser, config=config)
+                result = get_face_analysis_pipeline_module().analyze_image_data(
+                    frame_copy,
+                    detector=detector,
+                    parser=parser,
+                    config=config,
+                )
                 update_live_face_overlay_state(result)
                 store_live_face_result(result)
             except Exception as exc:
@@ -1858,7 +2015,7 @@ def yolo_loop():
         model.predict(source=dummy_img, verbose=False, imgsz=640)
         print("YOLO model warmed up successfully.")
     except Exception as e:
-        print(f"Failed to load YOLO model in thread: {e}")
+        print(f"YOLO model unavailable in thread: {e}")
         return
 
     while state.is_running:

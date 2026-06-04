@@ -110,13 +110,31 @@ class Monitor:
     def send_sedentary_notification(self, minutes):
         print(f"Sending sedentary notification for {minutes} minutes of continuous sitting.")
         try:
+            message = f"你已经连续工作了 {minutes} 分钟了！请起立活动一下，走动走动喝口水，防止病痛、保护视力。"
+            title = "AI 健康管家 (久坐提醒)"
+            if sys.platform == "darwin":
+                subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        f"display notification {json.dumps(message, ensure_ascii=False)} "
+                        f"with title {json.dumps(title, ensure_ascii=False)}",
+                    ],
+                    check=False,
+                )
+                return
+
+            if sys.platform != "win32":
+                subprocess.run(["notify-send", title, message], check=False)
+                return
+
             ps_script = f"""
             Add-Type -AssemblyName System.Windows.Forms
             $notify = New-Object System.Windows.Forms.NotifyIcon
             $notify.Icon = [System.Drawing.SystemIcons]::Warning
             $notify.BalloonTipIcon = 'Warning'
-            $notify.BalloonTipTitle = 'AI 健康管家 (久坐提醒)'
-            $notify.BalloonTipText = '你已经连续工作了 {minutes} 分钟了！请起立活动一下，走动走动喝口水，防止病痛、保护视力。'
+            $notify.BalloonTipTitle = '{title}'
+            $notify.BalloonTipText = '{message}'
             $notify.Visible = $True
             $notify.ShowBalloonTip(10000)
             Start-Sleep -Seconds 10

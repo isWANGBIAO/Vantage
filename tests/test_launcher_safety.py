@@ -40,6 +40,13 @@ def test_run_dev_bat_does_not_block_launch_on_camera_readiness():
     assert "Backend did not become camera-ready" not in run_dev_bat
 
 
+def test_run_dev_sh_detaches_backend_from_terminal_session():
+    run_dev_sh = Path("RUN_DEV.sh").read_text(encoding="utf-8")
+
+    assert "start_new_session=True" in run_dev_sh
+    assert "nohup \"$PYTHON_BIN\" src/scripts/run_server_background.py" not in run_dev_sh
+
+
 def test_run_bat_builds_and_silently_installs_latest_package():
     run_bat = Path("run.bat").read_text(encoding="utf-8")
 

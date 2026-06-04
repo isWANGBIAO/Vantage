@@ -14,7 +14,15 @@ function resolveBundledBackendExecutable({
   }
 
   const executableName = platform === 'win32' ? 'VantageBackend.exe' : 'VantageBackend';
-  return path.join(resourcesPath, 'backend-runtime', 'VantageBackend', executableName);
+  const pathModule = platform === 'win32' ? path.win32 : path.posix;
+  return pathModule.join(resourcesPath, 'backend-runtime', 'VantageBackend', executableName);
+}
+
+function pathForExecutable(executablePath, platform = process.platform) {
+  if (platform === 'win32' || /^[A-Za-z]:\\/.test(executablePath || '')) {
+    return path.win32;
+  }
+  return path.posix;
 }
 
 function applySelectedProviderEnvironment(nextEnv, providerConfig) {
@@ -192,7 +200,7 @@ async function ensureBundledBackendReady({
   }
 
   const childProcess = spawnProcess(resolvedExecutablePath, [], {
-    cwd: path.dirname(resolvedExecutablePath),
+    cwd: pathForExecutable(resolvedExecutablePath, platform).dirname(resolvedExecutablePath),
     env: buildBundledBackendEnvironment({ runtimePaths, env }),
     stdio: 'ignore',
     windowsHide: true,

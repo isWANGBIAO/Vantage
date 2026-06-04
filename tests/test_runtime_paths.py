@@ -30,6 +30,23 @@ def test_runtime_paths_default_to_local_appdata_in_packaged_mode(tmp_path):
     assert paths["migration_dir"] == local_appdata / "Vantage" / "migration"
 
 
+def test_packaged_runtime_paths_use_application_support_on_macos(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    with patch.dict(os.environ, {"VANTAGE_APP_MODE": "packaged", "HOME": str(home)}, clear=True), patch.object(
+        sys,
+        "platform",
+        "darwin",
+    ):
+        paths = Config.get_runtime_paths()
+
+    app_data = home / "Library" / "Application Support" / "Vantage"
+    assert paths["data_dir"] == app_data
+    assert paths["config_dir"] == app_data / "config"
+    assert paths["history_dir"] == app_data / "history"
+
+
 def test_runtime_paths_keep_history_out_of_project_root_in_development_mode(tmp_path):
     project_root = tmp_path / "repo"
     local_appdata = tmp_path / "LocalAppData"

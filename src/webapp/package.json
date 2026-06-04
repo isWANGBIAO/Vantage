@@ -1,7 +1,7 @@
 {
   "name": "vantage",
   "private": true,
-  "version": "1.0.30",
+  "version": "1.0.41",
   "description": "Vantage Electron Desktop Application",
   "main": "main.cjs",
   "type": "module",
@@ -68,6 +68,13 @@
       "target": [
         "nsis"
       ]
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.healthcare-fitness"
     },
     "nsis": {
       "oneClick": false,

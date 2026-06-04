@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 
@@ -12,6 +13,9 @@ _YOLO_MODEL = None
 def get_yolo_model():
     global _YOLO_MODEL
     if _YOLO_MODEL is None:
+        if not Path(PERSON_DETECTION_MODEL).exists():
+            raise FileNotFoundError(f"Missing person detection model: {PERSON_DETECTION_MODEL}")
+
         from ultralytics import YOLO
 
         _YOLO_MODEL = YOLO(PERSON_DETECTION_MODEL)
