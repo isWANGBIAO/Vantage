@@ -52,6 +52,7 @@ function buildBundledBackendEnvironment({
   runtimePaths,
   env = process.env,
   loadProviderConfigFn = loadProviderConfig,
+  platform = process.platform,
 } = {}) {
   const nextEnv = {
     ...env,
@@ -66,6 +67,12 @@ function buildBundledBackendEnvironment({
     VANTAGE_MIGRATION_DIR: runtimePaths.migrationDir,
   };
   delete nextEnv.VANTAGE_PROJECT_ROOT;
+
+  if (platform === 'darwin') {
+    nextEnv.VANTAGE_MACOS_SKIP_CAMERA_AUTH = '0';
+    nextEnv.VANTAGE_MACOS_CAMERA_AUTH_PREFLIGHT = '1';
+    nextEnv.OPENCV_AVFOUNDATION_SKIP_AUTH = '1';
+  }
 
   return applySelectedProviderEnvironment(nextEnv, loadProviderConfigFn(runtimePaths));
 }
@@ -201,7 +208,7 @@ async function ensureBundledBackendReady({
 
   const childProcess = spawnProcess(resolvedExecutablePath, [], {
     cwd: pathForExecutable(resolvedExecutablePath, platform).dirname(resolvedExecutablePath),
-    env: buildBundledBackendEnvironment({ runtimePaths, env }),
+    env: buildBundledBackendEnvironment({ runtimePaths, env, platform }),
     stdio: 'ignore',
     windowsHide: true,
   });
@@ -211,7 +218,7 @@ async function ensureBundledBackendReady({
   }
 
   try {
-    const status = await waitForStatusFn({ timeoutMs: 60000 });
+    const status = await waitForStatusFn({ timeoutMs: 300000 });
     return {
       started: true,
       reason: 'launched',

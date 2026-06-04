@@ -138,6 +138,7 @@ MONITOR_CAPTURE_INTERVAL_SECONDS = int(os.environ.get("VANTAGE_CAPTURE_INTERVAL_
 MONITOR_CAMERA_WAIT_INTERVAL_SECONDS = 2.0
 CAMERA_INDEX_OVERRIDE_ENV = "VANTAGE_CAMERA_INDEX"
 MACOS_CAMERA_ENUMERATION_ENV = "VANTAGE_MACOS_ENUMERATE_CAMERAS"
+MACOS_CAMERA_AUTH_PREFLIGHT_ENV = "VANTAGE_MACOS_CAMERA_AUTH_PREFLIGHT"
 CAMERA_RETRY_INTERVAL_SECONDS = float(os.environ.get(
     "VANTAGE_CAMERA_RETRY_INTERVAL_SECONDS",
     "30" if sys.platform == "darwin" else "2",
@@ -1718,6 +1719,36 @@ def open_camera_capture(camera_index: int, platform: str | None = None):
     print(f"Camera backend {backend} failed for index {camera_index}; retrying with CAP_ANY")
     return cv2.VideoCapture(camera_index)
 
+
+def preflight_macos_camera_authorization():
+    if (
+        sys.platform != "darwin"
+        or os.environ.get("VANTAGE_APP_MODE") != "packaged"
+        or os.environ.get(MACOS_CAMERA_AUTH_PREFLIGHT_ENV) != "1"
+    ):
+        return
+
+    previous_skip_auth = os.environ.get("OPENCV_AVFOUNDATION_SKIP_AUTH")
+    os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"] = "0"
+    camera = None
+    try:
+        camera_index = get_camera_index("darwin")
+        camera = cv2.VideoCapture(camera_index, get_camera_capture_backend("darwin"))
+        print(
+            "macOS camera authorization preflight "
+            f"{'opened camera' if camera.isOpened() else 'did not open camera'}"
+        )
+    except Exception as exc:
+        print(f"macOS camera authorization preflight failed: {exc}")
+    finally:
+        if camera is not None:
+            camera.release()
+        if previous_skip_auth is None:
+            os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"] = "1"
+        else:
+            os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"] = previous_skip_auth
+
+
 def identify_logs_folder(
     *,
     config_dir: str | Path | None = None,
@@ -1807,12 +1838,7 @@ async def startup_event():
     print("Starting up server...")
     state.is_running = True
     try:
-        # DEPRECATED IN FAVOR OF camera_loop: 
-        # idx = get_camera_index()
-        # state.camera = cv2.VideoCapture(idx)
-        # if not state.camera.isOpened():
-        #      print("Warning: Camera not opened")
-        pass # Camera init moved to camera_loop to centralize resolution settings
+        preflight_macos_camera_authorization()
     except Exception as e:
         print(f"Startup camera init error: {e}")
         

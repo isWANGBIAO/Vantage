@@ -69,3 +69,36 @@ def test_macos_camera_open_does_not_fallback_to_cap_any_when_permission_is_missi
 
     assert capture is not None
     assert calls == [(3, getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY))]
+
+
+def test_macos_camera_auth_preflight_temporarily_enables_avfoundation_auth():
+    calls = []
+
+    class FakeCapture:
+        def __init__(self, *args):
+            calls.append(args)
+
+        def isOpened(self):
+            return False
+
+        def release(self):
+            calls.append(("release",))
+
+    with (
+        patch.object(server.sys, "platform", "darwin"),
+        patch.dict(
+            os.environ,
+            {
+                "VANTAGE_APP_MODE": "packaged",
+                server.MACOS_CAMERA_AUTH_PREFLIGHT_ENV: "1",
+                "OPENCV_AVFOUNDATION_SKIP_AUTH": "1",
+            },
+            clear=False,
+        ),
+        patch.object(server, "get_camera_index", return_value=0),
+        patch.object(server.cv2, "VideoCapture", side_effect=lambda *args: FakeCapture(*args)),
+    ):
+        server.preflight_macos_camera_authorization()
+
+    assert calls == [(0, getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY)), ("release",)]
+    assert os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"] == "1"

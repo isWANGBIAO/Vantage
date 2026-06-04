@@ -32,6 +32,7 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
             )
             self.assertEqual(env["VANTAGE_DATA_DIR"], str(layout["build_root"] / "smoke-data"))
             self.assertEqual(env["VANTAGE_MACOS_SKIP_CAMERA_AUTH"], "1")
+            self.assertEqual(env["OPENCV_AVFOUNDATION_SKIP_AUTH"], "1")
 
     def test_status_payload_must_match_current_runtime_layout(self):
         with tempfile.TemporaryDirectory() as tmpdir:

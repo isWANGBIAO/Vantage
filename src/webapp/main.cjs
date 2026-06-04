@@ -8,6 +8,7 @@ const {
     ipcMain,
     dialog,
     shell,
+    systemPreferences,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -138,6 +139,59 @@ function getEffectiveDisplayLanguageForMain() {
 function getMainProcessCopy() {
     const language = getEffectiveDisplayLanguageForMain();
     return MAIN_PROCESS_COPY[language] || MAIN_PROCESS_COPY['en-US'];
+}
+
+function openMacosCameraPrivacySettings(reason) {
+    if (process.platform !== 'darwin') {
+        return;
+    }
+
+    const privacyUrl = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Camera';
+    shell.openExternal(privacyUrl)
+        .then(() => {
+            log.warn(`Opened macOS camera privacy settings: ${reason}`);
+        })
+        .catch((error) => {
+            log.warn(`Failed to open macOS camera privacy settings: ${error.message}`);
+        });
+}
+
+async function requestMacosCameraAccess({ timeoutMs = 5000 } = {}) {
+    if (process.platform !== 'darwin' || typeof systemPreferences.askForMediaAccess !== 'function') {
+        return null;
+    }
+
+    if (typeof systemPreferences.getMediaAccessStatus === 'function') {
+        const status = systemPreferences.getMediaAccessStatus('camera');
+        log.info(`macOS camera permission status: ${status}`);
+        if (status === 'granted') {
+            return true;
+        }
+        if (status === 'denied' || status === 'restricted') {
+            openMacosCameraPrivacySettings(status);
+            return false;
+        }
+    }
+
+    const accessRequest = systemPreferences.askForMediaAccess('camera')
+        .then((granted) => {
+            log.info(`macOS camera permission ${granted ? 'granted' : 'not granted'}`);
+            return granted;
+        })
+        .catch((error) => {
+            log.warn(`macOS camera permission request failed: ${error.message}`);
+            return false;
+        });
+
+    const timeout = new Promise((resolve) => {
+        setTimeout(() => {
+            log.warn('macOS camera permission request still pending; continuing backend startup');
+            openMacosCameraPrivacySettings('request pending');
+            resolve(null);
+        }, timeoutMs);
+    });
+
+    return Promise.race([accessRequest, timeout]);
 }
 
 function persistSettings(nextSettings) {
@@ -452,7 +506,12 @@ if (!gotTheLock) {
         syncLaunchAtLoginSetting();
 
         const shouldLaunchBundledBackend = runtimePaths.appMode === 'packaged' || app.isPackaged;
+        createWindow();
+        createTray();
+
         if (shouldLaunchBundledBackend) {
+            await requestMacosCameraAccess();
+
             try {
                 const backendBootstrap = await ensureBundledBackendReady({
                     isDev: false,
@@ -480,9 +539,6 @@ if (!gotTheLock) {
         } else {
             log.info('Development Electron flow detected, backend launch remains external');
         }
-
-        createWindow();
-        createTray();
 
         app.on('activate', () => {
             if (BrowserWindow.getAllWindows().length === 0) {

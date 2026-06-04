@@ -89,6 +89,7 @@ def _build_smoke_environment(layout: dict[str, Path]) -> dict[str, str]:
     env["VANTAGE_DATA_DIR"] = str(smoke_data_dir)
     env["VANTAGE_CONFIG_DIR"] = str(config_dir)
     env["VANTAGE_MACOS_SKIP_CAMERA_AUTH"] = "1"
+    env["OPENCV_AVFOUNDATION_SKIP_AUTH"] = "1"
     env.pop("VANTAGE_PROJECT_ROOT", None)
     return env
 

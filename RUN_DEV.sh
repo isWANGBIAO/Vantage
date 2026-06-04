@@ -14,7 +14,7 @@ BACKEND_RUNTIME_PYTHON="${BACKEND_RUNTIME_VENV}/bin/python"
 BACKEND_RUNTIME_REQUIREMENTS="${PROJECT_ROOT}/requirements-backend-runtime-gpu.txt"
 BACKEND_RUNTIME_REQUIREMENTS_STAMP="${BACKEND_RUNTIME_VENV}/.requirements-backend-runtime-gpu.sha256"
 BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.sha256"
-BOOTSTRAP_PYTHON="${BOOTSTRAP_PYTHON:-$(command -v python3)}"
+LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.13.5/bin/python3.13"
 FRONTEND_ROOT="${PROJECT_ROOT}/src/webapp"
 FRONTEND_PACKAGE_LOCK="${FRONTEND_ROOT}/package-lock.json"
 FRONTEND_NATIVE_CODESIGN_STAMP="${FRONTEND_ROOT}/node_modules/.macos-native-codesign.sha256"
@@ -24,6 +24,58 @@ BACKEND_WAIT_TIMEOUT="${BACKEND_WAIT_TIMEOUT:-60}"
 SERVER_LATEST_POINTER="${PROJECT_ROOT}/logs/server.latest.log"
 export BACKEND_STATUS_URL BACKEND_WAIT_TIMEOUT SERVER_LATEST_POINTER
 export PROJECT_ROOT PYTHON_BIN
+
+python_supports_backend_venv() {
+    local candidate="$1"
+    local probe_file probe_pid waited status
+
+    probe_file="$(mktemp "${TMPDIR:-/tmp}/vantage-python-probe.XXXXXX")" || return 1
+    "$candidate" -c 'import pathlib, sqlite3, ssl, subprocess, venv' >"$probe_file" 2>&1 &
+    probe_pid=$!
+    waited=0
+    while kill -0 "$probe_pid" 2>/dev/null; do
+        if (( waited >= 5 )); then
+            kill "$probe_pid" >/dev/null 2>&1 || true
+            wait "$probe_pid" >/dev/null 2>&1 || true
+            rm -f "$probe_file"
+            return 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    wait "$probe_pid"
+    status=$?
+    rm -f "$probe_file"
+    return "$status"
+}
+
+resolve_bootstrap_python() {
+    local candidates=()
+    if [[ -n "${BOOTSTRAP_PYTHON:-}" ]]; then
+        candidates+=("$BOOTSTRAP_PYTHON")
+    fi
+    candidates+=("/opt/homebrew/bin/python3.13" "$LOCAL_BOOTSTRAP_PYTHON")
+
+    local path_python
+    path_python="$(command -v python3 || true)"
+    if [[ -n "$path_python" ]]; then
+        candidates+=("$path_python")
+    fi
+
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [[ -x "$candidate" ]] && python_supports_backend_venv "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    echo "No usable Python found for backend runtime venv creation." >&2
+    exit 1
+}
+
+BOOTSTRAP_PYTHON="$(resolve_bootstrap_python)"
 
 codesign_macos_native_libraries() {
     if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -68,7 +120,9 @@ codesign_macos_frontend_binaries() {
 
     echo "      Ad-hoc signing macOS frontend native binaries..."
     xattr -dr com.apple.provenance "${FRONTEND_ROOT}/node_modules/@rollup" "${FRONTEND_ROOT}/node_modules/@esbuild" "${FRONTEND_ROOT}/node_modules/esbuild" "${FRONTEND_ROOT}/node_modules/app-builder-bin" >/dev/null 2>&1 || true
-    find "${FRONTEND_ROOT}/node_modules" -type f \( -name '*.node' -o -name '*.dylib' -o -path '*/@esbuild/*/bin/esbuild' -o -path '*/esbuild/bin/esbuild' -o -path '*/app-builder-bin/mac/app-builder*' -o -path '*/7zip-bin/mac/*/7za' \) -print0 |
+    find "${FRONTEND_ROOT}/node_modules" \
+        -path "${FRONTEND_ROOT}/node_modules/electron" -prune -o \
+        -type f \( -name '*.node' -o -name '*.dylib' -o -path '*/@esbuild/*/bin/esbuild' -o -path '*/esbuild/bin/esbuild' -o -path '*/app-builder-bin/mac/app-builder*' -o -path '*/7zip-bin/mac/*/7za' \) -print0 |
         while IFS= read -r -d '' native_binary; do
             codesign --force --sign - "$native_binary" >/dev/null 2>&1 || true
         done
@@ -96,7 +150,7 @@ if [[ "$requirements_hash" == "$stored_hash" && "${VANTAGE_FORCE_BACKEND_DEPS:-0
     echo "      Backend dependencies already synced"
 else
     echo "      Syncing backend dependencies..."
-    "$BACKEND_RUNTIME_PYTHON" -m pip install --upgrade pip
+    "$BACKEND_RUNTIME_PYTHON" -m pip install --upgrade "pip==25.3"
     "$BACKEND_RUNTIME_PYTHON" -m pip install -r "$BACKEND_RUNTIME_REQUIREMENTS"
     printf '%s\n' "$requirements_hash" > "$BACKEND_RUNTIME_REQUIREMENTS_STAMP"
 fi

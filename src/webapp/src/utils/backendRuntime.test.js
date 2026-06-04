@@ -56,6 +56,20 @@ test('buildBundledBackendEnvironment injects the packaged runtime contract', () 
   assert.equal('VANTAGE_PROJECT_ROOT' in env, false);
 });
 
+test('buildBundledBackendEnvironment enables macOS backend camera auth preflight', () => {
+  const env = buildBundledBackendEnvironment({
+    runtimePaths,
+    platform: 'darwin',
+    env: {
+      PATH: '/usr/bin',
+    },
+  });
+
+  assert.equal(env.VANTAGE_MACOS_SKIP_CAMERA_AUTH, '0');
+  assert.equal(env.VANTAGE_MACOS_CAMERA_AUTH_PREFLIGHT, '1');
+  assert.equal(env.OPENCV_AVFOUNDATION_SKIP_AUTH, '1');
+});
+
 test('buildBundledBackendEnvironment maps selected onboarding provider into backend env', () => {
   const env = buildBundledBackendEnvironment({
     runtimePaths,
@@ -145,6 +159,7 @@ test('ensureBundledBackendReady spawns the bundled backend in packaged mode', as
   };
 
   let waitAttempts = 0;
+  const waitTimeouts = [];
   const result = await ensureBundledBackendReady({
     isDev: false,
     runtimePaths,
@@ -154,7 +169,8 @@ test('ensureBundledBackendReady spawns the bundled backend in packaged mode', as
       spawnCall = { file, args, options };
       return fakeChild;
     },
-    waitForStatusFn: async () => {
+    waitForStatusFn: async ({ timeoutMs }) => {
+      waitTimeouts.push(timeoutMs);
       waitAttempts += 1;
       if (waitAttempts === 1) {
         throw new Error('backend not ready yet');
@@ -172,6 +188,7 @@ test('ensureBundledBackendReady spawns the bundled backend in packaged mode', as
   assert.equal(spawnCall.options.windowsHide, true);
   assert.equal(spawnCall.options.env.VANTAGE_APP_MODE, 'packaged');
   assert.equal(fakeChild.unrefCalled, true);
+  assert.deepEqual(waitTimeouts, [1000, 300000]);
   assert.equal(result.started, true);
   assert.equal(result.status.camera_online, false);
 });

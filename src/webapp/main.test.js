@@ -19,3 +19,20 @@ test('Electron main process exposes Settings IPC and restricts path opening', ()
   assert.ok(mainSource.includes('resolveAllowedSettingsPath'));
   assert.ok(mainSource.includes('settingsPathAllowlist'));
 });
+
+test('Electron main process requests macOS camera access before bundled backend startup', () => {
+  assert.ok(mainSource.includes('systemPreferences'));
+  assert.ok(mainSource.includes("systemPreferences.getMediaAccessStatus('camera')"));
+  assert.ok(mainSource.includes("systemPreferences.askForMediaAccess('camera')"));
+  assert.ok(mainSource.includes('openMacosCameraPrivacySettings'));
+  assert.ok(mainSource.includes('Privacy_Camera'));
+  assert.ok(mainSource.includes('continuing backend startup'));
+  assert.ok(
+    mainSource.indexOf('        createWindow();')
+      < mainSource.indexOf('await requestMacosCameraAccess()'),
+  );
+  assert.ok(
+    mainSource.indexOf('await requestMacosCameraAccess()')
+      < mainSource.indexOf('ensureBundledBackendReady({'),
+  );
+});
