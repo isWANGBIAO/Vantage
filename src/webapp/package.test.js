@@ -75,6 +75,9 @@ test('preload can bridge renderer camera frames to the main process', () => {
   assert.ok(preloadSource.includes('playVideoWithTimeout'));
   assert.ok(preloadSource.includes("renderer camera video play timed out"));
   assert.ok(preloadSource.includes('(document.body || document.documentElement)?.appendChild(video)'));
+  assert.ok(preloadSource.includes("typeof ImageCapture === 'function'"));
+  assert.ok(preloadSource.includes('imageCapture.grabFrame()'));
+  assert.ok(preloadSource.includes("renderer camera grabFrame timed out"));
   assert.ok(preloadSource.includes("canvas.toBlob(resolve, 'image/jpeg', quality)"));
   assert.ok(preloadSource.includes('Buffer.from(arrayBuffer)'));
   assert.ok(preloadSource.includes('ipcRenderer.send(CAMERA_FRAME_CHANNEL, buffer)'));

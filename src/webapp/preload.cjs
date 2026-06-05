@@ -35,6 +35,15 @@ function blobToBuffer(blob) {
     return blob.arrayBuffer().then((arrayBuffer) => Buffer.from(arrayBuffer));
 }
 
+function withTimeout(promise, timeoutMs, message) {
+    return Promise.race([
+        promise,
+        new Promise((resolve, reject) => {
+            setTimeout(() => reject(new Error(message)), timeoutMs);
+        }),
+    ]);
+}
+
 async function waitForVideoMetadata(video) {
     if (video.videoWidth && video.videoHeight) {
         return;
@@ -65,12 +74,7 @@ async function waitForVideoMetadata(video) {
 }
 
 async function playVideoWithTimeout(video) {
-    await Promise.race([
-        video.play(),
-        new Promise((resolve, reject) => {
-            setTimeout(() => reject(new Error('renderer camera video play timed out')), 5000);
-        }),
-    ]);
+    await withTimeout(video.play(), 5000, 'renderer camera video play timed out');
 }
 
 async function startRendererCameraFrameBridge({
@@ -101,17 +105,24 @@ async function startRendererCameraFrameBridge({
             audio: false,
         });
 
-        video = document.createElement('video');
-        video.muted = true;
-        video.autoplay = true;
-        video.playsInline = true;
-        video.style.display = 'none';
-        video.setAttribute('muted', '');
-        video.setAttribute('playsinline', '');
-        video.srcObject = stream;
-        (document.body || document.documentElement)?.appendChild(video);
-        await waitForVideoMetadata(video);
-        await playVideoWithTimeout(video);
+        const [videoTrack] = stream.getVideoTracks();
+        const imageCapture = typeof ImageCapture === 'function' && videoTrack
+            ? new ImageCapture(videoTrack)
+            : null;
+
+        if (!imageCapture) {
+            video = document.createElement('video');
+            video.muted = true;
+            video.autoplay = true;
+            video.playsInline = true;
+            video.style.display = 'none';
+            video.setAttribute('muted', '');
+            video.setAttribute('playsinline', '');
+            video.srcObject = stream;
+            (document.body || document.documentElement)?.appendChild(video);
+            await waitForVideoMetadata(video);
+            await playVideoWithTimeout(video);
+        }
 
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d', { alpha: false });
@@ -120,13 +131,26 @@ async function startRendererCameraFrameBridge({
         }
 
         const captureFrame = async () => {
-            if (!rendererCameraBridge?.started || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            if (!rendererCameraBridge?.started) {
+                return;
+            }
+            if (!imageCapture && (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA)) {
                 return;
             }
 
-            const frameWidth = video.videoWidth || width;
-            const frameHeight = video.videoHeight || height;
+            let source = video;
+            if (imageCapture) {
+                source = await withTimeout(
+                    imageCapture.grabFrame(),
+                    5000,
+                    'renderer camera grabFrame timed out',
+                );
+            }
+
+            const frameWidth = source.width || source.videoWidth || width;
+            const frameHeight = source.height || source.videoHeight || height;
             if (!frameWidth || !frameHeight) {
+                source.close?.();
                 return;
             }
 
@@ -137,7 +161,8 @@ async function startRendererCameraFrameBridge({
                 canvas.height = frameHeight;
             }
 
-            context.drawImage(video, 0, 0, frameWidth, frameHeight);
+            context.drawImage(source, 0, 0, frameWidth, frameHeight);
+            source.close?.();
             const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
             if (!blob) {
                 return;
@@ -152,7 +177,7 @@ async function startRendererCameraFrameBridge({
             stream,
             video,
             timer: setInterval(() => {
-                void captureFrame();
+                void captureFrame().catch(() => {});
             }, Math.max(250, intervalMs)),
         };
         await captureFrame();
