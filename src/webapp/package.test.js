@@ -111,7 +111,9 @@ test('macOS packaging hook ad-hoc signs the finished app bundle from a temp copy
   assert.ok(signMacAdHocSource.includes('codesignTopLevelApp'));
   assert.ok(signMacAdHocSource.includes('AD_HOC_MAIN_ENTITLEMENTS'));
   assert.ok(signMacAdHocSource.includes('clearSignBlockingAttributesRecursive'));
-  assert.ok(signMacAdHocSource.includes("path.basename(filePath) === 'VantageBackend'"));
+  assert.ok(signMacAdHocSource.includes("baseName.startsWith(`${signingOptions.productName || 'Vantage'} Helper`)"));
+  assert.ok(signMacAdHocSource.includes("productName: path.basename(appPath, '.app')"));
+  assert.ok(signMacAdHocSource.includes("baseName === 'VantageBackend'"));
   assert.ok(signMacAdHocSource.includes('com.apple.security.cs.disable-library-validation'));
   assert.ok(signMacAdHocSource.includes("run('xattr', ['-cr', bundlePath]"));
   assert.ok(signMacAdHocSource.includes('com.apple.FinderInfo'));

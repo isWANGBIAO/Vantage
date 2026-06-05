@@ -196,9 +196,11 @@ function createAdHocMainEntitlements(tempRoot) {
 }
 
 function shouldUseAdHocMainEntitlements(filePath, signingOptions = {}) {
+  const baseName = path.basename(filePath);
   return filePath === signingOptions.topLevelAppPath
     || filePath === signingOptions.mainExecutablePath
-    || path.basename(filePath) === 'VantageBackend';
+    || baseName.startsWith(`${signingOptions.productName || 'Vantage'} Helper`)
+    || baseName === 'VantageBackend';
 }
 
 function entitlementsForPath(filePath, signingOptions = {}) {
@@ -320,6 +322,7 @@ async function signAppBundle(appPath) {
   const signingOptions = {
     mainEntitlementsPath: createAdHocMainEntitlements(path.dirname(appPath)),
     mainExecutablePath,
+    productName: path.basename(appPath, '.app'),
     stableDesignatedRequirement: `=designated => identifier "${bundleIdentifier}"`,
     topLevelAppPath: appPath,
   };
