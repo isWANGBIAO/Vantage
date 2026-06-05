@@ -5,7 +5,33 @@ const CAMERA_FRAME_BRIDGE_RESULT_CHANNEL = 'camera:frame-bridge-result';
 const CAMERA_FRAME_BRIDGE_ERROR_CHANNEL = 'camera:frame-bridge-error';
 const CAMERA_FRAME_CHANNEL = 'camera:renderer-frame';
 let rendererCameraBridge = null;
+let rendererCameraPrimeStream = null;
 let rendererCameraBridgeLastErrorSentAt = 0;
+
+function stopRendererCameraStream(stream) {
+    if (!stream) {
+        return;
+    }
+    for (const track of stream.getTracks()) {
+        track.stop();
+    }
+}
+
+function hasLiveVideoTrack(stream) {
+    return Boolean(stream?.getVideoTracks?.().some((track) => track.readyState === 'live'));
+}
+
+function consumeRendererCameraPrimeStream() {
+    if (!hasLiveVideoTrack(rendererCameraPrimeStream)) {
+        stopRendererCameraStream(rendererCameraPrimeStream);
+        rendererCameraPrimeStream = null;
+        return null;
+    }
+
+    const stream = rendererCameraPrimeStream;
+    rendererCameraPrimeStream = null;
+    return stream;
+}
 
 async function primeRendererCameraAccess() {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -15,21 +41,18 @@ async function primeRendererCameraAccess() {
         };
     }
 
-    let stream = null;
+    if (rendererCameraBridge?.started || hasLiveVideoTrack(rendererCameraPrimeStream)) {
+        return { granted: true, reused: true };
+    }
+
     try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        rendererCameraPrimeStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         return { granted: true };
     } catch (error) {
         return {
             granted: false,
             error: error?.message || String(error),
         };
-    } finally {
-        if (stream) {
-            for (const track of stream.getTracks()) {
-                track.stop();
-            }
-        }
     }
 }
 
@@ -138,13 +161,16 @@ async function startRendererCameraFrameBridge({
     let stream = null;
     let video = null;
     try {
-        stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                width: { ideal: width },
-                height: { ideal: height },
-            },
-            audio: false,
-        });
+        stream = consumeRendererCameraPrimeStream();
+        if (!stream) {
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    width: { ideal: width },
+                    height: { ideal: height },
+                },
+                audio: false,
+            });
+        }
 
         const [videoTrack] = stream.getVideoTracks();
         let imageCapture = typeof ImageCapture === 'function' && videoTrack
@@ -235,11 +261,7 @@ async function startRendererCameraFrameBridge({
         runCaptureFrame();
         return { started: true, mode };
     } catch (error) {
-        if (stream) {
-            for (const track of stream.getTracks()) {
-                track.stop();
-            }
-        }
+        stopRendererCameraStream(stream);
         video?.remove();
         rendererCameraBridge = null;
         return {

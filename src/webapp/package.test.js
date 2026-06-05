@@ -65,7 +65,9 @@ test('preload can prime renderer camera access for macOS permission prompts', ()
   assert.ok(preloadSource.includes("ipcRenderer.on('camera:prime-renderer-access'"));
   assert.ok(preloadSource.includes("navigator.mediaDevices.getUserMedia({ video: true, audio: false })"));
   assert.ok(preloadSource.includes("ipcRenderer.send('camera:renderer-access-result'"));
-  assert.ok(preloadSource.includes('track.stop()'));
+  assert.ok(preloadSource.includes('rendererCameraPrimeStream'));
+  assert.ok(preloadSource.includes('consumeRendererCameraPrimeStream'));
+  assert.ok(preloadSource.includes('stopRendererCameraStream'));
 });
 
 test('preload can bridge renderer camera frames to the main process', () => {
@@ -73,6 +75,7 @@ test('preload can bridge renderer camera frames to the main process', () => {
   assert.ok(preloadSource.includes("CAMERA_FRAME_CHANNEL = 'camera:renderer-frame'"));
   assert.ok(preloadSource.includes("CAMERA_FRAME_BRIDGE_ERROR_CHANNEL = 'camera:frame-bridge-error'"));
   assert.ok(preloadSource.includes("navigator.mediaDevices.getUserMedia({"));
+  assert.ok(preloadSource.includes('stream = consumeRendererCameraPrimeStream()'));
   assert.ok(preloadSource.includes('playVideoWithTimeout'));
   assert.ok(preloadSource.includes("renderer camera video play timed out"));
   assert.ok(preloadSource.includes('(document.body || document.documentElement)?.appendChild(video)'));

@@ -304,9 +304,7 @@ async function requestMacosCameraAccess({ timeoutMs = 5000 } = {}) {
     const timeout = new Promise((resolve) => {
         setTimeout(() => {
             log.warn('macOS camera permission request still pending; continuing backend startup');
-            if (rendererAccess !== true) {
-                openMacosCameraPrivacySettings('request pending');
-            }
+            openMacosCameraPrivacySettings('request pending');
             resolve(null);
         }, timeoutMs);
     });
