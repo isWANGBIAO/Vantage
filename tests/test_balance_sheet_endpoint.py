@@ -93,6 +93,20 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(payload["prompt_payload"]["sheets"][0]["rows"], [["2026-04-01", 100.0, 5000.0]])
         self.assertIn(list(fake_sheets["Summary"].columns)[1], payload["prompt_payload"]["sheets"][0]["non_null_counts"])
 
+    def test_balance_sheet_route_builds_payload_in_background_thread(self):
+        route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
+        calls = []
+
+        async def fake_to_thread(func, *args, **kwargs):
+            calls.append(func)
+            return {"status": "ready"}
+
+        with patch.object(server.asyncio, "to_thread", side_effect=fake_to_thread):
+            payload = asyncio.run(route.endpoint())
+
+        self.assertEqual(payload, {"status": "ready"})
+        self.assertEqual(calls, [server._build_balance_sheet_payload])
+
     def test_balance_sheet_route_returns_unavailable_payload_when_workbook_is_missing(self):
         route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
 

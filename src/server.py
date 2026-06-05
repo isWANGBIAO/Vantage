@@ -4636,8 +4636,7 @@ async def delete_dismissed_balance_sheet_purchase_recommendation(item_id: int):
         )
 
 
-@app.get("/api/balance_sheet")
-async def get_balance_sheet():
+def _build_balance_sheet_payload():
     path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
     try:
         sheets = DataLoader.load_excel_sheets(path)
@@ -4678,6 +4677,11 @@ async def get_balance_sheet():
         return _build_balance_sheet_unavailable_payload(path, exc)
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@app.get("/api/balance_sheet")
+async def get_balance_sheet():
+    return await asyncio.to_thread(_build_balance_sheet_payload)
 
 @app.post("/api/face/analyze")
 async def analyze_face_history(background_tasks: BackgroundTasks):
