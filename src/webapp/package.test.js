@@ -71,6 +71,7 @@ test('preload can prime renderer camera access for macOS permission prompts', ()
 test('preload can bridge renderer camera frames to the main process', () => {
   assert.ok(preloadSource.includes("CAMERA_FRAME_BRIDGE_START_CHANNEL = 'camera:start-frame-bridge'"));
   assert.ok(preloadSource.includes("CAMERA_FRAME_CHANNEL = 'camera:renderer-frame'"));
+  assert.ok(preloadSource.includes("CAMERA_FRAME_BRIDGE_ERROR_CHANNEL = 'camera:frame-bridge-error'"));
   assert.ok(preloadSource.includes("navigator.mediaDevices.getUserMedia({"));
   assert.ok(preloadSource.includes('playVideoWithTimeout'));
   assert.ok(preloadSource.includes("renderer camera video play timed out"));
@@ -78,6 +79,8 @@ test('preload can bridge renderer camera frames to the main process', () => {
   assert.ok(preloadSource.includes("typeof ImageCapture === 'function'"));
   assert.ok(preloadSource.includes('imageCapture.grabFrame()'));
   assert.ok(preloadSource.includes("renderer camera grabFrame timed out"));
+  assert.ok(preloadSource.includes('reportRendererCameraBridgeError'));
+  assert.ok(preloadSource.includes("return { started: true, mode };"));
   assert.ok(preloadSource.includes("canvas.toBlob(resolve, 'image/jpeg', quality)"));
   assert.ok(preloadSource.includes('Buffer.from(arrayBuffer)'));
   assert.ok(preloadSource.includes('ipcRenderer.send(CAMERA_FRAME_CHANNEL, buffer)'));

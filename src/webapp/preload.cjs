@@ -2,8 +2,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const CAMERA_FRAME_BRIDGE_START_CHANNEL = 'camera:start-frame-bridge';
 const CAMERA_FRAME_BRIDGE_RESULT_CHANNEL = 'camera:frame-bridge-result';
+const CAMERA_FRAME_BRIDGE_ERROR_CHANNEL = 'camera:frame-bridge-error';
 const CAMERA_FRAME_CHANNEL = 'camera:renderer-frame';
 let rendererCameraBridge = null;
+let rendererCameraBridgeLastErrorSentAt = 0;
 
 async function primeRendererCameraAccess() {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -42,6 +44,25 @@ function withTimeout(promise, timeoutMs, message) {
             setTimeout(() => reject(new Error(message)), timeoutMs);
         }),
     ]);
+}
+
+function describeRendererCameraError(error) {
+    if (error?.message) {
+        return error.message;
+    }
+    const text = String(error);
+    return text && text !== 'undefined' ? text : 'unknown renderer camera capture error';
+}
+
+function reportRendererCameraBridgeError(error) {
+    const now = Date.now();
+    if (now - rendererCameraBridgeLastErrorSentAt < 5000) {
+        return;
+    }
+    rendererCameraBridgeLastErrorSentAt = now;
+    ipcRenderer.send(CAMERA_FRAME_BRIDGE_ERROR_CHANNEL, {
+        error: describeRendererCameraError(error),
+    });
 }
 
 async function waitForVideoMetadata(video) {
@@ -129,6 +150,7 @@ async function startRendererCameraFrameBridge({
         if (!context) {
             throw new Error('renderer camera canvas context is unavailable');
         }
+        const mode = imageCapture ? 'imageCapture' : 'video';
 
         const captureFrame = async () => {
             if (!rendererCameraBridge?.started) {
@@ -176,12 +198,15 @@ async function startRendererCameraFrameBridge({
             started: true,
             stream,
             video,
-            timer: setInterval(() => {
-                void captureFrame().catch(() => {});
-            }, Math.max(250, intervalMs)),
+            mode,
+            timer: null,
         };
-        await captureFrame();
-        return { started: true };
+        const runCaptureFrame = () => {
+            void captureFrame().catch(reportRendererCameraBridgeError);
+        };
+        rendererCameraBridge.timer = setInterval(runCaptureFrame, Math.max(250, intervalMs));
+        runCaptureFrame();
+        return { started: true, mode };
     } catch (error) {
         if (stream) {
             for (const track of stream.getTracks()) {

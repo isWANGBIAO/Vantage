@@ -130,6 +130,7 @@ const CAMERA_PERMISSION_PRIME_CHANNEL = 'camera:prime-renderer-access';
 const CAMERA_PERMISSION_RESULT_CHANNEL = 'camera:renderer-access-result';
 const CAMERA_FRAME_BRIDGE_START_CHANNEL = 'camera:start-frame-bridge';
 const CAMERA_FRAME_BRIDGE_RESULT_CHANNEL = 'camera:frame-bridge-result';
+const CAMERA_FRAME_BRIDGE_ERROR_CHANNEL = 'camera:frame-bridge-error';
 const CAMERA_FRAME_CHANNEL = 'camera:renderer-frame';
 const RENDERER_CAMERA_FRAME_INTENT = 'renderer-camera-frame';
 const RENDERER_CAMERA_MAX_FRAME_BYTES = 8 * 1024 * 1024;
@@ -281,12 +282,13 @@ async function requestMacosCameraAccess({ timeoutMs = 5000 } = {}) {
     }
 
     const rendererAccess = await requestRendererCameraAccess({ timeoutMs });
-    if (rendererAccess === true) {
-        return true;
-    }
 
     if (typeof systemPreferences.askForMediaAccess !== 'function') {
         return rendererAccess;
+    }
+
+    if (rendererAccess === true) {
+        log.info('Renderer camera access granted; confirming macOS camera media access');
     }
 
     const accessRequest = systemPreferences.askForMediaAccess('camera')
@@ -302,12 +304,15 @@ async function requestMacosCameraAccess({ timeoutMs = 5000 } = {}) {
     const timeout = new Promise((resolve) => {
         setTimeout(() => {
             log.warn('macOS camera permission request still pending; continuing backend startup');
-            openMacosCameraPrivacySettings('request pending');
+            if (rendererAccess !== true) {
+                openMacosCameraPrivacySettings('request pending');
+            }
             resolve(null);
         }, timeoutMs);
     });
 
-    return Promise.race([accessRequest, timeout]);
+    const confirmedAccess = await Promise.race([accessRequest, timeout]);
+    return confirmedAccess === null ? rendererAccess : Boolean(confirmedAccess || rendererAccess === true);
 }
 
 function postRendererCameraFrame(frameBytes) {
@@ -501,11 +506,21 @@ ipcMain.on(CAMERA_FRAME_BRIDGE_RESULT_CHANNEL, (event, result = {}) => {
     }
 
     if (result.started) {
-        log.info(`Renderer camera frame bridge ${result.reused ? 'reused' : 'started'}`);
+        const mode = typeof result.mode === 'string' ? result.mode : 'unknown';
+        log.info(`Renderer camera frame bridge ${result.reused ? 'reused' : 'started'} (${mode})`);
     } else {
         const errorMessage = typeof result.error === 'string' ? result.error : 'unknown error';
         log.warn(`Renderer camera frame bridge failed: ${errorMessage}`);
     }
+});
+
+ipcMain.on(CAMERA_FRAME_BRIDGE_ERROR_CHANNEL, (event, result = {}) => {
+    if (event.sender !== mainWindow?.webContents) {
+        return;
+    }
+
+    const errorMessage = typeof result.error === 'string' ? result.error : 'unknown error';
+    log.warn(`Renderer camera frame capture failed: ${errorMessage}`);
 });
 
 ipcMain.handle('settings:save', async (event, payload) => {

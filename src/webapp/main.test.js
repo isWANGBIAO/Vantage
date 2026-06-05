@@ -37,8 +37,11 @@ test('Electron main process requests macOS camera access before bundled backend 
   assert.ok(mainSource.includes('continuing backend startup'));
   assert.ok(mainSource.includes("CAMERA_FRAME_BRIDGE_START_CHANNEL = 'camera:start-frame-bridge'"));
   assert.ok(mainSource.includes("CAMERA_FRAME_CHANNEL = 'camera:renderer-frame'"));
+  assert.ok(mainSource.includes("CAMERA_FRAME_BRIDGE_ERROR_CHANNEL = 'camera:frame-bridge-error'"));
   assert.ok(mainSource.includes("path: '/api/renderer_camera/frame'"));
   assert.ok(mainSource.includes("'x-vantage-intent': RENDERER_CAMERA_FRAME_INTENT"));
+  assert.ok(mainSource.includes('Renderer camera access granted; confirming macOS camera media access'));
+  assert.ok(mainSource.includes('Renderer camera frame capture failed'));
   assert.ok(mainSource.includes('startRendererCameraFrameBridge'));
   assert.ok(
     mainSource.indexOf('configureMediaPermissionHandler();')
