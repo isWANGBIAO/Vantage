@@ -557,6 +557,74 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(kwargs["start_date"], "2025-01-01")
         self.assertNotIn("days", kwargs)
 
+    def test_analysis_mode_uses_compact_prompt_for_sjtu_route(self):
+        fake_client = _FakeLLMClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history_dir = temp_path / "history"
+            history_dir.mkdir()
+            (temp_path / "Prompt_Action_Plan.md").write_text(
+                "Now {current_time}\nPast {past_7_days_rows}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
+                encoding="utf-8",
+            )
+            (temp_path / "Prompt_Personal_Info.md").write_text("personal info", encoding="utf-8")
+            (temp_path / "Time.xlsx").write_text("placeholder", encoding="utf-8")
+
+            def fake_resolve_data_path(filename):
+                return temp_path / filename
+
+            with patch.object(run_prompt.Config, "load_env"), patch.object(
+                run_prompt.Config,
+                "get_history_dir",
+                return_value=history_dir,
+            ), patch.object(
+                run_prompt,
+                "LLMClient",
+                return_value=fake_client,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "construct_prompt",
+                return_value="analysis prompt",
+            ) as mock_construct_prompt, patch.object(
+                run_prompt.DataLoader,
+                "get_system_prompt_content",
+                return_value="system prompt",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_past_seven_days_rows",
+                return_value="past seven rows",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_today_data_row",
+                return_value="today row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_yesterday_data_row",
+                return_value="yesterday row",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_future_planned_rows",
+                return_value="future rows",
+            ), patch.object(
+                sys,
+                "argv",
+                ["run_prompt.py", "--provider_route=SJTU"],
+            ):
+                run_prompt.main()
+
+        _, kwargs = mock_construct_prompt.call_args
+        self.assertEqual(kwargs["days"], run_prompt.ACTION_PLAN_SJTU_TIME_SERIES_DAYS)
+        self.assertIsNone(kwargs["start_date"])
+        self.assertEqual(
+            kwargs["balance_sheet_row_limit_per_sheet"],
+            run_prompt.ACTION_PLAN_SJTU_BALANCE_SHEET_ROW_LIMIT_PER_SHEET,
+        )
+
     def test_analysis_mode_persists_structured_json_history(self):
         fake_client = _FakeLLMClient()
 

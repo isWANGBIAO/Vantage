@@ -434,6 +434,75 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
             ],
         )
 
+    def test_construct_prompt_can_limit_balance_sheet_rows_per_sheet(self):
+        today = datetime.now().date()
+        time_df = pd.DataFrame(
+            [
+                {
+                    "\u65e5\u671f": pd.Timestamp(today),
+                    "metric": 1,
+                },
+            ]
+        )
+        balance_sheets = {
+            "Assets": pd.DataFrame(
+                [
+                    {"Account": "Cash", "Amount": 1000},
+                    {"Account": "Brokerage", "Amount": 2000},
+                    {"Account": "Savings", "Amount": 3000},
+                ]
+            ),
+            "Budget": pd.DataFrame(
+                [
+                    {"Category": "Food", "Monthly": 1500},
+                    {"Category": "Transport", "Monthly": 300},
+                ]
+            ),
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            prompt_path = temp_path / "Prompt_Personal_Info.md"
+            excel_path = temp_path / "Time.xlsx"
+            balance_path = temp_path / "Balance Sheet.xlsx"
+            prompt_path.write_text("editable personal prompt", encoding="utf-8")
+            excel_path.write_text("placeholder", encoding="utf-8")
+            balance_path.write_text("placeholder", encoding="utf-8")
+
+            def fake_resolve_data_path(filename, user_home=None, onedrive_env=None):
+                return temp_path / filename
+
+            with patch.object(DataLoader, "load_excel_data", return_value=time_df), patch.object(
+                DataLoader,
+                "load_excel_sheets",
+                return_value=balance_sheets,
+            ), patch.object(
+                DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                DataLoader,
+                "get_future_planned_rows",
+                return_value="## Future Planned Items\n\n- none\n",
+            ):
+                combined = DataLoader.construct_prompt(
+                    prompt_path,
+                    excel_path,
+                    days=90,
+                    balance_sheet_row_limit_per_sheet=1,
+                )
+
+        payload = extract_json_block(combined, "Balance Sheet Data (JSON)")
+
+        self.assertEqual(payload["total_rows"], 5)
+        self.assertEqual(payload["total_included_rows"], 2)
+        self.assertTrue(payload["truncated"])
+        self.assertEqual(payload["sheets"][0]["row_count"], 3)
+        self.assertEqual(payload["sheets"][0]["included_row_count"], 1)
+        self.assertEqual(payload["sheets"][0]["omitted_row_count"], 2)
+        self.assertEqual(payload["sheets"][0]["rows"], [["Savings", 3000]])
+        self.assertEqual(payload["sheets"][1]["rows"], [["Transport", 300]])
+
     def test_prompt_cache_metadata_ignores_editable_prompt_changes_for_time_rows(self):
         first_prompt = (
             "## Time Series Data (JSON)\n\n```json\n"

@@ -68,6 +68,14 @@ def _clean_existing_build(layout: dict[str, Path]):
         shutil.rmtree(build_root)
 
 
+def _prepare_build_directories(layout: dict[str, Path]):
+    layout["build_root"].mkdir(parents=True, exist_ok=True)
+    layout["dist_dir"].mkdir(parents=True, exist_ok=True)
+    layout["spec_dir"].mkdir(parents=True, exist_ok=True)
+    layout["work_dir"].mkdir(parents=True, exist_ok=True)
+    (layout["work_dir"] / "VantageBackend").mkdir(parents=True, exist_ok=True)
+
+
 def _run_pyinstaller(pyinstaller_args: list[str]):
     try:
         from PyInstaller.__main__ import run as run_pyinstaller
@@ -134,7 +142,7 @@ def main() -> int:
         _clean_existing_build(layout)
 
     removed_packaging_dlls = remove_conflicting_packaging_environment_libraries(PROJECT_ROOT)
-    layout["build_root"].mkdir(parents=True, exist_ok=True)
+    _prepare_build_directories(layout)
     project_activity_resource = write_project_activity_snapshot(
         PROJECT_ROOT,
         layout["build_root"] / PROJECT_ACTIVITY_SNAPSHOT_NAME,

@@ -30,6 +30,8 @@ ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT = 1
 RUN_PROMPT_ENTRYPOINT = "src/scripts/run_prompt.py"
 ACTION_PLAN_TIME_SERIES_START_DATE = "2025-01-01"
 ACTION_PLAN_PROXY_PROMPT_TOKEN_LIMIT = 250_000
+ACTION_PLAN_SJTU_TIME_SERIES_DAYS = 14
+ACTION_PLAN_SJTU_BALANCE_SHEET_ROW_LIMIT_PER_SHEET = 8
 
 
 def _load_session_usage_summary(history_dir, session_id):
@@ -282,6 +284,22 @@ def _first_non_null(*values):
         if normalized is not None:
             return normalized
     return None
+
+
+def _uses_sjtu_provider(provider_route):
+    return str(provider_route or "").strip().lower() == "sjtu"
+
+
+def _build_action_plan_prompt_kwargs(provider_route):
+    if _uses_sjtu_provider(provider_route):
+        return {
+            "days": ACTION_PLAN_SJTU_TIME_SERIES_DAYS,
+            "start_date": None,
+            "balance_sheet_row_limit_per_sheet": ACTION_PLAN_SJTU_BALANCE_SHEET_ROW_LIMIT_PER_SHEET,
+        }
+    return {
+        "start_date": ACTION_PLAN_TIME_SERIES_START_DATE,
+    }
 
 
 def run_action_plan_round(
@@ -646,7 +664,7 @@ def main():
                 prompt_text = DataLoader.construct_prompt(
                     DataLoader.resolve_data_path("Prompt_Personal_Info.md"),
                     DataLoader.resolve_data_path("Time.xlsx"),
-                    start_date=ACTION_PLAN_TIME_SERIES_START_DATE,
+                    **_build_action_plan_prompt_kwargs(provider_route),
                 )
             prompt_cache_metadata = DataLoader.build_prompt_cache_metadata(prompt_text)
             

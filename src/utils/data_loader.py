@@ -403,7 +403,11 @@ class DataLoader:
         )
 
     @staticmethod
-    def build_balance_sheet_prompt_payload_from_sheets(sheets, file_name="Balance Sheet.xlsx"):
+    def build_balance_sheet_prompt_payload_from_sheets(
+        sheets,
+        file_name="Balance Sheet.xlsx",
+        row_limit_per_sheet=None,
+    ):
         payload_sheets = []
 
         for sheet_name, df in sheets.items():
@@ -426,31 +430,62 @@ class DataLoader:
                 if has_value:
                     rows.append(current_row)
 
+            row_count = len(rows)
+            included_rows = rows
+            truncated = False
+            if row_limit_per_sheet is not None:
+                try:
+                    normalized_limit = int(row_limit_per_sheet)
+                except (TypeError, ValueError):
+                    normalized_limit = 0
+                if normalized_limit > 0 and len(rows) > normalized_limit:
+                    included_rows = rows[-normalized_limit:]
+                    truncated = True
+
             non_null_counts = {
                 DataLoader._clean_prompt_column_name(col): int(df[col].notna().sum())
                 for col in df.columns
             }
-            payload_sheets.append(
-                {
-                    "name": str(sheet_name),
-                    "columns": columns,
-                    "rows": rows,
-                    "row_count": len(rows),
-                    "non_null_counts": non_null_counts,
-                }
-            )
+            sheet_payload = {
+                "name": str(sheet_name),
+                "columns": columns,
+                "rows": included_rows,
+                "row_count": row_count,
+                "non_null_counts": non_null_counts,
+            }
+            if row_limit_per_sheet is not None:
+                sheet_payload["included_row_count"] = len(included_rows)
+                sheet_payload["truncated"] = truncated
+                sheet_payload["omitted_row_count"] = max(row_count - len(included_rows), 0)
+            payload_sheets.append(sheet_payload)
 
-        return {
+        payload = {
             "file_name": file_name,
             "sheet_count": len(payload_sheets),
             "total_rows": sum(sheet["row_count"] for sheet in payload_sheets),
             "sheets": payload_sheets,
         }
+        if row_limit_per_sheet is not None:
+            payload["row_limit_per_sheet"] = row_limit_per_sheet
+            payload["total_included_rows"] = sum(sheet["included_row_count"] for sheet in payload_sheets)
+            payload["truncated"] = any(sheet["truncated"] for sheet in payload_sheets)
+        return payload
 
     @staticmethod
-    def get_balance_sheet_data_summary(excel_file_path):
+    def get_balance_sheet_data_summary(excel_file_path, row_limit_per_sheet=None):
         try:
-            payload = DataLoader.build_balance_sheet_prompt_payload(excel_file_path)
+            excel_file_path = Path(excel_file_path)
+            if row_limit_per_sheet is None:
+                payload = DataLoader.build_balance_sheet_prompt_payload(excel_file_path)
+            elif excel_file_path.exists():
+                sheets = DataLoader.load_excel_sheets(excel_file_path)
+                payload = DataLoader.build_balance_sheet_prompt_payload_from_sheets(
+                    sheets,
+                    file_name=excel_file_path.name,
+                    row_limit_per_sheet=row_limit_per_sheet,
+                )
+            else:
+                payload = None
         except Exception as e:
             logging.error(f"Error getting balance sheet data: {e}")
             return ""
@@ -464,7 +499,13 @@ class DataLoader:
         return data_summary
 
     @staticmethod
-    def construct_prompt(prompt_file_path, excel_file_path, days=90, start_date=None):
+    def construct_prompt(
+        prompt_file_path,
+        excel_file_path,
+        days=90,
+        start_date=None,
+        balance_sheet_row_limit_per_sheet=None,
+    ):
         prompt_file_path = Path(prompt_file_path)
         excel_file_path = Path(excel_file_path)
         project_mgmt_path = DataLoader.resolve_data_path("Prompt_Project_Management.md")
@@ -620,7 +661,8 @@ class DataLoader:
         data_summary += "\n```"
 
         balance_sheet_summary = DataLoader.get_balance_sheet_data_summary(
-            DataLoader.resolve_data_path("Balance Sheet.xlsx")
+            DataLoader.resolve_data_path("Balance Sheet.xlsx"),
+            row_limit_per_sheet=balance_sheet_row_limit_per_sheet,
         )
         future_planned_rows = DataLoader.get_future_planned_rows(excel_file_path)
 
