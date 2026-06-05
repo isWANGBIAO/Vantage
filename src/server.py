@@ -85,6 +85,9 @@ from src.utils.data_loader import DataLoader
 
 _cv2_module = None
 _face_analysis_pipeline_module = None
+RENDERER_CAMERA_FRAME_TTL_SECONDS = 5.0
+RENDERER_CAMERA_MAX_FRAME_BYTES = 8 * 1024 * 1024
+RENDERER_CAMERA_FRAME_INTENT = "renderer-camera-frame"
 
 
 def get_cv2_module():
@@ -501,7 +504,7 @@ def _has_local_action_intent(headers, expected_intent):
 
 def _build_status_payload():
     return {
-        "camera_online": state.camera.isOpened() if state.camera else False,
+        "camera_online": _camera_online(),
         "show_person_box": state.show_person_box,
         "paths": {
             "photo": bool(state.paths.get("photo")),
@@ -552,6 +555,9 @@ async def enforce_loopback_backend_access(request: Request, call_next):
 class SystemState:
     def __init__(self):
         self.camera = None
+        self.renderer_camera = None
+        self.renderer_camera_frame = None
+        self.renderer_camera_last_seen_at = 0.0
         self.monitor = None
         self.latest_frame = None
         self.is_running = True
@@ -665,7 +671,35 @@ def prewarm_runtime_models():
 
 def _camera_online():
     camera = state.camera
-    return bool(camera and camera.isOpened())
+    if camera and camera.isOpened():
+        return True
+    return is_renderer_camera_active()
+
+
+def is_renderer_camera_active(now_ts=None):
+    now_ts = float(now_ts if now_ts is not None else time.time())
+    last_seen_at = float(getattr(state, "renderer_camera_last_seen_at", 0.0) or 0.0)
+    return (
+        getattr(state, "renderer_camera_frame", None) is not None
+        and now_ts - last_seen_at <= RENDERER_CAMERA_FRAME_TTL_SECONDS
+    )
+
+
+class RendererCameraCapture:
+    def isOpened(self):
+        return is_renderer_camera_active()
+
+    def read(self):
+        with state.lock:
+            if not is_renderer_camera_active():
+                return False, None
+            frame = state.renderer_camera_frame
+            if frame is None:
+                return False, None
+            return True, frame.copy()
+
+    def release(self):
+        return None
 
 
 def _ensure_live_face_points_deque():
@@ -2159,6 +2193,48 @@ async def video_feed():
 @app.get("/api/status")
 async def get_status():
     return _build_status_payload()
+
+@app.post("/api/renderer_camera/frame")
+async def receive_renderer_camera_frame(request: Request):
+    if not _has_local_action_intent(request.headers, RENDERER_CAMERA_FRAME_INTENT):
+        return JSONResponse(status_code=403, content={"error": "Missing local action intent"})
+
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type not in {"image/jpeg", "image/jpg"}:
+        return JSONResponse(status_code=415, content={"error": "Expected image/jpeg frame"})
+
+    frame_bytes = await request.body()
+    if not frame_bytes:
+        return JSONResponse(status_code=400, content={"error": "Frame body is empty"})
+    if len(frame_bytes) > RENDERER_CAMERA_MAX_FRAME_BYTES:
+        return JSONResponse(status_code=413, content={"error": "Frame body is too large"})
+
+    try:
+        import numpy as np
+
+        encoded = np.frombuffer(frame_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"error": f"Frame decode failed: {exc}"})
+
+    if frame is None:
+        return JSONResponse(status_code=400, content={"error": "Frame decode failed"})
+
+    with state.lock:
+        state.renderer_camera_frame = frame
+        state.renderer_camera_last_seen_at = time.time()
+        state.latest_frame = frame.copy()
+        if state.renderer_camera is None:
+            state.renderer_camera = RendererCameraCapture()
+        if state.camera is None or not state.camera.isOpened():
+            state.camera = state.renderer_camera
+
+    return {
+        "ok": True,
+        "camera_online": _camera_online(),
+        "width": int(frame.shape[1]),
+        "height": int(frame.shape[0]),
+    }
 
 @app.post("/api/toggle_detection")
 async def toggle_detection():

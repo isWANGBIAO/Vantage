@@ -13,6 +13,7 @@ const {
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimePaths.cjs');
 const { applyLaunchAtLoginSetting } = require('./src/utils/autoLaunch.cjs');
 const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
@@ -67,6 +68,8 @@ const MAIN_PROCESS_COPY = {
 let mainWindow = null;
 let tray = null;
 let bundledBackendProcess = null;
+let rendererCameraFramePostInFlight = false;
+let rendererCameraFramePostPending = null;
 
 function getTitleBarOverlayOptions(theme = 'dark') {
     const isLight = theme === 'light';
@@ -125,6 +128,11 @@ const log = {
 
 const CAMERA_PERMISSION_PRIME_CHANNEL = 'camera:prime-renderer-access';
 const CAMERA_PERMISSION_RESULT_CHANNEL = 'camera:renderer-access-result';
+const CAMERA_FRAME_BRIDGE_START_CHANNEL = 'camera:start-frame-bridge';
+const CAMERA_FRAME_BRIDGE_RESULT_CHANNEL = 'camera:frame-bridge-result';
+const CAMERA_FRAME_CHANNEL = 'camera:renderer-frame';
+const RENDERER_CAMERA_FRAME_INTENT = 'renderer-camera-frame';
+const RENDERER_CAMERA_MAX_FRAME_BYTES = 8 * 1024 * 1024;
 
 function mapLocaleToSupportedLanguage(locale) {
     return typeof locale === 'string' && locale.trim().toLowerCase().startsWith('zh')
@@ -302,6 +310,81 @@ async function requestMacosCameraAccess({ timeoutMs = 5000 } = {}) {
     return Promise.race([accessRequest, timeout]);
 }
 
+function postRendererCameraFrame(frameBytes) {
+    let frameBuffer = null;
+    try {
+        frameBuffer = Buffer.isBuffer(frameBytes) ? frameBytes : Buffer.from(frameBytes);
+    } catch {
+        return;
+    }
+
+    if (!frameBuffer.length || frameBuffer.length > RENDERER_CAMERA_MAX_FRAME_BYTES) {
+        return;
+    }
+
+    if (rendererCameraFramePostInFlight) {
+        rendererCameraFramePostPending = frameBuffer;
+        return;
+    }
+
+    rendererCameraFramePostInFlight = true;
+    let settled = false;
+
+    const finish = () => {
+        if (settled) {
+            return;
+        }
+        settled = true;
+        rendererCameraFramePostInFlight = false;
+        if (rendererCameraFramePostPending) {
+            const pendingFrame = rendererCameraFramePostPending;
+            rendererCameraFramePostPending = null;
+            setImmediate(() => postRendererCameraFrame(pendingFrame));
+        }
+    };
+
+    const request = http.request(
+        {
+            hostname: '127.0.0.1',
+            port: 8000,
+            path: '/api/renderer_camera/frame',
+            method: 'POST',
+            timeout: 3000,
+            headers: {
+                'content-type': 'image/jpeg',
+                'content-length': frameBuffer.length,
+                'x-vantage-intent': RENDERER_CAMERA_FRAME_INTENT,
+            },
+        },
+        (response) => {
+            response.resume();
+            response.on('end', finish);
+        },
+    );
+
+    request.on('timeout', () => {
+        request.destroy(new Error('Renderer camera frame post timed out'));
+    });
+    request.on('error', finish);
+    request.write(frameBuffer);
+    request.end();
+}
+
+async function startRendererCameraFrameBridge({ intervalMs = 500 } = {}) {
+    if (process.platform !== 'darwin' || !mainWindow || !mainWindow.webContents) {
+        return;
+    }
+
+    await waitForMainWindowLoad({ timeoutMs: 3000 });
+    log.info('Starting renderer camera frame bridge');
+    mainWindow.webContents.send(CAMERA_FRAME_BRIDGE_START_CHANNEL, {
+        intervalMs,
+        width: 1280,
+        height: 720,
+        quality: 0.82,
+    });
+}
+
 function persistSettings(nextSettings) {
     const settingsFile = path.join(runtimePaths.configDir, 'settings.json');
     fs.mkdirSync(runtimePaths.configDir, { recursive: true });
@@ -404,6 +487,26 @@ process.on('unhandledRejection', (reason, promise) => {
 ipcMain.handle('onboarding:get-state', async () => getOnboardingState({ runtimePaths, projectRoot }));
 
 ipcMain.handle('settings:get-state', async () => getSettingsStatePayload());
+
+ipcMain.on(CAMERA_FRAME_CHANNEL, (event, frameBytes) => {
+    if (event.sender !== mainWindow?.webContents) {
+        return;
+    }
+    postRendererCameraFrame(frameBytes);
+});
+
+ipcMain.on(CAMERA_FRAME_BRIDGE_RESULT_CHANNEL, (event, result = {}) => {
+    if (event.sender !== mainWindow?.webContents) {
+        return;
+    }
+
+    if (result.started) {
+        log.info(`Renderer camera frame bridge ${result.reused ? 'reused' : 'started'}`);
+    } else {
+        const errorMessage = typeof result.error === 'string' ? result.error : 'unknown error';
+        log.warn(`Renderer camera frame bridge failed: ${errorMessage}`);
+    }
+});
 
 ipcMain.handle('settings:save', async (event, payload) => {
     const state = saveSettingsPayload({
@@ -636,6 +739,7 @@ if (!gotTheLock) {
                         ? `Bundled backend started: ${backendBootstrap.executablePath}`
                         : `Bundled backend reused: ${backendBootstrap.reason}`,
                 );
+                await startRendererCameraFrameBridge();
             } catch (error) {
                 log.error('Bundled backend startup failed', error);
                 dialog.showErrorBox(

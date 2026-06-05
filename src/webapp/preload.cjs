@@ -1,5 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+const CAMERA_FRAME_BRIDGE_START_CHANNEL = 'camera:start-frame-bridge';
+const CAMERA_FRAME_BRIDGE_RESULT_CHANNEL = 'camera:frame-bridge-result';
+const CAMERA_FRAME_CHANNEL = 'camera:renderer-frame';
+let rendererCameraBridge = null;
+
 async function primeRendererCameraAccess() {
     if (!navigator.mediaDevices?.getUserMedia) {
         return {
@@ -26,9 +31,138 @@ async function primeRendererCameraAccess() {
     }
 }
 
+function blobToBuffer(blob) {
+    return blob.arrayBuffer().then((arrayBuffer) => Buffer.from(arrayBuffer));
+}
+
+async function waitForVideoMetadata(video) {
+    if (video.videoWidth && video.videoHeight) {
+        return;
+    }
+
+    await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error('renderer camera metadata timed out'));
+        }, 5000);
+        const cleanup = () => {
+            clearTimeout(timeout);
+            video.removeEventListener('loadedmetadata', onLoadedMetadata);
+            video.removeEventListener('error', onError);
+        };
+        const onLoadedMetadata = () => {
+            cleanup();
+            resolve();
+        };
+        const onError = () => {
+            cleanup();
+            reject(new Error('renderer camera video element failed'));
+        };
+
+        video.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
+        video.addEventListener('error', onError, { once: true });
+    });
+}
+
+async function startRendererCameraFrameBridge({
+    intervalMs = 500,
+    width = 1280,
+    height = 720,
+    quality = 0.82,
+} = {}) {
+    if (!navigator.mediaDevices?.getUserMedia) {
+        return {
+            started: false,
+            error: 'renderer mediaDevices.getUserMedia is unavailable',
+        };
+    }
+
+    if (rendererCameraBridge?.started) {
+        return { started: true, reused: true };
+    }
+
+    let stream = null;
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                width: { ideal: width },
+                height: { ideal: height },
+            },
+            audio: false,
+        });
+
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        video.srcObject = stream;
+        await video.play();
+        await waitForVideoMetadata(video);
+
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d', { alpha: false });
+        if (!context) {
+            throw new Error('renderer camera canvas context is unavailable');
+        }
+
+        const captureFrame = async () => {
+            if (!rendererCameraBridge?.started || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+                return;
+            }
+
+            const frameWidth = video.videoWidth || width;
+            const frameHeight = video.videoHeight || height;
+            if (!frameWidth || !frameHeight) {
+                return;
+            }
+
+            if (canvas.width !== frameWidth) {
+                canvas.width = frameWidth;
+            }
+            if (canvas.height !== frameHeight) {
+                canvas.height = frameHeight;
+            }
+
+            context.drawImage(video, 0, 0, frameWidth, frameHeight);
+            const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+            if (!blob) {
+                return;
+            }
+
+            const buffer = await blobToBuffer(blob);
+            ipcRenderer.send(CAMERA_FRAME_CHANNEL, buffer);
+        };
+
+        rendererCameraBridge = {
+            started: true,
+            stream,
+            timer: setInterval(() => {
+                void captureFrame();
+            }, Math.max(250, intervalMs)),
+        };
+        await captureFrame();
+        return { started: true };
+    } catch (error) {
+        if (stream) {
+            for (const track of stream.getTracks()) {
+                track.stop();
+            }
+        }
+        rendererCameraBridge = null;
+        return {
+            started: false,
+            error: error?.message || String(error),
+        };
+    }
+}
+
 ipcRenderer.on('camera:prime-renderer-access', async () => {
     const result = await primeRendererCameraAccess();
     ipcRenderer.send('camera:renderer-access-result', result);
+});
+
+ipcRenderer.on(CAMERA_FRAME_BRIDGE_START_CHANNEL, async (event, options = {}) => {
+    const result = await startRendererCameraFrameBridge(options);
+    ipcRenderer.send(CAMERA_FRAME_BRIDGE_RESULT_CHANNEL, result);
 });
 
 contextBridge.exposeInMainWorld('electronAPI', {

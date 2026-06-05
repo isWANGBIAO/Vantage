@@ -68,6 +68,16 @@ test('preload can prime renderer camera access for macOS permission prompts', ()
   assert.ok(preloadSource.includes('track.stop()'));
 });
 
+test('preload can bridge renderer camera frames to the main process', () => {
+  assert.ok(preloadSource.includes("CAMERA_FRAME_BRIDGE_START_CHANNEL = 'camera:start-frame-bridge'"));
+  assert.ok(preloadSource.includes("CAMERA_FRAME_CHANNEL = 'camera:renderer-frame'"));
+  assert.ok(preloadSource.includes("navigator.mediaDevices.getUserMedia({"));
+  assert.ok(preloadSource.includes("canvas.toBlob(resolve, 'image/jpeg', quality)"));
+  assert.ok(preloadSource.includes('Buffer.from(arrayBuffer)'));
+  assert.ok(preloadSource.includes('ipcRenderer.send(CAMERA_FRAME_CHANNEL, buffer)'));
+  assert.ok(preloadSource.includes('camera:frame-bridge-result'));
+});
+
 test('macOS packaging hook ad-hoc signs the finished app bundle from a temp copy', () => {
   assert.equal(packageJson.build.afterPack, './scripts/sign-mac-ad-hoc.cjs');
   assert.ok(signMacAdHocSource.includes("context?.electronPlatformName !== 'darwin'"));
