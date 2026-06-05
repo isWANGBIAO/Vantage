@@ -1140,6 +1140,32 @@ class ActionPlanEndpointTests(unittest.TestCase):
         combined = "".join(chunks)
         self.assertIn('"error": "fatal action plan error"', combined)
 
+    def test_generate_action_plan_redacts_api_key_from_stderr_logs_and_error(self):
+        secret = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        fake_process = _FakeProcess(
+            lines=[],
+            returncode=1,
+            stderr_data=(
+                f"2026-06-05 17:05:54 - ERROR - provider failed: api_key: {secret}\n"
+                f'body={{"error":{{"message":"Rate limit exceeded for api_key: {secret}"}}}}\n'
+            ).encode("utf-8"),
+        )
+
+        with patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(return_value=fake_process),
+        ), patch.object(server.logging, "error") as mock_error:
+            response = asyncio.run(server.generate_action_plan())
+            chunks = asyncio.run(_read_all_stream_chunks(response))
+
+        combined = "".join(chunks)
+        self.assertNotIn(secret, combined)
+        self.assertIn("[REDACTED_API_KEY]", combined)
+        logged = "\n".join(str(call) for call in mock_error.call_args_list)
+        self.assertNotIn(secret, logged)
+        self.assertIn("[REDACTED_API_KEY]", logged)
+
     def test_generate_action_plan_uses_packaged_run_prompt_bridge_when_frozen(self):
         fake_process = _FakeProcess(lines=[b'STREAM_ANALYSIS_CONTENT:"ok"\n'])
         executable_path = r"C:\Program Files\Vantage\VantageBackend.exe"

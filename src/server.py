@@ -527,11 +527,12 @@ async def _drain_subprocess_stderr(stderr, channel, collected_lines):
             break
 
         decoded = _decode_subprocess_chunk(line)
-        if not decoded:
+        redacted = _redact_api_key_from_message(decoded)
+        if not redacted:
             continue
 
-        collected_lines.append(decoded)
-        _log_subprocess_stderr_line(channel, decoded)
+        collected_lines.append(redacted)
+        _log_subprocess_stderr_line(channel, redacted)
 
 # Allow CORS for development
 app.add_middleware(
@@ -3007,7 +3008,17 @@ def _redact_api_key_from_message(message: str, api_key: str | None = None) -> st
     redacted = str(message or "")
     if api_key:
         redacted = redacted.replace(api_key, "[REDACTED_API_KEY]")
-    return re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-[REDACTED]", redacted)
+    redacted = re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-[REDACTED]", redacted)
+    redacted = re.sub(
+        r'(?i)("api[_-]?key"\s*:\s*")[^"]{8,}(")',
+        r"\1[REDACTED_API_KEY]\2",
+        redacted,
+    )
+    return re.sub(
+        r"(?i)(api[_-]?key\s*[:=]\s*)[A-Za-z0-9_\-]{16,}",
+        r"\1[REDACTED_API_KEY]",
+        redacted,
+    )
 
 
 def _normalize_special_provider_kind(kind: str | None) -> str:
