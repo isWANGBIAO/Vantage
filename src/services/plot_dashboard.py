@@ -24,6 +24,16 @@ TIME_WARNING_CHART_IDS = [
     'time-delta',
     'radar-goal',
 ]
+TIME_SOURCE_CHART_IDS = [
+    'sleep-schedule',
+    'weight-bodyfat',
+    *TIME_WARNING_CHART_IDS,
+    'hhh-frequency',
+    'hhh-interval',
+    'running',
+    'running-form',
+    'running-hrc',
+]
 RUNNING_WARNING_CONFIG = {
     'running': {
         'id': 'running-missing-main',
@@ -272,6 +282,16 @@ def _build_time_data_warning(skipped_rows):
         'message': '这些记录未参与时间类图表计算。请修改 Excel 源数据后刷新 Plots 页面。',
         'details': details,
         'affected_chart_ids': TIME_WARNING_CHART_IDS,
+    }
+
+
+def _build_source_unavailable_warning(source_name, error, affected_chart_ids):
+    return {
+        'id': f'{source_name.lower().replace(" ", "-").replace(".", "-")}-unavailable',
+        'title': f'{source_name} 不可用',
+        'message': '当前 mac 数据目录中没有找到这个源文件，相关图表会显示为空态。',
+        'details': [str(error)],
+        'affected_chart_ids': affected_chart_ids,
     }
 
 
@@ -1483,7 +1503,8 @@ def _build_running_hrc_dashboard_chart(running_df):
 
 
 def build_plot_dashboard_data():
-    data_frame = plot_module.load_time_data()
+    data_frame = None
+    data_frame_error = None
     time_trend_payload = None
     time_trend_error = None
     running_metrics = None
@@ -1491,20 +1512,34 @@ def build_plot_dashboard_data():
     warnings = []
 
     try:
-        time_trend_payload = _compute_time_trend_payload(data_frame)
-        time_warning = _build_time_data_warning(time_trend_payload.get('warnings'))
-        if time_warning is not None:
-            warnings.append(time_warning)
+        data_frame = plot_module.load_time_data()
     except Exception as exc:
+        data_frame_error = exc
         time_trend_error = exc
-
-    try:
-        running_metrics = plot_module.compute_preferred_running_metrics(data_frame)
-        running_warning_rows = list(running_metrics.attrs.get('invalid_rows') or [])
-        running_warning_rows.extend(running_metrics.attrs.get('excluded_rows') or [])
-        warnings.extend(_build_running_data_warnings(running_warning_rows))
-    except Exception as exc:
         running_metrics_error = exc
+        warnings.append(_build_source_unavailable_warning('Time.xlsx', exc, TIME_SOURCE_CHART_IDS))
+
+    if data_frame_error is None:
+        try:
+            time_trend_payload = _compute_time_trend_payload(data_frame)
+            time_warning = _build_time_data_warning(time_trend_payload.get('warnings'))
+            if time_warning is not None:
+                warnings.append(time_warning)
+        except Exception as exc:
+            time_trend_error = exc
+
+        try:
+            running_metrics = plot_module.compute_preferred_running_metrics(data_frame)
+            running_warning_rows = list(running_metrics.attrs.get('invalid_rows') or [])
+            running_warning_rows.extend(running_metrics.attrs.get('excluded_rows') or [])
+            warnings.extend(_build_running_data_warnings(running_warning_rows))
+        except Exception as exc:
+            running_metrics_error = exc
+
+    def get_time_data():
+        if data_frame_error is not None:
+            raise data_frame_error
+        return data_frame
 
     def get_time_trend_payload():
         if time_trend_error is not None:
@@ -1521,7 +1556,7 @@ def build_plot_dashboard_data():
             'sleep-schedule',
             '作息趋势',
             '把主睡眠的入睡时间和起床时间放到同一条时间轴上，并按起床当天归属，直接看作息是提前还是后移。',
-            lambda: _build_sleep_schedule_dashboard_chart(data_frame),
+            lambda: _build_sleep_schedule_dashboard_chart(get_time_data()),
             formatter='sleep-schedule',
             height=500,
         ),
@@ -1529,7 +1564,7 @@ def build_plot_dashboard_data():
             'weight-bodyfat',
             '体重 / 体脂率 / 脂肪质量趋势',
             '保留现有计算口径，用交互式多轴折线替代多张静态体重图。',
-            lambda: _build_weight_bodyfat_dashboard_chart(data_frame),
+            lambda: _build_weight_bodyfat_dashboard_chart(get_time_data()),
             formatter='weight-bodyfat',
             height=430,
         ),
@@ -1569,7 +1604,7 @@ def build_plot_dashboard_data():
             'radar-goal',
             '目标达成率雷达图',
             '保留原来的达成率口径，但把它做成交互式雷达图，便于一眼看结构性短板。',
-            lambda: _build_radar_goal_dashboard_chart(data_frame, get_time_trend_payload()),
+            lambda: _build_radar_goal_dashboard_chart(get_time_data(), get_time_trend_payload()),
             formatter='percent',
             height=400,
         ),
@@ -1577,7 +1612,7 @@ def build_plot_dashboard_data():
             'hhh-frequency',
             'HHH 频率分布',
             '把历史散点直接做成交互式频率图，悬浮即可看具体时间点和强度。',
-            lambda: _build_hhh_frequency_dashboard_chart(data_frame),
+            lambda: _build_hhh_frequency_dashboard_chart(get_time_data()),
             formatter='count',
             height=400,
         ),
@@ -1585,7 +1620,7 @@ def build_plot_dashboard_data():
             'hhh-interval',
             'HHH 间隔趋势',
             '按真实日期展示每次间隔，左右轴分别承载两类节奏，避免小间隔被长间隔压扁。',
-            lambda: _build_hhh_interval_dashboard_chart(data_frame),
+            lambda: _build_hhh_interval_dashboard_chart(get_time_data()),
             formatter='days',
             height=400,
         ),

@@ -2857,6 +2857,31 @@ class ActionPlanRequest(BaseModel):
     wait_for_provider_ready: bool = False
 
 
+ACTION_PLAN_REQUIRED_DATA_FILES = ("Time.xlsx",)
+
+
+def _get_missing_action_plan_data_sources():
+    missing_sources = []
+    for filename in ACTION_PLAN_REQUIRED_DATA_FILES:
+        path = DataLoader.resolve_data_path(filename)
+        if Path(path).exists():
+            continue
+        missing_sources.append({"name": filename, "path": str(path)})
+    return missing_sources
+
+
+def _build_action_plan_data_unavailable_message(missing_sources):
+    details = "；".join(
+        f"{source.get('name')}: {source.get('path')}"
+        for source in missing_sources
+    )
+    return (
+        "行动计划数据源不可用，已跳过本次自动生成。"
+        f"缺少文件：{details}。"
+        "请恢复数据文件后再重新生成行动计划。"
+    )
+
+
 class LLMModelDiscoverRequest(BaseModel):
     route: Optional[str] = None
     base_url: Optional[str] = None
@@ -3311,6 +3336,16 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
     async def process_stream():
         stderr_task = None
         stderr_lines = []
+        missing_sources = _get_missing_action_plan_data_sources()
+        if missing_sources:
+            error_message = _build_action_plan_data_unavailable_message(missing_sources)
+            logging.warning("Action plan skipped because required data sources are missing: %s", error_message)
+            yield json.dumps(
+                {"log": f"STREAM_ANALYSIS_ERROR:{json.dumps(error_message, ensure_ascii=False)}"},
+                ensure_ascii=False,
+            ) + "\n"
+            return
+
         if wait_for_provider_ready:
             waiting_message = "等待本地反代启动，准备好后会自动开始生成行动计划。"
             yield json.dumps(
@@ -3700,6 +3735,79 @@ def _normalize_purchase_request_config(config=None):
         "provider_route": provider_route,
         "reasoning_effort": reasoning_effort,
         "service_tier": service_tier,
+    }
+
+
+def _build_balance_sheet_unavailable_payload(path, error):
+    error_text = str(error)
+    path_text = str(path or "Balance Sheet.xlsx")
+    return {
+        "status": "unavailable",
+        "source": {
+            "path": path_text,
+            "sheet_count": 0,
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "available": False,
+            "error": error_text,
+        },
+        "summary": {},
+        "suggestions": [],
+        "trend_points": [],
+        "forecast_points": [],
+        "sheets": [],
+        "prompt_payload": {
+            "status": "unavailable",
+            "file_name": Path(path_text).name or "Balance Sheet.xlsx",
+            "sheet_count": 0,
+            "total_rows": 0,
+            "sheets": [],
+            "error": error_text,
+        },
+        "error": error_text,
+    }
+
+
+def _build_purchase_recommendations_unavailable_payload(path, error, request_config=None):
+    request_config = _normalize_purchase_request_config(request_config)
+    error_text = str(error)
+    return {
+        "status": "unavailable",
+        "from_cache": False,
+        "cache_key": "",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "text_model": None,
+        "request_config": request_config,
+        "source": {
+            "path": str(path or "Balance Sheet.xlsx"),
+            "available": False,
+            "error": error_text,
+        },
+        "context": {
+            "time_xlsx_included": False,
+            "balance_sheet_included": False,
+            "prompt_hash": "",
+        },
+        "recommendation_mix_requested": _purchase_recommendation_mode_counts(
+            request_config["recommendation_count"],
+        ),
+        "recommendation_mix": {
+            PURCHASE_RECOMMENDATION_MODE_RANDOM: {"requested": 0, "actual": 0},
+            PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL: {"requested": 0, "actual": 0},
+        },
+        "recommendation_groups": [
+            {"key": key, "title": title, "items": []}
+            for key, title in PURCHASE_RECOMMENDATION_GROUPS
+        ],
+        "recommendation_count_requested": request_config["recommendation_count"],
+        "recommendation_count_actual": 0,
+        "recommendation_count_underfilled": False,
+        "dismissed_count": 0,
+        "usage": {
+            PURCHASE_RECOMMENDATION_MODE_CONTEXTUAL: None,
+            PURCHASE_RECOMMENDATION_MODE_RANDOM: None,
+        },
+        "response_raw": {},
+        "error": error_text,
     }
 
 
@@ -4308,9 +4416,16 @@ def _generate_purchase_recommendation_groups(
 def _build_purchase_recommendations_payload(force_regenerate=False, request_config=None):
     request_config = _normalize_purchase_request_config(request_config)
     path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
-    sheets = DataLoader.load_excel_sheets(path)
+    try:
+        sheets = DataLoader.load_excel_sheets(path)
+    except FileNotFoundError as exc:
+        return _build_purchase_recommendations_unavailable_payload(path, exc, request_config)
     if not sheets:
-        return JSONResponse(status_code=404, content={"error": "No sheets found in Balance Sheet.xlsx"})
+        return _build_purchase_recommendations_unavailable_payload(
+            path,
+            "No sheets found in Balance Sheet.xlsx",
+            request_config,
+        )
 
     prompt_payload = DataLoader.build_balance_sheet_prompt_payload_from_sheets(sheets, file_name=path.name)
     dismissed_items = _list_dismissed_purchase_items()
@@ -4430,7 +4545,8 @@ async def get_balance_sheet_purchase_recommendations(
             request_config=request_config,
         )
     except FileNotFoundError as exc:
-        return JSONResponse(status_code=404, content={"error": str(exc)})
+        path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
+        return _build_purchase_recommendations_unavailable_payload(path, exc, request_config)
     except Exception as exc:
         return JSONResponse(
             status_code=502,
@@ -4455,7 +4571,8 @@ async def regenerate_balance_sheet_purchase_recommendations(request: Optional[Pu
             request_config=request_config,
         )
     except FileNotFoundError as exc:
-        return JSONResponse(status_code=404, content={"error": str(exc)})
+        path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
+        return _build_purchase_recommendations_unavailable_payload(path, exc, request_config)
     except Exception as exc:
         return JSONResponse(
             status_code=502,
@@ -4521,12 +4638,12 @@ async def delete_dismissed_balance_sheet_purchase_recommendation(item_id: int):
 
 @app.get("/api/balance_sheet")
 async def get_balance_sheet():
+    path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
     try:
-        path = DataLoader.resolve_data_path("Balance Sheet.xlsx")
         sheets = DataLoader.load_excel_sheets(path)
 
         if not sheets:
-            return JSONResponse(status_code=404, content={"error": "No sheets found in Balance Sheet.xlsx"})
+            return _build_balance_sheet_unavailable_payload(path, "No sheets found in Balance Sheet.xlsx")
 
         summary = _build_balance_summary(sheets)
         suggestions = _build_balance_suggestions(summary)
@@ -4558,7 +4675,7 @@ async def get_balance_sheet():
             "prompt_payload": prompt_payload,
         }
     except FileNotFoundError as exc:
-        return JSONResponse(status_code=404, content={"error": str(exc)})
+        return _build_balance_sheet_unavailable_payload(path, exc)
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})
 

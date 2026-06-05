@@ -108,6 +108,17 @@ async def _consume_response_body(response):
 
 
 class ActionPlanEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self._missing_action_plan_sources_patcher = patch.object(
+            server,
+            "_get_missing_action_plan_data_sources",
+            return_value=[],
+        )
+        self._missing_action_plan_sources_patcher.start()
+
+    def tearDown(self):
+        self._missing_action_plan_sources_patcher.stop()
+
     def _complete_voice_settings(self):
         return {
             "voice_base_url": "https://voice.example.invalid/v1",
@@ -887,6 +898,28 @@ class ActionPlanEndpointTests(unittest.TestCase):
         combined = "".join(chunks)
         self.assertIn("本地反代还没准备好", combined)
         mock_create.assert_not_called()
+
+    def test_generate_action_plan_skips_subprocess_when_required_data_is_missing(self):
+        missing_sources = [{"name": "Time.xlsx", "path": "/Users/example/OneDrive/Time.xlsx"}]
+
+        with patch.object(
+            server,
+            "_get_missing_action_plan_data_sources",
+            return_value=missing_sources,
+        ), patch.object(
+            server.asyncio,
+            "create_subprocess_exec",
+            AsyncMock(),
+        ) as mock_create, patch.object(server.logging, "warning") as mock_warning:
+            response = asyncio.run(server.generate_action_plan())
+            chunks = asyncio.run(_read_all_stream_chunks(response))
+
+        combined = "".join(chunks)
+        self.assertIn("STREAM_ANALYSIS_ERROR", combined)
+        self.assertIn("Time.xlsx", combined)
+        self.assertIn("行动计划数据源不可用", combined)
+        mock_create.assert_not_called()
+        self.assertTrue(any("required data sources are missing" in call.args[0] for call in mock_warning.call_args_list))
 
     def test_list_llm_models_includes_provider_aware_options(self):
         fake_client = unittest.mock.Mock()

@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from src import server
+from src.services import plot_dashboard
 
 
 class PlotRefreshEndpointTests(unittest.TestCase):
@@ -80,6 +81,26 @@ class PlotRefreshEndpointTests(unittest.TestCase):
         self.assertEqual(first["count"], 1)
         self.assertEqual(second["count"], 2)
         self.assertEqual(len(calls), 2)
+
+    def test_plot_dashboard_data_returns_empty_payload_when_time_workbook_is_missing(self):
+        async def fake_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch.object(
+            plot_dashboard.plot_module,
+            "load_time_data",
+            side_effect=FileNotFoundError("Excel file not found: /Users/example/OneDrive/Time.xlsx"),
+        ), patch.object(
+            plot_dashboard.plot_module,
+            "load_balance_sheet",
+            side_effect=FileNotFoundError("Excel file not found: /Users/example/OneDrive/Balance Sheet.xlsx"),
+        ), patch.object(server.asyncio, "to_thread", side_effect=fake_to_thread):
+            response = asyncio.run(server.get_plot_dashboard_data())
+
+        self.assertIsInstance(response, dict)
+        self.assertGreater(response["count"], 0)
+        self.assertTrue(all(chart["empty"] for chart in response["charts"]))
+        self.assertEqual(response["warnings"][0]["id"], "time-xlsx-unavailable")
 
 
 if __name__ == "__main__":

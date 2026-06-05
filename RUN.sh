@@ -162,6 +162,22 @@ prepare_macos_app_bundle() {
     xattr -cr "$app_bundle" >/dev/null 2>&1 || true
 }
 
+clean_macos_package_outputs() {
+    local dist_dir="${FRONTEND_ROOT}/electron-dist"
+    if [[ ! -d "$dist_dir" ]]; then
+        return 0
+    fi
+
+    echo "      Removing stale macOS package outputs..."
+    rm -rf \
+        "${dist_dir}/mac" \
+        "${dist_dir}/mac-arm64" \
+        "${dist_dir}/Vantage-"*.dmg \
+        "${dist_dir}/Vantage-"*.zip \
+        "${dist_dir}/Vantage-"*.blockmap \
+        "${dist_dir}/builder-debug.yml"
+}
+
 RUN_START_SECONDS="$(date +%s)"
 
 step_start "[0/8] Cleaning residual source processes..."
@@ -219,6 +235,7 @@ step_start "[5/8] Verifying backend runtime..."
 step_done "Backend runtime verification complete"
 
 step_start "[6/8] Building macOS app package..."
+clean_macos_package_outputs
 npm --prefix "${FRONTEND_ROOT}" run electron:package -- --mac
 step_done "macOS app package build complete"
 

@@ -93,6 +93,41 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(payload["prompt_payload"]["sheets"][0]["rows"], [["2026-04-01", 100.0, 5000.0]])
         self.assertIn(list(fake_sheets["Summary"].columns)[1], payload["prompt_payload"]["sheets"][0]["non_null_counts"])
 
+    def test_balance_sheet_route_returns_unavailable_payload_when_workbook_is_missing(self):
+        route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
+
+        with patch.object(server.DataLoader, "resolve_data_path", return_value=Path("/Users/example/OneDrive/Balance Sheet.xlsx")), patch.object(
+            server.DataLoader,
+            "load_excel_sheets",
+            side_effect=FileNotFoundError("Excel file not found: /Users/example/OneDrive/Balance Sheet.xlsx"),
+        ):
+            payload = asyncio.run(route.endpoint())
+
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertFalse(payload["source"]["available"])
+        self.assertEqual(payload["sheets"], [])
+        self.assertEqual(payload["trend_points"], [])
+        self.assertEqual(payload["prompt_payload"]["sheet_count"], 0)
+
+    def test_purchase_recommendations_return_unavailable_payload_when_workbook_is_missing(self):
+        route = next(
+            (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
+            None,
+        )
+
+        with patch.object(server.DataLoader, "resolve_data_path", return_value=Path("/Users/example/OneDrive/Balance Sheet.xlsx")), patch.object(
+            server.DataLoader,
+            "load_excel_sheets",
+            side_effect=FileNotFoundError("Excel file not found: /Users/example/OneDrive/Balance Sheet.xlsx"),
+        ):
+            payload = asyncio.run(route.endpoint())
+
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertFalse(payload["source"]["available"])
+        self.assertEqual(payload["recommendation_count_actual"], 0)
+        self.assertEqual(len(payload["recommendation_groups"]), 3)
+        self.assertTrue(all(group["items"] == [] for group in payload["recommendation_groups"]))
+
     def test_purchase_recommendations_uses_cache_for_same_balance_sheet_hash(self):
         route = next(
             (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
