@@ -47,6 +47,7 @@ import {
   createStreamRenderScheduler,
   parseActionPlanStreamLog,
 } from '../utils/actionPlanStream';
+import { redactSensitiveText } from '../utils/sensitiveText';
 import { CHAT_CONTEXT_BASE_UPDATED_EVENT } from '../utils/chatContextState';
 import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import { loadSettingsState } from '../utils/settingsState';
@@ -194,29 +195,31 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const setAnalysisContentWithRef = useCallback((value) => {
     if (typeof value === 'function') {
       setAnalysisContent((prev) => {
-        const nextContent = value(prev);
+        const nextContent = redactSensitiveText(value(prev));
         analysisContentRef.current = nextContent;
         return nextContent;
       });
       return;
     }
 
-    analysisContentRef.current = value;
-    setAnalysisContent(value);
+    const redactedValue = redactSensitiveText(value);
+    analysisContentRef.current = redactedValue;
+    setAnalysisContent(redactedValue);
   }, []);
 
   const setPlanContentWithRef = useCallback((value) => {
     if (typeof value === 'function') {
       setPlanContent((prev) => {
-        const nextContent = value(prev);
+        const nextContent = redactSensitiveText(value(prev));
         planContentRef.current = nextContent;
         return nextContent;
       });
       return;
     }
 
-    planContentRef.current = value;
-    setPlanContent(value);
+    const redactedValue = redactSensitiveText(value);
+    planContentRef.current = redactedValue;
+    setPlanContent(redactedValue);
   }, []);
 
   useEffect(() => () => {
@@ -529,9 +532,22 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
           const data = JSON.parse(line);
           let { log } = data;
 
+          if (!log && data.error) {
+            const errorText = redactSensitiveText(String(data.error));
+            if (currentSection === 'analysis') {
+              setAnalysisContentWithRef((prev) => `${prev}\n\n${t('common.error_prefix', { error: errorText })}`);
+            } else {
+              setPlanContentWithRef((prev) => `${prev}\n\n${t('common.error_prefix', { error: errorText })}`);
+            }
+            await waitForRender();
+            return;
+          }
+
           if (!log) {
             return;
           }
+
+          log = redactSensitiveText(log);
 
           if (log.startsWith('STATS_JSON:')) {
             try {

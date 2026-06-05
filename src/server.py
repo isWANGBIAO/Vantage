@@ -81,6 +81,7 @@ from src.services.person_detection import (
     get_yolo_model,
 )
 from src.utils.data_loader import DataLoader
+from src.utils.sensitive_data import redact_sensitive_text
 
 
 _cv2_module = None
@@ -3008,17 +3009,7 @@ def _redact_api_key_from_message(message: str, api_key: str | None = None) -> st
     redacted = str(message or "")
     if api_key:
         redacted = redacted.replace(api_key, "[REDACTED_API_KEY]")
-    redacted = re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-[REDACTED]", redacted)
-    redacted = re.sub(
-        r'(?i)("api[_-]?key"\s*:\s*")[^"]{8,}(")',
-        r"\1[REDACTED_API_KEY]\2",
-        redacted,
-    )
-    return re.sub(
-        r"(?i)(api[_-]?key\s*[:=]\s*)[A-Za-z0-9_\-]{16,}",
-        r"\1[REDACTED_API_KEY]",
-        redacted,
-    )
+    return redact_sensitive_text(redacted)
 
 
 def _normalize_special_provider_kind(kind: str | None) -> str:

@@ -308,10 +308,55 @@ class SessionRecorderTests(unittest.TestCase):
             finally:
                 conn.close()
 
-        self.assertEqual(row[0], "failed")
-        self.assertEqual(row[1], "TimeoutError")
-        self.assertIn("timed out", row[2])
-        self.assertEqual(row[3], 3.0)
+            self.assertEqual(row[0], "failed")
+            self.assertEqual(row[1], "TimeoutError")
+            self.assertIn("timed out", row[2])
+            self.assertEqual(row[3], 3.0)
+
+    def test_failed_call_redacts_provider_api_key_from_history(self):
+        secret = "2615cad9be45f50badccd2fa5ffc2bd4596c01eb937c5204388a9c59dfc77b19"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            history_dir = Path(tmpdir) / "history"
+            recorder = SessionRecorder(
+                session_id="session-chat-redact",
+                source="chat",
+                entrypoint="src/scripts/run_prompt.py",
+                history_dir=history_dir,
+            )
+
+            recorder.record_request_started(
+                call_id="call-redact",
+                model="deepseek-chat",
+                provider_route="SJTU",
+                stream=True,
+                reasoning_effort="medium",
+                messages=[{"role": "user", "content": "boom"}],
+            )
+            recorder.record_request_failed(
+                call_id="call-redact",
+                error=RuntimeError(f"Rate limit exceeded for api_key: {secret}"),
+                model="deepseek-chat",
+                provider_route="SJTU",
+                stream=True,
+                reasoning_effort="medium",
+                duration=1.0,
+            )
+
+            lines = self._read_jsonl(recorder.rollout_path)
+            self.assertNotIn(secret, lines[-1]["payload"]["error_message"])
+            self.assertIn("[REDACTED_API_KEY]", lines[-1]["payload"]["error_message"])
+
+            conn = sqlite3.connect(history_dir / "state.db")
+            try:
+                row = conn.execute(
+                    "SELECT error_message FROM model_calls WHERE call_id = ?",
+                    ("call-redact",),
+                ).fetchone()
+            finally:
+                conn.close()
+
+            self.assertNotIn(secret, row[0])
+            self.assertIn("[REDACTED_API_KEY]", row[0])
 
 
 if __name__ == "__main__":

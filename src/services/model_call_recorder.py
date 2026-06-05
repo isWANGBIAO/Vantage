@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.core.config import Config
+from src.utils.sensitive_data import redact_sensitive_text
 
 
 def _now():
@@ -985,7 +986,7 @@ class SessionRecorder:
     ):
         completed_at = _isoformat()
         error_type = type(error).__name__
-        error_message = str(error)
+        error_message = redact_sensitive_text(str(error))
         self._append_event(
             "request_failed",
             {

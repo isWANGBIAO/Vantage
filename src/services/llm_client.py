@@ -12,6 +12,7 @@ import requests
 from src.core.config import Config
 from src.core import user_config
 from src.services.model_call_recorder import SessionRecorder
+from src.utils.sensitive_data import redact_sensitive_text
 
 SYNC_REQUEST_TIMEOUT_SECONDS = 1200
 STREAM_REQUEST_TIMEOUT_SECONDS = 600
@@ -587,8 +588,7 @@ class LLMClient:
         redacted = text
         for secret in self._known_secret_values():
             redacted = redacted.replace(secret, "[REDACTED_API_KEY]")
-        redacted = re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-[REDACTED]", redacted)
-        return redacted
+        return redact_sensitive_text(redacted)
 
     def _describe_request_error(self, error):
         response = getattr(error, "response", None)
@@ -1285,7 +1285,7 @@ class LLMClient:
                 service_tier=self._effective_service_tier_for_result(used_route, used_model, service_tier),
                 duration=time.time() - start_time,
             )
-            output("error", str(error))
+            output("error", self._redact_secrets(str(error)))
             raise
 
         duration = time.time() - start_time

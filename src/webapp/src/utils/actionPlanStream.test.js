@@ -80,6 +80,19 @@ test('parseActionPlanStreamLog ignores unrelated logs', () => {
   assert.equal(parseActionPlanStreamLog('STATS_JSON:{}'), null);
 });
 
+test('parseActionPlanStreamLog redacts api keys from streamed errors', () => {
+  const secret = '2615cad9be45f50badccd2fa5ffc2bd4596c01eb937c5204388a9c59dfc77b19';
+
+  assert.deepEqual(
+    parseActionPlanStreamLog(`STREAM_ANALYSIS_ERROR:"Rate limit exceeded for api_key: ${secret}"`),
+    {
+      section: 'analysis',
+      kind: 'error',
+      content: 'Rate limit exceeded for api_key: [REDACTED_API_KEY]',
+    },
+  );
+});
+
 test('createNdjsonLineBuffer preserves split lines across chunks', () => {
   const lineBuffer = createNdjsonLineBuffer();
 

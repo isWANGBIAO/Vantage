@@ -1,3 +1,5 @@
+import { redactSensitiveText } from './sensitiveText.js';
+
 const SECTIONED_LOG_PREFIXES = {
   'STREAM_ANALYSIS_START:': { section: 'analysis', kind: 'start' },
   'STREAM_ANALYSIS_SYSTEM:': { section: 'analysis', kind: 'system' },
@@ -16,9 +18,9 @@ const SECTIONED_LOG_PREFIXES = {
 
 function decodeStreamPayload(raw) {
   try {
-    return JSON.parse(raw);
+    return redactSensitiveText(JSON.parse(raw));
   } catch {
-    return raw;
+    return redactSensitiveText(raw);
   }
 }
 
@@ -64,11 +66,12 @@ export function parseActionPlanStreamLog(log) {
     return null;
   }
 
+  const redactedLog = redactSensitiveText(log);
   for (const [prefix, meta] of Object.entries(SECTIONED_LOG_PREFIXES)) {
-    if (log.startsWith(prefix)) {
+    if (redactedLog.startsWith(prefix)) {
       return {
         ...meta,
-        content: decodeStreamPayload(log.slice(prefix.length)),
+        content: decodeStreamPayload(redactedLog.slice(prefix.length)),
       };
     }
   }
