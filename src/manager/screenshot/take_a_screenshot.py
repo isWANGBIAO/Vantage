@@ -2,9 +2,50 @@ import os
 from datetime import datetime
 import mss
 import sys
+import subprocess
+import tempfile
 from ..get_location import save_image_with_gps
 import numpy as np
 import cv2
+
+
+def _build_screenshot_folder(screenshots_path):
+    now = datetime.now()
+    daily_folder = os.path.join(
+        screenshots_path,
+        now.strftime('%Y'),
+        now.strftime('%m'),
+        now.strftime('%d'),
+        now.strftime('%H'),
+    )
+    os.makedirs(daily_folder, exist_ok=True)
+    return daily_folder
+
+
+def _save_macos_screencapture(latitude, longitude, daily_folder, timestamp):
+    if sys.platform != "darwin":
+        return None
+
+    screenshot_path = os.path.join(daily_folder, f'screenshot_{timestamp}_monitor_1.jpg')
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".png", dir=daily_folder, delete=False) as temp_file:
+            temp_path = temp_file.name
+
+        subprocess.run(["screencapture", "-x", temp_path], check=True)
+        img = cv2.imread(temp_path, cv2.IMREAD_COLOR)
+        if img is None:
+            raise RuntimeError("macOS screencapture returned an unreadable image")
+
+        save_image_with_gps(screenshot_path, img, latitude, longitude)
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Screenshot for monitor 1 saved as {screenshot_path}")
+        return screenshot_path
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
 def take_and_save_screenshots(latitude, longitude, screenshots_path):
@@ -21,17 +62,15 @@ def take_and_save_screenshots(latitude, longitude, screenshots_path):
                 img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)  # 去掉 alpha 通道，转换为 BGR 格式
                 screenshots.append((i, img))  # 存储屏幕编号和图像对象
 
-            # 生成当前时间的时间戳
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            daily_folder = _build_screenshot_folder(screenshots_path)
 
-            # 按年月日小时创建四级文件夹
-            now = datetime.now()
-            year = now.strftime('%Y')
-            month = now.strftime('%m')
-            day = now.strftime('%d')
-            hour = now.strftime('%H')
-            daily_folder = os.path.join(screenshots_path, year, month, day, hour)
-            os.makedirs(daily_folder, exist_ok=True)
+            if not screenshots:
+                fallback_path = _save_macos_screencapture(latitude, longitude, daily_folder, timestamp)
+                if fallback_path:
+                    return fallback_path
+                print("No displays available for screenshot capture", file=sys.stderr)
+                return None
 
             # 保存所有截图
             screenshot_path = None

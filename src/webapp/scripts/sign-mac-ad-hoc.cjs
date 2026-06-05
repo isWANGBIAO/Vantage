@@ -65,6 +65,25 @@ function clearSignBlockingAttributes(targetPath) {
   }
 }
 
+function clearSignBlockingAttributesRecursive(targetPath) {
+  clearSignBlockingAttributes(targetPath);
+
+  let stat = null;
+  try {
+    stat = fs.lstatSync(targetPath);
+  } catch {
+    return;
+  }
+
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    return;
+  }
+
+  for (const entryName of fs.readdirSync(targetPath)) {
+    clearSignBlockingAttributesRecursive(path.join(targetPath, entryName));
+  }
+}
+
 function clearPathAndAncestors(targetPath, stopPath) {
   let currentPath = targetPath;
   const resolvedStopPath = path.resolve(stopPath);
@@ -81,6 +100,7 @@ function clearPathAndAncestors(targetPath, stopPath) {
 
 function clearBundleSignBlockingAttributes(bundlePath) {
   run('xattr', ['-cr', bundlePath], { ignoreFailure: true });
+  clearSignBlockingAttributesRecursive(bundlePath);
   clearPathAndAncestors(bundlePath, bundlePath);
 }
 

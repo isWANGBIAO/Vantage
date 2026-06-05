@@ -349,11 +349,15 @@ class ActionPlanEndpointTests(unittest.TestCase):
     def test_transcribe_audio_returns_configuration_error_when_voice_provider_missing(self):
         with patch.object(
             server,
-            "load_settings",
+            "_load_voice_transcription_config",
             return_value={
-                "voice_base_url": "",
-                "voice_api_key": "",
-                "voice_model": "FunAudioLLM/SenseVoiceSmall",
+                "base_url": "",
+                "api_key": "",
+                "model": "FunAudioLLM/SenseVoiceSmall",
+                "mode": "manual",
+                "route": "",
+                "complete": False,
+                "missing": ["voice_base_url", "voice_api_key"],
             },
         ), patch.object(
             server.asyncio,
