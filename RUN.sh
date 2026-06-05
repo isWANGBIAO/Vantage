@@ -16,6 +16,7 @@ cd "$PROJECT_ROOT"
 
 INSTALL_ROOT="${HOME}/Applications"
 INSTALLED_APP="${INSTALL_ROOT}/Vantage.app"
+VANTAGE_BUNDLE_ID="com.vantage.app"
 BACKEND_RUNTIME_VENV="${PROJECT_ROOT}/.venv-backend-runtime-gpu"
 BACKEND_RUNTIME_PYTHON="${BACKEND_RUNTIME_VENV}/bin/python"
 BACKEND_RUNTIME_REQUIREMENTS="${PROJECT_ROOT}/requirements-backend-runtime-gpu.txt"
@@ -162,6 +163,44 @@ prepare_macos_app_bundle() {
     xattr -cr "$app_bundle" >/dev/null 2>&1 || true
 }
 
+installed_app_bundle_id() {
+    local app_bundle="$1"
+    local info_plist="${app_bundle}/Contents/Info.plist"
+    if [[ ! -f "$info_plist" ]]; then
+        return 1
+    fi
+
+    /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$info_plist" 2>/dev/null || true
+}
+
+terminate_installed_vantage_apps() {
+    if [[ ! -d "$INSTALL_ROOT" ]]; then
+        return 0
+    fi
+
+    local app_bundle bundle_id
+    while IFS= read -r -d '' app_bundle; do
+        bundle_id="$(installed_app_bundle_id "$app_bundle")"
+        if [[ "$bundle_id" == "$VANTAGE_BUNDLE_ID" ]]; then
+            pkill -f "${app_bundle}/Contents" >/dev/null 2>&1 || true
+        fi
+    done < <(find "$INSTALL_ROOT" -maxdepth 1 -type d -name '*.app' -print0)
+}
+
+remove_installed_vantage_apps() {
+    mkdir -p "$INSTALL_ROOT"
+
+    local app_bundle bundle_id
+    while IFS= read -r -d '' app_bundle; do
+        bundle_id="$(installed_app_bundle_id "$app_bundle")"
+        if [[ "$bundle_id" == "$VANTAGE_BUNDLE_ID" ]]; then
+            echo "      Removing installed Vantage bundle: ${app_bundle}"
+            pkill -f "${app_bundle}/Contents" >/dev/null 2>&1 || true
+            rm -rf "$app_bundle"
+        fi
+    done < <(find "$INSTALL_ROOT" -maxdepth 1 -type d -name '*.app' -print0)
+}
+
 clean_macos_package_outputs() {
     local dist_dir="${FRONTEND_ROOT}/electron-dist"
     if [[ ! -d "$dist_dir" ]]; then
@@ -183,6 +222,7 @@ RUN_START_SECONDS="$(date +%s)"
 step_start "[0/8] Cleaning residual source processes..."
 "$BOOTSTRAP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
 pkill -f "${INSTALLED_APP}/Contents" >/dev/null 2>&1 || true
+terminate_installed_vantage_apps
 step_done "Source cleanup complete"
 
 step_start "[1/8] Checking frontend dependencies..."
@@ -245,8 +285,7 @@ if [[ -z "$app_path" ]]; then
     echo "      Built Vantage.app not found in src/webapp/electron-dist"
     exit 1
 fi
-mkdir -p "$INSTALL_ROOT"
-rm -rf "$INSTALLED_APP"
+remove_installed_vantage_apps
 ditto "$app_path" "$INSTALLED_APP"
 prepare_macos_app_bundle "$INSTALLED_APP"
 step_done "App installed to ${INSTALLED_APP}"
