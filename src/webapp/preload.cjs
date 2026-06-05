@@ -64,6 +64,15 @@ async function waitForVideoMetadata(video) {
     });
 }
 
+async function playVideoWithTimeout(video) {
+    await Promise.race([
+        video.play(),
+        new Promise((resolve, reject) => {
+            setTimeout(() => reject(new Error('renderer camera video play timed out')), 5000);
+        }),
+    ]);
+}
+
 async function startRendererCameraFrameBridge({
     intervalMs = 500,
     width = 1280,
@@ -82,6 +91,7 @@ async function startRendererCameraFrameBridge({
     }
 
     let stream = null;
+    let video = null;
     try {
         stream = await navigator.mediaDevices.getUserMedia({
             video: {
@@ -91,12 +101,17 @@ async function startRendererCameraFrameBridge({
             audio: false,
         });
 
-        const video = document.createElement('video');
+        video = document.createElement('video');
         video.muted = true;
+        video.autoplay = true;
         video.playsInline = true;
+        video.style.display = 'none';
+        video.setAttribute('muted', '');
+        video.setAttribute('playsinline', '');
         video.srcObject = stream;
-        await video.play();
+        (document.body || document.documentElement)?.appendChild(video);
         await waitForVideoMetadata(video);
+        await playVideoWithTimeout(video);
 
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d', { alpha: false });
@@ -135,6 +150,7 @@ async function startRendererCameraFrameBridge({
         rendererCameraBridge = {
             started: true,
             stream,
+            video,
             timer: setInterval(() => {
                 void captureFrame();
             }, Math.max(250, intervalMs)),
@@ -147,6 +163,7 @@ async function startRendererCameraFrameBridge({
                 track.stop();
             }
         }
+        video?.remove();
         rendererCameraBridge = null;
         return {
             started: false,
