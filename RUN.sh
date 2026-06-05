@@ -201,6 +201,39 @@ remove_installed_vantage_apps() {
     done < <(find "$INSTALL_ROOT" -maxdepth 1 -type d -name '*.app' -print0)
 }
 
+cleanup_macos_packaged_app_staging() {
+    local staging_dir staging_app
+    for staging_dir in "${FRONTEND_ROOT}/electron-dist/mac" "${FRONTEND_ROOT}/electron-dist/mac-arm64"; do
+        staging_app="${staging_dir}/Vantage.app"
+        if [[ -d "$staging_app" ]]; then
+            echo "      Removing packaged staging app: ${staging_app}"
+            rm -rf "$staging_app"
+        fi
+        if [[ -d "$staging_dir" ]] && [[ -z "$(find "$staging_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+            rmdir "$staging_dir" >/dev/null 2>&1 || true
+        fi
+    done
+}
+
+remove_path_with_retries() {
+    local target="$1"
+    local attempt
+    if [[ ! -e "$target" ]]; then
+        return 0
+    fi
+
+    for attempt in 1 2 3; do
+        rm -rf "$target" >/dev/null 2>&1 || true
+        if [[ ! -e "$target" ]]; then
+            return 0
+        fi
+        find "$target" -name '.DS_Store' -delete >/dev/null 2>&1 || true
+        sleep 1
+    done
+
+    rm -rf "$target"
+}
+
 clean_macos_package_outputs() {
     local dist_dir="${FRONTEND_ROOT}/electron-dist"
     if [[ ! -d "$dist_dir" ]]; then
@@ -208,13 +241,16 @@ clean_macos_package_outputs() {
     fi
 
     echo "      Removing stale macOS package outputs..."
-    rm -rf \
+    local package_output
+    for package_output in \
         "${dist_dir}/mac" \
         "${dist_dir}/mac-arm64" \
         "${dist_dir}/Vantage-"*.dmg \
         "${dist_dir}/Vantage-"*.zip \
         "${dist_dir}/Vantage-"*.blockmap \
-        "${dist_dir}/builder-debug.yml"
+        "${dist_dir}/builder-debug"*.yml; do
+        remove_path_with_retries "$package_output"
+    done
 }
 
 RUN_START_SECONDS="$(date +%s)"
@@ -288,6 +324,7 @@ fi
 remove_installed_vantage_apps
 ditto "$app_path" "$INSTALLED_APP"
 prepare_macos_app_bundle "$INSTALLED_APP"
+cleanup_macos_packaged_app_staging
 step_done "App installed to ${INSTALLED_APP}"
 
 step_start "[8/8] Launching Vantage..."
