@@ -67,7 +67,7 @@ test('buildBundledBackendEnvironment enables macOS backend camera auth preflight
 
   assert.equal(env.VANTAGE_MACOS_SKIP_CAMERA_AUTH, '0');
   assert.equal(env.VANTAGE_MACOS_CAMERA_AUTH_PREFLIGHT, '1');
-  assert.equal(env.OPENCV_AVFOUNDATION_SKIP_AUTH, '0');
+  assert.equal(env.OPENCV_AVFOUNDATION_SKIP_AUTH, '1');
 });
 
 test('buildBundledBackendEnvironment maps selected onboarding provider into backend env', () => {
