@@ -210,6 +210,32 @@ class BackendPathResolutionTests(unittest.TestCase):
 
         self.assertEqual(resolved, data_root)
 
+    def test_data_loader_resolve_data_root_finds_macos_cloudstorage_onedrive_mine(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            (home / "OneDrive").mkdir()
+            data_root = home / "Library" / "CloudStorage" / "OneDrive-Personal" / "Mine"
+            data_root.mkdir(parents=True)
+
+            with patch.dict(os.environ, {}, clear=True):
+                resolved = DataLoader.resolve_data_root(user_home=str(home), onedrive_env=None)
+
+        self.assertEqual(resolved, data_root)
+
+    def test_data_loader_resolve_data_path_finds_macos_cloudstorage_workbook(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            (home / "OneDrive").mkdir()
+            data_root = home / "Library" / "CloudStorage" / "OneDrive-Personal" / "Mine"
+            data_root.mkdir(parents=True)
+            workbook = data_root / "Time.xlsx"
+            workbook.write_bytes(b"fake")
+
+            with patch.dict(os.environ, {}, clear=True):
+                resolved = DataLoader.resolve_data_path("Time.xlsx", user_home=str(home), onedrive_env=None)
+
+        self.assertEqual(resolved, workbook)
+
     def test_analyzer_uses_resolved_time_sheet_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

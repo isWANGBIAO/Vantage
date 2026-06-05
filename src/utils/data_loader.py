@@ -34,22 +34,48 @@ class DataLoader:
         return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
     @staticmethod
-    def resolve_data_root(user_home=None, onedrive_env=None):
-        env_root = os.environ.get("AI_DATA_ROOT") or os.environ.get("DATA_ROOT")
-        if env_root:
-            return Path(env_root)
-
+    def _data_root_candidates(user_home=None, onedrive_env=None):
         user_home = user_home or os.path.expanduser("~")
         if onedrive_env is None:
             onedrive_env = os.environ.get("OneDrive") or os.environ.get("OneDriveConsumer")
 
         candidates = []
+        seen = set()
+
+        def add(candidate):
+            candidate = Path(candidate)
+            key = str(candidate)
+            if key not in seen:
+                seen.add(key)
+                candidates.append(candidate)
+
         if onedrive_env:
-            candidates.append(Path(onedrive_env) / "Mine")
-            candidates.append(Path(onedrive_env))
-        candidates.append(Path(user_home) / "OneDrive" / "Mine")
-        candidates.append(Path(user_home) / "OneDrive")
-        candidates.append(Path(user_home))
+            add(Path(onedrive_env) / "Mine")
+            add(Path(onedrive_env))
+
+        home_path = Path(user_home)
+        add(home_path / "OneDrive" / "Mine")
+
+        cloud_storage = home_path / "Library" / "CloudStorage"
+        if cloud_storage.exists():
+            one_drive_roots = sorted(cloud_storage.glob("OneDrive*"))
+            for root in one_drive_roots:
+                add(root / "Mine")
+            for root in one_drive_roots:
+                add(root)
+
+        add(home_path / "OneDrive")
+        add(home_path)
+
+        return candidates
+
+    @staticmethod
+    def resolve_data_root(user_home=None, onedrive_env=None):
+        env_root = os.environ.get("AI_DATA_ROOT") or os.environ.get("DATA_ROOT")
+        if env_root:
+            return Path(env_root)
+
+        candidates = DataLoader._data_root_candidates(user_home=user_home, onedrive_env=onedrive_env)
         for candidate in candidates:
             if candidate.exists():
                 return candidate
@@ -58,10 +84,16 @@ class DataLoader:
 
     @staticmethod
     def resolve_data_path(filename, user_home=None, onedrive_env=None):
-        root = DataLoader.resolve_data_root(user_home=user_home, onedrive_env=onedrive_env)
-        path = root / filename
-        if path.exists():
-            return path
+        env_root = os.environ.get("AI_DATA_ROOT") or os.environ.get("DATA_ROOT")
+        if env_root:
+            path = Path(env_root) / filename
+            if path.exists():
+                return path
+        else:
+            for root in DataLoader._data_root_candidates(user_home=user_home, onedrive_env=onedrive_env):
+                path = root / filename
+                if path.exists():
+                    return path
             
         # Check Project Root
         project_root = Config.get_project_root()
@@ -73,6 +105,10 @@ class DataLoader:
         fallback = Path.cwd() / filename
         if fallback.exists():
             return fallback
+        if env_root:
+            return Path(env_root) / filename
+        root = DataLoader.resolve_data_root(user_home=user_home, onedrive_env=onedrive_env)
+        path = root / filename
         return path
 
     @staticmethod
