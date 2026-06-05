@@ -98,6 +98,26 @@ async function playVideoWithTimeout(video) {
     await withTimeout(video.play(), 5000, 'renderer camera video play timed out');
 }
 
+async function createRendererCameraVideo(stream) {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.style.display = 'none';
+    video.setAttribute('muted', '');
+    video.setAttribute('playsinline', '');
+    video.srcObject = stream;
+    (document.body || document.documentElement)?.appendChild(video);
+    try {
+        await waitForVideoMetadata(video);
+        await playVideoWithTimeout(video);
+        return video;
+    } catch (error) {
+        video.remove();
+        throw error;
+    }
+}
+
 async function startRendererCameraFrameBridge({
     intervalMs = 500,
     width = 1280,
@@ -127,22 +147,13 @@ async function startRendererCameraFrameBridge({
         });
 
         const [videoTrack] = stream.getVideoTracks();
-        const imageCapture = typeof ImageCapture === 'function' && videoTrack
+        let imageCapture = typeof ImageCapture === 'function' && videoTrack
             ? new ImageCapture(videoTrack)
             : null;
+        let mode = imageCapture ? 'imageCapture' : 'video';
 
         if (!imageCapture) {
-            video = document.createElement('video');
-            video.muted = true;
-            video.autoplay = true;
-            video.playsInline = true;
-            video.style.display = 'none';
-            video.setAttribute('muted', '');
-            video.setAttribute('playsinline', '');
-            video.srcObject = stream;
-            (document.body || document.documentElement)?.appendChild(video);
-            await waitForVideoMetadata(video);
-            await playVideoWithTimeout(video);
+            video = await createRendererCameraVideo(stream);
         }
 
         const canvas = document.createElement('canvas');
@@ -150,29 +161,43 @@ async function startRendererCameraFrameBridge({
         if (!context) {
             throw new Error('renderer camera canvas context is unavailable');
         }
-        const mode = imageCapture ? 'imageCapture' : 'video';
-
         const captureFrame = async () => {
             if (!rendererCameraBridge?.started) {
                 return;
             }
-            if (!imageCapture && (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA)) {
-                return;
-            }
 
             let source = video;
+            let shouldCloseSource = false;
             if (imageCapture) {
-                source = await withTimeout(
-                    imageCapture.grabFrame(),
-                    5000,
-                    'renderer camera grabFrame timed out',
-                );
+                try {
+                    source = await withTimeout(
+                        imageCapture.grabFrame(),
+                        5000,
+                        'renderer camera grabFrame timed out',
+                    );
+                    shouldCloseSource = true;
+                } catch (error) {
+                    reportRendererCameraBridgeError(error);
+                    const fallbackVideo = await createRendererCameraVideo(stream);
+                    imageCapture = null;
+                    mode = 'video';
+                    video = fallbackVideo;
+                    rendererCameraBridge.video = video;
+                    rendererCameraBridge.mode = mode;
+                    source = video;
+                }
+            }
+
+            if (!imageCapture && (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA)) {
+                return;
             }
 
             const frameWidth = source.width || source.videoWidth || width;
             const frameHeight = source.height || source.videoHeight || height;
             if (!frameWidth || !frameHeight) {
-                source.close?.();
+                if (shouldCloseSource) {
+                    source.close?.();
+                }
                 return;
             }
 
@@ -184,7 +209,9 @@ async function startRendererCameraFrameBridge({
             }
 
             context.drawImage(source, 0, 0, frameWidth, frameHeight);
-            source.close?.();
+            if (shouldCloseSource) {
+                source.close?.();
+            }
             const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
             if (!blob) {
                 return;

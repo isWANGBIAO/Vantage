@@ -79,6 +79,9 @@ test('preload can bridge renderer camera frames to the main process', () => {
   assert.ok(preloadSource.includes("typeof ImageCapture === 'function'"));
   assert.ok(preloadSource.includes('imageCapture.grabFrame()'));
   assert.ok(preloadSource.includes("renderer camera grabFrame timed out"));
+  assert.ok(preloadSource.includes('async function createRendererCameraVideo(stream)'));
+  assert.ok(preloadSource.includes("mode = 'video';"));
+  assert.ok(preloadSource.includes('rendererCameraBridge.video = video'));
   assert.ok(preloadSource.includes('reportRendererCameraBridgeError'));
   assert.ok(preloadSource.includes("return { started: true, mode };"));
   assert.ok(preloadSource.includes("canvas.toBlob(resolve, 'image/jpeg', quality)"));
