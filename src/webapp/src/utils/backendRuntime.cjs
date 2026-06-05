@@ -71,7 +71,7 @@ function buildBundledBackendEnvironment({
   if (platform === 'darwin') {
     nextEnv.VANTAGE_MACOS_SKIP_CAMERA_AUTH = '0';
     nextEnv.VANTAGE_MACOS_CAMERA_AUTH_PREFLIGHT = '1';
-    nextEnv.OPENCV_AVFOUNDATION_SKIP_AUTH = '1';
+    nextEnv.OPENCV_AVFOUNDATION_SKIP_AUTH = '0';
   }
 
   return applySelectedProviderEnvironment(nextEnv, loadProviderConfigFn(runtimePaths));
