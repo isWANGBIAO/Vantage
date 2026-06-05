@@ -93,6 +93,12 @@ test('preload can bridge renderer camera frames to the main process', () => {
 test('macOS packaging hook ad-hoc signs the finished app bundle from a temp copy', () => {
   assert.equal(packageJson.build.afterPack, './scripts/sign-mac-ad-hoc.cjs');
   assert.ok(signMacAdHocSource.includes("context?.electronPlatformName !== 'darwin'"));
+  assert.ok(signMacAdHocSource.includes("process.env.VANTAGE_MAC_CODESIGN_IDENTITY || '-'"));
+  assert.ok(signMacAdHocSource.includes("process.env.VANTAGE_MAC_CODESIGN_STABLE_REQUIREMENT !== '0'"));
+  assert.ok(signMacAdHocSource.includes('readBundleIdentifier'));
+  assert.ok(signMacAdHocSource.includes('CFBundleIdentifier'));
+  assert.ok(signMacAdHocSource.includes('stableDesignatedRequirement'));
+  assert.ok(signMacAdHocSource.includes('=designated => identifier'));
   assert.ok(signMacAdHocSource.includes('walkAsync'));
   assert.ok(signMacAdHocSource.includes('isMachOFile'));
   assert.ok(signMacAdHocSource.includes('function commandPath'));

@@ -4,7 +4,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { walkAsync } = require('@electron/osx-sign');
 
-const SIGNING_IDENTITY = '-';
+const SIGNING_IDENTITY = process.env.VANTAGE_MAC_CODESIGN_IDENTITY || '-';
+const USE_STABLE_DESIGNATED_REQUIREMENT = process.env.VANTAGE_MAC_CODESIGN_STABLE_REQUIREMENT !== '0';
 const SIGN_BLOCKING_XATTRS = [
   'com.apple.FinderInfo',
   'com.apple.ResourceFork',
@@ -57,6 +58,10 @@ function run(command, args, { ignoreFailure = false } = {}) {
     throw new Error(`${command} ${args.map(formatCommandArg).join(' ')} failed${suffix}`);
   }
   return true;
+}
+
+function capture(command, args) {
+  return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
 function clearSignBlockingAttributes(targetPath) {
@@ -168,6 +173,22 @@ function resolveOsxSignEntitlement(fileName) {
   return fs.existsSync(entitlementPath) ? entitlementPath : null;
 }
 
+function readBundleIdentifier(appPath) {
+  const infoPlistPath = path.join(appPath, 'Contents', 'Info.plist');
+  const bundleIdentifier = capture('plutil', [
+    '-extract',
+    'CFBundleIdentifier',
+    'raw',
+    '-o',
+    '-',
+    infoPlistPath,
+  ]);
+  if (!/^[A-Za-z0-9][A-Za-z0-9.-]+$/.test(bundleIdentifier)) {
+    throw new Error(`Unsafe macOS bundle identifier for signing requirement: ${bundleIdentifier}`);
+  }
+  return bundleIdentifier;
+}
+
 function createAdHocMainEntitlements(tempRoot) {
   const entitlementsPath = path.join(tempRoot, 'vantage-ad-hoc-main.entitlements.plist');
   fs.writeFileSync(entitlementsPath, AD_HOC_MAIN_ENTITLEMENTS, 'utf8');
@@ -201,6 +222,23 @@ function entitlementsForPath(filePath, signingOptions = {}) {
   return resolveOsxSignEntitlement('default.darwin.plist');
 }
 
+function stableDesignatedRequirementForPath(filePath, signingOptions = {}) {
+  if (
+    !USE_STABLE_DESIGNATED_REQUIREMENT
+    || !signingOptions.stableDesignatedRequirement
+  ) {
+    return null;
+  }
+
+  if (
+    filePath === signingOptions.topLevelAppPath
+    || filePath === signingOptions.mainExecutablePath
+  ) {
+    return signingOptions.stableDesignatedRequirement;
+  }
+  return null;
+}
+
 function codesignPath(filePath, signingOptions = {}) {
   clearPathAndAncestors(filePath, path.dirname(filePath));
 
@@ -216,6 +254,10 @@ function codesignPath(filePath, signingOptions = {}) {
   if (entitlementsPath) {
     args.push('--entitlements', entitlementsPath);
   }
+  const stableDesignatedRequirement = stableDesignatedRequirementForPath(filePath, signingOptions);
+  if (stableDesignatedRequirement) {
+    args.push('--requirements', stableDesignatedRequirement);
+  }
   args.push(filePath);
   run('codesign', args);
 }
@@ -228,7 +270,6 @@ function codesignTopLevelApp(appPath, signingOptions = {}) {
   clearBundleSignBlockingAttributes(appPath);
   const args = [
     '--force',
-    '--deep',
     '--sign',
     SIGNING_IDENTITY,
     '--timestamp=none',
@@ -238,6 +279,10 @@ function codesignTopLevelApp(appPath, signingOptions = {}) {
   const entitlementsPath = entitlementsForPath(appPath, signingOptions);
   if (entitlementsPath) {
     args.push('--entitlements', entitlementsPath);
+  }
+  const stableDesignatedRequirement = stableDesignatedRequirementForPath(appPath, signingOptions);
+  if (stableDesignatedRequirement) {
+    args.push('--requirements', stableDesignatedRequirement);
   }
   args.push(appPath);
   run('codesign', args);
@@ -265,6 +310,7 @@ function findAppBundle(context) {
 async function signAppBundle(appPath) {
   clearBundleSignBlockingAttributes(appPath);
 
+  const bundleIdentifier = readBundleIdentifier(appPath);
   const mainExecutablePath = path.join(
     appPath,
     'Contents',
@@ -274,6 +320,7 @@ async function signAppBundle(appPath) {
   const signingOptions = {
     mainEntitlementsPath: createAdHocMainEntitlements(path.dirname(appPath)),
     mainExecutablePath,
+    stableDesignatedRequirement: `=designated => identifier "${bundleIdentifier}"`,
     topLevelAppPath: appPath,
   };
   const contentsPath = path.join(appPath, 'Contents');
