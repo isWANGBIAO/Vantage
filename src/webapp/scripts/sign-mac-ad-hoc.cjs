@@ -189,6 +189,16 @@ function readBundleIdentifier(appPath) {
   return bundleIdentifier;
 }
 
+function readCachedBundleIdentifier(bundlePath, signingOptions = {}) {
+  if (!signingOptions.bundleIdentifierCache) {
+    signingOptions.bundleIdentifierCache = new Map();
+  }
+  if (!signingOptions.bundleIdentifierCache.has(bundlePath)) {
+    signingOptions.bundleIdentifierCache.set(bundlePath, readBundleIdentifier(bundlePath));
+  }
+  return signingOptions.bundleIdentifierCache.get(bundlePath);
+}
+
 function createAdHocMainEntitlements(tempRoot) {
   const entitlementsPath = path.join(tempRoot, 'vantage-ad-hoc-main.entitlements.plist');
   fs.writeFileSync(entitlementsPath, AD_HOC_MAIN_ENTITLEMENTS, 'utf8');
@@ -224,7 +234,41 @@ function entitlementsForPath(filePath, signingOptions = {}) {
   return resolveOsxSignEntitlement('default.darwin.plist');
 }
 
-function stableDesignatedRequirementForPath(filePath, signingOptions = {}) {
+function nearestAppBundlePath(filePath, stopPath) {
+  const resolvedStopPath = path.resolve(stopPath);
+  let currentPath = filePath;
+
+  try {
+    if (!fs.lstatSync(currentPath).isDirectory()) {
+      currentPath = path.dirname(currentPath);
+    }
+  } catch {
+    return null;
+  }
+
+  while (path.resolve(currentPath).startsWith(resolvedStopPath)) {
+    if (
+      /\.app$/i.test(path.basename(currentPath))
+      && fs.existsSync(path.join(currentPath, 'Contents', 'Info.plist'))
+    ) {
+      return currentPath;
+    }
+
+    const parentPath = path.dirname(currentPath);
+    if (parentPath === currentPath) {
+      break;
+    }
+    currentPath = parentPath;
+  }
+  return null;
+}
+
+function isProductHelperAppPath(appPath, signingOptions = {}) {
+  const productName = signingOptions.productName || 'Vantage';
+  return path.basename(appPath).startsWith(`${productName} Helper`);
+}
+
+function stableCodeIdentifierForPath(filePath, signingOptions = {}) {
   if (
     !USE_STABLE_DESIGNATED_REQUIREMENT
     || !signingOptions.stableDesignatedRequirement
@@ -236,9 +280,30 @@ function stableDesignatedRequirementForPath(filePath, signingOptions = {}) {
     filePath === signingOptions.topLevelAppPath
     || filePath === signingOptions.mainExecutablePath
   ) {
-    return signingOptions.stableDesignatedRequirement;
+    return signingOptions.bundleIdentifier;
   }
+  if (path.basename(filePath) === 'VantageBackend') {
+    return `${signingOptions.bundleIdentifier}.VantageBackend`;
+  }
+
+  const appBundlePath = nearestAppBundlePath(
+    filePath,
+    signingOptions.topLevelAppPath || path.parse(filePath).root,
+  );
+  if (appBundlePath && isProductHelperAppPath(appBundlePath, signingOptions)) {
+    return readCachedBundleIdentifier(appBundlePath, signingOptions);
+  }
+
   return null;
+}
+
+function stableDesignatedRequirementForIdentifier(codeIdentifier) {
+  return `=designated => identifier "${codeIdentifier}"`;
+}
+
+function stableDesignatedRequirementForPath(filePath, signingOptions = {}) {
+  const codeIdentifier = stableCodeIdentifierForPath(filePath, signingOptions);
+  return codeIdentifier ? stableDesignatedRequirementForIdentifier(codeIdentifier) : null;
 }
 
 function codesignPath(filePath, signingOptions = {}) {
@@ -255,6 +320,10 @@ function codesignPath(filePath, signingOptions = {}) {
   const entitlementsPath = entitlementsForPath(filePath, signingOptions);
   if (entitlementsPath) {
     args.push('--entitlements', entitlementsPath);
+  }
+  const stableCodeIdentifier = stableCodeIdentifierForPath(filePath, signingOptions);
+  if (stableCodeIdentifier && !isBundlePath(filePath)) {
+    args.push('--identifier', stableCodeIdentifier);
   }
   const stableDesignatedRequirement = stableDesignatedRequirementForPath(filePath, signingOptions);
   if (stableDesignatedRequirement) {
@@ -320,6 +389,8 @@ async function signAppBundle(appPath) {
     path.basename(appPath, '.app'),
   );
   const signingOptions = {
+    bundleIdentifier,
+    bundleIdentifierCache: new Map([[appPath, bundleIdentifier]]),
     mainEntitlementsPath: createAdHocMainEntitlements(path.dirname(appPath)),
     mainExecutablePath,
     productName: path.basename(appPath, '.app'),

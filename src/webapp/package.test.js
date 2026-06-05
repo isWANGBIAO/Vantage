@@ -99,9 +99,14 @@ test('macOS packaging hook ad-hoc signs the finished app bundle from a temp copy
   assert.ok(signMacAdHocSource.includes("process.env.VANTAGE_MAC_CODESIGN_IDENTITY || '-'"));
   assert.ok(signMacAdHocSource.includes("process.env.VANTAGE_MAC_CODESIGN_STABLE_REQUIREMENT !== '0'"));
   assert.ok(signMacAdHocSource.includes('readBundleIdentifier'));
+  assert.ok(signMacAdHocSource.includes('readCachedBundleIdentifier'));
   assert.ok(signMacAdHocSource.includes('CFBundleIdentifier'));
+  assert.ok(signMacAdHocSource.includes('nearestAppBundlePath'));
+  assert.ok(signMacAdHocSource.includes('stableCodeIdentifierForPath'));
   assert.ok(signMacAdHocSource.includes('stableDesignatedRequirement'));
   assert.ok(signMacAdHocSource.includes('=designated => identifier'));
+  assert.ok(signMacAdHocSource.includes("`${signingOptions.bundleIdentifier}.VantageBackend`"));
+  assert.ok(signMacAdHocSource.includes("'--identifier'"));
   assert.ok(signMacAdHocSource.includes('walkAsync'));
   assert.ok(signMacAdHocSource.includes('isMachOFile'));
   assert.ok(signMacAdHocSource.includes('function commandPath'));
