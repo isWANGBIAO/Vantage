@@ -102,6 +102,7 @@ codesign_macos_native_libraries() {
     fi
 
     echo "      Ad-hoc signing macOS native Python libraries..."
+    xattr -cr "${BACKEND_RUNTIME_VENV}/lib" >/dev/null 2>&1 || true
     find "${BACKEND_RUNTIME_VENV}/lib" -type f \( -name '*.so' -o -name '*.dylib' \) -print0 |
         while IFS= read -r -d '' native_library; do
             codesign --force --sign - "$native_library" >/dev/null 2>&1 || true
@@ -146,8 +147,8 @@ codesign_macos_backend_runtime_bundle() {
     fi
 
     echo "      Ad-hoc signing packaged backend runtime binaries..."
-    xattr -dr com.apple.provenance "$backend_runtime_dir" >/dev/null 2>&1 || true
-    find "$backend_runtime_dir" -type f \( -name '*.so' -o -name '*.dylib' \) -print0 |
+    xattr -cr "$backend_runtime_dir" >/dev/null 2>&1 || true
+    find "$backend_runtime_dir" -type f \( -name '*.so' -o -name '*.dylib' -o -name 'VantageBackend' -o -name 'Python' \) -print0 |
         while IFS= read -r -d '' runtime_binary; do
             codesign --force --sign - "$runtime_binary" >/dev/null 2>&1 || true
         done
