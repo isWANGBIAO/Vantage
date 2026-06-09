@@ -4,7 +4,11 @@ import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 export default function CameraFeed({ isVisible = false, privacyRevealed = false }) {
     const { t } = useDisplayLanguage();
-    const [status, setStatus] = useState({ online: false, show_person_box: true });
+    const [status, setStatus] = useState({
+        online: false,
+        show_person_box: true,
+        camera_frame_dark: false,
+    });
     const [toggling, setToggling] = useState(false);
     const statusErrorLoggedRef = useRef(false);
 
@@ -16,7 +20,11 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
         const checkStatus = async () => {
             try {
                 const data = await fetchBackendJson('/api/status', { retryPolicy: 'poll' });
-                setStatus({ online: data.camera_online, show_person_box: data.show_person_box });
+                setStatus({
+                    online: data.camera_online,
+                    show_person_box: data.show_person_box,
+                    camera_frame_dark: Boolean(data.camera_frame_dark),
+                });
             } catch (err) {
                 if (!statusErrorLoggedRef.current) {
                     statusErrorLoggedRef.current = true;
@@ -55,6 +63,25 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
                     {status.online && isVisible && !privacyRevealed
                         ? t('camera_feed.show_stream')
                         : (status.online ? t('camera_feed.ready') : t('camera_feed.disconnected'))}
+                </div>
+            )}
+
+            {status.online && isVisible && privacyRevealed && status.camera_frame_dark && (
+                <div style={{
+                    position: 'absolute',
+                    left: '50%',
+                    top: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    padding: '0.45rem 0.7rem',
+                    borderRadius: '4px',
+                    border: '1px solid rgba(255,255,255,0.16)',
+                    background: 'rgba(0,0,0,0.68)',
+                    color: 'var(--text-secondary)',
+                    fontSize: '0.78rem',
+                    zIndex: 15,
+                    pointerEvents: 'none',
+                }}>
+                    {t('camera_feed.dark_frame')}
                 </div>
             )}
 

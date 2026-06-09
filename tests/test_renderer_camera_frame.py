@@ -73,6 +73,15 @@ class RendererCameraFrameTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_status_reports_dark_camera_frame(self):
+        server.state.latest_frame = np.zeros((6, 8, 3), dtype=np.uint8)
+
+        payload = server._build_status_payload()
+
+        self.assertTrue(payload["camera_frame_available"])
+        self.assertTrue(payload["camera_frame_dark"])
+        self.assertEqual(payload["camera_frame_mean_luma"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

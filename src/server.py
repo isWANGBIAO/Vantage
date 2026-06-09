@@ -78,6 +78,7 @@ from src.services.model_call_recorder import (
 from src.services.person_detection import (
     PERSON_DETECTION_CONFIDENCE,
     PERSON_DETECTION_MODEL,
+    detect_person_count,
     get_yolo_model,
 )
 from src.utils.data_loader import DataLoader
@@ -89,6 +90,7 @@ _face_analysis_pipeline_module = None
 RENDERER_CAMERA_FRAME_TTL_SECONDS = 5.0
 RENDERER_CAMERA_MAX_FRAME_BYTES = 8 * 1024 * 1024
 RENDERER_CAMERA_FRAME_INTENT = "renderer-camera-frame"
+CAMERA_DARK_FRAME_MEAN_LUMA_THRESHOLD = 12.0
 
 
 def get_cv2_module():
@@ -504,9 +506,13 @@ def _has_local_action_intent(headers, expected_intent):
 
 
 def _build_status_payload():
+    frame_diagnostics = _build_camera_frame_diagnostics()
     return {
         "camera_online": _camera_online(),
         "show_person_box": state.show_person_box,
+        "camera_frame_available": frame_diagnostics["available"],
+        "camera_frame_dark": frame_diagnostics["dark"],
+        "camera_frame_mean_luma": frame_diagnostics["mean_luma"],
         "paths": {
             "photo": bool(state.paths.get("photo")),
             "screenshot": bool(state.paths.get("screenshot")),
@@ -702,6 +708,40 @@ class RendererCameraCapture:
 
     def release(self):
         return None
+
+
+def calculate_frame_mean_luma(frame):
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return None
+
+    try:
+        if len(frame.shape) >= 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = frame
+        return float(gray.mean())
+    except Exception as exc:
+        print(f"Camera frame brightness check failed: {exc}")
+        return None
+
+
+def _build_camera_frame_diagnostics():
+    with state.lock:
+        frame = state.latest_frame.copy() if state.latest_frame is not None else None
+
+    mean_luma = calculate_frame_mean_luma(frame)
+    if mean_luma is None:
+        return {
+            "available": frame is not None,
+            "dark": False,
+            "mean_luma": None,
+        }
+
+    return {
+        "available": True,
+        "dark": mean_luma < CAMERA_DARK_FRAME_MEAN_LUMA_THRESHOLD,
+        "mean_luma": round(mean_luma, 2),
+    }
 
 
 def _ensure_live_face_points_deque():
@@ -1845,6 +1885,23 @@ def find_latest_file_recursive(
 find_latest_file_recursive.last_truncated = False
 
 
+def _saved_photo_contains_person(photo_path):
+    try:
+        image = cv2.imread(photo_path)
+        if image is None:
+            print(f"Skipping latest photo that OpenCV cannot read: {photo_path}")
+            return False
+
+        person_count = detect_person_count(image, conf=PERSON_DETECTION_CONFIDENCE)
+        if person_count <= 0:
+            print(f"Skipping latest photo without detected person: {photo_path}")
+            return False
+        return True
+    except Exception as exc:
+        print(f"Skipping latest photo because person validation failed: {photo_path}: {exc}")
+        return False
+
+
 def initialize_latest_media_state():
     try:
         print("Scanning for latest existing images...")
@@ -1855,10 +1912,11 @@ def initialize_latest_media_state():
                 getattr(find_latest_file_recursive, "last_truncated", False)
             )
             if latest_photo:
-                state.paths['photo'] = latest_photo
-                print(f"Found latest photo: {latest_photo}")
+                if _saved_photo_contains_person(latest_photo):
+                    state.paths['photo'] = latest_photo
+                    print(f"Found latest photo: {latest_photo}")
 
-        if not state.paths.get('screenshot') and state.screenshots_path:
+        if not state.paths.get('screenshot') and state.screenshots_path and state.paths.get('photo'):
             latest_screen = find_latest_file_recursive(state.screenshots_path)
             latest_media_scan_truncated = latest_media_scan_truncated or bool(
                 getattr(find_latest_file_recursive, "last_truncated", False)
@@ -1866,6 +1924,8 @@ def initialize_latest_media_state():
             if latest_screen:
                 state.paths['screenshot'] = latest_screen
                 print(f"Found latest screenshot: {latest_screen}")
+        elif not state.paths.get('screenshot') and state.screenshots_path:
+            print("Skipping latest screenshot because no validated latest photo is available.")
         state.latest_media_scan_truncated = latest_media_scan_truncated
     except Exception as e:
         print(f"Error finding latest files: {e}")
