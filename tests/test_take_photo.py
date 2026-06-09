@@ -48,7 +48,7 @@ class TakePhotoTests(unittest.TestCase):
         mock_save.assert_called_once()
         self.assertEqual(mock_save.call_args[0][1].shape, frame.shape)
 
-    def test_take_photo_saves_photo_when_person_detection_is_unavailable(self):
+    def test_take_photo_skips_save_when_person_detection_is_unavailable(self):
         frame = np.zeros((4, 4, 3), dtype=np.uint8)
 
         with tempfile.TemporaryDirectory() as tmpdir, patch.object(
@@ -65,9 +65,9 @@ class TakePhotoTests(unittest.TestCase):
         ) as mock_save:
             success, photo_path = take_a_photo.take_photo(object(), 1.0, 2.0, tmpdir)
 
-        self.assertTrue(success)
-        self.assertIsNotNone(photo_path)
-        mock_save.assert_called_once()
+        self.assertFalse(success)
+        self.assertIsNone(photo_path)
+        mock_save.assert_not_called()
 
 
 if __name__ == "__main__":
