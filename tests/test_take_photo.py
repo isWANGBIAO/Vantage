@@ -1,8 +1,18 @@
 import tempfile
+import sys
+import types
 import unittest
 from unittest.mock import patch
 
 import numpy as np
+
+sys.modules.setdefault(
+    "cv2",
+    types.SimpleNamespace(
+        getTickCount=lambda: 1,
+        getTickFrequency=lambda: 1.0,
+    ),
+)
 
 from src.manager.take_photo import take_a_photo
 
