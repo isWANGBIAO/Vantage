@@ -255,8 +255,13 @@ class FaceReportEndpointTests(unittest.TestCase):
                 server, "FACE_REPORT_PLOT_OUTPUT_DIR", output_dir
             ), patch.object(
                 server, "get_face_analysis_runtime", return_value=(object(), object(), object())
-            ), patch.object(server, "analyze_photo_file", return_value=fake_record), patch.object(
-                server, "build_face_report", return_value=fake_report
+            ), patch.object(
+                server,
+                "get_face_analysis_pipeline_module",
+                return_value=SimpleNamespace(
+                    analyze_photo_file=lambda *args, **kwargs: fake_record,
+                    build_face_report=lambda *args, **kwargs: fake_report,
+                ),
             ):
                 server.process_captured_face_photo(str(photo_path))
 

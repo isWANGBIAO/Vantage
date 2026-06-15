@@ -30,10 +30,14 @@ def test_get_camera_index_prefers_macos_camera_name():
 
 
 def test_get_camera_index_uses_macos_default_without_runtime_enumeration():
-    with patch.dict(os.environ, {server.MACOS_CAMERA_ENUMERATION_ENV: "0"}, clear=False), patch.object(
-        server,
-        "enumerate_available_cameras",
-        side_effect=AssertionError("default macOS runtime path should avoid enumeration"),
+    with (
+        patch.object(server.sys, "platform", "darwin"),
+        patch.dict(os.environ, {server.MACOS_CAMERA_ENUMERATION_ENV: "0"}, clear=False),
+        patch.object(
+            server,
+            "enumerate_available_cameras",
+            side_effect=AssertionError("default macOS runtime path should avoid enumeration"),
+        ),
     ):
         assert server.get_camera_index() == 0
 
@@ -99,6 +103,6 @@ def test_macos_camera_auth_preflight_temporarily_enables_avfoundation_auth():
         patch.object(server.cv2, "VideoCapture", side_effect=lambda *args: FakeCapture(*args)),
     ):
         server.preflight_macos_camera_authorization()
+        assert os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"] == "1"
 
     assert calls == [(0, getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY)), ("release",)]
-    assert os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"] == "1"

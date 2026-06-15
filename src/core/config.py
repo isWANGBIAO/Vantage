@@ -44,7 +44,9 @@ class Config:
             return Path.home() / "AppData" / "Local" / app_name
 
         if sys.platform == "darwin":
-            return Path.home() / "Library" / "Application Support" / app_name
+            home_dir = os.environ.get("HOME")
+            home = Path(home_dir).expanduser() if home_dir else Path.home()
+            return home / "Library" / "Application Support" / app_name
 
         return Path.home() / ".local" / "share" / app_name
 

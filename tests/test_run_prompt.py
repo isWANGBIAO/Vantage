@@ -556,6 +556,10 @@ class RunPromptTests(unittest.TestCase):
         _, kwargs = mock_construct_prompt.call_args
         self.assertEqual(kwargs["start_date"], "2025-01-01")
         self.assertNotIn("days", kwargs)
+        self.assertEqual(
+            kwargs["balance_sheet_row_limit_per_sheet"],
+            run_prompt.ACTION_PLAN_DEFAULT_BALANCE_SHEET_ROW_LIMIT_PER_SHEET,
+        )
 
     def test_analysis_mode_uses_compact_prompt_for_sjtu_route(self):
         fake_client = _FakeLLMClient()

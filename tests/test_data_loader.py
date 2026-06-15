@@ -503,6 +503,29 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
         self.assertEqual(payload["sheets"][0]["rows"], [["Savings", 3000]])
         self.assertEqual(payload["sheets"][1]["rows"], [["Transport", 300]])
 
+    def test_balance_sheet_prompt_payload_drops_wide_empty_columns(self):
+        sheets = {
+            "Asset": pd.DataFrame(
+                {
+                    "Date": [pd.Timestamp("2026-06-01"), pd.Timestamp("2026-06-02")],
+                    "Name": ["Laptop", "Monitor"],
+                    "Amount": [8000, 1200],
+                    "Empty Header": [None, None],
+                    "Column 16384": [None, None],
+                }
+            )
+        }
+
+        payload = DataLoader.build_balance_sheet_prompt_payload_from_sheets(sheets)
+
+        self.assertEqual(payload["total_rows"], 2)
+        self.assertEqual(payload["sheets"][0]["columns"], ["Date", "Name", "Amount"])
+        self.assertEqual(
+            payload["sheets"][0]["rows"],
+            [["2026-06-01", "Laptop", 8000], ["2026-06-02", "Monitor", 1200]],
+        )
+        self.assertEqual(payload["sheets"][0]["non_null_counts"], {"Date": 2, "Name": 2, "Amount": 2})
+
     def test_prompt_cache_metadata_ignores_editable_prompt_changes_for_time_rows(self):
         first_prompt = (
             "## Time Series Data (JSON)\n\n```json\n"

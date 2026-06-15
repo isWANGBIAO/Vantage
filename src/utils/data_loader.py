@@ -411,6 +411,7 @@ class DataLoader:
         payload_sheets = []
 
         for sheet_name, df in sheets.items():
+            df = df.dropna(axis=1, how="all")
             columns = [DataLoader._clean_prompt_column_name(col) for col in df.columns]
             rows = []
 
