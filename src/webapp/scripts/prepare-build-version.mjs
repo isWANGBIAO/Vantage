@@ -45,6 +45,13 @@ function resolveGitCleanState(webappRoot) {
   }
 }
 
+function formatBuildCommit(commit, gitClean) {
+  if (!commit) {
+    return null;
+  }
+  return gitClean ? commit : `${commit}+dirty`;
+}
+
 export function prepareBuildVersion({
   webappRoot = defaultWebappRoot,
   now = new Date(),
@@ -60,12 +67,29 @@ export function prepareBuildVersion({
   const normalizedMode = String(mode || 'bump').toLowerCase();
   const shouldBump = normalizedMode === 'auto' ? !gitClean : normalizedMode !== 'sync';
   const existingBuildInfo = existsSync(buildInfoPath) ? readJson(buildInfoPath) : null;
+  const buildCommit = formatBuildCommit(commit, gitClean);
 
   if (!shouldBump) {
-    return {
+    const buildInfo = {
       version: packageJson.version,
-      build_date: existingBuildInfo?.build_date || now.toISOString(),
-      build_commit: existingBuildInfo?.build_commit ?? commit ?? null,
+      build_date: existingBuildInfo?.build_commit === buildCommit
+        && existingBuildInfo?.version === packageJson.version
+        && existingBuildInfo?.build_date
+        ? existingBuildInfo.build_date
+        : now.toISOString(),
+      build_commit: buildCommit,
+    };
+    if (
+      existingBuildInfo?.version !== buildInfo.version
+      || existingBuildInfo?.build_date !== buildInfo.build_date
+      || existingBuildInfo?.build_commit !== buildInfo.build_commit
+    ) {
+      writeJson(buildInfoPath, buildInfo);
+    }
+    return {
+      version: buildInfo.version,
+      build_date: buildInfo.build_date,
+      build_commit: buildInfo.build_commit,
       bumped: false,
     };
   }
@@ -86,7 +110,7 @@ export function prepareBuildVersion({
   const buildInfo = {
     version: nextVersion,
     build_date: now.toISOString(),
-    build_commit: commit || null,
+    build_commit: buildCommit,
     bumped: true,
   };
   writeJson(buildInfoPath, {

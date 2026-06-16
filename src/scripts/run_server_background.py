@@ -1,3 +1,4 @@
+import importlib
 import os
 import runpy
 import sys
@@ -25,6 +26,10 @@ from src.core.runtime_library_bootstrap import apply_runtime_library_dirs, prelo
 
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
+PACKAGED_RUNTIME_REQUIRED_IMPORTS = (
+    "chinese_calendar",
+    "zhdate",
+)
 
 
 def _redirect_standard_streams(log_path: Path):
@@ -81,17 +86,31 @@ def _preload_frozen_torch_libraries(
     )
 
 
+def _validate_packaged_runtime_imports(*, import_module=importlib.import_module):
+    missing = []
+    for module_name in PACKAGED_RUNTIME_REQUIRED_IMPORTS:
+        try:
+            import_module(module_name)
+        except Exception as exc:
+            missing.append(f"{module_name} ({exc})")
+
+    if missing:
+        raise RuntimeError("Missing packaged runtime module(s): " + ", ".join(missing))
+
+
 def _run_server_entrypoint(
     project_root: Path,
     *,
     is_frozen: bool | None = None,
     run_path=runpy.run_path,
     server_main=None,
+    validate_runtime_imports=_validate_packaged_runtime_imports,
 ):
     frozen_mode = getattr(sys, "frozen", False) if is_frozen is None else is_frozen
     if frozen_mode:
         _configure_frozen_runtime_search_paths(project_root)
         _preload_frozen_torch_libraries(project_root)
+        validate_runtime_imports()
         resolved_server_main = server_main
         if resolved_server_main is None:
             from src.server import main as resolved_server_main
@@ -103,11 +122,17 @@ def _run_server_entrypoint(
     return "script"
 
 
-def _run_prompt_entrypoint(args: list[str], *, run_prompt_main=None):
+def _run_prompt_entrypoint(
+    args: list[str],
+    *,
+    run_prompt_main=None,
+    validate_runtime_imports=_validate_packaged_runtime_imports,
+):
     if getattr(sys, "frozen", False):
         resource_root = Config.get_project_root()
         _configure_frozen_runtime_search_paths(resource_root)
         _preload_frozen_torch_libraries(resource_root)
+        validate_runtime_imports()
 
     resolved_run_prompt_main = run_prompt_main
     if resolved_run_prompt_main is None:

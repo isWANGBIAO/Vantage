@@ -110,6 +110,38 @@ def test_run_server_entrypoint_calls_server_main_in_frozen_mode(tmp_path):
     assert called == ["server-main"]
 
 
+def test_run_server_entrypoint_validates_required_imports_in_frozen_mode(tmp_path):
+    launcher = _load_launcher_module()
+    project_root = tmp_path / "runtime"
+    calls = []
+
+    launcher._run_server_entrypoint(
+        project_root,
+        is_frozen=True,
+        server_main=lambda: calls.append("server-main"),
+        validate_runtime_imports=lambda: calls.append("validate-imports"),
+    )
+
+    assert calls == ["validate-imports", "server-main"]
+
+
+def test_validate_packaged_runtime_imports_reports_missing_modules():
+    launcher = _load_launcher_module()
+
+    def fake_import(module_name):
+        if module_name == "zhdate":
+            raise ModuleNotFoundError("No module named 'zhdate'")
+        return object()
+
+    try:
+        launcher._validate_packaged_runtime_imports(import_module=fake_import)
+    except RuntimeError as exc:
+        assert "Missing packaged runtime module(s): zhdate" in str(exc)
+        assert "No module named 'zhdate'" in str(exc)
+    else:
+        raise AssertionError("missing packaged runtime module did not fail validation")
+
+
 def test_run_prompt_entrypoint_delegates_args_to_run_prompt_main():
     launcher = _load_launcher_module()
     captured_argv = []

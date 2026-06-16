@@ -58,7 +58,10 @@ if exist "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" (
     for /f "usebackq delims=" %%H in ("%BACKEND_RUNTIME_REQUIREMENTS_STAMP%") do set "BACKEND_RUNTIME_REQUIREMENTS_STORED_HASH=%%H"
 )
 
-if /I "!BACKEND_RUNTIME_REQUIREMENTS_HASH!"=="!BACKEND_RUNTIME_REQUIREMENTS_STORED_HASH!" if not "%VANTAGE_FORCE_BACKEND_DEPS%"=="1" (
+set "BACKEND_RUNTIME_DEPS_NEED_SYNC=1"
+if /I "!BACKEND_RUNTIME_REQUIREMENTS_HASH!"=="!BACKEND_RUNTIME_REQUIREMENTS_STORED_HASH!" if not "%VANTAGE_FORCE_BACKEND_DEPS%"=="1" set "BACKEND_RUNTIME_DEPS_NEED_SYNC=0"
+
+if "!BACKEND_RUNTIME_DEPS_NEED_SYNC!"=="0" (
     echo       Backend runtime dependencies already synced
 ) else (
     echo       Syncing backend runtime dependencies...
@@ -73,6 +76,11 @@ if /I "!BACKEND_RUNTIME_REQUIREMENTS_HASH!"=="!BACKEND_RUNTIME_REQUIREMENTS_STOR
         exit /b 1
     )
     > "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" echo !BACKEND_RUNTIME_REQUIREMENTS_HASH!
+)
+"%BACKEND_RUNTIME_PYTHON%" -c "import chinese_calendar, lap, zhdate; print('backend runtime dependency imports ok')"
+if errorlevel 1 (
+    echo       Backend runtime dependency import check failed
+    exit /b 1
 )
 call :StepDone "Backend packaging environment ready"
 

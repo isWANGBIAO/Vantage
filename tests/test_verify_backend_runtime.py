@@ -60,6 +60,7 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
                 "Failed to load YOLO model in thread: [WinError 1114] Error loading c10.dll",
                 "YOLO model unavailable in thread: No module named 'ultralytics'",
                 "Live face analysis error: DLL load failed while importing _framework_bindings",
+                "Missing packaged runtime module(s): zhdate (No module named 'zhdate')",
             ]
         )
 
@@ -71,6 +72,8 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
                 "c10.dll",
                 "DLL load failed",
                 "Live face analysis error",
+                "Missing packaged runtime module",
+                "No module named",
             ],
         )
 

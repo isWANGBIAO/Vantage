@@ -164,7 +164,7 @@ test('build version script bumps patch and writes build metadata', async () => {
   assert.deepEqual(JSON.parse(readFileSync(buildInfoPath, 'utf8')), {
     version: '1.0.1',
     build_date: '2026-05-03T04:00:00.000Z',
-    build_commit: 'abcdef1',
+    build_commit: 'abcdef1+dirty',
   });
   assert.equal(result.bumped, true);
 });
@@ -189,7 +189,7 @@ test('build version script runs from the CLI on Windows-style relative paths', (
   assert.equal(JSON.parse(readFileSync(buildInfoPath, 'utf8')).version, '2.3.5');
 });
 
-test('build version script auto mode keeps committed versions unchanged on a clean tree', async () => {
+test('build version script auto mode refreshes build metadata without bumping clean versions', async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'vantage-version-auto-clean-'));
   const packagePath = path.join(root, 'package.json');
   const lockPath = path.join(root, 'package-lock.json');
@@ -208,6 +208,7 @@ test('build version script auto mode keeps committed versions unchanged on a cle
   const result = prepareBuildVersion({
     webappRoot: root,
     mode: 'auto',
+    now: new Date('2026-05-04T12:00:00+08:00'),
     commit: 'ignored999',
     gitClean: true,
   });
@@ -216,7 +217,11 @@ test('build version script auto mode keeps committed versions unchanged on a cle
   assert.equal(result.version, '3.4.5');
   assert.equal(JSON.parse(readFileSync(packagePath, 'utf8')).version, '3.4.5');
   assert.equal(JSON.parse(readFileSync(lockPath, 'utf8')).version, '3.4.5');
-  assert.deepEqual(JSON.parse(readFileSync(buildInfoPath, 'utf8')), buildInfoPayload);
+  assert.deepEqual(JSON.parse(readFileSync(buildInfoPath, 'utf8')), {
+    version: '3.4.5',
+    build_date: '2026-05-04T04:00:00.000Z',
+    build_commit: 'ignored999',
+  });
 });
 
 test('build version script auto mode bumps when tracked changes are present', async () => {
@@ -237,6 +242,7 @@ test('build version script auto mode bumps when tracked changes are present', as
   assert.equal(result.bumped, true);
   assert.equal(JSON.parse(readFileSync(packagePath, 'utf8')).version, '4.0.1');
   assert.equal(JSON.parse(readFileSync(buildInfoPath, 'utf8')).version, '4.0.1');
+  assert.equal(JSON.parse(readFileSync(buildInfoPath, 'utf8')).build_commit, 'dirty123+dirty');
 });
 
 test('RUN.bat prepares build version in auto mode but does not commit automatically', () => {

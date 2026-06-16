@@ -96,6 +96,11 @@ PYINSTALLER_EXCLUDES = (
     "torchaudio",
 )
 
+PYINSTALLER_HIDDEN_IMPORTS = (
+    "chinese_calendar",
+    "zhdate",
+)
+
 FORBIDDEN_RUNTIME_PACKAGE_NAMES = (
     "Cython",
     "IPython",
@@ -521,6 +526,9 @@ def build_pyinstaller_arguments(
 
     for module_name in PYINSTALLER_EXCLUDES:
         args.extend(["--exclude-module", module_name])
+
+    for module_name in PYINSTALLER_HIDDEN_IMPORTS:
+        args.extend(["--hidden-import", module_name])
 
     for resource in resources:
         args.extend(

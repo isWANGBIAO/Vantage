@@ -43,6 +43,8 @@ BLOCKING_RUNTIME_PATTERNS = (
     "c10.dll",
     "DLL load failed",
     "Live face analysis error",
+    "Missing packaged runtime module",
+    "No module named",
 )
 
 

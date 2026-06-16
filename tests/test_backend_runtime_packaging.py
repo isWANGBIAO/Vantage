@@ -136,6 +136,12 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         "tkinter",
         "torchaudio",
     } <= exclude_targets
+    hidden_import_targets = {
+        args[index + 1]
+        for index, value in enumerate(args)
+        if value == "--hidden-import"
+    }
+    assert {"chinese_calendar", "zhdate"} <= hidden_import_targets
     assert str(layout["entry_script"]) == args[-1]
     separator = get_pyinstaller_add_data_separator()
     assert f"{tmp_path / 'yolo26m.pt'}{separator}." in args

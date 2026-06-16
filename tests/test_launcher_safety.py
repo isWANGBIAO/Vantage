@@ -65,7 +65,10 @@ def test_run_bat_skips_reinstalling_backend_dependencies_when_requirements_hash_
 
     assert "BACKEND_RUNTIME_REQUIREMENTS_STAMP" in run_bat
     assert "VANTAGE_FORCE_BACKEND_DEPS" in run_bat
+    assert "BACKEND_RUNTIME_DEPS_NEED_SYNC" in run_bat
     assert "Backend runtime dependencies already synced" in run_bat
+    assert "backend runtime dependency imports ok" in run_bat
+    assert "Backend runtime dependency import check failed" in run_bat
 
 
 def test_run_bat_prints_step_timings():

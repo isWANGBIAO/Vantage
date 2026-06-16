@@ -17,6 +17,7 @@ REQUIRED_GPU_RUNTIME_PACKAGES = {
     "apscheduler",
     "cv2-enumerate-cameras",
     "fastapi",
+    "lap",
     "matplotlib",
     "mss",
     "numpy",
@@ -124,6 +125,18 @@ def test_backend_runtime_requirements_keep_macos_opencv_headless():
     assert any("opencv-python==" in line and 'sys_platform == "win32"' in line for line in opencv_lines)
     assert any(
         "opencv-python-headless==" in line and 'sys_platform != "win32"' in line
+        for line in opencv_lines
+    )
+    assert any(
+        "opencv-python==4.11.0.86" in line
+        and 'sys_platform == "win32"' in line
+        and 'python_version < "3.13"' in line
+        for line in opencv_lines
+    )
+    assert any(
+        "opencv-python==4.12.0.88" in line
+        and 'sys_platform == "win32"' in line
+        and 'python_version >= "3.13"' in line
         for line in opencv_lines
     )
 
