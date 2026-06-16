@@ -16,6 +16,9 @@ set "BACKEND_RUNTIME_VENV=%PROJECT_ROOT%.venv-backend-runtime-gpu"
 set "BACKEND_RUNTIME_PYTHON=%BACKEND_RUNTIME_VENV%\Scripts\python.exe"
 set "BACKEND_RUNTIME_REQUIREMENTS=%PROJECT_ROOT%requirements-backend-runtime-gpu.txt"
 set "BACKEND_RUNTIME_REQUIREMENTS_STAMP=%BACKEND_RUNTIME_VENV%\.requirements-backend-runtime-gpu.sha256"
+set "WEBAPP_BUILD_INFO=%PROJECT_ROOT%src\webapp\build-info.json"
+set "RUN_BUILD_INFO_BACKUP=%TEMP%\vantage-build-info-%RANDOM%-%RANDOM%.json"
+set "BUILD_INFO_BACKUP_CREATED=0"
 if not defined VANTAGE_BUILD_WORKERS set "VANTAGE_BUILD_WORKERS=%NUMBER_OF_PROCESSORS%"
 
 call :CaptureSeconds RUN_START_SECONDS
@@ -85,10 +88,19 @@ if errorlevel 1 (
 call :StepDone "Backend packaging environment ready"
 
 call :StepStart "[3/8] Preparing build version..."
+if exist "%WEBAPP_BUILD_INFO%" (
+    copy /Y "%WEBAPP_BUILD_INFO%" "%RUN_BUILD_INFO_BACKUP%" >nul
+    if errorlevel 1 (
+        echo       Build version backup failed
+        exit /b 1
+    )
+    set "BUILD_INFO_BACKUP_CREATED=1"
+)
 pushd "%PROJECT_ROOT%src\webapp"
 call node scripts\prepare-build-version.mjs --mode auto
 if errorlevel 1 (
     popd
+    call :RestoreBuildInfo
     echo       Build version preparation failed
     exit /b 1
 )
@@ -99,6 +111,7 @@ call :StepStart "[4/8] Building frontend and backend runtime in parallel..."
 echo       Build workers requested: %VANTAGE_BUILD_WORKERS%
 "%BACKEND_RUNTIME_PYTHON%" src\scripts\run_packaging_builds.py --backend-python "%BACKEND_RUNTIME_PYTHON%" --workers "%VANTAGE_BUILD_WORKERS%"
 if errorlevel 1 (
+    call :RestoreBuildInfo
     echo       Parallel packaging build failed
     exit /b 1
 )
@@ -107,6 +120,7 @@ call :StepDone "Frontend and backend build step complete"
 call :StepStart "[5/8] Verifying backend runtime..."
 "%BACKEND_RUNTIME_PYTHON%" src\scripts\verify_backend_runtime.py --timeout-seconds 60
 if errorlevel 1 (
+    call :RestoreBuildInfo
     echo       Backend runtime verification failed
     exit /b 1
 )
@@ -117,10 +131,12 @@ pushd "%PROJECT_ROOT%src\webapp"
 call npm run electron:package
 if errorlevel 1 (
     popd
+    call :RestoreBuildInfo
     echo       Installer build failed
     exit /b 1
 )
 popd
+call :RestoreBuildInfo
 call :StepDone "Windows installer build complete"
 
 call :StepStart "[7/8] Preparing silent install..."
@@ -177,4 +193,13 @@ exit /b 0
 call :CaptureSeconds STEP_END_SECONDS
 set /a STEP_DURATION_SECONDS=STEP_END_SECONDS-STEP_START_SECONDS
 echo       %~1 (!STEP_DURATION_SECONDS!s)
+exit /b 0
+
+:RestoreBuildInfo
+if "%BUILD_INFO_BACKUP_CREATED%"=="1" if exist "%RUN_BUILD_INFO_BACKUP%" (
+    copy /Y "%RUN_BUILD_INFO_BACKUP%" "%WEBAPP_BUILD_INFO%" >nul
+    del "%RUN_BUILD_INFO_BACKUP%" >nul 2>&1
+    set "BUILD_INFO_BACKUP_CREATED=0"
+    echo       Source build-info restored
+)
 exit /b 0

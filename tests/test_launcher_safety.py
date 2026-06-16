@@ -71,6 +71,18 @@ def test_run_bat_skips_reinstalling_backend_dependencies_when_requirements_hash_
     assert "Backend runtime dependency import check failed" in run_bat
 
 
+def test_run_bat_restores_source_build_info_after_packaging():
+    run_bat = Path("run.bat").read_text(encoding="utf-8")
+
+    assert "WEBAPP_BUILD_INFO" in run_bat
+    assert "RUN_BUILD_INFO_BACKUP" in run_bat
+    assert "BUILD_INFO_BACKUP_CREATED" in run_bat
+    assert "call :RestoreBuildInfo" in run_bat
+    assert "Source build-info restored" in run_bat
+    assert run_bat.index("call node scripts\\prepare-build-version.mjs --mode auto") < run_bat.index("npm run electron:package")
+    assert run_bat.index("npm run electron:package") < run_bat.rindex("call :RestoreBuildInfo")
+
+
 def test_run_bat_prints_step_timings():
     run_bat = Path("run.bat").read_text(encoding="utf-8")
 
