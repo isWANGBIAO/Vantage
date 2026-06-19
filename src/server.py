@@ -988,7 +988,7 @@ def _safe_directory_size(directory, *, max_seconds=STORAGE_SCAN_MAX_SECONDS, max
         _rate_limited_status_log(
             ("storage-size-budget", os.path.abspath(directory)),
             "Storage size scan budget reached under "
-            f"{directory}; returning partial size after {visited_count} files",
+            f"{directory}; returning partial size",
             interval_seconds=STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS,
         )
     _safe_directory_size.last_truncated = truncated

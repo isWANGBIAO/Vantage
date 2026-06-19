@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import builtins
 from pathlib import Path
 from unittest.mock import patch
 
@@ -37,6 +38,31 @@ class StorageStatsTests(unittest.TestCase):
 
         self.assertEqual(size, 1)
         self.assertTrue(server._safe_directory_size.last_truncated)
+
+    def test_safe_directory_size_budget_log_is_rate_limited_even_when_counts_change(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            (tmp / "a.bin").write_bytes(b"a")
+            (tmp / "b.bin").write_bytes(b"b")
+            (tmp / "c.bin").write_bytes(b"c")
+
+            now = {"value": 100.0}
+            messages = []
+            server._reset_status_logs("storage-size-budget")
+            try:
+                with (
+                    patch.object(server.time, "monotonic", side_effect=lambda: now["value"]),
+                    patch.object(builtins, "print", side_effect=lambda message: messages.append(message)),
+                ):
+                    server._safe_directory_size(tmp, max_entries=1, max_seconds=None)
+                    server._safe_directory_size(tmp, max_entries=2, max_seconds=None)
+            finally:
+                server._reset_status_logs("storage-size-budget")
+
+        budget_messages = [
+            message for message in messages if "Storage size scan budget reached" in message
+        ]
+        self.assertEqual(len(budget_messages), 1)
 
     def test_find_latest_file_recursive_marks_truncated_when_entry_budget_is_hit(self):
         with tempfile.TemporaryDirectory() as tmpdir:
