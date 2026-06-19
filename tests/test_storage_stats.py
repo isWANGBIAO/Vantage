@@ -51,6 +51,25 @@ class StorageStatsTests(unittest.TestCase):
         self.assertIsNotNone(latest)
         self.assertTrue(server.find_latest_file_recursive.last_truncated)
 
+    def test_find_latest_file_prefers_new_root_file_before_deep_budget_is_hit(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            nested = tmp / "nested"
+            nested.mkdir()
+            old = nested / "old.jpg"
+            newest = tmp / "newest.jpg"
+            old.write_bytes(b"old")
+            newest.write_bytes(b"new")
+
+            server.os.utime(old, (1000, 1000))
+            server.os.utime(nested, (1000, 1000))
+            server.os.utime(newest, (2000, 2000))
+
+            latest = server.find_latest_file_recursive(tmp, max_entries=1, max_seconds=None)
+
+        self.assertEqual(Path(latest).name, "newest.jpg")
+        self.assertFalse(server.find_latest_file_recursive.last_truncated)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,7 @@ const http = require('http');
 const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimePaths.cjs');
 const { applyLaunchAtLoginSetting } = require('./src/utils/autoLaunch.cjs');
 const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
+const { resolveAppBuildInfo } = require('./src/utils/buildInfo.cjs');
 const {
     buildSettingsState,
     getOnboardingState,
@@ -47,6 +48,12 @@ const logsDir = runtimePaths.logDir;
 const logFile = path.join(logsDir, `electron_${new Date().toISOString().split('T')[0]}.log`);
 const isDev = runtimePaths.appMode !== 'packaged' && !app.isPackaged && process.env.NODE_ENV !== 'production';
 const shouldManageLoginItem = runtimePaths.appMode === 'packaged' || app.isPackaged;
+buildInfo = resolveAppBuildInfo({
+    staticBuildInfo: buildInfo,
+    projectRoot,
+    appMode: runtimePaths.appMode,
+    isPackaged: app.isPackaged,
+});
 
 const MAIN_PROCESS_COPY = {
     'en-US': {

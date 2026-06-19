@@ -1,4 +1,5 @@
 import os
+import builtins
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -73,6 +74,40 @@ def test_macos_camera_open_does_not_fallback_to_cap_any_when_permission_is_missi
 
     assert capture is not None
     assert calls == [(3, getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY))]
+
+
+def test_windows_camera_backend_fallback_log_is_rate_limited():
+    class FakeCapture:
+        def __init__(self, *args):
+            self.args = args
+
+        def isOpened(self):
+            return False
+
+        def release(self):
+            pass
+
+    now = {"value": 100.0}
+    messages = []
+    server.reset_camera_status_logs()
+    try:
+        with (
+            patch.object(server.cv2, "VideoCapture", side_effect=lambda *args: FakeCapture(*args)),
+            patch.object(server.time, "monotonic", side_effect=lambda: now["value"]),
+            patch.object(builtins, "print", side_effect=lambda message: messages.append(message)),
+        ):
+            server.open_camera_capture(0, "win32")
+            server.open_camera_capture(0, "win32")
+            now["value"] += server.CAMERA_STATUS_LOG_INTERVAL_SECONDS + 1
+            server.open_camera_capture(0, "win32")
+    finally:
+        server.reset_camera_status_logs()
+
+    fallback_messages = [
+        message for message in messages if "Camera backend" in message and "failed" in message
+    ]
+    assert len(fallback_messages) == 2
+    assert "suppressed 1 repeat" in fallback_messages[-1]
 
 
 def test_macos_camera_auth_preflight_temporarily_enables_avfoundation_auth():

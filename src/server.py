@@ -129,6 +129,7 @@ ACTION_PLAN_PROVIDER_READY_POLL_SECONDS = 2.0
 ACTION_PLAN_PROVIDER_READY_REQUEST_TIMEOUT_SECONDS = 3
 STORAGE_SCAN_MAX_SECONDS = 3.0
 STORAGE_SCAN_MAX_ENTRIES = 20000
+STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS = 300.0
 LATEST_MEDIA_SCAN_MAX_SECONDS = 3.0
 LATEST_MEDIA_SCAN_MAX_ENTRIES = 30000
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
@@ -148,6 +149,10 @@ MACOS_CAMERA_AUTH_PREFLIGHT_ENV = "VANTAGE_MACOS_CAMERA_AUTH_PREFLIGHT"
 CAMERA_RETRY_INTERVAL_SECONDS = float(os.environ.get(
     "VANTAGE_CAMERA_RETRY_INTERVAL_SECONDS",
     "30" if sys.platform == "darwin" else "2",
+))
+CAMERA_STATUS_LOG_INTERVAL_SECONDS = float(os.environ.get(
+    "VANTAGE_CAMERA_STATUS_LOG_INTERVAL_SECONDS",
+    "300",
 ))
 PREWARM_FACE_ON_STARTUP = os.environ.get("VANTAGE_PREWARM_FACE_ON_STARTUP", "0") == "1"
 PREWARM_YOLO_ON_STARTUP = os.environ.get("VANTAGE_PREWARM_YOLO_ON_STARTUP", "0") == "1"
@@ -596,11 +601,57 @@ class SystemState:
         self.last_processed_face_photo_path = None
 
 state = SystemState()
+_status_log_records = {}
+_status_log_lock = threading.Lock()
 _background_mode_cache = {
     "mode": None,
     "loaded_at": 0.0,
 }
 _background_mode_cache_lock = threading.Lock()
+
+
+def _rate_limited_status_log(key, message, *, interval_seconds, now_fn=None):
+    now = (now_fn or time.monotonic)()
+    with _status_log_lock:
+        record = _status_log_records.get(key)
+        if record is None or record.get("message") != message:
+            _status_log_records[key] = {
+                "message": message,
+                "last_printed_at": now,
+                "suppressed_count": 0,
+            }
+            print(message)
+            return True
+
+        elapsed = now - record["last_printed_at"]
+        if elapsed < interval_seconds:
+            record["suppressed_count"] += 1
+            return False
+
+        suppressed_count = record["suppressed_count"]
+        record["last_printed_at"] = now
+        record["suppressed_count"] = 0
+
+    suffix = ""
+    if suppressed_count:
+        repeat_label = "repeat" if suppressed_count == 1 else "repeats"
+        suffix = f" (suppressed {suppressed_count} {repeat_label})"
+    print(f"{message}{suffix}")
+    return True
+
+
+def _reset_status_logs(prefix=None):
+    with _status_log_lock:
+        if prefix is None:
+            _status_log_records.clear()
+            return
+        for key in list(_status_log_records):
+            if isinstance(key, tuple) and key and key[0] == prefix:
+                del _status_log_records[key]
+
+
+def reset_camera_status_logs():
+    _reset_status_logs("camera")
 
 
 def _mount_static_once(route_path, directory, name):
@@ -934,9 +985,11 @@ def _safe_directory_size(directory, *, max_seconds=STORAGE_SCAN_MAX_SECONDS, max
     if skipped_count > 3:
         print(f"Storage size scan skipped {skipped_count} entries under {directory}")
     if truncated:
-        print(
+        _rate_limited_status_log(
+            ("storage-size-budget", os.path.abspath(directory)),
             "Storage size scan budget reached under "
-            f"{directory}; returning partial size after {visited_count} files"
+            f"{directory}; returning partial size after {visited_count} files",
+            interval_seconds=STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS,
         )
     _safe_directory_size.last_truncated = truncated
     return total_size
@@ -1792,7 +1845,11 @@ def open_camera_capture(camera_index: int, platform: str | None = None):
     if resolved_platform == "darwin":
         return camera
 
-    print(f"Camera backend {backend} failed for index {camera_index}; retrying with CAP_ANY")
+    _rate_limited_status_log(
+        ("camera", "backend-fallback", resolved_platform, camera_index, backend),
+        f"Camera backend {backend} failed for index {camera_index}; retrying with CAP_ANY",
+        interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
+    )
     return cv2.VideoCapture(camera_index)
 
 
@@ -1854,30 +1911,72 @@ def find_latest_file_recursive(
     visited_count = 0
     truncated = False
     deadline = time.monotonic() + max_seconds if max_seconds else None
-    for root, dirs, files in os.walk(directory):
-        dirs.sort(reverse=True)
-        files.sort(reverse=True)
-        for f in files:
-            visited_count += 1
-            if max_entries and visited_count > max_entries:
-                truncated = True
-                print(f"Latest media scan budget reached under {directory}; returning best match so far")
+    pending_dirs = [(float("inf"), os.path.abspath(directory))]
+    visited_dirs = set()
+    normalized_extensions = {ext.lower() for ext in extensions}
+
+    def mark_truncated(message):
+        nonlocal truncated
+        truncated = True
+        _rate_limited_status_log(
+            ("latest-media-budget", os.path.abspath(directory), message),
+            message,
+            interval_seconds=STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS,
+        )
+
+    while pending_dirs:
+        pending_dirs.sort(key=lambda item: item[0], reverse=True)
+        directory_mtime, current_dir = pending_dirs.pop(0)
+        if current_dir in visited_dirs:
+            continue
+        visited_dirs.add(current_dir)
+
+        if latest_file and directory_mtime <= latest_time:
+            continue
+
+        file_candidates = []
+        directory_candidates = []
+        try:
+            with os.scandir(current_dir) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stat_result = entry.stat(follow_symlinks=False)
+                            directory_candidates.append((stat_result.st_mtime, entry.path))
+                        elif entry.is_file(follow_symlinks=False):
+                            if os.path.splitext(entry.name)[1].lower() not in normalized_extensions:
+                                continue
+                            stat_result = entry.stat(follow_symlinks=False)
+                            file_candidates.append((stat_result.st_mtime, entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+
+        file_candidates.sort(key=lambda item: item[0], reverse=True)
+        for mtime, full_path in file_candidates:
+            if max_entries and visited_count >= max_entries:
+                mark_truncated(
+                    f"Latest media scan budget reached under {directory}; returning best match so far"
+                )
                 find_latest_file_recursive.last_truncated = truncated
                 return latest_file
             if deadline and time.monotonic() > deadline:
-                truncated = True
-                print(f"Latest media scan time budget reached under {directory}; returning best match so far")
+                mark_truncated(
+                    f"Latest media scan time budget reached under {directory}; returning best match so far"
+                )
                 find_latest_file_recursive.last_truncated = truncated
                 return latest_file
-            if os.path.splitext(f)[1].lower() in extensions:
-                full_path = os.path.join(root, f)
-                try:
-                    mtime = os.path.getmtime(full_path)
-                    if mtime > latest_time:
-                        latest_time = mtime
-                        latest_file = full_path
-                except OSError:
-                    pass
+
+            visited_count += 1
+            if mtime > latest_time:
+                latest_time = mtime
+                latest_file = full_path
+
+        for mtime, subdir in directory_candidates:
+            if latest_file and mtime <= latest_time:
+                continue
+            pending_dirs.append((mtime, subdir))
     find_latest_file_recursive.last_truncated = truncated
     return latest_file
 
@@ -2043,38 +2142,43 @@ def camera_loop():
     )
     while state.is_running:
         if state.camera is None:
-             idx = get_camera_index()
-             try:
-                 state.camera = open_camera_capture(idx)
-                 if not state.camera or not state.camera.isOpened():
-                     print(f"Camera index {idx} is offline; retrying in {CAMERA_RETRY_INTERVAL_SECONDS:.0f}s")
-                     if state.camera:
-                         state.camera.release()
-                     state.camera = None
-                     sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
-                     continue
-                 
-                 # Request 4K resolution (16:9)
-                 target_w, target_h = 3840, 2160
-                 state.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_w)
-                 state.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
-                 
-                 # Verify actual resolution
-                 actual_w = state.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
-                 actual_h = state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
-                 print(f"Camera Initialized: Requested {target_w}x{target_h}, Got {int(actual_w)}x{int(actual_h)}")
-                 
-                 # If 4K failed (e.g. got low res), try strict 1080p fallback
-                 if actual_w < 1280: 
-                     print("4K failed or ignored, trying strict 1080p force...")
-                     state.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-                     state.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-                     print(f"Fallback resolution: {int(state.camera.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
-                     
-             except Exception as e:
-                 print(f"Camera init failed: {e}")
-                 sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
-                 continue
+            idx = get_camera_index()
+            try:
+                state.camera = open_camera_capture(idx)
+                if not state.camera or not state.camera.isOpened():
+                    _rate_limited_status_log(
+                        ("camera", "offline", idx),
+                        f"Camera index {idx} is offline; retrying in {CAMERA_RETRY_INTERVAL_SECONDS:.0f}s",
+                        interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
+                    )
+                    if state.camera:
+                        state.camera.release()
+                    state.camera = None
+                    sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
+                    continue
+
+                # Request 4K resolution (16:9)
+                target_w, target_h = 3840, 2160
+                state.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_w)
+                state.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
+
+                # Verify actual resolution
+                actual_w = state.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
+                actual_h = state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                reset_camera_status_logs()
+                print(f"Camera Initialized: Requested {target_w}x{target_h}, Got {int(actual_w)}x{int(actual_h)}")
+
+                # If 4K failed (e.g. got low res), try strict 1080p fallback
+                if actual_w < 1280:
+                    print("4K failed or ignored, trying strict 1080p force...")
+                    state.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+                    state.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+                    print(f"Fallback resolution: {int(state.camera.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+
+            except Exception as e:
+                print(f"Camera init failed: {e}")
+                sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
+                continue
 
         if state.camera and state.camera.isOpened():
             try:
