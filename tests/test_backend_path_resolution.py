@@ -236,6 +236,31 @@ class BackendPathResolutionTests(unittest.TestCase):
 
         self.assertEqual(resolved, workbook)
 
+    def test_data_loader_resolve_health_data_root_prefers_dated_english_health_archive(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            archive_root = home / "OneDrive" / "Mine" / "20260416 MiFitness Zepp health history data"
+            (archive_root / "mi_fiteness_data").mkdir(parents=True)
+
+            with patch.dict(os.environ, {}, clear=True):
+                resolved = DataLoader.resolve_health_data_root(
+                    "mi_fiteness_data",
+                    user_home=str(home),
+                    onedrive_env=None,
+                )
+
+        self.assertEqual(resolved, archive_root)
+
+    def test_plot_running_data_root_uses_health_archive_resolver(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_root = Path(tmpdir)
+
+            with patch.object(plot.DataLoader, "resolve_health_data_root", return_value=archive_root) as mock_resolve:
+                resolved = plot._resolve_running_data_root()
+
+        self.assertEqual(resolved, archive_root)
+        mock_resolve.assert_called_once_with()
+
     def test_analyzer_uses_resolved_time_sheet_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

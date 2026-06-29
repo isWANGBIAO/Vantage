@@ -1422,7 +1422,7 @@ def _parse_running_text(text):
 def _resolve_running_data_root(data_dir=None):
     if data_dir is not None:
         return Path(data_dir)
-    return Path(__file__).resolve().parents[2] / "data"
+    return DataLoader.resolve_health_data_root()
 
 
 def _safe_float(value):

@@ -140,6 +140,8 @@ src/AI_Prediction/data/*.csv
 .vscode/launch.json
 src/scripts/download_model_helper.py
 results.csv
+data/mi_fiteness_data/
+data/zepplift_data/
 
 # Claude Code
 .claude/

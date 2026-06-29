@@ -11,6 +11,9 @@ from pathlib import Path
 from src.core.config import Config
 
 class DataLoader:
+    HEALTH_DATA_DIR_NAMES = ("mi_fiteness_data", "zepplift_data")
+    HEALTH_ARCHIVE_DIR_PATTERN = re.compile(r"^\d{8}\s+.*(?:健康历史数据|health history data)$", re.IGNORECASE)
+
     @staticmethod
     def _duration_text_to_hours(value):
         if value is None or pd.isna(value):
@@ -81,6 +84,53 @@ class DataLoader:
                 return candidate
 
         return Config.get_project_root()
+
+    @staticmethod
+    def _health_data_root_candidates(user_home=None, onedrive_env=None):
+        candidates = []
+        seen = set()
+
+        def add(candidate):
+            candidate = Path(candidate)
+            key = str(candidate)
+            if key not in seen:
+                seen.add(key)
+                candidates.append(candidate)
+
+        env_root = os.environ.get("AI_HEALTH_DATA_ROOT")
+        if env_root:
+            add(env_root)
+
+        for root in DataLoader._data_root_candidates(user_home=user_home, onedrive_env=onedrive_env):
+            if root.exists():
+                dated_archives = [
+                    child
+                    for child in root.iterdir()
+                    if child.is_dir() and DataLoader.HEALTH_ARCHIVE_DIR_PATTERN.match(child.name)
+                ]
+                for archive in sorted(dated_archives, key=lambda path: path.name, reverse=True):
+                    add(archive)
+            add(root)
+
+        add(Config.get_project_root() / "data")
+        return candidates
+
+    @staticmethod
+    def resolve_health_data_root(required_dir=None, user_home=None, onedrive_env=None):
+        for candidate in DataLoader._health_data_root_candidates(
+            user_home=user_home,
+            onedrive_env=onedrive_env,
+        ):
+            if required_dir:
+                if (candidate / required_dir).exists():
+                    return candidate
+            elif any((candidate / dirname).exists() for dirname in DataLoader.HEALTH_DATA_DIR_NAMES):
+                return candidate
+
+        env_root = os.environ.get("AI_HEALTH_DATA_ROOT")
+        if env_root:
+            return Path(env_root)
+        return Config.get_project_root() / "data"
 
     @staticmethod
     def resolve_data_path(filename, user_home=None, onedrive_env=None):
