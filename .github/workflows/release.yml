@@ -1,0 +1,151 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, for example v1.0.58"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  windows-installer:
+    name: Build Windows installer and publish release
+    runs-on: windows-latest
+    timeout-minutes: 180
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      VANTAGE_BUILD_WORKERS: "2"
+    steps:
+      - name: Check out release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+          lfs: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-backend-runtime-gpu.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: npm
+          cache-dependency-path: src/webapp/package-lock.json
+
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Release tag must match vMAJOR.MINOR.PATCH, got $env:RELEASE_TAG"
+          }
+          $package = Get-Content -Raw src/webapp/package.json | ConvertFrom-Json
+          $expectedTag = "v$($package.version)"
+          if ($env:RELEASE_TAG -ne $expectedTag) {
+            throw "Release tag $env:RELEASE_TAG does not match src/webapp/package.json version $($package.version)"
+          }
+          $tagCommit = (git rev-list -n 1 $env:RELEASE_TAG).Trim()
+          $headCommit = (git rev-parse HEAD).Trim()
+          if ($tagCommit -ne $headCommit) {
+            throw "Checked out commit $headCommit does not match $env:RELEASE_TAG commit $tagCommit"
+          }
+          "Validated $env:RELEASE_TAG at $headCommit"
+
+      - name: Build release installer
+        id: build
+        shell: pwsh
+        run: .\scripts\build-release-installer.ps1
+
+      - name: Stage release assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:RELEASE_TAG.TrimStart("v")
+          $dist = Join-Path $PWD "src\webapp\electron-dist"
+          $assetRoot = Join-Path $PWD "release-assets"
+          New-Item -ItemType Directory -Force -Path $assetRoot | Out-Null
+
+          $installer = Get-Item -LiteralPath (Join-Path $dist "Vantage Setup $version.exe")
+          $blockmap = Get-Item -LiteralPath (Join-Path $dist "Vantage Setup $version.exe.blockmap")
+          foreach ($asset in @($installer, $blockmap)) {
+            if ($asset.Length -ge 2147483648) {
+              throw "$($asset.Name) is $($asset.Length) bytes, which is at or above GitHub's 2 GiB release asset limit."
+            }
+            Copy-Item -LiteralPath $asset.FullName -Destination $assetRoot -Force
+          }
+
+          $hashLines = Get-ChildItem -LiteralPath $assetRoot -File |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            }
+          $hashLines | Set-Content -LiteralPath (Join-Path $assetRoot "SHA256SUMS.txt") -Encoding ascii
+
+          @"
+          # Vantage $env:RELEASE_TAG
+
+          Windows installer built from commit $env:GITHUB_SHA.
+
+          Assets:
+          - Vantage Setup $version.exe
+          - Vantage Setup $version.exe.blockmap
+          - SHA256SUMS.txt
+          "@ | Set-Content -LiteralPath RELEASE_NOTES.md -Encoding utf8
+
+          Get-ChildItem -LiteralPath $assetRoot -File | Format-Table Name,Length
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $assets = Get-ChildItem -LiteralPath release-assets -File | ForEach-Object { $_.FullName }
+          $releaseExists = $false
+          try {
+            gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+            $releaseExists = $true
+          } catch {
+            $releaseExists = $false
+          }
+
+          if ($releaseExists) {
+            gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --title "Vantage $env:RELEASE_TAG" --notes-file RELEASE_NOTES.md
+            gh release upload $env:RELEASE_TAG @assets --repo $env:GITHUB_REPOSITORY --clobber
+          } else {
+            gh release create $env:RELEASE_TAG @assets --repo $env:GITHUB_REPOSITORY --title "Vantage $env:RELEASE_TAG" --notes-file RELEASE_NOTES.md --verify-tag
+          }
+
+      - name: Write job summary
+        shell: pwsh
+        run: |
+          $assetRows = Get-ChildItem -LiteralPath release-assets -File |
+            Sort-Object Name |
+            ForEach-Object { "| $($_.Name) | $($_.Length) |" }
+          @"
+          ## Vantage $env:RELEASE_TAG
+
+          Published GitHub Release for ``$env:RELEASE_TAG``.
+
+          | Asset | Bytes |
+          | --- | ---: |
+          $($assetRows -join "`n")
+          "@ | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY

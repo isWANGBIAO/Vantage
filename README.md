@@ -72,6 +72,25 @@ Windows full build, install, and launch:
 Let `RUN.bat` finish naturally. The installer output is under
 `src/webapp/electron-dist`.
 
+Build a Windows release installer without installing or launching the app:
+
+```powershell
+.\scripts\build-release-installer.ps1
+```
+
+GitHub Releases are automated for version tags. Keep
+`src/webapp/package.json` at the release version, tag the commit, and push the
+tag:
+
+```powershell
+git tag v1.0.58
+git push origin v1.0.58
+```
+
+The `Release` workflow builds the Windows installer, generates `SHA256SUMS.txt`,
+and publishes the assets to the matching GitHub Release. The tag must match the
+frontend package version, for example `v1.0.58` for package version `1.0.58`.
+
 macOS full build, install, and launch:
 
 ```bash
