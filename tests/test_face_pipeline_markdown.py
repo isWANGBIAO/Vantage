@@ -8,7 +8,7 @@ class FacePipelineMarkdownTests(unittest.TestCase):
         markdown = build_pipeline_markdown(
             {
                 "sample_title": "示例样本",
-                "source_path": r"D:\WANGBIAO\图片\本机照片\2026\03\11\23\photo_20260311_231320.jpg",
+                "source_path": r"C:\Users\Example\Pictures\sample-face.jpg",
                 "status": "passed",
                 "fail_reasons": [],
                 "assets": {

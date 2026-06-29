@@ -139,9 +139,11 @@ history/
 src/AI_Prediction/data/*.csv
 .vscode/launch.json
 src/scripts/download_model_helper.py
+src/scripts/models/*.onnx
 results.csv
 data/mi_fiteness_data/
 data/zepplift_data/
+/build-info.json
 
 # Claude Code
 .claude/

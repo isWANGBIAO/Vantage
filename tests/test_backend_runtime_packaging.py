@@ -50,7 +50,7 @@ def test_resolve_backend_runtime_layout_uses_fixed_output_tree(tmp_path):
     assert layout["entry_script"] == tmp_path / "src" / "scripts" / "run_server_background.py"
 
 
-def test_collect_backend_runtime_resources_requires_models_and_prompts(tmp_path):
+def test_collect_backend_runtime_resources_includes_available_models_and_prompts(tmp_path):
     _create_required_runtime_resources(tmp_path)
 
     resources = collect_backend_runtime_resources(tmp_path)
@@ -69,18 +69,18 @@ def test_collect_backend_runtime_resources_rejects_missing_required_files(tmp_pa
         collect_backend_runtime_resources(tmp_path)
 
     assert "Prompt_Action_Plan.md" in str(excinfo.value)
-    assert "face_parsing.farl.lapa.int8.onnx" in str(excinfo.value)
 
 
-def test_collect_backend_runtime_resources_allows_missing_optional_yolo_model(tmp_path):
+def test_collect_backend_runtime_resources_allows_missing_optional_models(tmp_path):
     _create_required_runtime_resources(tmp_path)
     (tmp_path / "yolo26m.pt").unlink()
+    (tmp_path / "src" / "scripts" / "models" / "face_parsing.farl.lapa.int8.onnx").unlink()
 
     resources = collect_backend_runtime_resources(tmp_path)
 
     packaged_paths = {resource.output_relative_path for resource in resources}
     assert Path("yolo26m.pt") not in packaged_paths
-    assert Path("src") / "scripts" / "models" / "face_parsing.farl.lapa.int8.onnx" in packaged_paths
+    assert Path("src") / "scripts" / "models" / "face_parsing.farl.lapa.int8.onnx" not in packaged_paths
 
 
 def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_path):

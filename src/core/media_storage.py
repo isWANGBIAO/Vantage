@@ -6,7 +6,7 @@ from src.core.config import Config
 
 MEDIA_PATHS_FILE_NAME = "media-paths.json"
 MEDIA_PATHS_VERSION = 1
-DEFAULT_D_DRIVE_ROOT = r"D:\WANGBIAO"
+DEFAULT_LEGACY_MEDIA_ROOT = os.environ.get("VANTAGE_LEGACY_MEDIA_ROOT", "")
 PHOTO_DIR_NAME = "本机照片"
 PICTURE_DIR_CANDIDATES = ("Pictures", "图片")
 SCREENSHOT_DIR_CANDIDATES = ("Screenshots", "屏幕截图")
@@ -79,7 +79,7 @@ def _ensure_media_directories(
 
 def detect_preferred_media_paths(
     *,
-    d_drive_root: str = DEFAULT_D_DRIVE_ROOT,
+    d_drive_root: str = DEFAULT_LEGACY_MEDIA_ROOT,
     user_home: str | None = None,
     onedrive_env: str | None = None,
     onedrive_consumer_env: str | None = None,
@@ -131,7 +131,7 @@ def detect_preferred_media_paths(
 def resolve_media_storage_paths(
     *,
     settings_file: str | Path | None = None,
-    d_drive_root: str = DEFAULT_D_DRIVE_ROOT,
+    d_drive_root: str = DEFAULT_LEGACY_MEDIA_ROOT,
     user_home: str | None = None,
     onedrive_env: str | None = None,
     onedrive_consumer_env: str | None = None,

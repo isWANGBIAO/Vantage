@@ -41,8 +41,8 @@ def test_build_frontend_env_includes_runtime_path_contract():
     launcher = _load_launcher_module()
     runtime_env = {
         "VANTAGE_APP_MODE": "development",
-        "VANTAGE_DATA_DIR": r"C:\Users\97012\AppData\Local\Vantage",
-        "VANTAGE_LOG_DIR": r"C:\Users\97012\AppData\Local\Vantage\logs",
+        "VANTAGE_DATA_DIR": r"C:\Users\Example\AppData\Local\Vantage",
+        "VANTAGE_LOG_DIR": r"C:\Users\Example\AppData\Local\Vantage\logs",
     }
 
     with patch.object(launcher.Config, "build_runtime_environment", return_value=runtime_env):

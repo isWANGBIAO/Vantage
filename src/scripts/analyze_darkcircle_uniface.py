@@ -466,7 +466,6 @@ def main():
     # Default directories if none provided (compatible with previous script logic)
     search_dirs = args.dir if args.dir else [
         os.path.join(os.path.expanduser("~"), "OneDrive", "图片", "本机照片"),
-        r"D:\WANGBIAO\图片\本机照片"
     ]
     
     print(f"Scanning directories: {search_dirs}")

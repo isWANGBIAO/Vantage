@@ -40,11 +40,10 @@ REQUIRED_ROOT_RESOURCE_NAMES = (
     "Prompt_System.md",
 )
 
-REQUIRED_RESOURCE_SPECS = (
-    ("src/scripts/models/face_parsing.farl.lapa.int8.onnx", "src/scripts/models"),
-)
+REQUIRED_RESOURCE_SPECS: tuple[tuple[str, str], ...] = ()
 
 OPTIONAL_RESOURCE_SPECS = (
+    ("src/scripts/models/face_parsing.farl.lapa.int8.onnx", "src/scripts/models"),
     ("yolo26m.pt", "."),
 )
 

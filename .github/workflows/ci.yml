@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest -r requirements-backend-runtime-gpu.txt
+      - name: Run Python tests
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend tests and build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/webapp/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: src/webapp
+      - name: Run frontend tests
+        run: npm test
+        working-directory: src/webapp
+      - name: Build frontend
+        run: npm run build
+        working-directory: src/webapp

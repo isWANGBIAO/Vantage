@@ -17,11 +17,11 @@ def test_status_payload_does_not_expose_absolute_paths():
 
     try:
         server.state.paths = {
-            "photo": r"D:\WANGBIAO\Pictures\photo.jpg",
-            "screenshot": r"D:\WANGBIAO\Pictures\screen.png",
+            "photo": r"C:\Users\Example\Pictures\photo.jpg",
+            "screenshot": r"C:\Users\Example\Pictures\screen.png",
         }
-        server.state.photos_path = r"D:\WANGBIAO\Pictures\photos"
-        server.state.screenshots_path = r"D:\WANGBIAO\Pictures\screenshots"
+        server.state.photos_path = r"C:\Users\Example\Pictures\photos"
+        server.state.screenshots_path = r"C:\Users\Example\Pictures\screenshots"
 
         payload = server._build_status_payload()
     finally:
@@ -30,7 +30,7 @@ def test_status_payload_does_not_expose_absolute_paths():
         server.state.screenshots_path = original_screenshots_path
 
     payload_text = str(payload)
-    assert r"D:\WANGBIAO" not in payload_text
+    assert r"C:\Users\Example" not in payload_text
     assert payload["paths"]["photo"] is True
     assert payload["paths"]["screenshot"] is True
     assert "photos_path" not in payload

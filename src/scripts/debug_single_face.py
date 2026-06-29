@@ -82,5 +82,5 @@ def test_image(path):
         print("FAILURE: No face landmarks detected.")
 
 if __name__ == "__main__":
-    test_path = r"C:\Users\97012\OneDrive\图片\本机照片\2025\02\06\22\photo_20250206_224514.jpg"
+    test_path = os.environ.get("VANTAGE_DEBUG_FACE_IMAGE", r"C:\Users\Example\Pictures\sample-face.jpg")
     test_image(test_path)

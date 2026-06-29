@@ -68,7 +68,7 @@ from src.core.user_config import (
     load_provider_config,
     load_settings,
 )
-from src.core.media_storage import get_media_paths_settings_file, resolve_media_storage_paths
+from src.core.media_storage import DEFAULT_LEGACY_MEDIA_ROOT, get_media_paths_settings_file, resolve_media_storage_paths
 from src.manager.manager_main import Monitor
 from src.services.llm_client import LLMClient
 from src.services.model_call_recorder import (
@@ -1889,7 +1889,7 @@ def identify_logs_folder(
     user_home: str | None = None,
     onedrive_env: str | None = None,
     onedrive_consumer_env: str | None = None,
-    d_drive_root: str = r"D:\WANGBIAO",
+    d_drive_root: str = DEFAULT_LEGACY_MEDIA_ROOT,
 ):
     settings_file = get_media_paths_settings_file(config_dir=config_dir)
     return resolve_media_storage_paths(
