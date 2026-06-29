@@ -26,6 +26,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-ci.txt
       - name: Run Python tests
+        env:
+          VANTAGE_DATA_DIR: ${{ runner.temp }}\Vantage\data
+          VANTAGE_CONFIG_DIR: ${{ runner.temp }}\Vantage\config
+          VANTAGE_HISTORY_DIR: ${{ runner.temp }}\Vantage\history
+          VANTAGE_LOG_DIR: ${{ runner.temp }}\Vantage\logs
+          VANTAGE_PLOT_DIR: ${{ runner.temp }}\Vantage\plot_outputs
+          VANTAGE_CACHE_DIR: ${{ runner.temp }}\Vantage\cache
+          VANTAGE_RUNTIME_DIR: ${{ runner.temp }}\Vantage\runtime
+          VANTAGE_MIGRATION_DIR: ${{ runner.temp }}\Vantage\migration
         run: python -m pytest -q
 
   frontend:
