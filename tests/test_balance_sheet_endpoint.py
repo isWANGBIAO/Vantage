@@ -13,9 +13,29 @@ from src import server
 class BalanceSheetEndpointTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.llm_provider_chain_patch = patch.object(
+            server.LLMClient,
+            "_build_provider_chain",
+            side_effect=self._fake_llm_provider_chain,
+        )
+        self.llm_provider_chain_patch.start()
 
     def tearDown(self):
+        self.llm_provider_chain_patch.stop()
         self.temp_dir.cleanup()
+
+    def _fake_llm_provider_chain(self):
+        return [
+            {
+                "route": "custom",
+                "base_url": "http://127.0.0.1:9/v1",
+                "api_key": "unit-test-key",
+                "headers": {"Authorization": "Bearer unit-test-key"},
+                "model": "gpt-5.5",
+                "models": ["gpt-5.5"],
+                "model_capabilities": {"gpt-5.5": None},
+            }
+        ]
 
     def test_parse_required_flag_checks_optional_words_before_required_substrings(self):
         self.assertFalse(server._parse_required_flag("非必须"))
