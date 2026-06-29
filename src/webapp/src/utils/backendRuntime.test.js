@@ -12,14 +12,14 @@ const {
 
 const runtimePaths = {
   appMode: 'packaged',
-  dataDir: 'C:\\Users\\97012\\AppData\\Local\\Vantage',
-  configDir: 'C:\\Users\\97012\\AppData\\Local\\Vantage\\config',
-  historyDir: 'C:\\Users\\97012\\AppData\\Local\\Vantage\\history',
-  logDir: 'C:\\Users\\97012\\AppData\\Local\\Vantage\\logs',
-  plotDir: 'C:\\Users\\97012\\AppData\\Local\\Vantage\\plot_outputs',
-  cacheDir: 'C:\\Users\\97012\\AppData\\Local\\Vantage\\cache',
-  runtimeDir: 'C:\\Users\\97012\\AppData\\Local\\Vantage\\runtime',
-  migrationDir: 'C:\\Users\\97012\\AppData\\Local\\Vantage\\migration',
+  dataDir: 'C:\\Users\\Example\\AppData\\Local\\Vantage',
+  configDir: 'C:\\Users\\Example\\AppData\\Local\\Vantage\\config',
+  historyDir: 'C:\\Users\\Example\\AppData\\Local\\Vantage\\history',
+  logDir: 'C:\\Users\\Example\\AppData\\Local\\Vantage\\logs',
+  plotDir: 'C:\\Users\\Example\\AppData\\Local\\Vantage\\plot_outputs',
+  cacheDir: 'C:\\Users\\Example\\AppData\\Local\\Vantage\\cache',
+  runtimeDir: 'C:\\Users\\Example\\AppData\\Local\\Vantage\\runtime',
+  migrationDir: 'C:\\Users\\Example\\AppData\\Local\\Vantage\\migration',
 };
 
 test('resolveBundledBackendExecutable prefers an explicit override', () => {
@@ -41,6 +41,7 @@ test('buildBundledBackendEnvironment injects the packaged runtime contract', () 
       PATH: 'C:\\Windows\\System32',
       VANTAGE_PROJECT_ROOT: 'C:\\repo\\ai',
     },
+    loadProviderConfigFn: () => ({ selected_provider: '', providers: {} }),
   });
 
   assert.equal(env.PATH, 'C:\\Windows\\System32');
@@ -63,6 +64,7 @@ test('buildBundledBackendEnvironment enables macOS backend camera auth preflight
     env: {
       PATH: '/usr/bin',
     },
+    loadProviderConfigFn: () => ({ selected_provider: '', providers: {} }),
   });
 
   assert.equal(env.VANTAGE_MACOS_SKIP_CAMERA_AUTH, '0');
@@ -169,6 +171,7 @@ test('ensureBundledBackendReady spawns the bundled backend in packaged mode', as
       spawnCall = { file, args, options };
       return fakeChild;
     },
+    loadProviderConfigFn: () => ({ selected_provider: '', providers: {} }),
     waitForStatusFn: async ({ timeoutMs }) => {
       waitTimeouts.push(timeoutMs);
       waitAttempts += 1;

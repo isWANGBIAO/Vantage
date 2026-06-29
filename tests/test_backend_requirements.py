@@ -41,6 +41,38 @@ REQUIRED_GPU_RUNTIME_PACKAGES = {
     "winsdk",
 }
 
+REQUIRED_CI_PACKAGES = {
+    "cv2-enumerate-cameras",
+    "fastapi",
+    "jieba",
+    "matplotlib",
+    "mss",
+    "numpy",
+    "openai",
+    "opencv-python-headless",
+    "openpyxl",
+    "pandas",
+    "piexif",
+    "pillow",
+    "psutil",
+    "pytest",
+    "python-dotenv",
+    "python-multipart",
+    "requests",
+    "scienceplots",
+    "uvicorn",
+}
+
+FORBIDDEN_CI_PACKAGES = {
+    "lap",
+    "mediapipe",
+    "onnxruntime-gpu",
+    "torch",
+    "torchaudio",
+    "torchvision",
+    "ultralytics",
+}
+
 FORBIDDEN_GPU_RUNTIME_PACKAGES = {
     "cython",
     "ipykernel",
@@ -118,6 +150,21 @@ def test_gpu_runtime_requirements_are_minimal_and_reproducible():
     assert not missing, f"GPU runtime requirements missing packages: {sorted(missing)}"
     assert not forbidden, f"GPU runtime requirements include forbidden packages: {sorted(forbidden)}"
     assert any("download.pytorch.org/whl/cu" in line for line in content)
+
+
+def test_ci_requirements_cover_tests_without_gpu_runtime():
+    content = Path("requirements-ci.txt").read_text(encoding="utf-8").splitlines()
+    package_names = {
+        normalized
+        for line in content
+        if (normalized := _normalize_requirement_name(line)) is not None
+    }
+
+    missing = REQUIRED_CI_PACKAGES - package_names
+    forbidden = FORBIDDEN_CI_PACKAGES & package_names
+
+    assert not missing, f"requirements-ci.txt missing packages: {sorted(missing)}"
+    assert not forbidden, f"requirements-ci.txt includes heavyweight runtime packages: {sorted(forbidden)}"
 
 
 def test_backend_runtime_requirements_keep_macos_opencv_headless():

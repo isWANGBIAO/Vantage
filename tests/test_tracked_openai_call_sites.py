@@ -5,6 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+
 def _load_analyzer_module():
     fake_modules = {
         "jieba": types.ModuleType("jieba"),
@@ -22,12 +23,6 @@ def _load_analyzer_module():
         return importlib.import_module("src.AI_Prediction.analyzer")
 
 
-def _stream_chunk(content):
-    return SimpleNamespace(
-        choices=[SimpleNamespace(delta=SimpleNamespace(content=content))],
-    )
-
-
 class AnalyzerTrackedOpenAICallSiteTests(unittest.TestCase):
     def test_llm_classify_uses_tracked_openai_client(self):
         analyzer = _load_analyzer_module()
@@ -37,18 +32,22 @@ class AnalyzerTrackedOpenAICallSiteTests(unittest.TestCase):
             choices=[
                 SimpleNamespace(
                     message=SimpleNamespace(
-                        content='{"椋熺墿":["鐗涘ザ"],"椁愬巺":[],"娲诲姩":[]}',
+                        content='{"食物":["牛肉"],"餐厅":[],"活动":[]}',
                     )
                 )
             ]
         )
 
         with (
-            patch.dict(analyzer.os.environ, {"ALIYUN_ACCESS_KEY": "key", "ALIYUN_ACCESS_BASE_URL": "https://example.com"}, clear=False),
+            patch.dict(
+                analyzer.os.environ,
+                {"ALIYUN_ACCESS_KEY": "key", "ALIYUN_ACCESS_BASE_URL": "https://example.com"},
+                clear=False,
+            ),
             patch.object(analyzer, "OpenAI", return_value=raw_client) as openai_cls,
             patch.object(analyzer, "TrackedOpenAIClient", return_value=tracked_client) as tracked_client_cls,
         ):
-            result = analyzer.llm_classify("鐗涘ザ")
+            result = analyzer.llm_classify("牛肉")
 
         openai_cls.assert_called_once_with(base_url="https://example.com", api_key="key")
         tracked_client_cls.assert_called_once_with(
@@ -58,7 +57,7 @@ class AnalyzerTrackedOpenAICallSiteTests(unittest.TestCase):
             base_url="https://example.com",
         )
         tracked_client.create_chat_completion.assert_called_once()
-        self.assertEqual(result["椋熺墿"], ["鐗涘ザ"])
+        self.assertEqual(result["食物"], ["牛肉"])
 
     def test_llm_extract_meals_uses_tracked_openai_client(self):
         analyzer = _load_analyzer_module()
@@ -68,18 +67,22 @@ class AnalyzerTrackedOpenAICallSiteTests(unittest.TestCase):
             choices=[
                 SimpleNamespace(
                     message=SimpleNamespace(
-                        content='{"鏃╅":["楦¤泲"],"鍗堥":[],"鏅氶":[],"灏忓悆":[]}',
+                        content='{"早餐":["鸡蛋"],"午餐":[],"晚餐":[],"小吃":[]}',
                     )
                 )
             ]
         )
 
         with (
-            patch.dict(analyzer.os.environ, {"ALIYUN_ACCESS_KEY": "key", "ALIYUN_ACCESS_BASE_URL": "https://example.com"}, clear=False),
+            patch.dict(
+                analyzer.os.environ,
+                {"ALIYUN_ACCESS_KEY": "key", "ALIYUN_ACCESS_BASE_URL": "https://example.com"},
+                clear=False,
+            ),
             patch.object(analyzer, "OpenAI", return_value=raw_client) as openai_cls,
             patch.object(analyzer, "TrackedOpenAIClient", return_value=tracked_client) as tracked_client_cls,
         ):
-            result = analyzer.llm_extract_meals("楦¤泲")
+            result = analyzer.llm_extract_meals("鸡蛋")
 
         openai_cls.assert_called_once_with(base_url="https://example.com", api_key="key")
         tracked_client_cls.assert_called_once_with(
@@ -89,7 +92,7 @@ class AnalyzerTrackedOpenAICallSiteTests(unittest.TestCase):
             base_url="https://example.com",
         )
         tracked_client.create_chat_completion.assert_called_once()
-        self.assertEqual(result["鏃╅"], ["楦¤泲"])
+        self.assertEqual(result["早餐"], ["鸡蛋"])
 
     def test_llm_extract_diarrhea_info_uses_tracked_openai_client(self):
         analyzer = _load_analyzer_module()
@@ -99,18 +102,22 @@ class AnalyzerTrackedOpenAICallSiteTests(unittest.TestCase):
             choices=[
                 SimpleNamespace(
                     message=SimpleNamespace(
-                        content="[{'娆℃暟': 1, '绋嬪害': '杞诲井', '鏃堕棿': '鏃╀笂'}]",
+                        content="[{'次数': 1, '程度': '轻微', '时间': '早上'}]",
                     )
                 )
             ]
         )
 
         with (
-            patch.dict(analyzer.os.environ, {"ALIYUN_ACCESS_KEY": "key", "ALIYUN_ACCESS_BASE_URL": "https://example.com"}, clear=False),
+            patch.dict(
+                analyzer.os.environ,
+                {"ALIYUN_ACCESS_KEY": "key", "ALIYUN_ACCESS_BASE_URL": "https://example.com"},
+                clear=False,
+            ),
             patch.object(analyzer, "OpenAI", return_value=raw_client) as openai_cls,
             patch.object(analyzer, "TrackedOpenAIClient", return_value=tracked_client) as tracked_client_cls,
         ):
-            result = analyzer.llm_extract_diarrhea_info("鎷夌█ 1 娆?")
+            result = analyzer.llm_extract_diarrhea_info("拉稀 1 次")
 
         openai_cls.assert_called_once_with(base_url="https://example.com", api_key="key")
         tracked_client_cls.assert_called_once_with(
@@ -120,7 +127,7 @@ class AnalyzerTrackedOpenAICallSiteTests(unittest.TestCase):
             base_url="https://example.com",
         )
         tracked_client.create_chat_completion.assert_called_once()
-        self.assertEqual(result[0]["娆℃暟"], 1)
+        self.assertEqual(result[0]["次数"], 1)
 
 
 if __name__ == "__main__":

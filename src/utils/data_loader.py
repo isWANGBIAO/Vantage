@@ -303,8 +303,8 @@ class DataLoader:
         try:
             df = DataLoader.load_excel_data(excel_file_path).copy()
             today = datetime.now().date()
-            date_column = "日期" if "日期" in df.columns else "鏃ユ湡"
-            weekday_column = "周几" if "周几" in df.columns else None
+            date_column = "日期" if "日期" in df.columns else "Date"
+            weekday_column = "周几" if "周几" in df.columns else ("Weekday" if "Weekday" in df.columns else None)
 
             df["date_only"] = df[date_column].dt.date
             start_date = today - timedelta(days=days)
@@ -370,8 +370,8 @@ class DataLoader:
         try:
             df = DataLoader.load_excel_data(excel_file_path).copy()
             today = datetime.now().date()
-            date_column = "日期" if "日期" in df.columns else "鏃ユ湡"
-            weekday_column = "周几" if "周几" in df.columns else None
+            date_column = "日期" if "日期" in df.columns else "Date"
+            weekday_column = "周几" if "周几" in df.columns else ("Weekday" if "Weekday" in df.columns else None)
 
             df["date_only"] = df[date_column].dt.date
             future_df = df[df["date_only"] > today].sort_values(by=date_column)

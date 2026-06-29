@@ -7,7 +7,7 @@ const require = createRequire(import.meta.url);
 const { resolveRuntimePaths } = require('./runtimePaths.cjs');
 
 test('resolveRuntimePaths defaults packaged runs to LOCALAPPDATA Vantage directories', () => {
-  const localAppData = path.win32.join('C:\\Users\\97012', 'AppData', 'Local');
+  const localAppData = path.win32.join('C:\\Users\\Example', 'AppData', 'Local');
 
   const runtimePaths = resolveRuntimePaths({
     appMode: 'packaged',
@@ -29,7 +29,7 @@ test('resolveRuntimePaths defaults packaged runs to LOCALAPPDATA Vantage directo
 
 test('resolveRuntimePaths keeps history out of the project root in development mode', () => {
   const projectRoot = path.win32.join('C:\\repo', 'ai');
-  const localAppData = path.win32.join('C:\\Users\\97012', 'AppData', 'Local');
+  const localAppData = path.win32.join('C:\\Users\\Example', 'AppData', 'Local');
 
   const runtimePaths = resolveRuntimePaths({
     appMode: 'development',

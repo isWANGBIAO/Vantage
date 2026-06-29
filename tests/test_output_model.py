@@ -31,7 +31,7 @@ class OutputModelTests(unittest.TestCase):
             kwargs["messages"][1]["content"],
             "你是什么模型？你的资料的最新日期是什么？你的最大上下文是多少个token，为多少K？",
         )
-        self.assertNotIn("浣犳槸", kwargs["messages"][1]["content"])
+        self.assertNotIn("乱码", kwargs["messages"][1]["content"])
 
 
 if __name__ == "__main__":

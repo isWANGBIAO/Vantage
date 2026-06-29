@@ -215,13 +215,20 @@ class FaceParser:
 def discover_photo_search_paths():
     onedrive_path = os.environ.get("OneDrive", os.path.expanduser("~\\OneDrive"))
     user_home = os.path.expanduser("~")
+    configured_roots = [
+        root.strip()
+        for root in os.environ.get("VANTAGE_PHOTO_ROOTS", "").split(os.pathsep)
+        if root.strip()
+    ]
     potential_roots = [
-        "D:\\WANGBIAO",
+        *configured_roots,
         onedrive_path,
         os.path.join(user_home, "OneDrive"),
         user_home,
     ]
     subdirs = [
+        os.path.join("Pictures", "Camera Roll"),
+        os.path.join("Pictures", "Saved Pictures"),
         os.path.join("Pictures", "本机照片"),
         os.path.join("图片", "本机照片"),
         "本机照片",

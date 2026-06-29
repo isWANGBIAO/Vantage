@@ -24,7 +24,7 @@ class _FakeProcess:
 
 class CleanupVantagePythonProcessesTests(unittest.TestCase):
     def setUp(self):
-        self.project_root = Path("C:/Users/97012/gitee/ai")
+        self.project_root = Path(__file__).resolve().parents[1]
 
     def test_matches_python_server_script_in_project(self):
         process = _FakeProcess(
@@ -64,7 +64,7 @@ class CleanupVantagePythonProcessesTests(unittest.TestCase):
         process = _FakeProcess(
             pid=5678,
             name="python.exe",
-            cmdline=["python", "c:/Users/97012/.vscode/extensions/ms-python.black-formatter/lsp_server.py"],
+            cmdline=["python", "c:/Users/Example/.vscode/extensions/ms-python.black-formatter/lsp_server.py"],
             cwd=str(self.project_root),
         )
 

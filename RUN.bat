@@ -19,7 +19,12 @@ set "BACKEND_RUNTIME_REQUIREMENTS_STAMP=%BACKEND_RUNTIME_VENV%\.requirements-bac
 set "WEBAPP_BUILD_INFO=%PROJECT_ROOT%src\webapp\build-info.json"
 set "RUN_BUILD_INFO_BACKUP=%TEMP%\vantage-build-info-%RANDOM%-%RANDOM%.json"
 set "BUILD_INFO_BACKUP_CREATED=0"
+set "CUSTOM_NSIS_BINARY_RELEASE=1.0.0"
+set "CUSTOM_NSIS_BINARY_FILE=nsisbi-electronbuilder-3.10.3.7z"
+set "CUSTOM_NSIS_BINARY_URL=https://github.com/SoundSafari/NSISBI-ElectronBuilder/releases/download/%CUSTOM_NSIS_BINARY_RELEASE%/%CUSTOM_NSIS_BINARY_FILE%"
+set "CUSTOM_NSIS_BINARY_SHA256=374cfc092fd1bd1898472df627549ecc165b0d6ba88e82deba085673aec95336"
 if not defined VANTAGE_BUILD_WORKERS set "VANTAGE_BUILD_WORKERS=%NUMBER_OF_PROCESSORS%"
+if not defined VANTAGE_ELECTRON_MIRROR_FALLBACK set "VANTAGE_ELECTRON_MIRROR_FALLBACK=https://npmmirror.com/mirrors/electron/"
 
 call :CaptureSeconds RUN_START_SECONDS
 
@@ -31,7 +36,7 @@ call :StepStart "[1/7] Checking frontend dependencies..."
 if not exist "%PROJECT_ROOT%src\webapp\node_modules" (
     echo       Installing dependencies...
     pushd "%PROJECT_ROOT%src\webapp"
-    call npm install
+    call :RunNpmInstallWithFallback
     if errorlevel 1 (
         popd
         echo       npm install failed
@@ -41,6 +46,14 @@ if not exist "%PROJECT_ROOT%src\webapp\node_modules" (
 ) else (
     echo       Dependencies already installed
 )
+pushd "%PROJECT_ROOT%src\webapp"
+call :EnsureElectronBinary
+if errorlevel 1 (
+    popd
+    echo       Electron binary preparation failed
+    exit /b 1
+)
+popd
 call :StepDone "Frontend dependency check complete"
 
 call :StepStart "[2/7] Preparing backend packaging environment..."
@@ -127,8 +140,14 @@ if errorlevel 1 (
 call :StepDone "Backend runtime verification complete"
 
 call :StepStart "[6/8] Building Windows installer..."
+call :EnsureCustomNsisArchiveCache
+if errorlevel 1 (
+    call :RestoreBuildInfo
+    echo       Custom NSIS archive cache preparation failed
+    exit /b 1
+)
 pushd "%PROJECT_ROOT%src\webapp"
-call npm run electron:package
+call :RunElectronPackageWithFallback
 if errorlevel 1 (
     popd
     call :RestoreBuildInfo
@@ -194,6 +213,46 @@ call :CaptureSeconds STEP_END_SECONDS
 set /a STEP_DURATION_SECONDS=STEP_END_SECONDS-STEP_START_SECONDS
 echo       %~1 (!STEP_DURATION_SECONDS!s)
 exit /b 0
+
+:UseElectronMirrorFallback
+if defined ELECTRON_MIRROR (
+    echo       ELECTRON_MIRROR already set: !ELECTRON_MIRROR!
+) else (
+    set "ELECTRON_MIRROR=%VANTAGE_ELECTRON_MIRROR_FALLBACK%"
+    echo       Retrying Electron download with mirror fallback: !ELECTRON_MIRROR!
+)
+exit /b 0
+
+:RunNpmInstallWithFallback
+call npm install
+if not errorlevel 1 exit /b 0
+if defined ELECTRON_MIRROR exit /b 1
+call :UseElectronMirrorFallback
+call npm install
+exit /b %ERRORLEVEL%
+
+:EnsureElectronBinary
+call node node_modules\electron\install.js
+if not errorlevel 1 goto VerifyElectronBinary
+if defined ELECTRON_MIRROR exit /b 1
+call :UseElectronMirrorFallback
+call node node_modules\electron\install.js
+if errorlevel 1 exit /b 1
+:VerifyElectronBinary
+call npm exec -- electron --version
+exit /b %ERRORLEVEL%
+
+:RunElectronPackageWithFallback
+call npm run electron:package
+if not errorlevel 1 exit /b 0
+if defined ELECTRON_MIRROR exit /b 1
+call :UseElectronMirrorFallback
+call npm run electron:package
+exit /b %ERRORLEVEL%
+
+:EnsureCustomNsisArchiveCache
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; $override = $env:ELECTRON_BUILDER_CACHE; if ($override -and [System.IO.Path]::IsPathRooted($override)) { $cacheRoot = $override } elseif ($env:LOCALAPPDATA) { $cacheRoot = Join-Path $env:LOCALAPPDATA 'electron-builder\Cache' } else { $cacheRoot = Join-Path $env:TEMP 'electron-builder-cache' }; $archiveDir = Join-Path $cacheRoot '%CUSTOM_NSIS_BINARY_RELEASE%'; $archive = Join-Path $archiveDir '%CUSTOM_NSIS_BINARY_FILE%'; $expected = '%CUSTOM_NSIS_BINARY_SHA256%'; if (Test-Path -LiteralPath $archive) { $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant(); if ($actual -eq $expected) { Write-Host '      Custom NSIS archive cache ready'; exit 0 }; Write-Host '      Custom NSIS archive checksum mismatch; refreshing'; Remove-Item -LiteralPath $archive -Force }; New-Item -ItemType Directory -Force -Path $archiveDir | Out-Null; $tmp = $archive + '.tmp'; if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }; & curl.exe --silent --show-error --location --retry 3 --retry-delay 2 --fail --output $tmp '%CUSTOM_NSIS_BINARY_URL%'; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmp).Hash.ToLowerInvariant(); if ($actual -ne $expected) { Remove-Item -LiteralPath $tmp -Force; throw 'Custom NSIS archive checksum mismatch' }; Move-Item -LiteralPath $tmp -Destination $archive -Force; Write-Host '      Custom NSIS archive cache ready'"
+exit /b %ERRORLEVEL%
 
 :RestoreBuildInfo
 if "%BUILD_INFO_BACKUP_CREATED%"=="1" if exist "%RUN_BUILD_INFO_BACKUP%" (

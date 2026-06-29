@@ -18,7 +18,7 @@ test('buildExpenseSheetViewModel tolerates a null payload before data loads', ()
 test('buildExpenseSheetViewModel derives dashboard sections from workbook payload', () => {
   const payload = {
     source: {
-      path: 'C:\\Users\\97012\\OneDrive\\Mine\\Balance Sheet.xlsx',
+      path: 'C:\\Users\\Example\\OneDrive\\Mine\\Balance Sheet.xlsx',
       updated_at: '2026-04-11 18:46:33',
       sheet_count: 4,
     },
@@ -112,7 +112,7 @@ test('buildExpenseSheetViewModel derives dashboard sections from workbook payloa
 test('buildExpenseSheetViewModel prefers full trend_points history for the chart', () => {
   const payload = {
     source: {
-      path: 'C:\\Users\\97012\\OneDrive\\Mine\\Balance Sheet.xlsx',
+      path: 'C:\\Users\\Example\\OneDrive\\Mine\\Balance Sheet.xlsx',
       updated_at: '2026-04-11 18:46:33',
       sheet_count: 1,
     },
@@ -160,7 +160,7 @@ test('buildExpenseSheetViewModel prefers full trend_points history for the chart
 test('buildExpenseSheetViewModel exposes future fixed income forecast separately', () => {
   const payload = {
     source: {
-      path: 'C:\\Users\\97012\\OneDrive\\Mine\\Balance Sheet.xlsx',
+      path: 'C:\\Users\\Example\\OneDrive\\Mine\\Balance Sheet.xlsx',
       updated_at: '2026-04-30 23:27:13',
       sheet_count: 1,
     },

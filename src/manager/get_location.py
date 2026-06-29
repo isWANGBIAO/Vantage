@@ -1,13 +1,11 @@
-
-import piexif
 import asyncio
-# winrt最高支持到Python 3.9，Python 3.10及以上得使用winsdk，而且不会报com错误
-# from winrt.windows.devices.geolocation import Geolocator
-from datetime import datetime
-import cv2
-import threading
-import platform
+import os
 import sys
+import threading
+from datetime import datetime
+
+import cv2
+import piexif
 
 if sys.platform == "win32":
     try:
@@ -18,23 +16,32 @@ else:
     Geolocator = None
 
 
-# 同步获取经纬度
+def _timestamp():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _configured_static_location():
+    latitude = os.environ.get("VANTAGE_STATIC_LATITUDE")
+    longitude = os.environ.get("VANTAGE_STATIC_LONGITUDE")
+    if not latitude or not longitude:
+        return None
+
+    try:
+        return float(latitude), float(longitude)
+    except ValueError:
+        print(f"Time {_timestamp()} Invalid VANTAGE_STATIC_LATITUDE/VANTAGE_STATIC_LONGITUDE; ignoring.")
+        return None
+
+
 def get_location():
-    # 台式机就固定一个经纬度
-    if platform.node() == "Biao_PC":
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 台式机为固定位置，只需要指定经纬度即可")
-        latitude = 22.348769382455153
-        longitude = 113.58774933243512
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Location: {latitude}, {longitude}")
+    static_location = _configured_static_location()
+    if static_location is not None:
+        latitude, longitude = static_location
+        print(f"Time {_timestamp()} Using configured static location: {latitude}, {longitude}")
         return latitude, longitude
-    else:
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 非指定台式机，需要调用定位服务获取定位信息")
 
     if Geolocator is None:
-        print(
-            f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-            f"当前平台暂不支持系统定位服务，跳过 GPS 坐标"
-        )
+        print(f"Time {_timestamp()} System location service is unavailable; skipping GPS coordinates.")
         return None, None
 
     async def fetch_location():
@@ -43,10 +50,10 @@ def get_location():
             position = await locator.get_geoposition_async()
             latitude = position.coordinate.point.position.latitude
             longitude = position.coordinate.point.position.longitude
-            print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Location: {latitude}, {longitude}")
+            print(f"Time {_timestamp()} Location: {latitude}, {longitude}")
             return latitude, longitude
-        except Exception as e:
-            print(f"⚠️ 获取定位信息失败：{e}")
+        except Exception as exc:
+            print(f"Time {_timestamp()} Failed to get system location: {exc}")
             return None, None
 
     def run_async_in_thread(result_holder):
@@ -54,8 +61,8 @@ def get_location():
         try:
             asyncio.set_event_loop(loop)
             latitude, longitude = loop.run_until_complete(fetch_location())
-            result_holder['latitude'] = latitude
-            result_holder['longitude'] = longitude
+            result_holder["latitude"] = latitude
+            result_holder["longitude"] = longitude
         finally:
             loop.close()
 
@@ -69,41 +76,36 @@ def get_location():
         thread = threading.Thread(target=run_async_in_thread, args=(result_holder,))
         thread.start()
         thread.join()
-        latitude = result_holder.get('latitude')
-        longitude = result_holder.get('longitude')
+        latitude = result_holder.get("latitude")
+        longitude = result_holder.get("longitude")
     else:
         latitude, longitude = asyncio.run(fetch_location())
 
     return latitude, longitude
 
 
-# 将十进制度数转换为EXIF格式 (度, 分, 秒)
 def convert_to_exif_coords(value):
-    deg = int(value)
-    min_float = abs((value - deg) * 60)
-    min = int(min_float)
-    sec = int((min_float - min) * 6000)
-    return ((deg, 1), (min, 1), (sec, 100))
+    degrees = int(value)
+    minutes_float = abs((value - degrees) * 60)
+    minutes = int(minutes_float)
+    seconds = int((minutes_float - minutes) * 6000)
+    return ((degrees, 1), (minutes, 1), (seconds, 100))
 
 
-# 保存图片并写入EXIF GPS信息
 def save_image_with_gps(photo_path, frame, latitude, longitude):
-    # 保存图像
     cv2.imwrite(photo_path, frame)
 
     if latitude is None or longitude is None:
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Location unavailable, skip GPS EXIF for {photo_path}")
+        print(f"Time {_timestamp()} Location unavailable; skipping GPS EXIF for {photo_path}")
         return
 
-    # 准备GPS EXIF数据
     gps_ifd = {
-        piexif.GPSIFD.GPSLatitudeRef: 'N' if latitude >= 0 else 'S',
+        piexif.GPSIFD.GPSLatitudeRef: "N" if latitude >= 0 else "S",
         piexif.GPSIFD.GPSLatitude: convert_to_exif_coords(abs(latitude)),
-        piexif.GPSIFD.GPSLongitudeRef: 'E' if longitude >= 0 else 'W',
+        piexif.GPSIFD.GPSLongitudeRef: "E" if longitude >= 0 else "W",
         piexif.GPSIFD.GPSLongitude: convert_to_exif_coords(abs(longitude)),
     }
 
-    # 写入EXIF信息
     exif_dict = {"GPS": gps_ifd}
     exif_bytes = piexif.dump(exif_dict)
     piexif.insert(exif_bytes, photo_path)

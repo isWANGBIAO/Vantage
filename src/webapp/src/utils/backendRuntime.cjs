@@ -172,6 +172,7 @@ async function ensureBundledBackendReady({
   platform = process.platform,
   executablePath,
   fileExists = fs.existsSync,
+  loadProviderConfigFn = loadProviderConfig,
   spawnProcess = spawn,
   waitForStatusFn = waitForBackendStatus,
   logger = console,
@@ -208,7 +209,7 @@ async function ensureBundledBackendReady({
 
   const childProcess = spawnProcess(resolvedExecutablePath, [], {
     cwd: pathForExecutable(resolvedExecutablePath, platform).dirname(resolvedExecutablePath),
-    env: buildBundledBackendEnvironment({ runtimePaths, env, platform }),
+    env: buildBundledBackendEnvironment({ runtimePaths, env, platform, loadProviderConfigFn }),
     stdio: 'ignore',
     windowsHide: true,
   });

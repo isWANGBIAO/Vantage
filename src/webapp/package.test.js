@@ -53,8 +53,9 @@ test('package bundles the backend runtime and installer shortcuts for Windows', 
   assert.equal(packageJson.build.nsis.warningsAsErrors, false);
   assert.deepEqual(packageJson.build.nsis.customNsisBinary, {
     url: 'https://github.com/SoundSafari/NSISBI-ElectronBuilder/releases/download/1.0.0/nsisbi-electronbuilder-3.10.3.7z',
-    checksum: 'WRmZUsACjIc2s7bvsFGFRofK31hfS7riPlcfI1V9uFB2Q8s7tidgI/9U16+X0I9X2ZhNxi8N7Z3gKvm6ojvLvg==',
+    checksum: '374cfc092fd1bd1898472df627549ecc165b0d6ba88e82deba085673aec95336',
   });
+  assert.match(packageJson.build.nsis.customNsisBinary.checksum, /^[a-f0-9]{64}$/);
 });
 
 test('preload does not emit startup console noise', () => {

@@ -54,10 +54,30 @@ def test_run_bat_builds_and_silently_installs_latest_package():
     assert "requirements-backend-runtime-gpu.txt" in run_bat
     assert "run_packaging_builds.py" in run_bat
     assert '"%BACKEND_RUNTIME_PYTHON%" src\\scripts\\verify_backend_runtime.py --timeout-seconds 60' in run_bat
+    assert "call :RunElectronPackageWithFallback" in run_bat
     assert "npm run electron:package" in run_bat
     assert "npm run electron:build" not in run_bat
     assert "ArgumentList '/S'" in run_bat
     assert 'Filter \'Vantage Setup *.exe\'' in run_bat
+
+
+def test_run_bat_retries_electron_downloads_with_mirror_fallback():
+    run_bat = Path("run.bat").read_text(encoding="utf-8")
+
+    assert "VANTAGE_ELECTRON_MIRROR_FALLBACK" in run_bat
+    assert "call :RunNpmInstallWithFallback" in run_bat
+    assert "call :EnsureElectronBinary" in run_bat
+    assert "call :RunElectronPackageWithFallback" in run_bat
+    assert "Retrying Electron download with mirror fallback" in run_bat
+
+
+def test_run_bat_primes_custom_nsis_archive_cache():
+    run_bat = Path("run.bat").read_text(encoding="utf-8")
+
+    assert "CUSTOM_NSIS_BINARY_URL" in run_bat
+    assert "CUSTOM_NSIS_BINARY_SHA256=374cfc092fd1bd1898472df627549ecc165b0d6ba88e82deba085673aec95336" in run_bat
+    assert "call :EnsureCustomNsisArchiveCache" in run_bat
+    assert "Custom NSIS archive cache ready" in run_bat
 
 
 def test_run_bat_skips_reinstalling_backend_dependencies_when_requirements_hash_matches():
@@ -79,8 +99,10 @@ def test_run_bat_restores_source_build_info_after_packaging():
     assert "BUILD_INFO_BACKUP_CREATED" in run_bat
     assert "call :RestoreBuildInfo" in run_bat
     assert "Source build-info restored" in run_bat
-    assert run_bat.index("call node scripts\\prepare-build-version.mjs --mode auto") < run_bat.index("npm run electron:package")
-    assert run_bat.index("npm run electron:package") < run_bat.rindex("call :RestoreBuildInfo")
+    package_call = "call :RunElectronPackageWithFallback"
+    assert run_bat.index("call node scripts\\prepare-build-version.mjs --mode auto") < run_bat.index(package_call)
+    assert run_bat.index(package_call) < run_bat.rindex("call :RestoreBuildInfo")
+    assert "npm run electron:package" in run_bat
 
 
 def test_run_bat_prints_step_timings():

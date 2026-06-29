@@ -28,7 +28,16 @@ def test_save_image_with_gps_skips_exif_when_location_missing(monkeypatch, tmp_p
 
 
 def test_get_location_returns_empty_coordinates_without_platform_geolocator(monkeypatch):
-    monkeypatch.setattr(get_location.platform, "node", lambda: "MacMini")
+    monkeypatch.delenv("VANTAGE_STATIC_LATITUDE", raising=False)
+    monkeypatch.delenv("VANTAGE_STATIC_LONGITUDE", raising=False)
     monkeypatch.setattr(get_location, "Geolocator", None)
 
     assert get_location.get_location() == (None, None)
+
+
+def test_get_location_uses_configured_static_coordinates(monkeypatch):
+    monkeypatch.setenv("VANTAGE_STATIC_LATITUDE", "12.5")
+    monkeypatch.setenv("VANTAGE_STATIC_LONGITUDE", "34.75")
+    monkeypatch.setattr(get_location, "Geolocator", None)
+
+    assert get_location.get_location() == (12.5, 34.75)

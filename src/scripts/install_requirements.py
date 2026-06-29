@@ -1,9 +1,7 @@
-'''
-可以写一个简单的 Python 或 Bash 脚本，逐行读取 requirements.txt，即使某个包失败，仍继续安装其他包。
-'''
-import os
-
 from pathlib import Path
+import subprocess
+import sys
+
 
 def get_project_root():
     current = Path(__file__).resolve().parent
@@ -13,20 +11,32 @@ def get_project_root():
         current = current.parent
     return Path.cwd()
 
-# 打开requirements.txt文件，使用with语句确保文件在使用后正确关闭
-req_path = get_project_root() / 'requirements.txt'
-with open(req_path, 'r') as file:
-    # 遍历文件的每一行
-    for line in file:
-        # 去除行两端的空白字符
+
+def iter_requirements(path):
+    for line in path.read_text(encoding="utf-8").splitlines():
         package = line.strip()
-        # 检查行是否不为空且不是注释
-        if package and not package.startswith('#'):
-            # 打印正在安装的包名
-            print(f"Installing {package}...")
-            # 执行系统命令安装包，并获取退出码
-            exit_code = os.system(f'pip install {package}')
-            # 如果退出码不为0，说明安装失败
-            if exit_code != 0:
-                # 打印失败信息，并跳过当前包的安装
-                print(f"Failed to install {package}, skipping...\n")
+        if package and not package.startswith("#"):
+            yield package
+
+
+def install_requirements(requirements_path=None):
+    req_path = Path(requirements_path) if requirements_path else get_project_root() / "requirements.txt"
+    failures = []
+
+    for package in iter_requirements(req_path):
+        print(f"Installing {package}...")
+        result = subprocess.run([sys.executable, "-m", "pip", "install", package], check=False)
+        if result.returncode != 0:
+            failures.append(package)
+            print(f"Failed to install {package}; continuing.\n")
+
+    return failures
+
+
+if __name__ == "__main__":
+    failed_packages = install_requirements()
+    if failed_packages:
+        print("Packages that failed to install:")
+        for package in failed_packages:
+            print(f"- {package}")
+        raise SystemExit(1)

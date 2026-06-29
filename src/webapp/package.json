@@ -32,8 +32,8 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
     "concurrently": "^9.1.0",
-    "electron": "^34.0.0",
-    "electron-builder": "^25.1.8",
+    "electron": "^42.5.1",
+    "electron-builder": "^26.15.3",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
@@ -90,7 +90,7 @@
       "warningsAsErrors": false,
       "customNsisBinary": {
         "url": "https://github.com/SoundSafari/NSISBI-ElectronBuilder/releases/download/1.0.0/nsisbi-electronbuilder-3.10.3.7z",
-        "checksum": "WRmZUsACjIc2s7bvsFGFRofK31hfS7riPlcfI1V9uFB2Q8s7tidgI/9U16+X0I9X2ZhNxi8N7Z3gKvm6ojvLvg=="
+        "checksum": "374cfc092fd1bd1898472df627549ecc165b0d6ba88e82deba085673aec95336"
       }
     }
   }
