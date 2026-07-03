@@ -59,10 +59,21 @@ class AudioService:
     @staticmethod
     def _resolve_transcription_config(base_url=None, api_key=None, model=None):
         Config.load_env()
-        resolved_base_url = (base_url or Config.get("SILICONFLOW_BASE_URL") or "").strip()
-        resolved_api_key = (api_key or Config.get("SILICONFLOW_API_KEY") or "").strip()
+        resolved_base_url = (
+            base_url
+            or Config.get("VANTAGE_TRANSCRIBE_BASE_URL")
+            or Config.get("SILICONFLOW_BASE_URL")
+            or ""
+        ).strip()
+        resolved_api_key = (
+            api_key
+            or Config.get("VANTAGE_TRANSCRIBE_API_KEY")
+            or Config.get("SILICONFLOW_API_KEY")
+            or ""
+        ).strip()
         resolved_model = (
             model
+            or Config.get("VANTAGE_TRANSCRIBE_MODEL")
             or Config.get("SILICONFLOW_AUDIO_MODEL")
             or "FunAudioLLM/SenseVoiceSmall"
         ).strip()

@@ -1419,9 +1419,11 @@ def _parse_running_text(text):
     }
 
 
-def _resolve_running_data_root(data_dir=None):
+def _resolve_running_data_root(data_dir=None, required_dir=None):
     if data_dir is not None:
         return Path(data_dir)
+    if required_dir is not None:
+        return DataLoader.resolve_health_data_root(required_dir)
     return DataLoader.resolve_health_data_root()
 
 
@@ -1525,7 +1527,7 @@ def _build_running_export_text(
 def load_mi_fitness_running_log_frame(data_dir=None, date_col="日期", source_col="运动"):
     columns = [date_col, source_col]
     csv_path = (
-        _resolve_running_data_root(data_dir)
+        _resolve_running_data_root(data_dir, required_dir="mi_fiteness_data")
         / "mi_fiteness_data"
         / "20260416_881116692_MiFitness_hlth_center_sport_record.csv"
     )
@@ -1586,7 +1588,7 @@ def load_mi_fitness_running_log_frame(data_dir=None, date_col="日期", source_c
 
 def load_zepp_running_log_frame(data_dir=None, date_col="日期", source_col="运动"):
     columns = [date_col, source_col]
-    sport_dir = _resolve_running_data_root(data_dir) / "zepplift_data" / "SPORT"
+    sport_dir = _resolve_running_data_root(data_dir, required_dir="zepplift_data") / "zepplift_data" / "SPORT"
     master_path = sport_dir / "SPORT_running_master.csv"
     csv_path = sport_dir / "SPORT_1776331608562.csv"
 

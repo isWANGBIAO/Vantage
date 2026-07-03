@@ -1,7 +1,7 @@
 {
   "name": "vantage",
   "private": true,
-  "version": "1.0.58",
+  "version": "1.0.59",
   "description": "Vantage Electron Desktop Application",
   "main": "main.cjs",
   "type": "module",

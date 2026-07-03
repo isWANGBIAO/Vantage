@@ -167,6 +167,15 @@ def test_ci_requirements_cover_tests_without_gpu_runtime():
     assert not forbidden, f"requirements-ci.txt includes heavyweight runtime packages: {sorted(forbidden)}"
 
 
+def test_readme_recommends_environment_python_version():
+    environment = Path("environment.yml").read_text(encoding="utf-8")
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert "python=3.11" in environment
+    assert "Python 3.11 recommended." in readme
+    assert "Python 3.12 recommended." not in readme
+
+
 def test_backend_runtime_requirements_keep_macos_opencv_headless():
     opencv_lines = _find_requirement_lines("requirements-backend-runtime-gpu.txt", "opencv-python")
     assert any("opencv-python==" in line and 'sys_platform == "win32"' in line for line in opencv_lines)

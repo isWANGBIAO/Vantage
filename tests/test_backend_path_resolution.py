@@ -261,6 +261,61 @@ class BackendPathResolutionTests(unittest.TestCase):
         self.assertEqual(resolved, archive_root)
         mock_resolve.assert_called_once_with()
 
+    def test_plot_running_loaders_find_mi_and_zepp_in_separate_archives(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mine_root = Path(tmpdir) / "OneDrive" / "Mine"
+            mi_root = mine_root / "20260416 MiFitness health history data"
+            zepp_root = mine_root / "20260417 Zepp health history data"
+            mi_dir = mi_root / "mi_fiteness_data"
+            zepp_dir = zepp_root / "zepplift_data" / "SPORT"
+            mi_dir.mkdir(parents=True)
+            zepp_dir.mkdir(parents=True)
+
+            mi_csv = mi_dir / "20260416_881116692_MiFitness_hlth_center_sport_record.csv"
+            mi_csv.write_text(
+                'Category,Value,Time\n'
+                '"running","{""start_time"":1782748800,""distance"":5000,""duration"":1800}",1782748800\n',
+                encoding="utf-8",
+            )
+            (zepp_dir / "SPORT_running_master.csv").write_text(
+                "summary_start_local,distance_km,duration_seconds,avg_pace_min_per_km\n"
+                "2026-06-29 08:00:00,3.2,1200,6.25\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=True), patch.object(
+                plot.DataLoader,
+                "_data_root_candidates",
+                return_value=[mine_root],
+            ):
+                combined = plot.load_app_running_log_frame()
+
+        self.assertEqual(len(combined), 2)
+        source_text = "\n".join(combined["运动"].astype(str).tolist())
+        self.assertIn("Mi Fitness 跑步", source_text)
+        self.assertIn("Zepp 跑步", source_text)
+
+    def test_plot_running_explicit_data_dir_bypasses_health_archive_resolver(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_root = Path(tmpdir)
+            mi_dir = data_root / "mi_fiteness_data"
+            mi_dir.mkdir(parents=True)
+            (mi_dir / "20260416_881116692_MiFitness_hlth_center_sport_record.csv").write_text(
+                'Category,Value,Time\n'
+                '"running","{""start_time"":1782748800,""distance"":5000,""duration"":1800}",1782748800\n',
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                plot.DataLoader,
+                "resolve_health_data_root",
+                side_effect=AssertionError("explicit data_dir should not use archive resolver"),
+            ):
+                frame = plot.load_mi_fitness_running_log_frame(data_dir=data_root)
+
+        self.assertEqual(len(frame), 1)
+        self.assertIn("Mi Fitness 跑步", frame.iloc[0]["运动"])
+
     def test_analyzer_uses_resolved_time_sheet_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

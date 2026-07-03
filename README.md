@@ -34,7 +34,7 @@ the platform user-data directory, not in this repository.
 
 ## Requirements
 
-- Python 3.12 recommended.
+- Python 3.11 recommended.
 - Node.js 22 recommended for the frontend.
 - Windows is the primary packaging target. macOS scripts are included for source
   and packaged workflows.
@@ -83,13 +83,13 @@ GitHub Releases are automated for version tags. Keep
 tag:
 
 ```powershell
-git tag v1.0.58
-git push origin v1.0.58
+git tag v1.0.59
+git push origin v1.0.59
 ```
 
 The `Release` workflow builds the Windows installer, generates `SHA256SUMS.txt`,
 and publishes the assets to the matching GitHub Release. The tag must match the
-frontend package version, for example `v1.0.58` for package version `1.0.58`.
+frontend package version, for example `v1.0.59` for package version `1.0.59`.
 
 macOS full build, install, and launch:
 
@@ -118,7 +118,9 @@ Packaged macOS builds use:
 ## Configuration
 
 Copy [.env.example](.env.example) to `.env` for local development and fill only
-the providers you use. Never commit real secrets.
+the providers you use. Never commit real secrets. Voice transcription normally
+uses Settings; `VANTAGE_TRANSCRIBE_*` variables provide CLI/subprocess fallback
+configuration for local development.
 
 ## Optional Model Assets
 
