@@ -6,7 +6,7 @@ fastapi==0.139.0
 jieba==0.42.1
 matplotlib==3.11.0
 mss==10.2.0
-numpy==1.26.4
+numpy==2.2.6
 openai==1.109.1
 opencv-python-headless==4.13.0.92
 openpyxl==3.1.5

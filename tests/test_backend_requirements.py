@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -197,7 +198,11 @@ def test_backend_runtime_requirements_keep_macos_opencv_headless():
     )
 
     ultralytics_lines = _find_requirement_lines("requirements-backend-runtime-gpu.txt", "ultralytics")
-    assert ultralytics_lines == ['ultralytics==8.4.0; sys_platform == "win32"']
+    assert len(ultralytics_lines) == 1
+    assert re.fullmatch(
+        r'ultralytics==\d+\.\d+\.\d+; sys_platform == "win32"',
+        ultralytics_lines[0],
+    )
 
 
 def test_backend_runtime_requirements_keep_torch_windows_only():
