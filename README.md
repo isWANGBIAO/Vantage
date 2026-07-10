@@ -21,7 +21,7 @@
   <a href="https://github.com/isWANGBIAO/Vantage/graphs/contributors"><img alt="Contributors" src="https://img.shields.io/github/contributors/isWANGBIAO/Vantage?style=flat-square&amp;label=Contributors"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/issues"><img alt="Open issues" src="https://img.shields.io/github/issues/isWANGBIAO/Vantage?style=flat-square&amp;label=Issues"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/pulls"><img alt="Open pull requests" src="https://img.shields.io/github/issues-pr/isWANGBIAO/Vantage?style=flat-square&amp;label=Pull%20Requests"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/isWANGBIAO/Vantage?style=flat-square&amp;label=Stars"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage"><img alt="GitHub stars" src="https://img.shields.io/github/stars/isWANGBIAO/Vantage?style=flat-square&amp;label=Stars"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/network/members"><img alt="GitHub forks" src="https://img.shields.io/github/forks/isWANGBIAO/Vantage?style=flat-square&amp;label=Forks"></a>
 </p>
 
