@@ -1985,6 +1985,19 @@ def find_latest_file_recursive(
 find_latest_file_recursive.last_truncated = False
 
 
+def _prefer_primary_monitor_screenshot(screenshot_path):
+    if not screenshot_path:
+        return screenshot_path
+
+    screenshot = Path(screenshot_path)
+    match = re.match(r"^(screenshot_.+)_monitor_\d+(\.[^.]+)$", screenshot.name, re.IGNORECASE)
+    if not match:
+        return screenshot_path
+
+    primary_screenshot = screenshot.with_name(f"{match.group(1)}_monitor_1{match.group(2)}")
+    return str(primary_screenshot) if primary_screenshot.is_file() else screenshot_path
+
+
 def _saved_photo_contains_person(photo_path):
     try:
         image = cv2.imread(photo_path)
@@ -2022,6 +2035,7 @@ def initialize_latest_media_state():
                 getattr(find_latest_file_recursive, "last_truncated", False)
             )
             if latest_screen:
+                latest_screen = _prefer_primary_monitor_screenshot(latest_screen)
                 state.paths['screenshot'] = latest_screen
                 print(f"Found latest screenshot: {latest_screen}")
         elif not state.paths.get('screenshot') and state.screenshots_path:
