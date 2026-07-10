@@ -89,8 +89,8 @@ badge image has an SVG content type.
 Run:
 
 ```powershell
-gh api "repos/isWANGBIAO/Vantage/actions/workflows/ci.yml/runs?branch=master&event=push&per_page=1"
-gh api "repos/isWANGBIAO/Vantage/actions/workflows/codeql.yml/runs?branch=master&per_page=1"
+gh api "repos/isWANGBIAO/Vantage/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=1"
+gh api "repos/isWANGBIAO/Vantage/actions/workflows/codeql.yml/runs?branch=main&per_page=1"
 gh api repos/isWANGBIAO/Vantage/releases/latest
 ```
 

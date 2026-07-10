@@ -1,23 +1,23 @@
 # Vantage
 
 <p align="center">
-  <a href="https://github.com/isWANGBIAO/Vantage/actions/workflows/ci.yml?query=branch%3Amaster+event%3Apush"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/isWANGBIAO/Vantage/ci.yml?branch=master&amp;event=push&amp;style=flat-square&amp;label=CI"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/actions/workflows/codeql.yml?query=branch%3Amaster"><img alt="CodeQL status" src="https://img.shields.io/github/actions/workflow/status/isWANGBIAO/Vantage/codeql.yml?branch=master&amp;style=flat-square&amp;label=CodeQL"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/isWANGBIAO/Vantage/ci.yml?branch=main&amp;event=push&amp;style=flat-square&amp;label=CI"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/actions/workflows/codeql.yml?query=branch%3Amain"><img alt="CodeQL status" src="https://img.shields.io/github/actions/workflow/status/isWANGBIAO/Vantage/codeql.yml?branch=main&amp;style=flat-square&amp;label=CodeQL"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/isWANGBIAO/Vantage?style=flat-square&amp;label=Release"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/releases"><img alt="Total release downloads" src="https://img.shields.io/github/downloads/isWANGBIAO/Vantage/total?style=flat-square&amp;label=Downloads"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/blob/master/LICENSE"><img alt="Repository license" src="https://img.shields.io/github/license/isWANGBIAO/Vantage?style=flat-square&amp;label=License"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/LICENSE"><img alt="Repository license" src="https://img.shields.io/github/license/isWANGBIAO/Vantage?style=flat-square&amp;label=License"></a>
 </p>
 <p align="center">
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Windows supported" src="https://img.shields.io/badge/Windows-supported-0078D4?style=flat-square&amp;logo=windows&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#features"><img alt="macOS supported" src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&amp;logo=apple&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Python 3.11" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Node.js 22" src="https://img.shields.io/badge/Node.js-22-5FA04E?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/blob/master/requirements.txt"><img alt="FastAPI 0.139.0" src="https://img.shields.io/badge/FastAPI-0.139.0-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/blob/master/src/webapp/package.json"><img alt="React 19.2.7" src="https://img.shields.io/badge/React-19.2.7-61DAFB?style=flat-square&amp;logo=react&amp;logoColor=black"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/blob/master/src/webapp/package.json"><img alt="Electron 42.6.0" src="https://img.shields.io/badge/Electron-42.6.0-47848F?style=flat-square&amp;logo=electron&amp;logoColor=white"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/requirements.txt"><img alt="FastAPI 0.139.0" src="https://img.shields.io/badge/FastAPI-0.139.0-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="React 19.2.7" src="https://img.shields.io/badge/React-19.2.7-61DAFB?style=flat-square&amp;logo=react&amp;logoColor=black"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="Electron 42.6.0" src="https://img.shields.io/badge/Electron-42.6.0-47848F?style=flat-square&amp;logo=electron&amp;logoColor=white"></a>
 </p>
 <p align="center">
-  <a href="https://github.com/isWANGBIAO/Vantage/commits/master"><img alt="Last commit on master" src="https://img.shields.io/github/last-commit/isWANGBIAO/Vantage/master?style=flat-square&amp;label=Last%20Commit"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/commits/main"><img alt="Last commit on main" src="https://img.shields.io/github/last-commit/isWANGBIAO/Vantage/main?style=flat-square&amp;label=Last%20Commit"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/graphs/contributors"><img alt="Contributors" src="https://img.shields.io/github/contributors/isWANGBIAO/Vantage?style=flat-square&amp;label=Contributors"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/issues"><img alt="Open issues" src="https://img.shields.io/github/issues/isWANGBIAO/Vantage?style=flat-square&amp;label=Issues"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/pulls"><img alt="Open pull requests" src="https://img.shields.io/github/issues-pr/isWANGBIAO/Vantage?style=flat-square&amp;label=Pull%20Requests"></a>

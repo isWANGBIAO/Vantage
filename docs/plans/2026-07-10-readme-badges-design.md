@@ -23,7 +23,7 @@ static only when the declared support or version is present in tracked files.
 
 ## Truthfulness Rules
 
-- CI and CodeQL badges point to the existing workflow files and the `master`
+- CI and CodeQL badges point to the existing workflow files and the `main`
   branch.
 - Release, download, license, and activity badges use live GitHub metadata.
 - Python and Node.js versions match README requirements and CI setup files.
