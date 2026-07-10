@@ -11,3 +11,16 @@ paths.
   naturally; do not stop it with a short debug timeout.
 - Keep runtime data under the configured user data directory, not in the repo.
 - The only remote for this checkout is GitHub `origin`.
+
+## README Badges
+
+- Dynamic status badges must reference real, existing workflows or repository
+  metadata.
+- Static stack, platform, and version badges must match tracked configuration or
+  documentation.
+- Update relevant badges whenever dependencies or supported platforms change.
+- Remove badges that become broken, stale, or unverifiable.
+- Never fabricate passing status, coverage, quality, security, compliance,
+  version, download, or support claims.
+- Do not add a coverage badge unless the repository has a real coverage
+  collector and published reporting source.
