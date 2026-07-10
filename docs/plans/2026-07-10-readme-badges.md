@@ -1,7 +1,5 @@
 # Truthful README Badge Wall Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task.
-
 **Goal:** Add a complete, polished, and evidence-backed badge wall to Vantage and preserve its truthfulness contract in `AGENTS.md`.
 
 **Architecture:** Use three centered HTML badge rows under the README title. Live repository state comes from GitHub Actions and Shields.io GitHub endpoints, while supported-stack badges mirror versions or platforms declared in tracked files. Repository guidance prevents future maintainers from adding unsupported claims.
