@@ -93,6 +93,10 @@ RENDERER_CAMERA_FRAME_INTENT = "renderer-camera-frame"
 CAMERA_DARK_FRAME_MEAN_LUMA_THRESHOLD = 12.0
 CAMERA_BLANK_FRAME_MEAN_LUMA_THRESHOLD = 1.0
 CAMERA_BLANK_FRAME_RECOVERY_COUNT = int(os.environ.get("VANTAGE_CAMERA_BLANK_FRAME_RECOVERY_COUNT", "60"))
+CAMERA_WARMUP_SECONDS = max(
+    0.0,
+    float(os.environ.get("VANTAGE_CAMERA_WARMUP_SECONDS", "2.0")),
+)
 
 
 def get_cv2_module():
@@ -786,6 +790,27 @@ def update_camera_blank_frame_streak(frame, current_streak):
 
     next_streak = max(0, int(current_streak or 0)) + 1
     return next_streak, next_streak >= CAMERA_BLANK_FRAME_RECOVERY_COUNT
+
+
+def get_camera_warmup_deadline(opened_at=None):
+    started_at = time.monotonic() if opened_at is None else float(opened_at)
+    return started_at + CAMERA_WARMUP_SECONDS
+
+
+def evaluate_camera_frame(
+    frame,
+    current_blank_streak,
+    warmup_deadline,
+    now_monotonic=None,
+):
+    next_streak, should_reopen = update_camera_blank_frame_streak(
+        frame,
+        current_blank_streak,
+    )
+    now = time.monotonic() if now_monotonic is None else float(now_monotonic)
+    warmup_complete = warmup_deadline is None or now >= float(warmup_deadline)
+    should_publish = next_streak == 0 and not should_reopen and warmup_complete
+    return next_streak, should_reopen, should_publish
 
 
 def _build_camera_frame_diagnostics():
@@ -2167,6 +2192,7 @@ def camera_loop():
         f"Backend: {get_camera_capture_backend()}"
     )
     blank_frame_streak = 0
+    warmup_deadline = None
     while state.is_running:
         if state.camera is None:
             idx = get_camera_index()
@@ -2194,6 +2220,7 @@ def camera_loop():
                 actual_h = state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
                 reset_camera_status_logs()
                 blank_frame_streak = 0
+                warmup_deadline = get_camera_warmup_deadline()
                 print(f"Camera Initialized: Requested {target_w}x{target_h}, Got {int(actual_w)}x{int(actual_h)}")
 
                 # If 4K failed (e.g. got low res), try strict 1080p fallback
@@ -2212,12 +2239,17 @@ def camera_loop():
             try:
                 ret, frame = state.camera.read()
                 if ret:
-                    blank_frame_streak, should_reopen_camera = update_camera_blank_frame_streak(
-                        frame,
+                    (
                         blank_frame_streak,
+                        should_reopen_camera,
+                        should_publish_frame,
+                    ) = evaluate_camera_frame(
+                        frame, blank_frame_streak, warmup_deadline
                     )
-                    with state.lock:
-                        state.latest_frame = frame
+                    if should_publish_frame:
+                        with state.lock:
+                            state.latest_frame = frame
+                        warmup_deadline = None
                     if should_reopen_camera:
                         _rate_limited_status_log(
                             ("camera", "blank-frame-recovery"),
@@ -2227,11 +2259,13 @@ def camera_loop():
                         state.camera.release()
                         state.camera = None
                         blank_frame_streak = 0
+                        warmup_deadline = None
                         sleep_while_running(0.5)
                 else:
                     print("Warning: Can't receive frame (stream end?). Exiting ...")
                     state.camera.release()
                     state.camera = None
+                    warmup_deadline = None
                     time.sleep(2)
             except Exception as e:
                 print(f"Camera read error: {e}")
@@ -2241,6 +2275,7 @@ def camera_loop():
              if state.camera:
                  state.camera.release()
              state.camera = None
+             warmup_deadline = None
              sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
         time.sleep(0.03)
 

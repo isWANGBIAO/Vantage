@@ -83,6 +83,56 @@ def test_dark_but_visible_frame_does_not_trigger_camera_recovery():
     assert should_reopen is False
 
 
+def test_camera_warmup_deadline_defaults_to_two_seconds():
+    assert server.CAMERA_WARMUP_SECONDS == 2.0
+    assert server.get_camera_warmup_deadline(100.0) == 102.0
+
+
+def test_visible_camera_frame_is_not_published_before_warmup_completes():
+    visible_frame = np.full((8, 8, 3), 128, dtype=np.uint8)
+
+    streak, should_reopen, should_publish = server.evaluate_camera_frame(
+        visible_frame,
+        current_blank_streak=0,
+        warmup_deadline=102.0,
+        now_monotonic=101.99,
+    )
+
+    assert streak == 0
+    assert should_reopen is False
+    assert should_publish is False
+
+
+def test_visible_camera_frame_is_published_when_warmup_completes():
+    visible_frame = np.full((8, 8, 3), 128, dtype=np.uint8)
+
+    streak, should_reopen, should_publish = server.evaluate_camera_frame(
+        visible_frame,
+        current_blank_streak=0,
+        warmup_deadline=102.0,
+        now_monotonic=102.0,
+    )
+
+    assert streak == 0
+    assert should_reopen is False
+    assert should_publish is True
+
+
+def test_pure_black_camera_frame_is_never_published_after_warmup():
+    black_frame = np.zeros((8, 8, 3), dtype=np.uint8)
+
+    streak, should_reopen, should_publish = server.evaluate_camera_frame(
+        black_frame,
+        current_blank_streak=0,
+        warmup_deadline=102.0,
+        now_monotonic=103.0,
+    )
+
+    assert streak == 1
+    assert should_reopen is False
+    assert should_publish is False
+
+
 def test_macos_camera_open_does_not_fallback_to_cap_any_when_permission_is_missing():
     calls = []
 
