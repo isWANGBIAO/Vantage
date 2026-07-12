@@ -510,7 +510,7 @@ function AppShell() {
               marginTop: 'auto',
             }}
           >
-            {t('app.footer.powered_by', { provider: 'Gemini' })}
+            {t('app.footer.copyright')}
           </footer>
         )}
     </div>

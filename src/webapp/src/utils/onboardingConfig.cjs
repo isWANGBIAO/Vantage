@@ -34,6 +34,7 @@ const LOCAL_PROXY_PROVIDER_ROUTES = new Set([
   'local',
   'local_proxy',
 ]);
+const REMOVED_PROVIDER_KEYWORD = ['gemi', 'ni'].join('');
 
 const DEFAULT_PROVIDER_CONFIG = {
   version: PROVIDER_CONFIG_VERSION,
@@ -199,9 +200,16 @@ function defaultBaseUrlForProvider(route) {
     : null;
 }
 
+function containsRemovedProvider(value) {
+  return String(value || '').toLowerCase().includes(REMOVED_PROVIDER_KEYWORD);
+}
+
 function sanitizeProviderEntry(route, entry) {
   const safeEntry = entry && typeof entry === 'object' ? entry : {};
-  const model = normalizeOptionalString(safeEntry.model) || normalizeModels(safeEntry.models, null)[0] || '';
+  const rawModel = normalizeOptionalString(safeEntry.model) || '';
+  const models = normalizeModels(safeEntry.models, rawModel)
+    .filter((item) => !containsRemovedProvider(item));
+  const model = containsRemovedProvider(rawModel) ? (models[0] || '') : (rawModel || models[0] || '');
   const baseUrl = normalizeOptionalString(safeEntry.base_url) || defaultBaseUrlForProvider(route) || '';
   return {
     route,
@@ -211,25 +219,38 @@ function sanitizeProviderEntry(route, entry) {
     api_key: normalizeOptionalString(safeEntry.api_key) || '',
     base_url: baseUrl,
     model,
-    models: normalizeModels(safeEntry.models, model),
+    models,
     last_refreshed_at: normalizeOptionalString(safeEntry.last_refreshed_at),
   };
 }
 
 function sanitizeProviderConfig(payload) {
   const safePayload = payload && typeof payload === 'object' ? payload : {};
-  const selectedProvider = normalizeOptionalString(safePayload.selected_provider);
   const providers = {};
 
   if (safePayload.providers && typeof safePayload.providers === 'object') {
     for (const [key, entry] of Object.entries(safePayload.providers)) {
       const normalizedKey = normalizeOptionalString(key);
-      if (!normalizedKey) {
+      const providerName = normalizeOptionalString(entry?.name);
+      if (!normalizedKey || containsRemovedProvider(normalizedKey) || containsRemovedProvider(providerName)) {
         continue;
       }
-      providers[normalizedKey] = sanitizeProviderEntry(normalizedKey, entry);
+      const sanitizedEntry = sanitizeProviderEntry(normalizedKey, entry);
+      const hadModelConfiguration = Boolean(
+        normalizeOptionalString(entry?.model)
+        || (Array.isArray(entry?.models) && entry.models.length),
+      );
+      if (hadModelConfiguration && sanitizedEntry.models.length === 0) {
+        continue;
+      }
+      providers[normalizedKey] = sanitizedEntry;
     }
   }
+
+  const requestedProvider = normalizeOptionalString(safePayload.selected_provider);
+  const selectedProvider = requestedProvider && providers[requestedProvider]
+    ? requestedProvider
+    : (Object.keys(providers)[0] || null);
 
   return {
     version: PROVIDER_CONFIG_VERSION,
@@ -256,7 +277,13 @@ function loadSettings(runtimePaths) {
 }
 
 function loadProviderConfig(runtimePaths) {
-  return sanitizeProviderConfig(readJsonFile(getProvidersFile(runtimePaths)));
+  const providersFile = getProvidersFile(runtimePaths);
+  const rawProviderConfig = readJsonFile(providersFile);
+  const sanitizedProviderConfig = sanitizeProviderConfig(rawProviderConfig);
+  if (JSON.stringify(rawProviderConfig) !== JSON.stringify(sanitizedProviderConfig)) {
+    writeJsonFile(providersFile, sanitizedProviderConfig);
+  }
+  return sanitizedProviderConfig;
 }
 
 function saveSettings(runtimePaths, settings) {

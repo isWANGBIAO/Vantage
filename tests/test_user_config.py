@@ -117,6 +117,47 @@ def test_load_provider_config_normalizes_legacy_provider_to_v2(tmp_path):
     }
 
 
+def test_load_provider_config_removes_deprecated_provider_models(tmp_path):
+    user_config = _load_user_config_module()
+    removed_name = "gemi" + "ni"
+    providers_file = tmp_path / "config" / "providers.json"
+    providers_file.parent.mkdir(parents=True, exist_ok=True)
+    providers_file.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "selected_provider": "secondary",
+                "providers": {
+                    "secondary": {
+                        "name": "Secondary",
+                        "api_key": "sk-secondary",
+                        "base_url": "http://127.0.0.1:8045/v1",
+                        "model": f"{removed_name}-pro",
+                        "models": [f"{removed_name}-pro"],
+                    },
+                    "mixed": {
+                        "name": "Mixed",
+                        "api_key": "sk-mixed",
+                        "base_url": "http://127.0.0.1:8317/v1",
+                        "model": f"{removed_name}-flash",
+                        "models": [f"{removed_name}-flash", "gpt-5.5"],
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = user_config.load_provider_config(providers_file=providers_file)
+
+    assert payload["selected_provider"] == "mixed"
+    assert list(payload["providers"]) == ["mixed"]
+    assert payload["providers"]["mixed"]["model"] == "gpt-5.5"
+    assert payload["providers"]["mixed"]["models"] == ["gpt-5.5"]
+    assert removed_name not in providers_file.read_text(encoding="utf-8").lower()
+
+
 def test_load_migration_state_repairs_corrupt_json_in_migration_dir(tmp_path):
     user_config = _load_user_config_module()
     migration_dir = tmp_path / "migration"

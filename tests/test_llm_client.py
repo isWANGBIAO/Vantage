@@ -27,7 +27,7 @@ class LLMClientTests(unittest.TestCase):
             "CLIPROXYAPI_MODEL": "gpt-5.1",
             "CLIPROXYAPI_SECONDARY_BASE_URL": "http://127.0.0.1:8045/v1",
             "CLIPROXYAPI_SECONDARY_API_KEY": "secondary-key",
-            "CLIPROXYAPI_SECONDARY_MODEL": "gemini-3.1-pro-high",
+            "CLIPROXYAPI_SECONDARY_MODEL": "secondary-chat-model",
             "CLIPROXYAPI_FALLBACK_BASE_URL": "https://api.siliconflow.cn/v1",
             "CLIPROXYAPI_FALLBACK_API_KEY": "fallback-key",
             "CLIPROXYAPI_FALLBACK_MODEL": "Pro/deepseek-ai/DeepSeek-V3.2",
@@ -111,7 +111,7 @@ class LLMClientTests(unittest.TestCase):
         )
         self.assertEqual(
             [provider["model"] for provider in providers],
-            ["gpt-5.2", "gemini-3.1-pro-high", "Pro/deepseek-ai/DeepSeek-V3.2"],
+            ["gpt-5.2", "secondary-chat-model", "Pro/deepseek-ai/DeepSeek-V3.2"],
         )
         self.assertEqual(providers[0]["models"], ["gpt-5.2", "gpt-5.2-codex", "gpt-5.1", "gpt-5"])
 
@@ -408,7 +408,7 @@ class LLMClientTests(unittest.TestCase):
             )
 
         self.assertIs(response, fake_response)
-        self.assertEqual(used_model, "gemini-3.1-pro-high")
+        self.assertEqual(used_model, "secondary-chat-model")
         self.assertEqual(used_route, "cliproxyapi_secondary")
         self.assertEqual(
             [call.args[0] for call in mock_post.call_args_list],
@@ -1014,7 +1014,7 @@ class LLMClientTests(unittest.TestCase):
                 print_callback=capture_event,
             )
 
-        self.assertEqual(result["model"], "gemini-3.1-pro-high")
+        self.assertEqual(result["model"], "secondary-chat-model")
         self.assertEqual(result["provider_route"], "cliproxyapi_secondary")
         self.assertGreaterEqual(len(events), 3)
         self.assertEqual(
@@ -1022,7 +1022,7 @@ class LLMClientTests(unittest.TestCase):
             (
                 "metadata",
                 {
-                    "model": "gemini-3.1-pro-high",
+                    "model": "secondary-chat-model",
                     "provider_route": "cliproxyapi_secondary",
                     "requested_model": "gpt-5.2",
                     "requested_provider_route": "cliproxyapi_primary",

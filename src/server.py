@@ -91,6 +91,8 @@ RENDERER_CAMERA_FRAME_TTL_SECONDS = 5.0
 RENDERER_CAMERA_MAX_FRAME_BYTES = 8 * 1024 * 1024
 RENDERER_CAMERA_FRAME_INTENT = "renderer-camera-frame"
 CAMERA_DARK_FRAME_MEAN_LUMA_THRESHOLD = 12.0
+CAMERA_BLANK_FRAME_MEAN_LUMA_THRESHOLD = 1.0
+CAMERA_BLANK_FRAME_RECOVERY_COUNT = int(os.environ.get("VANTAGE_CAMERA_BLANK_FRAME_RECOVERY_COUNT", "60"))
 
 
 def get_cv2_module():
@@ -775,6 +777,15 @@ def calculate_frame_mean_luma(frame):
     except Exception as exc:
         print(f"Camera frame brightness check failed: {exc}")
         return None
+
+
+def update_camera_blank_frame_streak(frame, current_streak):
+    mean_luma = calculate_frame_mean_luma(frame)
+    if mean_luma is None or mean_luma > CAMERA_BLANK_FRAME_MEAN_LUMA_THRESHOLD:
+        return 0, False
+
+    next_streak = max(0, int(current_streak or 0)) + 1
+    return next_streak, next_streak >= CAMERA_BLANK_FRAME_RECOVERY_COUNT
 
 
 def _build_camera_frame_diagnostics():
@@ -2155,6 +2166,7 @@ def camera_loop():
         "Starting camera loop... "
         f"Backend: {get_camera_capture_backend()}"
     )
+    blank_frame_streak = 0
     while state.is_running:
         if state.camera is None:
             idx = get_camera_index()
@@ -2181,6 +2193,7 @@ def camera_loop():
                 actual_w = state.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
                 actual_h = state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
                 reset_camera_status_logs()
+                blank_frame_streak = 0
                 print(f"Camera Initialized: Requested {target_w}x{target_h}, Got {int(actual_w)}x{int(actual_h)}")
 
                 # If 4K failed (e.g. got low res), try strict 1080p fallback
@@ -2199,8 +2212,22 @@ def camera_loop():
             try:
                 ret, frame = state.camera.read()
                 if ret:
+                    blank_frame_streak, should_reopen_camera = update_camera_blank_frame_streak(
+                        frame,
+                        blank_frame_streak,
+                    )
                     with state.lock:
                         state.latest_frame = frame
+                    if should_reopen_camera:
+                        _rate_limited_status_log(
+                            ("camera", "blank-frame-recovery"),
+                            "Camera returned persistent blank frames; reopening capture",
+                            interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
+                        )
+                        state.camera.release()
+                        state.camera = None
+                        blank_frame_streak = 0
+                        sleep_while_running(0.5)
                 else:
                     print("Warning: Can't receive frame (stream end?). Exiting ...")
                     state.camera.release()

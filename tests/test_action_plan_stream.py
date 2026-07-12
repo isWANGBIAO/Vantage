@@ -70,7 +70,7 @@ class ActionPlanStreamPrinterTests(unittest.TestCase):
             "plan",
             "metadata",
             {
-                "model": "gemini-3.1-pro-high",
+                "model": "secondary-chat-model",
                 "provider_route": "cliproxyapi_secondary",
             },
             emit=emitted.append,
@@ -82,7 +82,7 @@ class ActionPlanStreamPrinterTests(unittest.TestCase):
         self.assertEqual(
             json.loads(emitted[0][len(prefix):]),
             {
-                "model": "gemini-3.1-pro-high",
+                "model": "secondary-chat-model",
                 "provider_route": "cliproxyapi_secondary",
             },
         )

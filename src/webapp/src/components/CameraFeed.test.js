@@ -26,4 +26,7 @@ test('CameraFeed only opens the live stream when the dashboard is visible', () =
 test('CameraFeed surfaces dark live frames from backend status', () => {
   assert.ok(cameraFeedSource.includes('camera_frame_dark: Boolean(data.camera_frame_dark)'));
   assert.ok(cameraFeedSource.includes('status.camera_frame_dark'));
+  assert.ok(cameraFeedSource.includes('className="camera-feed-dark-warning"'));
+  assert.equal(cameraFeedSource.includes("top: '50%'"), false);
+  assert.equal(cameraFeedSource.includes('&& !status.camera_frame_dark'), false);
 });

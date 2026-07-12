@@ -42,12 +42,12 @@ test('parseActionPlanStreamLog reads analysis prompt events', () => {
 
 test('parseActionPlanStreamLog reads plan metadata events', () => {
   assert.deepEqual(
-    parseActionPlanStreamLog('STREAM_PLAN_METADATA:{"model":"gemini-3.1-pro-high","provider_route":"cliproxyapi_secondary"}'),
+    parseActionPlanStreamLog('STREAM_PLAN_METADATA:{"model":"secondary-chat-model","provider_route":"cliproxyapi_secondary"}'),
     {
       section: 'plan',
       kind: 'metadata',
       content: {
-        model: 'gemini-3.1-pro-high',
+        model: 'secondary-chat-model',
         provider_route: 'cliproxyapi_secondary',
       },
     },

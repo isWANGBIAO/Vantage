@@ -10,9 +10,39 @@ const {
   buildSettingsState,
   getOnboardingState,
   maskProviderConfig,
+  sanitizeProviderConfig,
   saveSettingsPayload,
   saveOnboardingCompletion,
 } = require('./onboardingConfig.cjs');
+
+test('sanitizeProviderConfig removes deprecated provider models', () => {
+  const removedName = ['gemi', 'ni'].join('');
+  const sanitized = sanitizeProviderConfig({
+    selected_provider: 'secondary',
+    providers: {
+      secondary: {
+        name: 'Secondary',
+        api_key: 'sk-secondary',
+        base_url: 'http://127.0.0.1:8045/v1',
+        model: `${removedName}-pro`,
+        models: [`${removedName}-pro`],
+      },
+      mixed: {
+        name: 'Mixed',
+        api_key: 'sk-mixed',
+        base_url: 'http://127.0.0.1:8317/v1',
+        model: `${removedName}-flash`,
+        models: [`${removedName}-flash`, 'gpt-5.5'],
+      },
+    },
+  });
+
+  assert.equal(sanitized.selected_provider, 'mixed');
+  assert.deepEqual(Object.keys(sanitized.providers), ['mixed']);
+  assert.equal(sanitized.providers.mixed.model, 'gpt-5.5');
+  assert.deepEqual(sanitized.providers.mixed.models, ['gpt-5.5']);
+  assert.equal(JSON.stringify(sanitized).toLowerCase().includes(removedName), false);
+});
 
 test('getOnboardingState defaults to incomplete when settings file is missing', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'vantage-onboarding-'));

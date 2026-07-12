@@ -1095,7 +1095,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
             returncode=0,
             stderr_data=(
                 b"2026-03-08 14:58:33 - WARNING - LLM route cliproxyapi_primary failed for model gpt-5.2 at http://127.0.0.1:8317/v1: timeout\n"
-                b"2026-03-08 14:58:34 - INFO - LLM route cliproxyapi_secondary succeeded with model gemini-3.1-pro-high at http://127.0.0.1:8045/v1\n"
+                b"2026-03-08 14:58:34 - INFO - LLM route cliproxyapi_secondary succeeded with model secondary-chat-model at http://127.0.0.1:8045/v1\n"
             ),
         )
 

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import cv2
+import numpy as np
 
 from src import server
 from src.manager.take_photo.get_best_photo import capture_best_photo
@@ -54,6 +55,32 @@ def test_get_camera_index_honors_explicit_camera_index_override():
 
 def test_capture_best_photo_returns_none_when_camera_is_missing():
     assert capture_best_photo(None) is None
+
+
+def test_persistent_pure_black_frames_trigger_camera_recovery():
+    black_frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    streak = 0
+
+    for _ in range(server.CAMERA_BLANK_FRAME_RECOVERY_COUNT - 1):
+        streak, should_reopen = server.update_camera_blank_frame_streak(black_frame, streak)
+        assert should_reopen is False
+
+    streak, should_reopen = server.update_camera_blank_frame_streak(black_frame, streak)
+
+    assert streak == server.CAMERA_BLANK_FRAME_RECOVERY_COUNT
+    assert should_reopen is True
+
+
+def test_dark_but_visible_frame_does_not_trigger_camera_recovery():
+    visible_dark_frame = np.full((8, 8, 3), 5, dtype=np.uint8)
+
+    streak, should_reopen = server.update_camera_blank_frame_streak(
+        visible_dark_frame,
+        server.CAMERA_BLANK_FRAME_RECOVERY_COUNT - 1,
+    )
+
+    assert streak == 0
+    assert should_reopen is False
 
 
 def test_macos_camera_open_does_not_fallback_to_cap_any_when_permission_is_missing():

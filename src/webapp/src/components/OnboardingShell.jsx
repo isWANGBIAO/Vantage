@@ -228,7 +228,6 @@ export default function OnboardingShell({
                         disabled={chatSetupSkipped}
                       >
                         <option value="openai">{t('onboarding.provider.openai')}</option>
-                        <option value="gemini">{t('onboarding.provider.gemini')}</option>
                         <option value="custom">{t('onboarding.provider.custom')}</option>
                       </select>
                     </Field>
@@ -264,7 +263,7 @@ export default function OnboardingShell({
                         type="text"
                         value={model}
                         onChange={(event) => setModel(event.target.value)}
-                        placeholder="gpt-5 / gemini-2.5-pro / custom-model"
+                        placeholder="gpt-5 / custom-model"
                         disabled={chatSetupSkipped}
                       />
                     </Field>

@@ -67,11 +67,10 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
             )}
 
             {status.online && isVisible && privacyRevealed && status.camera_frame_dark && (
-                <div style={{
+                <div className="camera-feed-dark-warning" style={{
                     position: 'absolute',
-                    left: '50%',
-                    top: '50%',
-                    transform: 'translate(-50%, -50%)',
+                    left: '10px',
+                    bottom: '10px',
                     padding: '0.45rem 0.7rem',
                     borderRadius: '4px',
                     border: '1px solid rgba(255,255,255,0.16)',

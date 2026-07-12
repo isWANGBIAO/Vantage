@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const onboardingShellSource = readFileSync(new URL('./OnboardingShell.jsx', import.meta.url), 'utf8');
+const appSource = readFileSync(new URL('../App.jsx', import.meta.url), 'utf8');
+const displayCopySource = readFileSync(new URL('../utils/displayCopy.js', import.meta.url), 'utf8');
 
 test('OnboardingShell defines the four first-run placeholder steps', () => {
   assert.ok(onboardingShellSource.includes('const STEP_ORDER ='));
@@ -34,6 +36,13 @@ test('OnboardingShell collects provider fields and legacy import controls before
   assert.ok(onboardingShellSource.includes("t('onboarding.field.model')"));
   assert.ok(onboardingShellSource.includes("t('onboarding.field.import_legacy')"));
   assert.ok(onboardingShellSource.includes("t('onboarding.button.choose_folder')"));
+});
+
+test('first-run and footer copy omit the removed provider', () => {
+  const removedProvider = ['gemi', 'ni'].join('');
+  assert.equal(onboardingShellSource.toLowerCase().includes(removedProvider), false);
+  assert.equal(appSource.toLowerCase().includes(removedProvider), false);
+  assert.equal(displayCopySource.toLowerCase().includes(removedProvider), false);
 });
 
 test('OnboardingShell keeps the first-run window draggable under hidden native chrome', () => {

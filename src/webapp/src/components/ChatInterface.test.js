@@ -257,9 +257,8 @@ test('ChatInterface seeds live timing stats as soon as a request starts', () => 
   assert.ok(chatSource.includes('const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now())'));
 });
 
-test('ChatInterface does not hardcode Gemini provider copy and keeps user markdown readable', () => {
-  assert.equal(chatSource.includes('Powered by Gemini'), false);
-  assert.ok(chatSource.includes('providerLabel'));
+test('ChatInterface uses dynamic provider copy and keeps user markdown readable', () => {
+  assert.ok(chatSource.includes("t('chat.powered_by', { provider: providerLabel })"));
   assert.ok(chatSource.includes("isUser ? 'inherit'"));
 });
 

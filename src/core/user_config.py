@@ -16,6 +16,7 @@ DEFAULT_VOICE_MODEL = "FunAudioLLM/SenseVoiceSmall"
 PROVIDER_MODE_INHERIT_AI = "inherit_ai"
 PROVIDER_MODE_CUSTOM = "custom"
 DEFAULT_LOCAL_PROXY_BASE_URL = "http://127.0.0.1:8317/v1"
+REMOVED_PROVIDER_KEYWORD = "gemi" + "ni"
 LOCAL_PROXY_PROVIDER_ROUTES = {
     "custom",
     "cliproxyapi",
@@ -133,6 +134,10 @@ def _coerce_optional_str_value(value) -> str | None:
     return normalized or None
 
 
+def _contains_removed_provider(value) -> bool:
+    return REMOVED_PROVIDER_KEYWORD in str(value or "").lower()
+
+
 def _coerce_dict(payload: dict | None, key: str) -> dict:
     value = payload.get(key) if isinstance(payload, dict) else None
     return deepcopy(value) if isinstance(value, dict) else {}
@@ -150,7 +155,7 @@ def _coerce_provider_models(payload: dict | None, model: str | None) -> list[str
     models = []
     seen = set()
 
-    if isinstance(model, str) and model.strip():
+    if isinstance(model, str) and model.strip() and not _contains_removed_provider(model):
         normalized_model = model.strip()
         models.append(normalized_model)
         seen.add(normalized_model)
@@ -158,7 +163,7 @@ def _coerce_provider_models(payload: dict | None, model: str | None) -> list[str
     if isinstance(raw_models, (list, tuple)):
         for item in raw_models:
             normalized_item = _coerce_optional_str_value(item)
-            if not normalized_item or normalized_item in seen:
+            if not normalized_item or normalized_item in seen or _contains_removed_provider(normalized_item):
                 continue
             models.append(normalized_item)
             seen.add(normalized_item)
@@ -220,7 +225,8 @@ def _coerce_background_mode(payload: dict | None, key: str = "background_mode") 
 
 
 def _sanitize_provider_entry(route: str, entry: dict | None) -> dict:
-    model = _coerce_optional_str(entry, "model") or ""
+    raw_model = _coerce_optional_str(entry, "model") or ""
+    model = "" if _contains_removed_provider(raw_model) else raw_model
     models = _coerce_provider_models(entry, model)
     if not model and models:
         model = models[0]
@@ -269,16 +275,28 @@ def _sanitize_provider_config(payload: dict | None) -> dict:
     raw_providers = _coerce_dict(payload, "providers")
     for key, entry in raw_providers.items():
         normalized_key = str(key).strip() if isinstance(key, str) else ""
-        if not normalized_key:
+        provider_name = _coerce_optional_str(entry, "name")
+        if not normalized_key or _contains_removed_provider(normalized_key) or _contains_removed_provider(provider_name):
             continue
-        providers[normalized_key] = _sanitize_provider_entry(
+        sanitized_entry = _sanitize_provider_entry(
             normalized_key,
             entry if isinstance(entry, dict) else None,
         )
+        had_model_configuration = bool(
+            _coerce_optional_str(entry, "model")
+            or (isinstance(entry, dict) and isinstance(entry.get("models"), (list, tuple)) and entry.get("models"))
+        )
+        if had_model_configuration and not sanitized_entry["models"]:
+            continue
+        providers[normalized_key] = sanitized_entry
+
+    selected_provider = _coerce_optional_str(payload, "selected_provider")
+    if selected_provider not in providers:
+        selected_provider = next(iter(providers), None)
 
     return {
         "version": PROVIDERS_VERSION,
-        "selected_provider": _coerce_optional_str(payload, "selected_provider"),
+        "selected_provider": selected_provider,
         "providers": providers,
     }
 

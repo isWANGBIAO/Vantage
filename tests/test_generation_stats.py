@@ -22,7 +22,7 @@ class GenerationStatsTests(unittest.TestCase):
                 "reasoning_effort": "high",
             },
             {
-                "model": "gemini-3.1-pro-high",
+                "model": "secondary-chat-model",
                 "provider_route": "cliproxyapi_secondary",
                 "reasoning_effort": "xhigh",
             },
@@ -38,12 +38,12 @@ class GenerationStatsTests(unittest.TestCase):
                 "reasoning_effort": "medium",
             },
             {
-                "model": "gemini-3.1-pro-high",
+                "model": "secondary-chat-model",
                 "provider_route": "cliproxyapi_secondary",
                 "reasoning_effort": "xhigh",
             },
         )
 
-        self.assertEqual(metadata["model"], "gemini-3.1-pro-high")
+        self.assertEqual(metadata["model"], "secondary-chat-model")
         self.assertEqual(metadata["provider_route"], "cliproxyapi_secondary")
         self.assertEqual(metadata["reasoning_effort"], "xhigh")
