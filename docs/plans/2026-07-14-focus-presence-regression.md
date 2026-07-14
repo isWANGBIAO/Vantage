@@ -1,200 +1,133 @@
 # Focus Presence Regression Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+## Goal
 
-**Goal:** Restore reliable, restart-safe focus-time tracking without bringing the removed heavyweight YOLO runtime back.
+Restore body-aware, restart-safe focus tracking; add trusted away timing; pause
+both timers through unobserved gaps; recover quickly when the camera becomes
+available; and show durations in minute, hour, and day units.
 
-**Architecture:** Split raw YuNet presence from stricter camera-facing classification, carry tri-state observations through the monitor, and persist a narrowly bounded restart-recovery record under the runtime directory. Make the camera loop the sole physical-frame producer, complete Unicode media handling, and expose measurement status independently from focus duration.
+## Architecture
 
-**Tech Stack:** Python 3.11, OpenCV YuNet, FastAPI, React, pytest, Node test runner, Electron packaging.
+- OpenCV YuNet remains responsible for face and camera-facing classification.
+- A bundled OpenCV Zoo YOLOX int8 model supplies body-aware person presence.
+- Presence is positive when either detector succeeds positively, negative only
+  when both detectors succeed negatively, and unknown otherwise.
+- The monitor owns accumulated trusted focus and away segments rather than
+  deriving duration from wall-clock session starts.
+- Camera frames carry monotonic publication timestamps and expire after five
+  seconds for monitor use.
+- FastAPI exposes additive away-timer fields; React selects and formats the
+  active trusted timer.
+- Packaged smoke verification runs real inference through both camera models.
 
----
+## Task 1: Restore body-aware presence
 
-### Task 1: Separate presence from camera-facing classification
+**Files**
 
-**Files:**
-- Modify: `src/services/person_detection.py`
-- Modify: `src/manager/take_photo/take_a_photo.py`
-- Test: `tests/test_person_detection.py`
-- Test: `tests/test_take_photo.py`
+- `src/services/person_detection.py`
+- `src/models/object_detection_yolox_2022nov_int8bq.onnx`
+- `src/models/LICENSE.object_detection_yolox.txt`
+- `src/core/backend_runtime_packaging.py`
+- person-detection and packaging tests
 
-**Step 1: Write the failing tests**
+**Acceptance criteria**
 
-Add tests proving that a moderate-confidence, non-frontal YuNet face counts as
-presence while the camera-facing API still rejects it. Make the fake detector
-honor `setScoreThreshold` so the previous all-0.96 fixture cannot hide threshold
-regressions. Update photo tests to require the presence API and tri-state
-`None` for capture or detector failure.
+- YuNet face or YOLOX person is sufficient for presence.
+- Absence requires two successful negative detectors.
+- Detector failures produce unknown unless the other detector is positive.
+- Invalid or non-finite model output cannot become a full-frame person box.
+- The model and license are present in source and packaged runtime resources.
 
-**Step 2: Run tests to verify RED**
+## Task 2: Track trusted focus and away duration
 
-Run: `python -m pytest tests/test_person_detection.py tests/test_take_photo.py -q -p no:cacheprovider`
+**Files**
 
-Expected: FAIL because the presence-specific API and tri-state behavior do not exist.
+- `src/manager/manager_main.py`
+- `src/server.py`
+- `tests/test_sedentary_monitor.py`
 
-**Step 3: Write minimal implementation**
+**Acceptance criteria**
 
-Add a separate presence threshold and raw-face detection path. Keep
-`detect_camera_facing_faces()` and its geometry filter intact. Route periodic
-photo presence through the raw presence count and return `None` for untrusted
-capture/inference results.
+- Present runs focus; absent runs away immediately; unknown pauses both.
+- Unknown, capture latency, and stale-heartbeat gaps are never counted later.
+- Exactly 120 trusted away seconds clears only the old focus session.
+- Focus and away values remain monotonic inside their active episode.
+- Version 2 state is atomic, version 1 migrates, restart downtime is excluded,
+  and only a fresh matching trusted observation restores the candidate.
+- The API retains existing fields and adds `away_duration_seconds` and
+  `active_timer`.
 
-**Step 4: Run tests to verify GREEN**
+## Task 3: Reject stale camera frames and retry quickly
 
-Run the same focused pytest command and expect all tests to pass.
+**Files**
 
-### Task 2: Make focus state tri-state and restart-safe
+- `src/server.py`
+- camera, renderer, monitor, and startup tests
 
-**Files:**
-- Modify: `src/manager/manager_main.py`
-- Modify: `src/server.py`
-- Test: `tests/test_sedentary_monitor.py`
-- Test: `tests/test_server_startup_idempotence.py`
+**Acceptance criteria**
 
-**Step 1: Write the failing tests**
+- Frame and monotonic publication timestamp update and clear atomically.
+- Missing, invalid, future, or older-than-five-second frames become unknown.
+- Present and absent cycles use the configured normal interval.
+- Missing, stale, unknown, and failed cycles retry after two seconds.
+- Renderer liveness uses monotonic time and preserves camera ownership rules.
 
-Cover `present -> unknown -> present`, confirmed absence beyond the grace
-period, short-restart recovery, stale/corrupt/future recovery-state rejection,
-and runtime-directory injection from server startup.
+## Task 4: Verify packaged camera inference
 
-**Step 2: Run tests to verify RED**
+**Files**
 
-Run: `python -m pytest tests/test_sedentary_monitor.py tests/test_server_startup_idempotence.py -q -p no:cacheprovider`
+- `src/server.py`
+- `src/scripts/verify_backend_runtime.py`
+- runtime-prewarm and verifier tests
 
-Expected: FAIL because the monitor has no tri-state recorder or persistence.
+**Acceptance criteria**
 
-**Step 3: Write minimal implementation**
+- The enabled prewarm path executes one real YuNet inference and one real YOLOX
+  inference; either failure is reported without skipping the other detector.
+- Smoke verification clears the old pointer and accepts only the current
+  in-scope runtime log.
+- Both success markers are required; missing or unreadable evidence fails.
 
-Add observation-state recording and an atomic, versioned recovery file. Restore
-only after a fresh positive observation inside the grace window. Preserve the
-timer on unknown measurements and keep stale-heartbeat reporting separate.
+## Task 5: Show focus and away time with automatic units
 
-**Step 4: Run tests to verify GREEN**
+**Files**
 
-Run the same focused pytest command and expect all tests to pass.
+- `src/webapp/src/components/focusStatus.js`
+- `src/webapp/src/components/Dashboard.jsx`
+- `src/webapp/src/utils/displayCopy.js`
+- corresponding frontend tests
 
-### Task 3: Preserve media state and complete Unicode image support
+**Acceptance criteria**
 
-**Files:**
-- Modify: `src/manager/manager_main.py`
-- Modify: `src/server.py`
-- Test: `tests/test_sedentary_monitor.py`
-- Test: `tests/test_latest_images_endpoint.py`
-
-**Step 1: Write the failing tests**
-
-Prove that a confirmed presence with failed photo storage does not replace the
-last valid photo path, and that a valid image under a Unicode path is decoded
-and passed to person validation.
-
-**Step 2: Run tests to verify RED**
-
-Run: `python -m pytest tests/test_sedentary_monitor.py tests/test_latest_images_endpoint.py -q -p no:cacheprovider`
-
-Expected: FAIL on path overwrite and `cv2.imread` Unicode behavior.
-
-**Step 3: Write minimal implementation**
-
-Only replace media paths with non-empty successful outputs. Decode stored image
-bytes through `numpy.fromfile` plus `cv2.imdecode`.
-
-**Step 4: Run tests to verify GREEN**
-
-Run the same focused pytest command and expect all tests to pass.
-
-### Task 4: Fix warmup recovery and monitor frame ownership
-
-**Files:**
-- Modify: `src/server.py`
-- Modify: `src/manager/take_photo/take_a_photo.py`
-- Test: `tests/test_cross_platform_capture.py`
-- Test: `tests/test_sedentary_monitor.py`
-
-**Step 1: Write the failing tests**
-
-Cover dark frames throughout warmup without reopen, reopen counting only after
-warmup, first valid frame publication, and monitor use of a copied
-`state.latest_frame` rather than concurrent physical-camera reads.
-
-**Step 2: Run tests to verify RED**
-
-Run: `python -m pytest tests/test_cross_platform_capture.py tests/test_sedentary_monitor.py -q -p no:cacheprovider`
-
-Expected: FAIL because warmup dark frames currently reach the reopen threshold and monitor capture bypasses the published frame.
-
-**Step 3: Write minimal implementation**
-
-Ignore dark-frame streak accumulation until warmup completes. Add an optional
-pre-captured frame to the photo/monitor path and pass a locked copy of the
-published latest frame from `monitor_loop()`.
-
-**Step 4: Run tests to verify GREEN**
-
-Run the same focused pytest command and expect all tests to pass.
-
-### Task 5: Report measurement status correctly in the dashboard
-
-**Files:**
-- Modify: `src/server.py`
-- Modify: `src/webapp/src/components/Dashboard.jsx`
-- Modify: `src/webapp/src/utils/displayCopy.js`
-- Test: `tests/test_sedentary_monitor.py`
-- Test: `src/webapp/src/components/Dashboard.test.js`
-- Test: `src/webapp/src/utils/displayCopy.test.js`
-
-**Step 1: Write the failing tests**
-
-Add endpoint contracts for present, absent, unknown, and stale observations.
-Add frontend tests proving unknown displays a paused/unavailable measurement,
-not confirmed absence, while keeping the last valid duration visible.
-
-**Step 2: Run tests to verify RED**
-
-Run: `python -m pytest tests/test_sedentary_monitor.py -q -p no:cacheprovider`
-
-Run: `npm --prefix src/webapp test -- src/webapp/src/components/Dashboard.test.js src/webapp/src/utils/displayCopy.test.js`
-
-Expected: FAIL because observation status is not returned or rendered.
-
-**Step 3: Write minimal implementation**
-
-Return a stable `detection_status` field and duration snapshot. Render distinct
-present, absent, and temporarily unavailable copy without discarding the last
-known focus duration.
-
-**Step 4: Run tests to verify GREEN**
-
-Run both focused commands and expect all tests to pass.
-
-### Task 6: Full regression and installed-runtime verification
-
-**Files:**
-- Modify only if a verification failure proves another in-scope regression.
-
-**Step 1: Run source verification**
-
-Run:
+- Active payload validation includes away seconds and active timer.
+- Poll failures preserve both frozen durations and the last trusted mode.
+- Present displays focus; absent displays away from its first trusted second.
+- Unknown and stale display the timer selected by `active_timer`.
+- One formatter handles the defined minute, hour, and day boundaries in both
+  English and Chinese, including English day singular and plural.
+- Near-limit styling applies only to fresh present focus time.
+
+## Task 6: Full source and installed-runtime verification
+
+Run from the repository root unless noted otherwise:
 
 - `python -m pytest -q -p no:cacheprovider`
-- `npm --prefix src/webapp test`
-- `npm --prefix src/webapp run lint`
-- `npm --prefix src/webapp run build`
+- `npm test` from `src/webapp`
+- `npm run lint` from `src/webapp`
+- `npm run build` from `src/webapp`
 - `git diff --check`
+- Python compile checks for changed source files
 
-**Step 2: Validate packaging dependencies**
+Then run `RUN.bat` and let the complete Windows build, packaging, installation,
+launch, and packaged-runtime smoke verification finish naturally.
 
-Run the repository packaging verifier with
-`.venv-backend-runtime-gpu\\Scripts\\python.exe` and confirm the YuNet asset and
-runtime dependencies are present.
+The installed application must satisfy all of the following:
 
-**Step 3: Run the complete install flow**
-
-Run `RUN.bat` from the repository root and let it finish naturally.
-
-**Step 4: Verify the installed application**
-
-Confirm installed build metadata matches the repair branch, the backend owns
-`127.0.0.1:8000`, `/api/status` reports a valid camera frame, and
-`/api/health/sedentary` reports a stable detection status with monotonically
-increasing duration while the user remains present. Inspect only fresh logs for
-reset, Unicode, warmup, and backend errors.
+- installed build metadata matches the repair commit;
+- the backend owns `127.0.0.1:8000`;
+- `/api/status` reports the expected packaged runtime and camera state;
+- `/api/health/sedentary` includes valid focus, away, and active-timer fields;
+- the current packaged runtime log contains successful YuNet and YOLOX
+  inference markers and no blocking startup errors;
+- live observations never advance a timer during missing, stale, or unknown
+  camera intervals.
