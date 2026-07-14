@@ -1,4 +1,3 @@
-import re
 from pathlib import Path
 
 
@@ -9,7 +8,6 @@ REQUIRED_BACKEND_PACKAGES = {
     "mediapipe",
     "piexif",
     "python-multipart",
-    "ultralytics",
     "uvicorn",
     "winsdk",
 }
@@ -22,7 +20,6 @@ REQUIRED_GPU_RUNTIME_PACKAGES = {
     "matplotlib",
     "mss",
     "numpy",
-    "onnxruntime-gpu",
     "openai",
     "opencv-python",
     "openpyxl",
@@ -35,9 +32,6 @@ REQUIRED_GPU_RUNTIME_PACKAGES = {
     "python-multipart",
     "requests",
     "scienceplots",
-    "torch",
-    "torchvision",
-    "ultralytics",
     "uvicorn",
     "winsdk",
 }
@@ -92,7 +86,12 @@ FORBIDDEN_GPU_RUNTIME_PACKAGES = {
     "notebook",
     "polars",
     "polars-runtime-32",
+    "onnxruntime",
+    "onnxruntime-gpu",
+    "torch",
     "torchaudio",
+    "torchvision",
+    "ultralytics",
 }
 
 
@@ -132,9 +131,16 @@ def test_requirements_cover_backend_runtime_dependencies():
     }
 
     missing = REQUIRED_BACKEND_PACKAGES - package_names
-    if "onnxruntime" not in package_names and "onnxruntime-gpu" not in package_names:
-        missing.add("onnxruntime or onnxruntime-gpu")
     assert not missing, f"requirements.txt missing backend runtime packages: {sorted(missing)}"
+
+    removed_detector_packages = {
+        "onnxruntime",
+        "onnxruntime-gpu",
+        "torchaudio",
+        "torchvision",
+        "ultralytics",
+    }
+    assert not (removed_detector_packages & package_names)
 
 
 def test_gpu_runtime_requirements_are_minimal_and_reproducible():
@@ -150,7 +156,7 @@ def test_gpu_runtime_requirements_are_minimal_and_reproducible():
 
     assert not missing, f"GPU runtime requirements missing packages: {sorted(missing)}"
     assert not forbidden, f"GPU runtime requirements include forbidden packages: {sorted(forbidden)}"
-    assert any("download.pytorch.org/whl/cu" in line for line in content)
+    assert not any("download.pytorch.org/whl/cu" in line for line in content)
 
 
 def test_ci_requirements_cover_tests_without_gpu_runtime():
@@ -184,7 +190,7 @@ def test_readme_recommends_environment_python_version():
 
     assert "python=3.11" in environment
     assert (
-        "Python 3.11 recommended for local GPU packaging; CI also validates "
+        "Python 3.11 recommended for local backend packaging; CI also validates "
         "Python 3.13."
     ) in readme
     assert "Python 3.12 recommended." not in readme
@@ -210,23 +216,12 @@ def test_backend_runtime_requirements_keep_macos_opencv_headless():
         for line in opencv_lines
     )
 
-    ultralytics_lines = _find_requirement_lines("requirements-backend-runtime-gpu.txt", "ultralytics")
-    assert len(ultralytics_lines) == 1
-    assert re.fullmatch(
-        r'ultralytics==\d+\.\d+\.\d+; sys_platform == "win32"',
-        ultralytics_lines[0],
-    )
-
-
-def test_backend_runtime_requirements_keep_torch_windows_only():
-    for package_name in ("torch", "torchvision"):
-        lines = _find_requirement_lines("requirements-backend-runtime-gpu.txt", package_name)
-        assert lines, f"requirements-backend-runtime-gpu.txt missing {package_name}"
-        assert all('sys_platform == "win32"' in line for line in lines)
+    for package_name in ("onnxruntime", "onnxruntime-gpu", "torch", "torchvision", "ultralytics"):
+        assert not _find_requirement_lines("requirements-backend-runtime-gpu.txt", package_name)
 
 
 def test_development_requirements_mark_windows_only_packages():
-    for package_name in ("pywin32", "pywinpty", "torch", "torchaudio", "torchvision", "ultralytics", "wmi", "winsdk"):
+    for package_name in ("pywin32", "pywinpty", "torch", "wmi", "winsdk"):
         lines = _find_requirement_lines("requirements.txt", package_name)
         assert lines, f"requirements.txt missing {package_name}"
         assert all('sys_platform == "win32"' in line for line in lines)

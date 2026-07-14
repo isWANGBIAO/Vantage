@@ -57,8 +57,9 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
     def test_find_runtime_blockers_flags_packaged_dll_errors(self):
         log_text = "\n".join(
             [
-                "Failed to load YOLO model in thread: [WinError 1114] Error loading c10.dll",
-                "YOLO model unavailable in thread: No module named 'ultralytics'",
+                "Face detector unavailable in thread: DLL load failed while loading opencv_world.dll",
+                "Face detector unavailable in thread: No module named 'cv2'",
+                "Camera face detector unavailable in thread: Missing face detection model",
                 "Live face analysis error: DLL load failed while importing _framework_bindings",
                 "Missing packaged runtime module(s): zhdate (No module named 'zhdate')",
             ]
@@ -69,11 +70,11 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
         self.assertEqual(
             blockers,
             [
-                "c10.dll",
                 "DLL load failed",
                 "Live face analysis error",
                 "Missing packaged runtime module",
                 "No module named",
+                "Missing face detection model",
             ],
         )
 

@@ -29,6 +29,7 @@ def _ensure_project_root_on_sys_path(
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
 from src.core.backend_runtime_packaging import (
+    collect_backend_runtime_resources,
     get_backend_runtime_executable_name,
     load_backend_runtime_manifest,
     resolve_backend_runtime_layout,
@@ -45,6 +46,7 @@ BLOCKING_RUNTIME_PATTERNS = (
     "Live face analysis error",
     "Missing packaged runtime module",
     "No module named",
+    "Missing face detection model",
 )
 
 
@@ -174,9 +176,10 @@ def main() -> int:
     args = parser.parse_args()
 
     layout = resolve_backend_runtime_layout(PROJECT_ROOT)
+    resources = collect_backend_runtime_resources(PROJECT_ROOT)
     errors = validate_backend_runtime_bundle(
         layout,
-        [],
+        resources,
     )
     if errors:
         for error in errors:

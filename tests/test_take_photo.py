@@ -25,18 +25,21 @@ class TakePhotoTests(unittest.TestCase):
             return_value=None,
         ), patch.object(
             take_a_photo,
-            "detect_person_YOLO",
+            "detect_camera_facing_face_count",
             side_effect=AssertionError("detection should not run without a frame"),
         ), patch.object(
             take_a_photo,
             "save_image_with_gps",
             side_effect=AssertionError("save should not run without a frame"),
-        ):
+        ), patch("builtins.print") as mock_print:
             result = take_a_photo.take_photo(object(), 0.0, 0.0, tmpdir)
 
         self.assertEqual(result, (False, None))
+        log_text = "\n".join(str(item) for item in mock_print.call_args_list)
+        self.assertIn("skipping face detection", log_text)
+        self.assertNotIn("YOLO", log_text)
 
-    def test_take_photo_saves_photo_when_person_is_detected(self):
+    def test_take_photo_saves_photo_when_camera_facing_face_is_detected(self):
         frame = np.zeros((4, 4, 3), dtype=np.uint8)
 
         with tempfile.TemporaryDirectory() as tmpdir, patch.object(
@@ -45,7 +48,7 @@ class TakePhotoTests(unittest.TestCase):
             return_value=frame,
         ), patch.object(
             take_a_photo,
-            "detect_person_YOLO",
+            "detect_camera_facing_face_count",
             return_value=1,
         ), patch.object(
             take_a_photo,
@@ -58,7 +61,7 @@ class TakePhotoTests(unittest.TestCase):
         mock_save.assert_called_once()
         self.assertEqual(mock_save.call_args[0][1].shape, frame.shape)
 
-    def test_take_photo_skips_save_when_person_detection_is_unavailable(self):
+    def test_take_photo_skips_save_when_face_detection_is_unavailable(self):
         frame = np.zeros((4, 4, 3), dtype=np.uint8)
 
         with tempfile.TemporaryDirectory() as tmpdir, patch.object(
@@ -67,7 +70,7 @@ class TakePhotoTests(unittest.TestCase):
             return_value=frame,
         ), patch.object(
             take_a_photo,
-            "detect_person_YOLO",
+            "detect_camera_facing_face_count",
             side_effect=FileNotFoundError("missing model"),
         ), patch.object(
             take_a_photo,

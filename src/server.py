@@ -78,8 +78,9 @@ from src.services.model_call_recorder import (
 from src.services.person_detection import (
     PERSON_DETECTION_CONFIDENCE,
     PERSON_DETECTION_MODEL,
+    detect_face_boxes,
     detect_person_count,
-    get_yolo_model,
+    get_face_detector,
 )
 from src.utils.data_loader import DataLoader
 from src.utils.sensitive_data import redact_sensitive_text
@@ -161,7 +162,10 @@ CAMERA_STATUS_LOG_INTERVAL_SECONDS = float(os.environ.get(
     "300",
 ))
 PREWARM_FACE_ON_STARTUP = os.environ.get("VANTAGE_PREWARM_FACE_ON_STARTUP", "0") == "1"
-PREWARM_YOLO_ON_STARTUP = os.environ.get("VANTAGE_PREWARM_YOLO_ON_STARTUP", "0") == "1"
+PREWARM_FACE_DETECTION_ON_STARTUP = os.environ.get(
+    "VANTAGE_PREWARM_FACE_DETECTION_ON_STARTUP",
+    "0",
+) == "1"
 BACKGROUND_MODE_CACHE_TTL_SECONDS = 2.0
 FACE_OVERLAY_BASE_SCORE_FONT_SCALE = 1.9
 FACE_OVERLAY_SCORE_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
@@ -588,7 +592,7 @@ class SystemState:
             "monitor_loop": False,
             "update_legacy_storage_stats": False,
             "update_storage_stats": False,
-            "yolo_loop": False,
+            "face_detection_loop": False,
         }
         self.lock = threading.Lock()
         self.paths = {'photo': None, 'screenshot': None}
@@ -725,14 +729,14 @@ def prewarm_runtime_models():
             print(f"Failed to warm face analysis runtime: {exc}")
 
     try:
-        if not PREWARM_YOLO_ON_STARTUP:
-            print("YOLO model warmup deferred to background thread.")
+        if not PREWARM_FACE_DETECTION_ON_STARTUP:
+            print("Camera face detector warmup deferred to background thread.")
             return
 
-        get_yolo_model()
-        print("YOLO model warmed up successfully.")
+        get_face_detector()
+        print("Camera face detector warmed up successfully.")
     except Exception as exc:
-        print(f"Failed to warm YOLO model: {exc}")
+        print(f"Failed to warm camera face detector: {exc}")
 
 
 def _camera_online():
@@ -939,7 +943,7 @@ def has_active_video_stream_client():
         return getattr(state, "video_stream_client_count", 0) > 0
 
 
-def should_run_yolo_detection():
+def should_run_face_detection():
     if not state.show_person_box:
         return False
     if load_background_mode() == "prewarm":
@@ -2049,11 +2053,11 @@ def _saved_photo_contains_person(photo_path):
 
         person_count = detect_person_count(image, conf=PERSON_DETECTION_CONFIDENCE)
         if person_count <= 0:
-            print(f"Skipping latest photo without detected person: {photo_path}")
+            print(f"Skipping latest photo without a camera-facing face: {photo_path}")
             return False
         return True
     except Exception as exc:
-        print(f"Skipping latest photo because person validation failed: {photo_path}: {exc}")
+        print(f"Skipping latest photo because face validation failed: {photo_path}: {exc}")
         return False
 
 
@@ -2111,7 +2115,7 @@ async def startup_event():
             ("monitor_loop", monitor_loop),
             ("update_legacy_storage_stats", update_legacy_storage_stats),
             ("update_storage_stats", update_storage_stats),
-            ("yolo_loop", yolo_loop),
+            ("face_detection_loop", face_detection_loop),
         )
         for thread_name, thread_target in thread_specs:
             _start_background_thread_once(thread_name, thread_target)
@@ -2314,21 +2318,17 @@ def face_live_loop():
 
         time.sleep(FACE_LIVE_SAMPLE_INTERVAL_SECONDS)
 
-def yolo_loop():
-    print("Starting YOLO detection background thread...")
+def face_detection_loop():
+    print("Starting camera-facing face detection background thread...")
     try:
-        model = get_yolo_model()
-        # Initialize an empty run to warm up the model
-        import numpy as np
-        dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
-        model.predict(source=dummy_img, verbose=False, imgsz=640)
-        print("YOLO model warmed up successfully.")
+        detector = get_face_detector()
+        print("Camera face detector loaded successfully.")
     except Exception as e:
-        print(f"YOLO model unavailable in thread: {e}")
+        print(f"Camera face detector unavailable in thread: {e}")
         return
 
     while state.is_running:
-        if not should_run_yolo_detection():
+        if not should_run_face_detection():
             with state.lock:
                 state.person_boxes = []
             time.sleep(1)
@@ -2341,32 +2341,20 @@ def yolo_loop():
 
         if frame_copy is not None:
             try:
-                # Run detection on a resized frame to save CPU/GPU if needed, 
-                # but ultralytics handles padding/resizing automatically based on imgsz.
-                # using a standard surveillance confidence threshold to reduce false positives
-                results = model.predict(
-                    source=frame_copy,
-                    verbose=False,
+                boxes = detect_face_boxes(
+                    frame_copy,
+                    model=detector,
                     conf=PERSON_DETECTION_CONFIDENCE,
-                    imgsz=640,
                 )
-                
-                boxes = []
-                if results and len(results) > 0:
-                    for box in results[0].boxes:
-                        if int(box.cls[0]) == 0:  # 0 is 'person' class in COCO
-                            x1, y1, x2, y2 = box.xyxy[0].tolist()
-                            boxes.append((int(x1), int(y1), int(x2), int(y2)))
-                
+
                 with state.lock:
                     state.person_boxes = boxes
-                    
+
             except Exception as e:
-                print(f"YOLO detection error: {e}")
-        
-        # Don't hit 100% CPU on this thread, YOLO inference takes time anyway, 
-        # but yield a bit to prevent lock starvation
+                print(f"Camera face detection error: {e}")
+
         time.sleep(0.1)
+
 
 def generate_frames():
     register_video_stream_client()
@@ -2374,14 +2362,14 @@ def generate_frames():
         while True:
             frame = None
             show_person_box = False
-            person_boxes_copy = []
+            face_boxes_copy = []
             with state.lock:
                 if state.latest_frame is not None:
                     frame = state.latest_frame.copy()
                 overlay_score = state.latest_live_face_score
                 show_person_box = state.show_person_box
                 if show_person_box:
-                    person_boxes_copy = list(state.person_boxes)
+                    face_boxes_copy = list(state.person_boxes)
 
             if frame is None:
                 import numpy as np
@@ -2389,20 +2377,20 @@ def generate_frames():
                 cv2.putText(frame, "Camera Offline", (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 2)
 
             if show_person_box:
-                for (x1, y1, x2, y2) in person_boxes_copy:
+                for (x1, y1, x2, y2) in face_boxes_copy:
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                    person_label = "Person"
-                    (_, person_text_height), person_baseline = cv2.getTextSize(
-                        person_label,
+                    face_label = "Face"
+                    (_, face_text_height), face_baseline = cv2.getTextSize(
+                        face_label,
                         cv2.FONT_HERSHEY_SIMPLEX,
                         FACE_OVERLAY_PERSON_FONT_SCALE,
                         FACE_OVERLAY_PERSON_THICKNESS,
                     )
-                    person_y = max(person_text_height + person_baseline + 8, y1 - 16)
+                    face_y = max(face_text_height + face_baseline + 8, y1 - 16)
                     cv2.putText(
                         frame,
-                        person_label,
-                        (x1, person_y),
+                        face_label,
+                        (x1, face_y),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         FACE_OVERLAY_PERSON_FONT_SCALE,
                         (0, 255, 0),

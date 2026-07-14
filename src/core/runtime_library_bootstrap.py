@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import os
 import sys
 from pathlib import Path
@@ -9,8 +8,6 @@ from pathlib import Path
 _RUNTIME_DLL_HANDLES = []
 
 _INTERNAL_RELATIVE_DIRS = (
-    Path("torch") / "lib",
-    Path("onnxruntime") / "capi",
     Path("mediapipe"),
     Path("cv2"),
     Path("numpy.libs"),
@@ -19,16 +16,6 @@ _INTERNAL_RELATIVE_DIRS = (
     Path("pyzmq.libs"),
     Path("pywin32_system32"),
 )
-
-_TORCH_PRELOAD_ORDER = (
-    "torch_global_deps.dll",
-    "c10.dll",
-    "c10_cuda.dll",
-    "torch_cpu.dll",
-    "torch_cuda.dll",
-    "torch_python.dll",
-)
-
 
 def resolve_runtime_library_root(resource_root: str | Path | None = None) -> Path:
     if resource_root:
@@ -103,36 +90,11 @@ def apply_runtime_library_dirs(
     return new_entries
 
 
-def preload_torch_libraries(
-    resource_root: str | Path | None,
-    *,
-    load_library=None,
-) -> list[str]:
-    resolved_loader = load_library or ctypes.CDLL
-    internal_root, _runtime_root = _resolve_internal_and_runtime_roots(resource_root)
-    torch_lib_dir = internal_root / "torch" / "lib"
-    if not torch_lib_dir.exists():
-        return []
-
-    loaded_dlls = []
-    for dll_name in _TORCH_PRELOAD_ORDER:
-        dll_path = torch_lib_dir / dll_name
-        if not dll_path.exists():
-            continue
-        try:
-            resolved_loader(str(dll_path))
-            loaded_dlls.append(str(dll_path))
-        except Exception:
-            continue
-    return loaded_dlls
-
-
 def bootstrap_packaged_runtime_libraries(
     resource_root: str | Path | None = None,
     *,
     env: dict[str, str] | None = None,
     add_dll_directory=None,
-    load_library=None,
 ) -> dict[str, object]:
     resolved_root = resolve_runtime_library_root(resource_root)
     library_dirs = apply_runtime_library_dirs(
@@ -140,12 +102,8 @@ def bootstrap_packaged_runtime_libraries(
         env=env,
         add_dll_directory=add_dll_directory,
     )
-    preloaded_dlls = preload_torch_libraries(
-        resolved_root,
-        load_library=load_library,
-    )
     return {
         "resource_root": str(resolved_root),
         "library_dirs": library_dirs,
-        "preloaded_dlls": preloaded_dlls,
+        "preloaded_dlls": [],
     }

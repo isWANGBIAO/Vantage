@@ -304,7 +304,7 @@ def test_startup_event_resumes_only_missing_threads_after_partial_start_failure(
                 "monitor_loop": 1,
                 "update_legacy_storage_stats": 2,
                 "update_storage_stats": 1,
-                "yolo_loop": 1,
+                "face_detection_loop": 1,
             }
             assert _static_route_directories() == {
                 "/static/photos": os.path.abspath(str(photos_path)),

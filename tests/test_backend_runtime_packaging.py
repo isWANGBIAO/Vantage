@@ -31,9 +31,11 @@ from src.core.backend_runtime_packaging import (
 
 
 def _create_required_runtime_resources(project_root: Path):
-    (project_root / "src" / "scripts" / "models").mkdir(parents=True, exist_ok=True)
-    (project_root / "src" / "scripts" / "models" / "face_parsing.farl.lapa.int8.onnx").write_bytes(b"onnx")
-    (project_root / "yolo26m.pt").write_bytes(b"weights")
+    models_dir = project_root / "src" / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    (project_root / "src" / "scripts").mkdir(parents=True, exist_ok=True)
+    (models_dir / "face_detection_yunet_2023mar.onnx").write_bytes(b"onnx")
+    (models_dir / "LICENSE.face_detection_yunet.txt").write_text("MIT\n", encoding="utf-8")
     for resource_name in REQUIRED_ROOT_RESOURCE_NAMES:
         (project_root / resource_name).write_text(f"# {resource_name}\n", encoding="utf-8")
 
@@ -50,7 +52,7 @@ def test_resolve_backend_runtime_layout_uses_fixed_output_tree(tmp_path):
     assert layout["entry_script"] == tmp_path / "src" / "scripts" / "run_server_background.py"
 
 
-def test_collect_backend_runtime_resources_includes_available_models_and_prompts(tmp_path):
+def test_collect_backend_runtime_resources_includes_required_yunet_model_and_prompts(tmp_path):
     _create_required_runtime_resources(tmp_path)
 
     resources = collect_backend_runtime_resources(tmp_path)
@@ -58,8 +60,8 @@ def test_collect_backend_runtime_resources_includes_available_models_and_prompts
     packaged_paths = {resource.output_relative_path for resource in resources}
     assert Path("opencv-data") / "haarcascade_frontalface_default.xml" in packaged_paths
     assert Path("scienceplots") / "styles" in packaged_paths
-    assert Path("yolo26m.pt") in packaged_paths
-    assert Path("src") / "scripts" / "models" / "face_parsing.farl.lapa.int8.onnx" in packaged_paths
+    assert Path("src") / "models" / "face_detection_yunet_2023mar.onnx" in packaged_paths
+    assert Path("src") / "models" / "LICENSE.face_detection_yunet.txt" in packaged_paths
     for resource_name in REQUIRED_ROOT_RESOURCE_NAMES:
         assert Path(resource_name) in packaged_paths
 
@@ -71,16 +73,12 @@ def test_collect_backend_runtime_resources_rejects_missing_required_files(tmp_pa
     assert "Prompt_Action_Plan.md" in str(excinfo.value)
 
 
-def test_collect_backend_runtime_resources_allows_missing_optional_models(tmp_path):
+def test_collect_backend_runtime_resources_rejects_missing_yunet_model(tmp_path):
     _create_required_runtime_resources(tmp_path)
-    (tmp_path / "yolo26m.pt").unlink()
-    (tmp_path / "src" / "scripts" / "models" / "face_parsing.farl.lapa.int8.onnx").unlink()
+    (tmp_path / "src" / "models" / "face_detection_yunet_2023mar.onnx").unlink()
 
-    resources = collect_backend_runtime_resources(tmp_path)
-
-    packaged_paths = {resource.output_relative_path for resource in resources}
-    assert Path("yolo26m.pt") not in packaged_paths
-    assert Path("src") / "scripts" / "models" / "face_parsing.farl.lapa.int8.onnx" not in packaged_paths
+    with pytest.raises(FileNotFoundError, match="face_detection_yunet_2023mar.onnx"):
+        collect_backend_runtime_resources(tmp_path)
 
 
 def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_path):
@@ -135,6 +133,11 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         "tensorrt_bindings",
         "tkinter",
         "torchaudio",
+        "torch",
+        "torchvision",
+        "ultralytics",
+        "onnxruntime",
+        "onnxruntime-gpu",
     } <= exclude_targets
     hidden_import_targets = {
         args[index + 1]
@@ -144,10 +147,13 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
     assert {"chinese_calendar", "zhdate"} <= hidden_import_targets
     assert str(layout["entry_script"]) == args[-1]
     separator = get_pyinstaller_add_data_separator()
-    assert f"{tmp_path / 'yolo26m.pt'}{separator}." in args
     assert (
-        f"{tmp_path / 'src' / 'scripts' / 'models' / 'face_parsing.farl.lapa.int8.onnx'}{separator}"
-        "src/scripts/models"
+        f"{tmp_path / 'src' / 'models' / 'face_detection_yunet_2023mar.onnx'}{separator}"
+        "src/models"
+    ) in args
+    assert (
+        f"{tmp_path / 'src' / 'models' / 'LICENSE.face_detection_yunet.txt'}{separator}"
+        "src/models"
     ) in args
     assert any(
         value.endswith(f"{separator}scienceplots/styles") and "scienceplots" in value and "styles" in value
@@ -157,9 +163,9 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
 
 def test_remove_conflicting_runtime_libraries_deletes_known_vc_runtime_copies(tmp_path):
     runtime_dir = tmp_path / RUNTIME_NAME
-    keep_file = runtime_dir / "_internal" / "torch" / "lib" / "torch_cpu.dll"
+    keep_file = runtime_dir / "_internal" / "cv2" / "opencv_videoio_ffmpeg.dll"
     keep_file.parent.mkdir(parents=True, exist_ok=True)
-    keep_file.write_bytes(b"torch")
+    keep_file.write_bytes(b"opencv")
 
     removed_targets = []
     for relative_path in (
@@ -217,8 +223,8 @@ def test_build_backend_runtime_manifest_records_relative_outputs(tmp_path):
     assert manifest["generated_at"] == "2026-04-23T18:00:00"
     assert manifest["entry_script"] == "src/scripts/run_server_background.py"
     assert manifest["app_mode"] == "packaged"
-    assert "yolo26m.pt" in manifest["resource_outputs"]
-    assert "src/scripts/models/face_parsing.farl.lapa.int8.onnx" in manifest["resource_outputs"]
+    assert "src/models/face_detection_yunet_2023mar.onnx" in manifest["resource_outputs"]
+    assert "src/models/LICENSE.face_detection_yunet.txt" in manifest["resource_outputs"]
 
 
 def test_backend_runtime_executable_and_pyinstaller_separator_are_platform_specific():
@@ -299,6 +305,8 @@ def test_backend_runtime_size_report_flags_forbidden_packages(tmp_path):
     layout = resolve_backend_runtime_layout(tmp_path)
     internal_root = layout["resource_dir"]
     (internal_root / "torch").mkdir(parents=True)
+    (internal_root / "onnxruntime").mkdir()
+    (internal_root / "ultralytics").mkdir()
     (internal_root / "jaxlib").mkdir()
     (internal_root / "_polars_runtime_32").mkdir()
     (internal_root / "torch" / "tiny.bin").write_bytes(b"x" * 32)
@@ -306,10 +314,19 @@ def test_backend_runtime_size_report_flags_forbidden_packages(tmp_path):
 
     report = build_backend_runtime_size_report(layout, top_n=2)
 
-    assert set(report["forbidden_packages_present"]) == {"_polars_runtime_32", "jaxlib"}
+    assert set(report["forbidden_packages_present"]) == {
+        "_polars_runtime_32",
+        "jaxlib",
+        "onnxruntime",
+        "torch",
+        "ultralytics",
+    }
     assert report["top_directories"][0]["name"] == "jaxlib"
     assert report["top_files"][0]["path"].endswith("jaxlib/heavy.bin")
     assert "jaxlib" in FORBIDDEN_RUNTIME_PACKAGE_NAMES
+    assert {"onnxruntime", "torch", "torchvision", "ultralytics"} <= set(
+        FORBIDDEN_RUNTIME_PACKAGE_NAMES
+    )
 
 
 def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(tmp_path):

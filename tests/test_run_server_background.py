@@ -161,10 +161,10 @@ def test_configure_frozen_runtime_search_paths_adds_internal_runtime_dirs(tmp_pa
     launcher = _load_launcher_module()
     resource_root = tmp_path / "runtime" / "_internal"
     runtime_root = resource_root.parent
-    torch_lib = resource_root / "torch" / "lib"
-    onnx_capi = resource_root / "onnxruntime" / "capi"
-    torch_lib.mkdir(parents=True)
-    onnx_capi.mkdir(parents=True)
+    cv2_lib = resource_root / "cv2"
+    numpy_libs = resource_root / "numpy.libs"
+    cv2_lib.mkdir(parents=True)
+    numpy_libs.mkdir(parents=True)
 
     added_paths = []
     env = {"PATH": r"C:\Windows\System32"}
@@ -178,36 +178,20 @@ def test_configure_frozen_runtime_search_paths_adds_internal_runtime_dirs(tmp_pa
     assert env["PATH"].split(os.pathsep)[:4] == [
         str(resource_root),
         str(runtime_root),
-        str(torch_lib),
-        str(onnx_capi),
+        str(cv2_lib),
+        str(numpy_libs),
     ]
     assert added_paths == [
         str(resource_root),
         str(runtime_root),
-        str(torch_lib),
-        str(onnx_capi),
+        str(cv2_lib),
+        str(numpy_libs),
     ]
 
 
-def test_preload_frozen_torch_libraries_uses_stable_dependency_order(tmp_path):
+def test_launcher_does_not_preload_obsolete_torch_libraries():
     launcher = _load_launcher_module()
-    resource_root = tmp_path / "runtime" / "_internal"
-    torch_lib = resource_root / "torch" / "lib"
-    torch_lib.mkdir(parents=True)
+    source = Path(launcher.__file__).read_text(encoding="utf-8")
 
-    for dll_name in ("torch_global_deps.dll", "c10.dll", "torch_cpu.dll", "torch_cuda.dll"):
-        (torch_lib / dll_name).write_bytes(b"dll")
-
-    loaded = []
-
-    launcher._preload_frozen_torch_libraries(
-        resource_root,
-        load_library=lambda value: loaded.append(Path(value).name),
-    )
-
-    assert loaded == [
-        "torch_global_deps.dll",
-        "c10.dll",
-        "torch_cpu.dll",
-        "torch_cuda.dll",
-    ]
+    assert "preload_torch" not in source
+    assert "_preload_frozen_torch_libraries" not in source

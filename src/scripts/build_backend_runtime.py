@@ -123,6 +123,7 @@ def main() -> int:
             [*static_resources, project_activity_resource],
             key=lambda resource: resource.output_relative_path.as_posix(),
         )
+        removed_runtime_dlls = remove_conflicting_runtime_libraries(layout["runtime_dir"])
         manifest = write_backend_runtime_manifest(layout=layout, resources=resources)
         size_report = write_backend_runtime_size_report(layout)
         write_backend_runtime_fingerprint(layout, runtime_fingerprint)
@@ -130,7 +131,7 @@ def main() -> int:
         print(f"Built backend runtime: {layout['executable_path']}")
         print(f"Runtime manifest: {layout['manifest_path']}")
         print(f"Bundled resources: {len(manifest['resource_outputs'])}")
-        print("Removed conflicting runtime DLLs: 0")
+        print(f"Removed conflicting runtime DLLs: {len(removed_runtime_dlls)}")
         print(f"Runtime size: {size_report['total_mb']} MB")
         if size_report["forbidden_packages_present"]:
             print("Forbidden runtime packages present: " + ", ".join(size_report["forbidden_packages_present"]))

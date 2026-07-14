@@ -10,7 +10,7 @@ from src.services.person_detection import (
 )
 
 
-def detect_person_YOLO(image):
+def detect_camera_facing_face_count(image):
     return detect_person_count(image, conf=PERSON_DETECTION_CONFIDENCE)
 
 
@@ -18,26 +18,26 @@ def take_photo(cam, latitude, longitude, photos_path):
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking photo")
     frame = capture_best_photo(cam)
     if frame is None:
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Camera capture failed; skipping person detection")
+        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Camera capture failed; skipping face detection")
         return False, None
 
     try:
         t1 = cv2.getTickCount()
-        results = detect_person_YOLO(frame)
+        face_count = detect_camera_facing_face_count(frame)
         t2 = cv2.getTickCount()
         elapsed = (t2 - t1) / cv2.getTickFrequency()
         fps = 1.0 / elapsed if elapsed else 0.0
     except Exception as exc:
         print(
             f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-            f"Person detection unavailable; skipping photo save: {exc}"
+            f"Face detection unavailable; skipping photo save: {exc}"
         )
         return False, None
 
-    if results:
+    if face_count:
         print(
             f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-            f"Detected {results} person(s) in the photo Time: {elapsed}, FPS: {fps}"
+            f"Detected {face_count} camera-facing face(s) in the photo Time: {elapsed}, FPS: {fps}"
         )
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Saving photo")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

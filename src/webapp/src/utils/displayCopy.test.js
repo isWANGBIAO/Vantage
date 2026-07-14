@@ -74,6 +74,13 @@ test('displayCopy keeps en-US and zh-CN key sets aligned', () => {
   assert.deepEqual(zhKeys, enKeys);
 });
 
+test('camera detection copy describes camera-facing face detection', () => {
+  assert.equal(DISPLAY_COPY['en-US']['camera_feed.enable_detection'], 'Enable camera-facing face detection');
+  assert.equal(DISPLAY_COPY['zh-CN']['camera_feed.enable_detection'], '开启面向摄像头的人脸检测');
+  assert.equal(DISPLAY_COPY['en-US']['camera_feed.disable_detection'], 'Disable camera-facing face detection');
+  assert.equal(DISPLAY_COPY['zh-CN']['camera_feed.disable_detection'], '关闭面向摄像头的人脸检测');
+});
+
 test('displayCopy includes Expense Sheet JSON copy labels in both languages', () => {
   for (const key of [
     'expense.copy_json',

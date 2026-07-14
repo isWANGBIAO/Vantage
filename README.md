@@ -53,13 +53,15 @@ the platform user-data directory, not in this repository.
   face-analysis reports, and local media endpoints.
 - React UI for dashboard, action plan, chat, plots, usage, settings, expenses,
   project progress, and face-history views.
+- OpenCV YuNet ONNX face-presence detection for camera-facing faces. This is a
+  coarse head-pose filter, not eye tracking or gaze estimation.
 - Local prompt templates that users can replace privately.
 - Optional face parsing model support. Model weights are not distributed in this
   repository; fallback analysis remains available when no model is configured.
 
 ## Requirements
 
-- Python 3.11 recommended for local GPU packaging; CI also validates Python 3.13.
+- Python 3.11 recommended for local backend packaging; CI also validates Python 3.13.
 - Node.js 22 recommended for the frontend.
 - Windows is the primary packaging target. macOS scripts are included for source
   and packaged workflows.
@@ -149,7 +151,12 @@ configuration for local development.
 
 ## Optional Model Assets
 
-The face parsing ONNX model is optional and not bundled in this repository.
+The required YuNet face detector and its MIT license are tracked under
+`src/models/` and bundled with the backend runtime. It runs through OpenCV DNN,
+so the installed app does not require PyTorch, Ultralytics, or ONNX Runtime for
+camera face-presence detection.
+
+The separate face parsing ONNX model is optional and not bundled in this repository.
 Place a licensed model at `src/scripts/models/face_parsing.farl.lapa.int8.onnx`
 for local experiments, or run without it and use the fallback path.
 

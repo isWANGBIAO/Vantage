@@ -40,12 +40,12 @@ REQUIRED_ROOT_RESOURCE_NAMES = (
     "Prompt_System.md",
 )
 
-REQUIRED_RESOURCE_SPECS: tuple[tuple[str, str], ...] = ()
-
-OPTIONAL_RESOURCE_SPECS = (
-    ("src/scripts/models/face_parsing.farl.lapa.int8.onnx", "src/scripts/models"),
-    ("yolo26m.pt", "."),
+REQUIRED_RESOURCE_SPECS = (
+    ("src/models/face_detection_yunet_2023mar.onnx", "src/models"),
+    ("src/models/LICENSE.face_detection_yunet.txt", "src/models"),
 )
+
+OPTIONAL_RESOURCE_SPECS: tuple[tuple[str, str], ...] = ()
 
 OPENCV_FACE_CASCADE_NAME = "haarcascade_frontalface_default.xml"
 SCIENCEPLOTS_STYLES_DIR_NAME = "styles"
@@ -79,6 +79,8 @@ PYINSTALLER_EXCLUDES = (
     "nbconvert",
     "nbformat",
     "notebook",
+    "onnxruntime",
+    "onnxruntime-gpu",
     "polars",
     "src.AI_Prediction",
     "src.battery_monitor",
@@ -92,7 +94,10 @@ PYINSTALLER_EXCLUDES = (
     "tensorrt",
     "tensorrt_bindings",
     "tkinter",
+    "torch",
     "torchaudio",
+    "torchvision",
+    "ultralytics",
 )
 
 PYINSTALLER_HIDDEN_IMPORTS = (
@@ -117,11 +122,16 @@ FORBIDDEN_RUNTIME_PACKAGE_NAMES = (
     "nbconvert",
     "nbformat",
     "notebook",
+    "onnxruntime",
+    "onnxruntime-gpu",
     "polars",
     "tensorrt",
     "tensorrt_bindings",
     "tkinter",
+    "torch",
     "torchaudio",
+    "torchvision",
+    "ultralytics",
 )
 
 

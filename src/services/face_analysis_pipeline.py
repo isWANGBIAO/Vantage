@@ -152,9 +152,9 @@ class FaceParser:
             self._init_fallback()
             return
 
-        import onnxruntime as ort
-
         try:
+            import onnxruntime as ort
+
             sess_options = ort.SessionOptions()
             sess_options.log_severity_level = 3
             available = ort.get_available_providers()

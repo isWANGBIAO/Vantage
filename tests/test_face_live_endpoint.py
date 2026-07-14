@@ -131,27 +131,27 @@ class FaceLiveEndpointTests(unittest.TestCase):
 
         self.assertEqual(server.state.face_live_last_seen_at, 123.0)
 
-    def test_yolo_detection_requires_enabled_boxes_and_active_video_stream_client(self):
+    def test_face_detection_requires_enabled_boxes_and_active_video_stream_client(self):
         server.state.show_person_box = True
         server.state.video_stream_client_count = 0
 
         with patch.object(server, "load_background_mode", return_value="balanced"):
-            self.assertFalse(server.should_run_yolo_detection())
+            self.assertFalse(server.should_run_face_detection())
 
         server.register_video_stream_client()
         with patch.object(server, "load_background_mode", return_value="balanced"):
-            self.assertTrue(server.should_run_yolo_detection())
+            self.assertTrue(server.should_run_face_detection())
 
         server.state.show_person_box = False
         with patch.object(server, "load_background_mode", return_value="balanced"):
-            self.assertFalse(server.should_run_yolo_detection())
+            self.assertFalse(server.should_run_face_detection())
 
-    def test_yolo_prewarm_mode_can_run_without_video_stream_client(self):
+    def test_face_detection_prewarm_mode_can_run_without_video_stream_client(self):
         server.state.show_person_box = True
         server.state.video_stream_client_count = 0
 
         with patch.object(server, "load_background_mode", return_value="prewarm"):
-            self.assertTrue(server.should_run_yolo_detection())
+            self.assertTrue(server.should_run_face_detection())
 
     def test_video_stream_client_count_never_goes_below_zero(self):
         server.state.video_stream_client_count = 0
