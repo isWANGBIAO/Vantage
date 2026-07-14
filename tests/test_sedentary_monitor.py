@@ -469,13 +469,37 @@ def test_run_task_resets_sedentary_timer_after_stale_monitor_gap():
         assert monitor.continuous_sit_start == 600.0
 
 
-def test_get_sedentary_stats_treats_stale_monitor_as_not_sitting():
+@pytest.mark.parametrize(
+    (
+        "observation_status",
+        "heartbeat",
+        "expected_detection_status",
+        "expected_is_sitting",
+        "expected_duration_seconds",
+    ),
+    [
+        ("PRESENT", 590.0, "present", True, 500),
+        ("ABSENT", 590.0, "absent", True, 300),
+        ("UNKNOWN", 590.0, "unknown", True, 300),
+        ("PRESENT", 100.0, "stale", False, 300),
+    ],
+    ids=("present", "absent", "unknown", "stale"),
+)
+def test_get_sedentary_stats_reports_detection_state_and_trusted_duration(
+    observation_status,
+    heartbeat,
+    expected_detection_status,
+    expected_is_sitting,
+    expected_duration_seconds,
+):
     original_monitor = server.state.monitor
     try:
         server.state.monitor = SimpleNamespace(
             continuous_sit_start=100.0,
+            last_presence_time=400.0,
+            last_observation_status=observation_status,
             sedentary_threshold=20 * 60,
-            last_monitor_heartbeat=100.0,
+            last_monitor_heartbeat=heartbeat,
             monitor_stale_timeout=2 * 60,
         )
 
@@ -484,9 +508,55 @@ def test_get_sedentary_stats_treats_stale_monitor_as_not_sitting():
 
         assert result == {
             "status": "active",
-            "is_sitting": False,
-            "duration_minutes": 0,
+            "detection_status": expected_detection_status,
+            "is_sitting": expected_is_sitting,
+            "duration_seconds": expected_duration_seconds,
+            "duration_minutes": expected_duration_seconds // 60,
             "threshold_minutes": 20,
         }
+        assert server.state.monitor.continuous_sit_start == 100.0
+    finally:
+        server.state.monitor = original_monitor
+
+
+@pytest.mark.parametrize(
+    ("start", "last_presence", "observation_status"),
+    [
+        (float("nan"), 400.0, "UNKNOWN"),
+        (700.0, 700.0, "PRESENT"),
+        (100.0, float("inf"), "ABSENT"),
+        (100.0, 601.0, "UNKNOWN"),
+        (100.0, 601.0, "PRESENT"),
+    ],
+    ids=(
+        "non-finite-start",
+        "future-start",
+        "non-finite-presence",
+        "future-presence-frozen",
+        "future-presence-live",
+    ),
+)
+def test_get_sedentary_stats_rejects_untrusted_duration_timestamps(
+    start,
+    last_presence,
+    observation_status,
+):
+    original_monitor = server.state.monitor
+    try:
+        server.state.monitor = SimpleNamespace(
+            continuous_sit_start=start,
+            last_presence_time=last_presence,
+            last_observation_status=observation_status,
+            sedentary_threshold=20 * 60,
+            last_monitor_heartbeat=590.0,
+            monitor_stale_timeout=2 * 60,
+        )
+
+        with patch("src.server.time.time", return_value=600.0):
+            result = server.get_sedentary_stats()
+
+        assert result["duration_seconds"] == 0
+        assert result["duration_minutes"] == 0
+        assert result["is_sitting"] is False
     finally:
         server.state.monitor = original_monitor

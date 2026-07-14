@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import { shouldUseDashboardGeolocation } from './dashboardAqiPolicy.js';
+import { getFocusStatusPresentation } from './focusStatus.js';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 async function getGeolocationPermissionState() {
@@ -214,6 +215,7 @@ export default function Dashboard({ isVisible = false }) {
   const daysLeft = stats && storageEstimate.groupSizeBytes > 0
     ? ((stats.disk_free_gb * 1024 * 1024 * 1024) / storageEstimate.groupSizeBytes) * 10 / 86400
     : 0;
+  const focusStatusPresentation = getFocusStatusPresentation(healthStats);
 
   return (
     <div className="dashboard-page">
@@ -514,23 +516,13 @@ export default function Dashboard({ isVisible = false }) {
           icon={(
             <Heart
               size={24}
-              color={
-                healthStats?.is_sitting && healthStats.duration_minutes >= (healthStats.threshold_minutes * 0.8)
-                  ? '#e74c3c'
-                  : '#2ecc71'
-              }
+              color={focusStatusPresentation.isNearLimit ? '#e74c3c' : '#2ecc71'}
             />
           )}
           title={t('dashboard.stat.focus_time')}
-          value={healthStats && healthStats.is_sitting ? `${healthStats.duration_minutes} min` : t('dashboard.stat.away')}
-          subValue={healthStats?.is_sitting
-            ? t('dashboard.stat.limit', { value: healthStats.threshold_minutes })
-            : t('dashboard.stat.timer_paused')}
-          color={
-            healthStats?.is_sitting && healthStats.duration_minutes >= (healthStats.threshold_minutes * 0.8)
-              ? '#e74c3c'
-              : '#2ecc71'
-          }
+          value={t(focusStatusPresentation.valueKey, focusStatusPresentation.valueParams)}
+          subValue={t(focusStatusPresentation.detailKey, focusStatusPresentation.detailParams)}
+          color={focusStatusPresentation.isNearLimit ? '#e74c3c' : '#2ecc71'}
         />
       </div>
     </div>

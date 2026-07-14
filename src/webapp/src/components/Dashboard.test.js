@@ -29,3 +29,8 @@ test('Dashboard marks truncated storage scans as a lower-bound estimate', () => 
   assert.ok(dashboardSource.includes("t('dashboard.stat.storage_partial')"));
   assert.ok(dashboardSource.includes("'≥ '"));
 });
+
+test('Dashboard delegates focus-state rendering to a behavioral helper', () => {
+  assert.ok(dashboardSource.includes("import { getFocusStatusPresentation } from './focusStatus.js';"));
+  assert.ok(dashboardSource.includes('getFocusStatusPresentation(healthStats)'));
+});

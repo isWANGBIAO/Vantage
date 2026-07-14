@@ -126,6 +126,20 @@ test('displayCopy includes partial storage scan labels in both languages', () =>
   assert.ok(DISPLAY_COPY['zh-CN']['dashboard.stat.storage_partial']);
 });
 
+test('displayCopy distinguishes focus detection states in both languages', () => {
+  const expected = {
+    'dashboard.stat.focus_duration': ['{value} min', '{value} 分钟'],
+    'dashboard.stat.focus_present': ['Focus detected · limit: {value} min', '持续专注中 · 阈值：{value} 分钟'],
+    'dashboard.stat.focus_absent': ['No person detected · grace period active', '暂未检测到人 · 宽限中'],
+    'dashboard.stat.focus_unavailable': ['Measurement unavailable · timer preserved', '测量暂不可用 · 计时保留'],
+  };
+
+  for (const [key, [english, chinese]] of Object.entries(expected)) {
+    assert.equal(DISPLAY_COPY['en-US'][key], english);
+    assert.equal(DISPLAY_COPY['zh-CN'][key], chinese);
+  }
+});
+
 test('displayCopy includes Action Plan context limit warning labels in both languages', () => {
   for (const key of [
     'action_plan.context_limit.title',

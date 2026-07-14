@@ -5173,43 +5173,75 @@ async def get_face_progress():
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
+def _is_finite_nonnegative_number(value):
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+
+
 @app.get("/api/health/sedentary")
 def get_sedentary_stats():
     """Returns the current continuous sitting duration from the monitor."""
     try:
         if not state.monitor:
-             return {"status": "inactive"}
+            return {"status": "inactive"}
 
         now = time.time()
+        monitor = state.monitor
         heartbeat = getattr(state.monitor, "last_monitor_heartbeat", None)
         stale_timeout = getattr(state.monitor, "monitor_stale_timeout", 120)
-        if heartbeat is not None and stale_timeout is not None and (now - heartbeat) >= stale_timeout:
-             return {
-                 "status": "active",
-                 "is_sitting": False,
-                 "duration_minutes": 0,
-                 "threshold_minutes": state.monitor.sedentary_threshold // 60
-             }
+        heartbeat_is_stale = (
+            _is_finite_nonnegative_number(heartbeat)
+            and _is_finite_nonnegative_number(stale_timeout)
+            and heartbeat <= now
+            and (now - heartbeat) >= stale_timeout
+        )
 
-        start = state.monitor.continuous_sit_start
-        if start is None:
-             return {
-                 "status": "active",
-                 "is_sitting": False,
-                 "duration_minutes": 0,
-                 "threshold_minutes": state.monitor.sedentary_threshold // 60
-             }
+        observed_status = str(
+            getattr(monitor, "last_observation_status", "") or ""
+        ).lower()
+        if heartbeat_is_stale:
+            detection_status = "stale"
+        elif observed_status in {"present", "absent", "unknown"}:
+            detection_status = observed_status
+        else:
+            detection_status = "unknown"
 
-        duration_sec = now - start
+        start = getattr(monitor, "continuous_sit_start", None)
+        last_presence = getattr(monitor, "last_presence_time", None)
+        trusted_end = (
+            now
+            if detection_status == "present"
+            else last_presence
+        )
+        has_trusted_session = (
+            _is_finite_nonnegative_number(start)
+            and _is_finite_nonnegative_number(last_presence)
+            and _is_finite_nonnegative_number(trusted_end)
+            and start <= last_presence <= now
+            and start <= trusted_end <= now
+        )
+        duration_sec = int(trusted_end - start) if has_trusted_session else 0
+
+        threshold_seconds = getattr(monitor, "sedentary_threshold", 0)
+        threshold_minutes = (
+            int(threshold_seconds // 60)
+            if _is_finite_nonnegative_number(threshold_seconds)
+            else 0
+        )
         return {
-             "status": "active",
-             "is_sitting": True,
-             "duration_minutes": int(duration_sec // 60),
-             "duration_seconds": int(duration_sec),
-             "threshold_minutes": state.monitor.sedentary_threshold // 60
+            "status": "active",
+            "detection_status": detection_status,
+            "is_sitting": has_trusted_session and detection_status != "stale",
+            "duration_minutes": int(duration_sec // 60),
+            "duration_seconds": int(duration_sec),
+            "threshold_minutes": threshold_minutes,
         }
     except Exception as e:
-         return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": str(e)}
 
 @app.get("/api/project_progress")
 async def get_project_progress():
