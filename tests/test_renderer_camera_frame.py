@@ -64,8 +64,9 @@ class RendererCameraFrameTests(unittest.TestCase):
         frame = np.full((6, 8, 3), 127, dtype=np.uint8)
         ok, encoded = server.cv2.imencode(".jpg", frame)
         self.assertTrue(ok)
+        published_at = time.monotonic()
 
-        with patch.object(server.time, "monotonic", return_value=404.25):
+        with patch.object(server.time, "monotonic", return_value=published_at):
             payload = asyncio.run(
                 server.receive_renderer_camera_frame(
                     _FakeRequest(
@@ -89,7 +90,32 @@ class RendererCameraFrameTests(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(captured.shape, (6, 8, 3))
         self.assertEqual(server.state.latest_frame.shape, (6, 8, 3))
-        self.assertEqual(server.state.latest_frame_published_at, 404.25)
+        self.assertEqual(server.state.renderer_camera_last_seen_at, published_at)
+        self.assertEqual(server.state.latest_frame_published_at, published_at)
+
+    def test_renderer_liveness_ignores_wall_clock_jumps(self):
+        server.state.renderer_camera_frame = np.full((2, 2, 3), 1, dtype=np.uint8)
+        server.state.renderer_camera_last_seen_at = 100.0
+
+        for wall_clock in (-1_000_000_000.0, 1_000_000_000.0):
+            with self.subTest(wall_clock=wall_clock), patch.object(
+                server.time,
+                "time",
+                return_value=wall_clock,
+            ), patch.object(server.time, "monotonic", return_value=104.0):
+                self.assertTrue(server.is_renderer_camera_active())
+
+    def test_renderer_liveness_expires_from_monotonic_age(self):
+        server.state.renderer_camera_frame = np.full((2, 2, 3), 1, dtype=np.uint8)
+        server.state.renderer_camera_last_seen_at = 100.0
+
+        self.assertFalse(server.is_renderer_camera_active(105.001))
+
+    def test_renderer_liveness_rejects_future_monotonic_timestamp(self):
+        server.state.renderer_camera_frame = np.full((2, 2, 3), 1, dtype=np.uint8)
+        server.state.renderer_camera_last_seen_at = 100.001
+
+        self.assertFalse(server.is_renderer_camera_active(100.0))
 
     def test_renderer_upload_atomically_takes_ownership_from_open_physical_capture(self):
         renderer_input = np.full((6, 8, 3), 127, dtype=np.uint8)
@@ -129,6 +155,11 @@ class RendererCameraFrameTests(unittest.TestCase):
         self.assertIs(server.state.camera, server.state.renderer_camera)
         self.assertTrue(
             np.array_equal(server.state.latest_frame, published_renderer_frame)
+        )
+        self.assertIsNotNone(server.state.renderer_camera_last_seen_at)
+        self.assertEqual(
+            server.state.latest_frame_published_at,
+            server.state.renderer_camera_last_seen_at,
         )
         self.assertEqual(physical_camera.release_count, 1)
 

@@ -493,9 +493,10 @@ def test_camera_loop_does_not_clear_renderer_frame_that_takes_over_failed_captur
         with server.state.lock:
             server.state.renderer_camera = renderer
             server.state.renderer_camera_frame = renderer_frame
-            server.state.renderer_camera_last_seen_at = server.time.time()
+            server.state.renderer_camera_last_seen_at = server.time.monotonic()
             server.state.camera = renderer
             server.state.latest_frame = renderer_frame.copy()
+            server.state.latest_frame_published_at = server.time.monotonic()
             server.state.is_running = False
         return False, None
 

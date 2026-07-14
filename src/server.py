@@ -741,13 +741,25 @@ def prewarm_runtime_models():
         return
 
     try:
-        get_face_detector()
+        import numpy as np
+
+        face_detector = get_face_detector()
+        blank_frame = np.zeros((640, 640, 3), dtype=np.uint8)
+        detect_face_boxes(
+            blank_frame,
+            model=face_detector,
+            conf=PERSON_DETECTION_CONFIDENCE,
+        )
         print("Camera face detector warmed up successfully.")
     except Exception as exc:
         print(f"Failed to warm camera face detector: {exc}")
 
     try:
-        get_person_presence_detector()
+        import numpy as np
+
+        body_detector = get_person_presence_detector()
+        blank_frame = np.zeros((640, 640, 3), dtype=np.uint8)
+        body_detector.detect_person_boxes(blank_frame)
         print("Camera body detector warmed up successfully.")
     except Exception as exc:
         print(f"Failed to warm camera body detector: {exc}")
@@ -760,12 +772,23 @@ def _camera_online():
     return is_renderer_camera_active()
 
 
-def is_renderer_camera_active(now_ts=None):
-    now_ts = float(now_ts if now_ts is not None else time.time())
-    last_seen_at = float(getattr(state, "renderer_camera_last_seen_at", 0.0) or 0.0)
+def is_renderer_camera_active(now_monotonic=None):
+    try:
+        now_monotonic = float(
+            time.monotonic() if now_monotonic is None else now_monotonic
+        )
+        last_seen_at = float(
+            getattr(state, "renderer_camera_last_seen_at", 0.0) or 0.0
+        )
+    except (TypeError, ValueError):
+        return False
+
+    age_seconds = now_monotonic - last_seen_at
     return (
         getattr(state, "renderer_camera_frame", None) is not None
-        and now_ts - last_seen_at <= RENDERER_CAMERA_FRAME_TTL_SECONDS
+        and math.isfinite(now_monotonic)
+        and math.isfinite(last_seen_at)
+        and 0.0 <= age_seconds <= RENDERER_CAMERA_FRAME_TTL_SECONDS
     )
 
 
@@ -2618,12 +2641,13 @@ async def receive_renderer_camera_frame(request: Request):
 
     with state.lock:
         displaced_camera = state.camera
+        published_at = time.monotonic()
         if state.renderer_camera is None:
             state.renderer_camera = RendererCameraCapture()
         state.renderer_camera_frame = frame
-        state.renderer_camera_last_seen_at = time.time()
+        state.renderer_camera_last_seen_at = published_at
         state.latest_frame = frame.copy()
-        state.latest_frame_published_at = time.monotonic()
+        state.latest_frame_published_at = published_at
         state.camera = state.renderer_camera
         if displaced_camera is not state.renderer_camera:
             _queue_camera_release_locked(displaced_camera)
