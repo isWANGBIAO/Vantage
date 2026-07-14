@@ -15,6 +15,17 @@ class _FakeRequest:
         return self._body
 
 
+class _OpenPhysicalCapture:
+    def __init__(self):
+        self.release_count = 0
+
+    def isOpened(self):
+        return True
+
+    def release(self):
+        self.release_count += 1
+
+
 class RendererCameraFrameTests(unittest.TestCase):
     def setUp(self):
         self.original_camera = server.state.camera
@@ -58,6 +69,39 @@ class RendererCameraFrameTests(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(captured.shape, (6, 8, 3))
         self.assertEqual(server.state.latest_frame.shape, (6, 8, 3))
+
+    def test_renderer_upload_atomically_takes_ownership_from_open_physical_capture(self):
+        physical_camera = _OpenPhysicalCapture()
+        server.state.camera = physical_camera
+        renderer_input = np.full((6, 8, 3), 127, dtype=np.uint8)
+        ok, encoded = server.cv2.imencode(".jpg", renderer_input)
+        self.assertTrue(ok)
+
+        payload = asyncio.run(
+            server.receive_renderer_camera_frame(
+                _FakeRequest(
+                    encoded.tobytes(),
+                    {
+                        "content-type": "image/jpeg",
+                        "x-vantage-intent": server.RENDERER_CAMERA_FRAME_INTENT,
+                    },
+                )
+            )
+        )
+        published_renderer_frame = server.state.renderer_camera_frame.copy()
+
+        stale_physical_frame = np.full((6, 8, 3), 240, dtype=np.uint8)
+        self.assertFalse(
+            server._publish_camera_frame(physical_camera, stale_physical_frame)
+        )
+        server._retire_camera_capture(physical_camera)
+
+        self.assertTrue(payload["ok"])
+        self.assertIs(server.state.camera, server.state.renderer_camera)
+        self.assertTrue(
+            np.array_equal(server.state.latest_frame, published_renderer_frame)
+        )
+        self.assertEqual(physical_camera.release_count, 1)
 
     def test_renderer_camera_frame_requires_local_intent_header(self):
         response = asyncio.run(

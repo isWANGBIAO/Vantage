@@ -2540,13 +2540,12 @@ async def receive_renderer_camera_frame(request: Request):
         return JSONResponse(status_code=400, content={"error": "Frame decode failed"})
 
     with state.lock:
+        if state.renderer_camera is None:
+            state.renderer_camera = RendererCameraCapture()
         state.renderer_camera_frame = frame
         state.renderer_camera_last_seen_at = time.time()
         state.latest_frame = frame.copy()
-        if state.renderer_camera is None:
-            state.renderer_camera = RendererCameraCapture()
-        if state.camera is None or not state.camera.isOpened():
-            state.camera = state.renderer_camera
+        state.camera = state.renderer_camera
 
     return {
         "ok": True,
