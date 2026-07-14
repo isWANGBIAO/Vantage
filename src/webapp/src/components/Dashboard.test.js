@@ -33,6 +33,9 @@ test('Dashboard marks truncated storage scans as a lower-bound estimate', () => 
 test('Dashboard delegates focus-state rendering to a behavioral helper', () => {
   assert.ok(dashboardSource.includes('getFocusStatusPresentation,'));
   assert.ok(dashboardSource.includes('getFocusStatusPresentation(healthStats)'));
+  assert.ok(dashboardSource.includes('title={t(focusStatusPresentation.titleKey)}'));
+  assert.ok(dashboardSource.includes('value={t(focusStatusPresentation.valueKey, focusStatusPresentation.valueParams)}'));
+  assert.ok(!dashboardSource.includes("title={t('dashboard.stat.focus_time')}"));
 });
 
 test('Dashboard downgrades stale focus UI on every health polling failure', () => {

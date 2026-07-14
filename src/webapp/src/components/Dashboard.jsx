@@ -533,7 +533,7 @@ export default function Dashboard({ isVisible = false }) {
               color={focusStatusPresentation.isNearLimit ? '#e74c3c' : '#2ecc71'}
             />
           )}
-          title={t('dashboard.stat.focus_time')}
+          title={t(focusStatusPresentation.titleKey)}
           value={t(focusStatusPresentation.valueKey, focusStatusPresentation.valueParams)}
           subValue={t(focusStatusPresentation.detailKey, focusStatusPresentation.detailParams)}
           color={focusStatusPresentation.isNearLimit ? '#e74c3c' : '#2ecc71'}

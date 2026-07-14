@@ -128,11 +128,18 @@ test('displayCopy includes partial storage scan labels in both languages', () =>
 
 test('displayCopy distinguishes focus detection states in both languages', () => {
   const expected = {
-    'dashboard.stat.focus_duration': ['{value} min', '{value} 分钟'],
+    'dashboard.stat.focus_time': ['Focus Time', '专注时长'],
+    'dashboard.stat.away_time': ['Away Time', '离开时长'],
+    'dashboard.stat.duration_under_minute': ['Under 1 min', '不足 1 分钟'],
+    'dashboard.stat.duration_minutes': ['{value} min', '{value} 分钟'],
+    'dashboard.stat.duration_hours': ['{value} hr', '{value} 小时'],
+    'dashboard.stat.duration_hours_minutes': ['{hours} hr {minutes} min', '{hours} 小时 {minutes} 分钟'],
+    'dashboard.stat.duration_days': ['{value} day', '{value} 天'],
+    'dashboard.stat.duration_days_hours': ['{days} day {hours} hr', '{days} 天 {hours} 小时'],
     'dashboard.stat.focus_present': ['Focus detected · limit: {value} min', '持续专注中 · 阈值：{value} 分钟'],
-    'dashboard.stat.focus_absent': ['No person detected · grace period active', '暂未检测到人 · 宽限中'],
-    'dashboard.stat.focus_absent_confirmed': ['Away confirmed · timer reset', '已确认离座 · 计时已重置'],
-    'dashboard.stat.focus_unavailable': ['Measurement unavailable · timer preserved', '测量暂不可用 · 计时保留'],
+    'dashboard.stat.focus_absent': ['Away detected · focus grace period active', '检测到离座 · 专注宽限中'],
+    'dashboard.stat.focus_absent_confirmed': ['Away confirmed · focus session reset', '已确认离座 · 专注会话已重置'],
+    'dashboard.stat.focus_unavailable': ['Measurement unavailable · timer paused', '测量暂不可用 · 计时已暂停'],
   };
 
   for (const [key, [english, chinese]] of Object.entries(expected)) {
