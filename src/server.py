@@ -2309,25 +2309,55 @@ def sleep_while_running(seconds: float):
         time.sleep(min(1.0, remaining))
 
 
+def _monitor_frame_timestamp_is_fresh(published_at, now_monotonic):
+    return (
+        isinstance(published_at, (int, float))
+        and not isinstance(published_at, bool)
+        and math.isfinite(published_at)
+        and published_at <= now_monotonic
+        and now_monotonic - published_at <= MONITOR_FRAME_TTL_SECONDS
+    )
+
+
 def run_monitor_capture_cycle():
     with state.lock:
         monitor = state.monitor
+        source_camera = state.camera
         frame = state.latest_frame
         published_at = state.latest_frame_published_at
         now_monotonic = time.monotonic()
-        timestamp_is_fresh = (
-            isinstance(published_at, (int, float))
-            and not isinstance(published_at, bool)
-            and math.isfinite(published_at)
-            and published_at <= now_monotonic
-            and now_monotonic - published_at <= MONITOR_FRAME_TTL_SECONDS
+        timestamp_is_fresh = _monitor_frame_timestamp_is_fresh(
+            published_at,
+            now_monotonic,
         )
         frame = frame.copy() if frame is not None and timestamp_is_fresh else None
 
     if monitor is None:
         return False
 
-    observation_status = monitor.run_task(pre_captured_frame=frame)
+    def validate_observation_at_completion():
+        with state.lock:
+            completed_at = time.monotonic()
+            current_frame = state.latest_frame
+            current_published_at = state.latest_frame_published_at
+            return (
+                state.camera is source_camera
+                and _monitor_frame_timestamp_is_fresh(
+                    published_at,
+                    completed_at,
+                )
+                and current_frame is not None
+                and _monitor_frame_timestamp_is_fresh(
+                    current_published_at,
+                    completed_at,
+                )
+                and current_published_at >= published_at
+            )
+
+    observation_status = monitor.run_task(
+        pre_captured_frame=frame,
+        observation_validator=validate_observation_at_completion,
+    )
 
     photo_path = state.paths.get("photo")
     if photo_path and photo_path != state.last_processed_face_photo_path:

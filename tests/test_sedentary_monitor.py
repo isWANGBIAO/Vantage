@@ -1255,14 +1255,287 @@ def test_run_task_without_frame_keeps_legacy_photo_capture_call(tmp_path):
     )
 
 
+def test_run_task_records_unknown_when_observation_validator_raises(tmp_path):
+    frame = np.full((4, 4, 3), 23, dtype=np.uint8)
+    monitor = _make_monitor(tmp_path)
+
+    with (
+        patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
+        patch("src.manager.manager_main.take_photo", return_value=(True, None)),
+        patch(
+            "src.manager.manager_main.take_and_save_screenshots"
+        ) as screenshot_mock,
+        patch(
+            "src.manager.manager_main.time.time",
+            side_effect=[100.0, 105.0],
+        ),
+    ):
+        status = monitor.run_task(
+            pre_captured_frame=frame,
+            observation_validator=lambda: (_ for _ in ()).throw(
+                RuntimeError("frame validation failed")
+            ),
+        )
+
+    assert status == Monitor.UNKNOWN
+    assert monitor.last_observation_status == Monitor.UNKNOWN
+    assert monitor.focus_elapsed_seconds == 0.0
+    assert monitor.away_elapsed_seconds == 0.0
+    screenshot_mock.assert_not_called()
+
+
+def test_monitor_capture_cycle_downgrades_slow_completed_inference_to_unknown(
+    tmp_path,
+):
+    monitor = _make_monitor(tmp_path)
+    camera = object()
+    frame = np.full((4, 4, 3), 31, dtype=np.uint8)
+    original_state = (
+        server.state.monitor,
+        server.state.camera,
+        server.state.latest_frame,
+        server.state.latest_frame_published_at,
+        server.state.paths,
+    )
+    try:
+        with server.state.lock:
+            server.state.monitor = monitor
+            server.state.camera = camera
+            server.state.latest_frame = frame
+            server.state.latest_frame_published_at = 99.0
+            server.state.paths = {}
+
+        with (
+            patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
+            patch("src.manager.manager_main.take_photo", return_value=(True, None)),
+            patch(
+                "src.manager.manager_main.take_and_save_screenshots"
+            ) as screenshot_mock,
+            patch.object(server.time, "monotonic", side_effect=[100.0, 106.0]),
+            patch(
+                "src.manager.manager_main.time.time",
+                side_effect=[1000.0, 1006.0],
+            ),
+        ):
+            trusted = server.run_monitor_capture_cycle()
+
+        assert trusted is False
+        assert monitor.last_observation_status == Monitor.UNKNOWN
+        assert monitor.focus_elapsed_seconds == 0.0
+        assert monitor.away_elapsed_seconds == 0.0
+        screenshot_mock.assert_not_called()
+    finally:
+        with server.state.lock:
+            (
+                server.state.monitor,
+                server.state.camera,
+                server.state.latest_frame,
+                server.state.latest_frame_published_at,
+                server.state.paths,
+            ) = original_state
+
+
+def test_monitor_capture_cycle_downgrades_observation_when_frame_is_cleared(
+    tmp_path,
+):
+    monitor = _make_monitor(tmp_path)
+    camera = object()
+    frame = np.full((4, 4, 3), 32, dtype=np.uint8)
+    original_state = (
+        server.state.monitor,
+        server.state.camera,
+        server.state.latest_frame,
+        server.state.latest_frame_published_at,
+        server.state.paths,
+    )
+
+    def clear_frame_during_inference(*_args, **_kwargs):
+        with server.state.lock:
+            server.state.latest_frame = None
+            server.state.latest_frame_published_at = None
+        return True, None
+
+    try:
+        with server.state.lock:
+            server.state.monitor = monitor
+            server.state.camera = camera
+            server.state.latest_frame = frame
+            server.state.latest_frame_published_at = 99.0
+            server.state.paths = {}
+
+        with (
+            patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
+            patch(
+                "src.manager.manager_main.take_photo",
+                side_effect=clear_frame_during_inference,
+            ),
+            patch.object(server.time, "monotonic", side_effect=[100.0, 101.0]),
+            patch(
+                "src.manager.manager_main.time.time",
+                side_effect=[1000.0, 1001.0],
+            ),
+        ):
+            trusted = server.run_monitor_capture_cycle()
+
+        assert trusted is False
+        assert monitor.last_observation_status == Monitor.UNKNOWN
+        assert monitor.focus_elapsed_seconds == 0.0
+        assert monitor.away_elapsed_seconds == 0.0
+    finally:
+        with server.state.lock:
+            (
+                server.state.monitor,
+                server.state.camera,
+                server.state.latest_frame,
+                server.state.latest_frame_published_at,
+                server.state.paths,
+            ) = original_state
+
+
+def test_monitor_capture_cycle_rejects_replacement_after_source_camera_retires(
+    tmp_path,
+):
+    monitor = _make_monitor(tmp_path)
+    source_camera = object()
+    replacement_camera = object()
+    frame = np.full((4, 4, 3), 35, dtype=np.uint8)
+    replacement_frame = np.full((4, 4, 3), 36, dtype=np.uint8)
+    original_state = (
+        server.state.monitor,
+        server.state.camera,
+        server.state.latest_frame,
+        server.state.latest_frame_published_at,
+        server.state.paths,
+        list(server.state.camera_release_queue),
+        set(server.state.camera_release_ids),
+    )
+
+    def replace_camera_during_inference(*_args, **_kwargs):
+        assert server._retire_camera_capture(source_camera) is True
+        assert server._install_camera_capture(replacement_camera) is True
+        assert server._publish_camera_frame(
+            replacement_camera,
+            replacement_frame,
+            published_at=100.5,
+        ) is True
+        return True, None
+
+    try:
+        with server.state.lock:
+            server.state.monitor = monitor
+            server.state.camera = source_camera
+            server.state.latest_frame = frame
+            server.state.latest_frame_published_at = 99.0
+            server.state.paths = {}
+
+        with (
+            patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
+            patch(
+                "src.manager.manager_main.take_photo",
+                side_effect=replace_camera_during_inference,
+            ),
+            patch(
+                "src.manager.manager_main.take_and_save_screenshots"
+            ) as screenshot_mock,
+            patch.object(server.time, "monotonic", side_effect=[100.0, 101.0]),
+            patch(
+                "src.manager.manager_main.time.time",
+                side_effect=[1000.0, 1001.0],
+            ),
+        ):
+            trusted = server.run_monitor_capture_cycle()
+
+        assert trusted is False
+        assert monitor.last_observation_status == Monitor.UNKNOWN
+        screenshot_mock.assert_not_called()
+    finally:
+        with server.state.lock:
+            (
+                server.state.monitor,
+                server.state.camera,
+                server.state.latest_frame,
+                server.state.latest_frame_published_at,
+                server.state.paths,
+                release_queue,
+                release_ids,
+            ) = original_state
+            server.state.camera_release_queue = release_queue
+            server.state.camera_release_ids = release_ids
+
+
+@pytest.mark.parametrize("real_person", [True, False], ids=("present", "absent"))
+def test_monitor_capture_cycle_accepts_newer_frame_while_original_is_still_fresh(
+    tmp_path,
+    real_person,
+):
+    monitor = _make_monitor(tmp_path)
+    camera = object()
+    original_frame = np.full((4, 4, 3), 33, dtype=np.uint8)
+    newer_frame = np.full((4, 4, 3), 34, dtype=np.uint8)
+    original_state = (
+        server.state.monitor,
+        server.state.camera,
+        server.state.latest_frame,
+        server.state.latest_frame_published_at,
+        server.state.paths,
+    )
+
+    def publish_newer_frame_during_inference(*_args, **_kwargs):
+        with server.state.lock:
+            server.state.latest_frame = newer_frame
+            server.state.latest_frame_published_at = 100.5
+        return real_person, None
+
+    try:
+        with server.state.lock:
+            server.state.monitor = monitor
+            server.state.camera = camera
+            server.state.latest_frame = original_frame
+            server.state.latest_frame_published_at = 99.0
+            server.state.paths = {}
+
+        with (
+            patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
+            patch(
+                "src.manager.manager_main.take_photo",
+                side_effect=publish_newer_frame_during_inference,
+            ),
+            patch(
+                "src.manager.manager_main.take_and_save_screenshots",
+                return_value=None,
+            ),
+            patch.object(server.time, "monotonic", side_effect=[100.0, 101.0]),
+            patch(
+                "src.manager.manager_main.time.time",
+                side_effect=[1000.0, 1001.0],
+            ),
+        ):
+            trusted = server.run_monitor_capture_cycle()
+
+        assert trusted is True
+        assert monitor.last_observation_status == (
+            Monitor.PRESENT if real_person else Monitor.ABSENT
+        )
+    finally:
+        with server.state.lock:
+            (
+                server.state.monitor,
+                server.state.camera,
+                server.state.latest_frame,
+                server.state.latest_frame_published_at,
+                server.state.paths,
+            ) = original_state
+
+
 @pytest.mark.parametrize("status", [Monitor.PRESENT, Monitor.ABSENT])
 def test_monitor_capture_cycle_uses_fresh_copy_and_returns_trusted_status(status):
     published_frame = np.full((4, 4, 3), 41, dtype=np.uint8)
     received_frames = []
 
     class RecordingMonitor:
-        def run_task(self, *, pre_captured_frame):
+        def run_task(self, *, pre_captured_frame, observation_validator):
             received_frames.append(pre_captured_frame)
+            assert observation_validator() is True
             return status
 
     original_monitor = server.state.monitor
@@ -1309,7 +1582,7 @@ def test_monitor_capture_cycle_rejects_untrustworthy_frame_metadata(
     received_frames = []
 
     class RecordingMonitor:
-        def run_task(self, *, pre_captured_frame):
+        def run_task(self, *, pre_captured_frame, observation_validator):
             received_frames.append(pre_captured_frame)
             return Monitor.UNKNOWN
 
@@ -1339,7 +1612,7 @@ def test_monitor_capture_cycle_returns_false_for_unknown_fresh_observation():
     frame = np.full((2, 2, 3), 7, dtype=np.uint8)
 
     class UnknownMonitor:
-        def run_task(self, *, pre_captured_frame):
+        def run_task(self, *, pre_captured_frame, observation_validator):
             assert np.array_equal(pre_captured_frame, frame)
             return Monitor.UNKNOWN
 
@@ -1380,7 +1653,7 @@ def test_monitor_loop_selects_interval_from_observation_trust(
     expected_sleep,
 ):
     class OneCycleMonitor:
-        def run_task(self, *, pre_captured_frame):
+        def run_task(self, *, pre_captured_frame, observation_validator):
             server.state.is_running = False
             return status
 

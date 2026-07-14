@@ -104,6 +104,8 @@ def _build_smoke_environment(layout: dict[str, Path]) -> dict[str, str]:
     env["OPENCV_AVFOUNDATION_SKIP_AUTH"] = "1"
     env["VANTAGE_PREWARM_FACE_DETECTION_ON_STARTUP"] = "1"
     env.pop("VANTAGE_PROJECT_ROOT", None)
+    env.pop("VANTAGE_FACE_DETECTION_MODEL_PATH", None)
+    env.pop("VANTAGE_PERSON_PRESENCE_MODEL_PATH", None)
     return env
 
 

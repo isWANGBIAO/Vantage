@@ -741,7 +741,12 @@ class Monitor:
             self.last_observation_time = current_time
             return status
 
-    def run_task(self, pre_captured_frame=_PRE_CAPTURED_FRAME_UNSET):
+    def run_task(
+        self,
+        pre_captured_frame=_PRE_CAPTURED_FRAME_UNSET,
+        *,
+        observation_validator=None,
+    ):
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---------------------------------------------")
 
         cycle_started_at = time.time()
@@ -780,6 +785,18 @@ class Monitor:
                     self.photos_path,
                     pre_captured_frame=pre_captured_frame,
                 )
+
+            if observation_validator is not None:
+                try:
+                    observation_is_valid = observation_validator() is True
+                except Exception as validation_error:
+                    print(
+                        f"Presence observation validation error: {validation_error}",
+                        file=sys.stderr,
+                    )
+                    observation_is_valid = False
+                if not observation_is_valid:
+                    real_person = None
 
             current_time = time.time()
             had_active_session = self.continuous_sit_start is not None

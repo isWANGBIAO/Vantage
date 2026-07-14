@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -49,6 +50,38 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
             self.assertEqual(env["VANTAGE_MACOS_SKIP_CAMERA_AUTH"], "1")
             self.assertEqual(env["OPENCV_AVFOUNDATION_SKIP_AUTH"], "1")
             self.assertEqual(env["VANTAGE_PREWARM_FACE_DETECTION_ON_STARTUP"], "1")
+
+    def test_build_smoke_environment_removes_host_model_overrides(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            layout = {
+                "build_root": tmp_path / "build",
+                "runtime_dir": tmp_path / "stage" / "VantageBackend",
+                "resource_dir": tmp_path / "stage" / "VantageBackend" / "_internal",
+            }
+            layout["resource_dir"].mkdir(parents=True, exist_ok=True)
+            host_path = str(tmp_path / "host-runtime-bin")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "PATH": host_path,
+                    "VANTAGE_FACE_DETECTION_MODEL_PATH": str(
+                        tmp_path / "external-face.onnx"
+                    ),
+                    "VANTAGE_PERSON_PRESENCE_MODEL_PATH": str(
+                        tmp_path / "external-body.onnx"
+                    ),
+                    "VANTAGE_PROJECT_ROOT": str(tmp_path / "external-project"),
+                },
+                clear=False,
+            ):
+                env = verify_backend_runtime._build_smoke_environment(layout)
+
+            self.assertNotIn("VANTAGE_FACE_DETECTION_MODEL_PATH", env)
+            self.assertNotIn("VANTAGE_PERSON_PRESENCE_MODEL_PATH", env)
+            self.assertNotIn("VANTAGE_PROJECT_ROOT", env)
+            self.assertIn(host_path, env["PATH"].split(os.pathsep))
 
     def test_status_payload_must_match_current_runtime_layout(self):
         with tempfile.TemporaryDirectory() as tmpdir:
