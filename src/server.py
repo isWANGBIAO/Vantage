@@ -589,6 +589,7 @@ class SystemState:
         self.monitor = None
         self.latest_frame = None
         self.is_running = True
+        self.camera_iteration_lock = threading.Lock()
         self.background_thread_status = {
             "camera_loop": False,
             "face_live_loop": False,
@@ -2240,11 +2241,12 @@ async def shutdown_event():
     for thread_name in state.background_thread_status:
         state.background_thread_status[thread_name] = False
 
-    with state.lock:
-        camera = state.camera
-        state.camera = None
-        _queue_camera_release_locked(camera)
-    _drain_camera_release_queue()
+    with state.camera_iteration_lock:
+        with state.lock:
+            camera = state.camera
+            state.camera = None
+            _queue_camera_release_locked(camera)
+        _drain_camera_release_queue()
 
 
 @asynccontextmanager
@@ -2302,113 +2304,117 @@ def camera_loop():
     blank_frame_streak = 0
     warmup_deadline = None
     while state.is_running:
-        _drain_camera_release_queue()
-        if state.camera is None:
-            idx = get_camera_index()
-            candidate = None
-            try:
-                candidate = open_camera_capture(idx)
-                if not candidate or not candidate.isOpened():
-                    _rate_limited_status_log(
-                        ("camera", "offline", idx),
-                        f"Camera index {idx} is offline; retrying in {CAMERA_RETRY_INTERVAL_SECONDS:.0f}s",
-                        interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
-                    )
-                    if candidate:
+        with state.camera_iteration_lock:
+            if not state.is_running:
+                break
+
+            _drain_camera_release_queue()
+            if state.camera is None:
+                idx = get_camera_index()
+                candidate = None
+                try:
+                    candidate = open_camera_capture(idx)
+                    if not candidate or not candidate.isOpened():
+                        _rate_limited_status_log(
+                            ("camera", "offline", idx),
+                            f"Camera index {idx} is offline; retrying in {CAMERA_RETRY_INTERVAL_SECONDS:.0f}s",
+                            interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
+                        )
+                        if candidate:
+                            _queue_camera_release(candidate)
+                        _clear_latest_frame_if_camera_is(None)
+                        _drain_camera_release_queue()
+                        sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
+                        continue
+
+                    if not _install_camera_capture(candidate):
                         _queue_camera_release(candidate)
-                    _clear_latest_frame_if_camera_is(None)
+                        _drain_camera_release_queue()
+                        continue
+
+                    # Request 4K resolution (16:9)
+                    target_w, target_h = 3840, 2160
+                    candidate.set(cv2.CAP_PROP_FRAME_WIDTH, target_w)
+                    candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
+
+                    # Verify actual resolution
+                    actual_w = candidate.get(cv2.CAP_PROP_FRAME_WIDTH)
+                    actual_h = candidate.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                    reset_camera_status_logs()
+                    blank_frame_streak = 0
+                    warmup_deadline = get_camera_warmup_deadline()
+                    print(f"Camera Initialized: Requested {target_w}x{target_h}, Got {int(actual_w)}x{int(actual_h)}")
+
+                    # If 4K failed (e.g. got low res), try strict 1080p fallback
+                    if actual_w < 1280:
+                        print("4K failed or ignored, trying strict 1080p force...")
+                        candidate.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+                        candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+                        print(f"Fallback resolution: {int(candidate.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(candidate.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+
+                except Exception as e:
+                    print(f"Camera init failed: {e}")
+                    if candidate is None:
+                        _clear_latest_frame_if_camera_is(None)
+                    else:
+                        _retire_camera_capture(candidate)
                     _drain_camera_release_queue()
                     sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
                     continue
 
-                if not _install_camera_capture(candidate):
-                    _queue_camera_release(candidate)
-                    _drain_camera_release_queue()
-                    continue
-
-                # Request 4K resolution (16:9)
-                target_w, target_h = 3840, 2160
-                candidate.set(cv2.CAP_PROP_FRAME_WIDTH, target_w)
-                candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
-
-                # Verify actual resolution
-                actual_w = candidate.get(cv2.CAP_PROP_FRAME_WIDTH)
-                actual_h = candidate.get(cv2.CAP_PROP_FRAME_HEIGHT)
-                reset_camera_status_logs()
-                blank_frame_streak = 0
-                warmup_deadline = get_camera_warmup_deadline()
-                print(f"Camera Initialized: Requested {target_w}x{target_h}, Got {int(actual_w)}x{int(actual_h)}")
-
-                # If 4K failed (e.g. got low res), try strict 1080p fallback
-                if actual_w < 1280:
-                    print("4K failed or ignored, trying strict 1080p force...")
-                    candidate.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-                    candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-                    print(f"Fallback resolution: {int(candidate.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(candidate.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
-
-            except Exception as e:
-                print(f"Camera init failed: {e}")
-                if candidate is None:
-                    _clear_latest_frame_if_camera_is(None)
-                else:
-                    _retire_camera_capture(candidate)
-                _drain_camera_release_queue()
-                sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
-                continue
-
-        camera = state.camera
-        if camera and camera.isOpened():
-            try:
-                ret, frame = camera.read()
-                if ret:
-                    (
-                        blank_frame_streak,
-                        should_reopen_camera,
-                        should_publish_frame,
-                    ) = evaluate_camera_frame(
-                        frame, blank_frame_streak, warmup_deadline
-                    )
-                    if should_publish_frame:
-                        _publish_camera_frame(camera, frame)
-                        warmup_deadline = None
-                    if should_reopen_camera:
-                        _rate_limited_status_log(
-                            ("camera", "blank-frame-recovery"),
-                            "Camera returned persistent blank frames; reopening capture",
-                            interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
+            camera = state.camera
+            if camera and camera.isOpened():
+                try:
+                    ret, frame = camera.read()
+                    if ret:
+                        (
+                            blank_frame_streak,
+                            should_reopen_camera,
+                            should_publish_frame,
+                        ) = evaluate_camera_frame(
+                            frame, blank_frame_streak, warmup_deadline
                         )
+                        if should_publish_frame:
+                            _publish_camera_frame(camera, frame)
+                            warmup_deadline = None
+                        if should_reopen_camera:
+                            _rate_limited_status_log(
+                                ("camera", "blank-frame-recovery"),
+                                "Camera returned persistent blank frames; reopening capture",
+                                interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
+                            )
+                            retired = _retire_camera_capture(camera)
+                            blank_frame_streak = 0
+                            warmup_deadline = None
+                            _drain_camera_release_queue()
+                            if retired:
+                                sleep_while_running(0.5)
+                    else:
+                        print("Warning: Can't receive frame (stream end?). Exiting ...")
                         retired = _retire_camera_capture(camera)
-                        blank_frame_streak = 0
                         warmup_deadline = None
                         _drain_camera_release_queue()
                         if retired:
-                            sleep_while_running(0.5)
-                else:
-                    print("Warning: Can't receive frame (stream end?). Exiting ...")
+                            time.sleep(2)
+                except Exception as e:
+                    print(f"Camera read error: {e}")
                     retired = _retire_camera_capture(camera)
+                    blank_frame_streak = 0
                     warmup_deadline = None
                     _drain_camera_release_queue()
                     if retired:
-                        time.sleep(2)
-            except Exception as e:
-                print(f"Camera read error: {e}")
-                retired = _retire_camera_capture(camera)
-                blank_frame_streak = 0
+                        time.sleep(1)
+            else:
+                print("Camera not opened, retrying...")
+                if camera:
+                    retired = _retire_camera_capture(camera)
+                else:
+                    retired = _clear_latest_frame_if_camera_is(None)
                 warmup_deadline = None
                 _drain_camera_release_queue()
                 if retired:
-                    time.sleep(1)
-        else:
-            print("Camera not opened, retrying...")
-            if camera:
-                retired = _retire_camera_capture(camera)
-            else:
-                retired = _clear_latest_frame_if_camera_is(None)
-            warmup_deadline = None
+                    sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
             _drain_camera_release_queue()
-            if retired:
-                sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
-        _drain_camera_release_queue()
         time.sleep(0.03)
 
 

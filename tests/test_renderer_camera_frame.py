@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -142,6 +144,47 @@ class RendererCameraFrameTests(unittest.TestCase):
         )
         asyncio.run(server.shutdown_event())
 
+        self.assertEqual(physical_camera.release_count, 1)
+        self.assertEqual(server.state.camera_release_queue, [])
+        self.assertEqual(server.state.camera_release_ids, set())
+
+    def test_shutdown_waits_for_inflight_read_and_releases_capture_once(self):
+        read_started = threading.Event()
+        allow_read_to_finish = threading.Event()
+        shutdown_finished = threading.Event()
+
+        def blocking_read():
+            read_started.set()
+            allow_read_to_finish.wait(timeout=5)
+            return False, None
+
+        physical_camera = _OpenPhysicalCapture(on_read=blocking_read)
+        server.state.camera = physical_camera
+        server.state.is_running = True
+        camera_thread = threading.Thread(target=server.camera_loop)
+
+        def run_shutdown():
+            asyncio.run(server.shutdown_event())
+            shutdown_finished.set()
+
+        shutdown_thread = threading.Thread(target=run_shutdown)
+        with patch.object(server.time, "sleep", return_value=None):
+            camera_thread.start()
+            self.assertTrue(read_started.wait(timeout=2))
+            shutdown_thread.start()
+
+            deadline = time.monotonic() + 2
+            while server.state.is_running and time.monotonic() < deadline:
+                time.sleep(0.01)
+            shutdown_completed_while_read_blocked = shutdown_finished.wait(timeout=0.1)
+
+            allow_read_to_finish.set()
+            camera_thread.join(timeout=2)
+            shutdown_thread.join(timeout=2)
+
+        self.assertFalse(shutdown_completed_while_read_blocked)
+        self.assertFalse(camera_thread.is_alive())
+        self.assertFalse(shutdown_thread.is_alive())
         self.assertEqual(physical_camera.release_count, 1)
         self.assertEqual(server.state.camera_release_queue, [])
         self.assertEqual(server.state.camera_release_ids, set())
