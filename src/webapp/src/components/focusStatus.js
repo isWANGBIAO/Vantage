@@ -44,12 +44,16 @@ export function getDurationPresentation(rawSeconds) {
   const hours = Math.floor((totalSeconds % 86400) / 3600);
   if (hours === 0) {
     return {
-      valueKey: 'dashboard.stat.duration_days',
+      valueKey: days === 1
+        ? 'dashboard.stat.duration_days'
+        : 'dashboard.stat.duration_days_plural',
       valueParams: { value: days },
     };
   }
   return {
-    valueKey: 'dashboard.stat.duration_days_hours',
+    valueKey: days === 1
+      ? 'dashboard.stat.duration_days_hours'
+      : 'dashboard.stat.duration_days_hours_plural',
     valueParams: { days, hours },
   };
 }

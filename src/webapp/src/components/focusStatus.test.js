@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import * as focusStatus from './focusStatus.js';
+import { translate } from '../utils/displayCopy.js';
 
 const {
   degradeFocusHealthSnapshot,
@@ -34,6 +35,8 @@ const DURATION_BOUNDARIES = [
   [86399, 'dashboard.stat.duration_hours_minutes', { hours: 23, minutes: 59 }],
   [86400, 'dashboard.stat.duration_days', { value: 1 }],
   [90000, 'dashboard.stat.duration_days_hours', { days: 1, hours: 1 }],
+  [172800, 'dashboard.stat.duration_days_plural', { value: 2 }],
+  [176400, 'dashboard.stat.duration_days_hours_plural', { days: 2, hours: 1 }],
 ];
 
 for (const [seconds, valueKey, valueParams] of DURATION_BOUNDARIES) {
@@ -53,6 +56,22 @@ test('duration formatter floors raw seconds and normalizes invalid or negative i
       valueParams: undefined,
     });
   }
+});
+
+test('duration formatter and translations keep day units grammatical in both languages', () => {
+  const format = (language, seconds) => {
+    const { valueKey, valueParams } = getDurationPresentation(seconds);
+    return translate(language, valueKey, valueParams);
+  };
+
+  assert.equal(format('en-US', 86400), '1 day');
+  assert.equal(format('en-US', 90000), '1 day 1 hr');
+  assert.equal(format('en-US', 172800), '2 days');
+  assert.equal(format('en-US', 176400), '2 days 1 hr');
+  assert.equal(format('zh-CN', 86400), '1 天');
+  assert.equal(format('zh-CN', 90000), '1 天 1 小时');
+  assert.equal(format('zh-CN', 172800), '2 天');
+  assert.equal(format('zh-CN', 176400), '2 天 1 小时');
 });
 
 test('present focus uses raw focus seconds, a focus title, and the focus threshold detail', () => {

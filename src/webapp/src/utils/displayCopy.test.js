@@ -136,6 +136,8 @@ test('displayCopy distinguishes focus detection states in both languages', () =>
     'dashboard.stat.duration_hours_minutes': ['{hours} hr {minutes} min', '{hours} 小时 {minutes} 分钟'],
     'dashboard.stat.duration_days': ['{value} day', '{value} 天'],
     'dashboard.stat.duration_days_hours': ['{days} day {hours} hr', '{days} 天 {hours} 小时'],
+    'dashboard.stat.duration_days_plural': ['{value} days', '{value} 天'],
+    'dashboard.stat.duration_days_hours_plural': ['{days} days {hours} hr', '{days} 天 {hours} 小时'],
     'dashboard.stat.focus_present': ['Focus detected · limit: {value} min', '持续专注中 · 阈值：{value} 分钟'],
     'dashboard.stat.focus_absent': ['Away detected · focus grace period active', '检测到离座 · 专注宽限中'],
     'dashboard.stat.focus_absent_confirmed': ['Away confirmed · focus session reset', '已确认离座 · 专注会话已重置'],
