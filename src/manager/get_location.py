@@ -3,6 +3,7 @@ import os
 import sys
 import threading
 from datetime import datetime
+from pathlib import Path
 
 import cv2
 import piexif
@@ -93,7 +94,15 @@ def convert_to_exif_coords(value):
 
 
 def save_image_with_gps(photo_path, frame, latitude, longitude):
-    cv2.imwrite(photo_path, frame)
+    resolved_path = Path(photo_path)
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    extension = resolved_path.suffix or ".jpg"
+    encoded, image_buffer = cv2.imencode(extension, frame)
+    if not encoded:
+        raise OSError(f"OpenCV could not encode image as {extension}")
+
+    # cv2.imwrite() does not reliably support non-ASCII Windows paths.
+    image_buffer.tofile(str(resolved_path))
 
     if latitude is None or longitude is None:
         print(f"Time {_timestamp()} Location unavailable; skipping GPS EXIF for {photo_path}")
@@ -106,6 +115,9 @@ def save_image_with_gps(photo_path, frame, latitude, longitude):
         piexif.GPSIFD.GPSLongitude: convert_to_exif_coords(abs(longitude)),
     }
 
-    exif_dict = {"GPS": gps_ifd}
-    exif_bytes = piexif.dump(exif_dict)
-    piexif.insert(exif_bytes, photo_path)
+    try:
+        exif_dict = {"GPS": gps_ifd}
+        exif_bytes = piexif.dump(exif_dict)
+        piexif.insert(exif_bytes, str(resolved_path))
+    except Exception as exc:
+        print(f"Time {_timestamp()} Saved image but could not write GPS EXIF for {photo_path}: {exc}")

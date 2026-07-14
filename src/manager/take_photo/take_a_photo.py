@@ -54,7 +54,14 @@ def take_photo(cam, latitude, longitude, photos_path):
         os.makedirs(daily_folder, exist_ok=True)
         photo_path = os.path.join(daily_folder, photo_name)
 
-        save_image_with_gps(photo_path, frame, latitude, longitude)
+        try:
+            save_image_with_gps(photo_path, frame, latitude, longitude)
+        except Exception as exc:
+            print(
+                f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                f"Detected presence but failed to save photo: {exc}"
+            )
+            return True, None
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Photo taken and saved as {photo_path}")
         return True, photo_path
 

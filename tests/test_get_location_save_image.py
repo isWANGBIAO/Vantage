@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 
 from src.manager import get_location
@@ -6,11 +7,6 @@ from src.manager import get_location
 def test_save_image_with_gps_skips_exif_when_location_missing(monkeypatch, tmp_path):
     frame = np.zeros((8, 8, 3), dtype=np.uint8)
     photo_path = tmp_path / "photo.jpg"
-    imwrite_calls = []
-
-    def fake_imwrite(path, image):
-        imwrite_calls.append((path, image.shape))
-        return True
 
     def fail_dump(*args, **kwargs):
         raise AssertionError("piexif.dump should not be called when location is missing")
@@ -18,13 +14,25 @@ def test_save_image_with_gps_skips_exif_when_location_missing(monkeypatch, tmp_p
     def fail_insert(*args, **kwargs):
         raise AssertionError("piexif.insert should not be called when location is missing")
 
-    monkeypatch.setattr(get_location.cv2, "imwrite", fake_imwrite)
     monkeypatch.setattr(get_location.piexif, "dump", fail_dump)
     monkeypatch.setattr(get_location.piexif, "insert", fail_insert)
 
     get_location.save_image_with_gps(str(photo_path), frame, None, None)
 
-    assert imwrite_calls == [(str(photo_path), frame.shape)]
+    assert photo_path.is_file()
+
+
+def test_save_image_with_gps_supports_unicode_windows_paths(tmp_path):
+    frame = np.full((8, 8, 3), 127, dtype=np.uint8)
+    photo_path = tmp_path / "本机照片" / "照片.jpg"
+    photo_path.parent.mkdir(parents=True)
+
+    get_location.save_image_with_gps(str(photo_path), frame, None, None)
+
+    assert photo_path.is_file()
+    decoded = cv2.imdecode(np.fromfile(photo_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decoded is not None
+    assert decoded.shape == frame.shape
 
 
 def test_get_location_returns_empty_coordinates_without_platform_geolocator(monkeypatch):

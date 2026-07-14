@@ -82,6 +82,27 @@ class TakePhotoTests(unittest.TestCase):
         self.assertIsNone(photo_path)
         mock_save.assert_not_called()
 
+    def test_take_photo_keeps_presence_when_photo_storage_fails(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "capture_best_photo",
+            return_value=frame,
+        ), patch.object(
+            take_a_photo,
+            "detect_camera_facing_face_count",
+            return_value=1,
+        ), patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+            side_effect=OSError("storage unavailable"),
+        ):
+            success, photo_path = take_a_photo.take_photo(object(), 1.0, 2.0, tmpdir)
+
+        self.assertTrue(success)
+        self.assertIsNone(photo_path)
+
 
 if __name__ == "__main__":
     unittest.main()
