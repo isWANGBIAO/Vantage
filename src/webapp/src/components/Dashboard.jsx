@@ -15,7 +15,11 @@ import {
 } from 'lucide-react';
 import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import { shouldUseDashboardGeolocation } from './dashboardAqiPolicy.js';
-import { getFocusStatusPresentation } from './focusStatus.js';
+import {
+  degradeFocusHealthSnapshot,
+  getFocusStatusPresentation,
+  isValidFocusHealthSnapshot,
+} from './focusStatus.js';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 async function getGeolocationPermissionState() {
@@ -148,6 +152,10 @@ export default function Dashboard({ isVisible = false }) {
     );
   }, [fetchAqiBackend]);
 
+  const markHealthMeasurementUnavailable = useCallback(() => {
+    setHealthStats((previous) => degradeFocusHealthSnapshot(previous));
+  }, []);
+
   const fetchHealth = useCallback(async () => {
     try {
       const res = await fetchBackend('/api/health/sedentary', {
@@ -155,15 +163,21 @@ export default function Dashboard({ isVisible = false }) {
         allowHttpError: true,
       });
       if (!res.ok) {
+        markHealthMeasurementUnavailable();
         return;
       }
 
       const data = await res.json();
+      if (!isValidFocusHealthSnapshot(data)) {
+        markHealthMeasurementUnavailable();
+        return;
+      }
       setHealthStats(data);
     } catch (err) {
+      markHealthMeasurementUnavailable();
       logPollErrorOnce('health', 'Failed to fetch health stats', err);
     }
-  }, [logPollErrorOnce]);
+  }, [logPollErrorOnce, markHealthMeasurementUnavailable]);
 
   const openFolder = async (type) => {
     try {

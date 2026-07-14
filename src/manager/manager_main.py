@@ -186,9 +186,6 @@ class Monitor:
         if clock_rolled_back:
             self.reset_sedentary_state()
 
-        self.last_observation_status = status
-        self.last_observation_time = current_time
-
         if status == self.PRESENT:
             self.last_missing_time = None
             if (
@@ -207,6 +204,8 @@ class Monitor:
             elif current_time - self.last_missing_time >= self.grace_period:
                 self.reset_sedentary_state()
 
+        self.last_observation_status = status
+        self.last_observation_time = current_time
         return status
 
     def run_task(self, pre_captured_frame=_PRE_CAPTURED_FRAME_UNSET):

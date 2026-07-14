@@ -42,6 +42,41 @@ def test_presence_observations_preserve_start_across_unknown():
         assert monitor.last_observation_time == 200.0
 
 
+def test_observation_time_is_published_after_present_session_state(tmp_path):
+    class CommitRecordingMonitor(Monitor):
+        def __init__(self, *args, **kwargs):
+            self.commit_snapshots = []
+            super().__init__(*args, **kwargs)
+
+        def __setattr__(self, name, value):
+            if name == "last_observation_time" and value is not None:
+                self.commit_snapshots.append(
+                    {
+                        "continuous_sit_start": self.continuous_sit_start,
+                        "last_presence_time": self.last_presence_time,
+                        "last_observation_status": self.last_observation_status,
+                    }
+                )
+            super().__setattr__(name, value)
+
+    monitor = CommitRecordingMonitor(
+        camera=None,
+        paths={},
+        photos_path=str(tmp_path),
+        screenshots_path=str(tmp_path),
+    )
+
+    monitor.record_presence_observation(True, observed_at=100.0)
+
+    assert monitor.commit_snapshots == [
+        {
+            "continuous_sit_start": 100.0,
+            "last_presence_time": 100.0,
+            "last_observation_status": "PRESENT",
+        }
+    ]
+
+
 def test_confirmed_absence_only_resets_after_full_grace_period(tmp_path):
     state_path = tmp_path / "focus-presence-state.json"
     monitor = _make_monitor(tmp_path, state_path=state_path)
@@ -473,21 +508,23 @@ def test_run_task_resets_sedentary_timer_after_stale_monitor_gap():
     (
         "observation_status",
         "heartbeat",
+        "last_observation_time",
         "expected_detection_status",
         "expected_is_sitting",
         "expected_duration_seconds",
     ),
     [
-        ("PRESENT", 590.0, "present", True, 500),
-        ("ABSENT", 590.0, "absent", True, 300),
-        ("UNKNOWN", 590.0, "unknown", True, 300),
-        ("PRESENT", 100.0, "stale", False, 300),
+        ("PRESENT", 590.0, 590.0, "present", True, 500),
+        ("ABSENT", 590.0, 590.0, "absent", True, 300),
+        ("UNKNOWN", 590.0, 590.0, "unknown", True, 300),
+        ("PRESENT", 100.0, 400.0, "stale", False, 300),
     ],
     ids=("present", "absent", "unknown", "stale"),
 )
 def test_get_sedentary_stats_reports_detection_state_and_trusted_duration(
     observation_status,
     heartbeat,
+    last_observation_time,
     expected_detection_status,
     expected_is_sitting,
     expected_duration_seconds,
@@ -498,6 +535,7 @@ def test_get_sedentary_stats_reports_detection_state_and_trusted_duration(
             continuous_sit_start=100.0,
             last_presence_time=400.0,
             last_observation_status=observation_status,
+            last_observation_time=last_observation_time,
             sedentary_threshold=20 * 60,
             last_monitor_heartbeat=heartbeat,
             monitor_stale_timeout=2 * 60,
@@ -539,6 +577,7 @@ def test_get_sedentary_stats_fails_closed_for_invalid_heartbeat(
             continuous_sit_start=100.0,
             last_presence_time=400.0,
             last_observation_status="PRESENT",
+            last_observation_time=590.0,
             sedentary_threshold=20 * 60,
             monitor_stale_timeout=2 * 60,
             **heartbeat_attributes,
@@ -574,6 +613,7 @@ def test_get_sedentary_stats_fails_closed_for_invalid_stale_timeout(
             continuous_sit_start=100.0,
             last_presence_time=400.0,
             last_observation_status="PRESENT",
+            last_observation_time=590.0,
             sedentary_threshold=20 * 60,
             last_monitor_heartbeat=590.0,
             monitor_stale_timeout=stale_timeout,
@@ -588,6 +628,76 @@ def test_get_sedentary_stats_fails_closed_for_invalid_stale_timeout(
             "is_sitting": True,
             "duration_seconds": 300,
             "duration_minutes": 5,
+            "threshold_minutes": 20,
+        }
+    finally:
+        server.state.monitor = original_monitor
+
+
+@pytest.mark.parametrize(
+    "observation_attributes",
+    [
+        {},
+        {"last_observation_time": float("nan")},
+        {"last_observation_time": float("inf")},
+        {"last_observation_time": 700.0},
+        {"last_observation_time": 580.0},
+    ],
+    ids=("missing", "nan", "infinite", "future", "before-heartbeat"),
+)
+def test_get_sedentary_stats_fails_closed_until_current_observation_completes(
+    observation_attributes,
+):
+    original_monitor = server.state.monitor
+    try:
+        server.state.monitor = SimpleNamespace(
+            continuous_sit_start=100.0,
+            last_presence_time=400.0,
+            last_observation_status="PRESENT",
+            sedentary_threshold=20 * 60,
+            last_monitor_heartbeat=590.0,
+            monitor_stale_timeout=2 * 60,
+            **observation_attributes,
+        )
+
+        with patch("src.server.time.time", return_value=600.0):
+            result = server.get_sedentary_stats()
+
+        assert result == {
+            "status": "active",
+            "detection_status": "unknown",
+            "is_sitting": True,
+            "duration_seconds": 300,
+            "duration_minutes": 5,
+            "threshold_minutes": 20,
+        }
+        assert server.state.monitor.continuous_sit_start == 100.0
+    finally:
+        server.state.monitor = original_monitor
+
+
+def test_get_sedentary_stats_does_not_reuse_present_status_after_stale_gap_reset():
+    original_monitor = server.state.monitor
+    try:
+        server.state.monitor = SimpleNamespace(
+            continuous_sit_start=None,
+            last_presence_time=None,
+            last_observation_status="PRESENT",
+            last_observation_time=400.0,
+            sedentary_threshold=20 * 60,
+            last_monitor_heartbeat=600.0,
+            monitor_stale_timeout=2 * 60,
+        )
+
+        with patch("src.server.time.time", return_value=600.0):
+            result = server.get_sedentary_stats()
+
+        assert result == {
+            "status": "active",
+            "detection_status": "unknown",
+            "is_sitting": False,
+            "duration_seconds": 0,
+            "duration_minutes": 0,
             "threshold_minutes": 20,
         }
     finally:
@@ -622,6 +732,7 @@ def test_get_sedentary_stats_rejects_untrusted_duration_timestamps(
             continuous_sit_start=start,
             last_presence_time=last_presence,
             last_observation_status=observation_status,
+            last_observation_time=590.0,
             sedentary_threshold=20 * 60,
             last_monitor_heartbeat=590.0,
             monitor_stale_timeout=2 * 60,

@@ -131,6 +131,7 @@ test('displayCopy distinguishes focus detection states in both languages', () =>
     'dashboard.stat.focus_duration': ['{value} min', '{value} 分钟'],
     'dashboard.stat.focus_present': ['Focus detected · limit: {value} min', '持续专注中 · 阈值：{value} 分钟'],
     'dashboard.stat.focus_absent': ['No person detected · grace period active', '暂未检测到人 · 宽限中'],
+    'dashboard.stat.focus_absent_confirmed': ['Away confirmed · timer reset', '已确认离座 · 计时已重置'],
     'dashboard.stat.focus_unavailable': ['Measurement unavailable · timer preserved', '测量暂不可用 · 计时保留'],
   };
 

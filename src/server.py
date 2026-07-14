@@ -5235,18 +5235,25 @@ def _is_finite_nonnegative_number(value):
 def get_sedentary_stats():
     """Returns the current continuous sitting duration from the monitor."""
     try:
-        if not state.monitor:
+        monitor = state.monitor
+        if not monitor:
             return {"status": "inactive"}
 
         now = time.time()
-        monitor = state.monitor
-        heartbeat = getattr(state.monitor, "last_monitor_heartbeat", None)
-        stale_timeout = getattr(state.monitor, "monitor_stale_timeout", 120)
+        monitor_snapshot = vars(monitor).copy()
+        heartbeat = monitor_snapshot.get("last_monitor_heartbeat")
+        stale_timeout = monitor_snapshot.get("monitor_stale_timeout", 120)
+        last_observation_time = monitor_snapshot.get("last_observation_time")
         heartbeat_is_valid = (
             _is_finite_nonnegative_number(heartbeat)
             and heartbeat <= now
         )
         stale_timeout_is_valid = _is_finite_nonnegative_number(stale_timeout)
+        observation_is_current = (
+            heartbeat_is_valid
+            and _is_finite_nonnegative_number(last_observation_time)
+            and heartbeat <= last_observation_time <= now
+        )
         heartbeat_is_stale = (
             heartbeat_is_valid
             and stale_timeout_is_valid
@@ -5254,9 +5261,13 @@ def get_sedentary_stats():
         )
 
         observed_status = str(
-            getattr(monitor, "last_observation_status", "") or ""
+            monitor_snapshot.get("last_observation_status") or ""
         ).lower()
-        if not heartbeat_is_valid or not stale_timeout_is_valid:
+        if (
+            not heartbeat_is_valid
+            or not stale_timeout_is_valid
+            or not observation_is_current
+        ):
             detection_status = "unknown"
         elif heartbeat_is_stale:
             detection_status = "stale"
@@ -5265,8 +5276,8 @@ def get_sedentary_stats():
         else:
             detection_status = "unknown"
 
-        start = getattr(monitor, "continuous_sit_start", None)
-        last_presence = getattr(monitor, "last_presence_time", None)
+        start = monitor_snapshot.get("continuous_sit_start")
+        last_presence = monitor_snapshot.get("last_presence_time")
         trusted_end = (
             now
             if detection_status == "present"
@@ -5281,7 +5292,7 @@ def get_sedentary_stats():
         )
         duration_sec = int(trusted_end - start) if has_trusted_session else 0
 
-        threshold_seconds = getattr(monitor, "sedentary_threshold", 0)
+        threshold_seconds = monitor_snapshot.get("sedentary_threshold", 0)
         threshold_minutes = (
             int(threshold_seconds // 60)
             if _is_finite_nonnegative_number(threshold_seconds)
