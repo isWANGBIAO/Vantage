@@ -177,6 +177,30 @@ def test_clock_rollback_after_unknown_does_not_restore_candidate(tmp_path):
     assert monitor.continuous_sit_start == 160.0
 
 
+def test_clock_rollback_absence_invalidates_recovery_candidate(tmp_path):
+    state_path = tmp_path / "focus-presence-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "continuous_sit_start": 50.0,
+                "last_presence_time": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("src.manager.manager_main.time.time", return_value=150.0):
+        monitor = _make_monitor(tmp_path, state_path=state_path)
+
+    monitor.record_presence_observation(False, observed_at=140.0)
+    assert not state_path.exists()
+
+    monitor.record_presence_observation(True, observed_at=160.0)
+
+    assert monitor.continuous_sit_start == 160.0
+
+
 def test_clock_rollback_restarts_active_session_at_current_observation(tmp_path):
     monitor = _make_monitor(tmp_path)
     monitor.record_presence_observation(True, observed_at=50.0)

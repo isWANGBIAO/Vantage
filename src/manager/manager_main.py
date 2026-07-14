@@ -169,6 +169,13 @@ class Monitor:
         else:
             raise ValueError("presence observation must be True, False, or None")
 
+        if (
+            self._recovery_candidate is not None
+            and current_time < self._recovery_candidate[2]
+        ):
+            self._recovery_candidate = None
+            self._remove_presence_state()
+
         clock_rolled_back = (
             self.last_observation_time is not None
             and current_time < self.last_observation_time
