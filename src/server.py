@@ -774,6 +774,51 @@ class RendererCameraCapture:
         return None
 
 
+def _clear_latest_frame_if_camera_is(expected_camera):
+    with state.lock:
+        if state.camera is not expected_camera:
+            return False
+        state.latest_frame = None
+        return True
+
+
+def _install_camera_capture(camera):
+    with state.lock:
+        if state.camera is not None:
+            return False
+        state.camera = camera
+        state.latest_frame = None
+        return True
+
+
+def _publish_camera_frame(camera, frame):
+    with state.lock:
+        if state.camera is not camera:
+            return False
+        if camera is state.renderer_camera and is_renderer_camera_active():
+            return True
+        state.latest_frame = frame
+        return True
+
+
+def _retire_camera_capture(camera):
+    preserve_active_renderer = False
+    retired = False
+    with state.lock:
+        if state.camera is camera:
+            preserve_active_renderer = (
+                camera is state.renderer_camera and is_renderer_camera_active()
+            )
+            if not preserve_active_renderer:
+                state.camera = None
+                state.latest_frame = None
+                retired = True
+
+    if camera is not None and not preserve_active_renderer:
+        camera.release()
+    return retired
+
+
 def calculate_frame_mean_luma(frame):
     if frame is None or getattr(frame, "size", 0) == 0:
         return None
@@ -2228,28 +2273,33 @@ def camera_loop():
     while state.is_running:
         if state.camera is None:
             idx = get_camera_index()
+            candidate = None
             try:
-                state.camera = open_camera_capture(idx)
-                if not state.camera or not state.camera.isOpened():
+                candidate = open_camera_capture(idx)
+                if not candidate or not candidate.isOpened():
                     _rate_limited_status_log(
                         ("camera", "offline", idx),
                         f"Camera index {idx} is offline; retrying in {CAMERA_RETRY_INTERVAL_SECONDS:.0f}s",
                         interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
                     )
-                    if state.camera:
-                        state.camera.release()
-                    state.camera = None
+                    if candidate:
+                        candidate.release()
+                    _clear_latest_frame_if_camera_is(None)
                     sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
+                    continue
+
+                if not _install_camera_capture(candidate):
+                    candidate.release()
                     continue
 
                 # Request 4K resolution (16:9)
                 target_w, target_h = 3840, 2160
-                state.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_w)
-                state.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
+                candidate.set(cv2.CAP_PROP_FRAME_WIDTH, target_w)
+                candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
 
                 # Verify actual resolution
-                actual_w = state.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
-                actual_h = state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                actual_w = candidate.get(cv2.CAP_PROP_FRAME_WIDTH)
+                actual_h = candidate.get(cv2.CAP_PROP_FRAME_HEIGHT)
                 reset_camera_status_logs()
                 blank_frame_streak = 0
                 warmup_deadline = get_camera_warmup_deadline()
@@ -2258,18 +2308,23 @@ def camera_loop():
                 # If 4K failed (e.g. got low res), try strict 1080p fallback
                 if actual_w < 1280:
                     print("4K failed or ignored, trying strict 1080p force...")
-                    state.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-                    state.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-                    print(f"Fallback resolution: {int(state.camera.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+                    candidate.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+                    candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+                    print(f"Fallback resolution: {int(candidate.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(candidate.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
 
             except Exception as e:
                 print(f"Camera init failed: {e}")
+                if candidate is None:
+                    _clear_latest_frame_if_camera_is(None)
+                else:
+                    _retire_camera_capture(candidate)
                 sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
                 continue
 
-        if state.camera and state.camera.isOpened():
+        camera = state.camera
+        if camera and camera.isOpened():
             try:
-                ret, frame = state.camera.read()
+                ret, frame = camera.read()
                 if ret:
                     (
                         blank_frame_streak,
@@ -2279,8 +2334,7 @@ def camera_loop():
                         frame, blank_frame_streak, warmup_deadline
                     )
                     if should_publish_frame:
-                        with state.lock:
-                            state.latest_frame = frame
+                        _publish_camera_frame(camera, frame)
                         warmup_deadline = None
                     if should_reopen_camera:
                         _rate_limited_status_log(
@@ -2288,27 +2342,33 @@ def camera_loop():
                             "Camera returned persistent blank frames; reopening capture",
                             interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
                         )
-                        state.camera.release()
-                        state.camera = None
+                        retired = _retire_camera_capture(camera)
                         blank_frame_streak = 0
                         warmup_deadline = None
-                        sleep_while_running(0.5)
+                        if retired:
+                            sleep_while_running(0.5)
                 else:
                     print("Warning: Can't receive frame (stream end?). Exiting ...")
-                    state.camera.release()
-                    state.camera = None
+                    retired = _retire_camera_capture(camera)
                     warmup_deadline = None
-                    time.sleep(2)
+                    if retired:
+                        time.sleep(2)
             except Exception as e:
                 print(f"Camera read error: {e}")
-                time.sleep(1)
+                retired = _retire_camera_capture(camera)
+                blank_frame_streak = 0
+                warmup_deadline = None
+                if retired:
+                    time.sleep(1)
         else:
-             print("Camera not opened, retrying...")
-             if state.camera:
-                 state.camera.release()
-             state.camera = None
-             warmup_deadline = None
-             sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
+            print("Camera not opened, retrying...")
+            if camera:
+                retired = _retire_camera_capture(camera)
+            else:
+                retired = _clear_latest_frame_if_camera_is(None)
+            warmup_deadline = None
+            if retired:
+                sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
         time.sleep(0.03)
 
 

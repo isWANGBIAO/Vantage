@@ -5,9 +5,59 @@ from unittest.mock import patch
 
 import cv2
 import numpy as np
+import pytest
 
 from src import server
 from src.manager.take_photo.get_best_photo import capture_best_photo
+
+
+class _CameraLoopCapture:
+    def __init__(self, *, opened=True, frame=None, read_error=None, on_read=None):
+        self.opened = opened
+        self.frame = frame
+        self.read_error = read_error
+        self.on_read = on_read
+        self.release_count = 0
+
+    def isOpened(self):
+        return self.opened
+
+    def set(self, _property, _value):
+        return True
+
+    def get(self, _property):
+        return 1920
+
+    def read(self):
+        if self.on_read is not None:
+            return self.on_read()
+        server.state.is_running = False
+        if self.read_error is not None:
+            raise self.read_error
+        return self.frame
+
+    def release(self):
+        self.release_count += 1
+
+
+@pytest.fixture
+def preserve_camera_loop_state():
+    with server.state.lock:
+        snapshot = {
+            "camera": server.state.camera,
+            "latest_frame": server.state.latest_frame,
+            "renderer_camera": server.state.renderer_camera,
+            "renderer_camera_frame": server.state.renderer_camera_frame,
+            "renderer_camera_last_seen_at": server.state.renderer_camera_last_seen_at,
+        }
+    original_is_running = server.state.is_running
+    try:
+        yield
+    finally:
+        with server.state.lock:
+            for name, value in snapshot.items():
+                setattr(server.state, name, value)
+            server.state.is_running = original_is_running
 
 
 def test_monitor_capture_interval_defaults_to_one_minute():
@@ -162,6 +212,143 @@ def test_warmup_black_frames_do_not_carry_a_recovery_streak_past_deadline():
             frame_number == server.CAMERA_BLANK_FRAME_RECOVERY_COUNT
         )
         assert should_publish is False
+
+
+def test_camera_loop_clears_published_frame_when_blank_recovery_reopens_capture(
+    monkeypatch,
+    preserve_camera_loop_state,
+):
+    old_frame = np.full((8, 8, 3), 91, dtype=np.uint8)
+    black_frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    capture = _CameraLoopCapture(frame=(True, black_frame))
+    with server.state.lock:
+        server.state.camera = capture
+        server.state.latest_frame = old_frame
+        server.state.is_running = True
+
+    monkeypatch.setattr(server, "CAMERA_BLANK_FRAME_RECOVERY_COUNT", 1)
+    monkeypatch.setattr(server, "_rate_limited_status_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server.time, "sleep", lambda _seconds: None)
+
+    server.camera_loop()
+
+    with server.state.lock:
+        assert server.state.camera is None
+        assert server.state.latest_frame is None
+    assert capture.release_count == 1
+
+
+@pytest.mark.parametrize(
+    ("read_result", "read_error"),
+    [
+        ((False, None), None),
+        (None, OSError("camera disconnected")),
+    ],
+    ids=("read-returned-false", "read-raised"),
+)
+def test_camera_loop_clears_published_frame_when_read_becomes_unavailable(
+    monkeypatch,
+    preserve_camera_loop_state,
+    read_result,
+    read_error,
+):
+    capture = _CameraLoopCapture(frame=read_result, read_error=read_error)
+    with server.state.lock:
+        server.state.camera = capture
+        server.state.latest_frame = np.full((8, 8, 3), 92, dtype=np.uint8)
+        server.state.is_running = True
+
+    monkeypatch.setattr(server.time, "sleep", lambda _seconds: None)
+
+    server.camera_loop()
+
+    with server.state.lock:
+        assert server.state.camera is None
+        assert server.state.latest_frame is None
+    assert capture.release_count == 1
+
+
+def test_camera_loop_clears_old_frame_before_new_capture_warmup(
+    monkeypatch,
+    preserve_camera_loop_state,
+):
+    visible_frame = np.full((8, 8, 3), 128, dtype=np.uint8)
+    capture = _CameraLoopCapture(frame=(True, visible_frame))
+    with server.state.lock:
+        server.state.camera = None
+        server.state.latest_frame = np.full((8, 8, 3), 93, dtype=np.uint8)
+        server.state.is_running = True
+
+    monkeypatch.setattr(server, "get_camera_index", lambda: 0)
+    monkeypatch.setattr(server, "open_camera_capture", lambda _index: capture)
+    monkeypatch.setattr(server, "get_camera_warmup_deadline", lambda: 102.0)
+    monkeypatch.setattr(server.time, "monotonic", lambda: 101.0)
+    monkeypatch.setattr(server.time, "sleep", lambda _seconds: None)
+
+    server.camera_loop()
+
+    with server.state.lock:
+        assert server.state.camera is capture
+        assert server.state.latest_frame is None
+
+
+def test_camera_loop_clears_old_frame_when_new_capture_fails_to_open(
+    monkeypatch,
+    preserve_camera_loop_state,
+):
+    capture = _CameraLoopCapture(opened=False)
+    with server.state.lock:
+        server.state.camera = None
+        server.state.latest_frame = np.full((8, 8, 3), 94, dtype=np.uint8)
+        server.state.is_running = True
+
+    monkeypatch.setattr(server, "get_camera_index", lambda: 0)
+    monkeypatch.setattr(server, "open_camera_capture", lambda _index: capture)
+    monkeypatch.setattr(
+        server,
+        "sleep_while_running",
+        lambda _seconds: setattr(server.state, "is_running", False),
+    )
+
+    server.camera_loop()
+
+    with server.state.lock:
+        assert server.state.camera is None
+        assert server.state.latest_frame is None
+    assert capture.release_count == 1
+
+
+def test_camera_loop_does_not_clear_renderer_frame_that_takes_over_failed_capture(
+    monkeypatch,
+    preserve_camera_loop_state,
+):
+    renderer = server.RendererCameraCapture()
+    renderer_frame = np.full((8, 8, 3), 127, dtype=np.uint8)
+
+    def switch_to_renderer():
+        with server.state.lock:
+            server.state.renderer_camera = renderer
+            server.state.renderer_camera_frame = renderer_frame
+            server.state.renderer_camera_last_seen_at = server.time.time()
+            server.state.camera = renderer
+            server.state.latest_frame = renderer_frame.copy()
+            server.state.is_running = False
+        return False, None
+
+    capture = _CameraLoopCapture(on_read=switch_to_renderer)
+    with server.state.lock:
+        server.state.camera = capture
+        server.state.latest_frame = np.full((8, 8, 3), 95, dtype=np.uint8)
+        server.state.is_running = True
+
+    monkeypatch.setattr(server.time, "sleep", lambda _seconds: None)
+
+    server.camera_loop()
+
+    with server.state.lock:
+        assert server.state.camera is renderer
+        assert np.array_equal(server.state.latest_frame, renderer_frame)
+    assert capture.release_count == 1
 
 
 def test_macos_camera_open_does_not_fallback_to_cap_any_when_permission_is_missing():
