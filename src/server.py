@@ -140,6 +140,7 @@ STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS = 3600.0
 LATEST_MEDIA_SCAN_MAX_SECONDS = 3.0
 LATEST_MEDIA_SCAN_MAX_ENTRIES = 30000
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
+FOCUS_PRESENCE_STATE_FILENAME = "focus-presence-state.json"
 
 FACE_ANALYSIS_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsing.farl.lapa.int8.onnx")
 FACE_ANALYSIS_DB_FILE = None
@@ -2106,7 +2107,13 @@ async def startup_event():
         print(f"[Storage] Screenshots Path: {state.screenshots_path}")
         print(f"----------------------------------------------------------------")
         
-        state.monitor = Monitor(state.camera, state.paths, state.photos_path, state.screenshots_path)
+        state.monitor = Monitor(
+            state.camera,
+            state.paths,
+            state.photos_path,
+            state.screenshots_path,
+            state_path=Path(Config.get_runtime_dir()) / FOCUS_PRESENCE_STATE_FILENAME,
+        )
         prewarm_runtime_models()
 
         thread_specs = (
