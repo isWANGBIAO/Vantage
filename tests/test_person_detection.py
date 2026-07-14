@@ -6,7 +6,13 @@ import numpy as np
 from src.services import person_detection
 
 
-def _face_row(*, nose_x=60.0, right_eye_y=55.0, left_eye_y=54.0):
+def _face_row(
+    *,
+    nose_x=60.0,
+    right_eye_y=55.0,
+    left_eye_y=54.0,
+    confidence=0.96,
+):
     return np.array(
         [
             10.0,
@@ -23,13 +29,13 @@ def _face_row(*, nose_x=60.0, right_eye_y=55.0, left_eye_y=54.0):
             110.0,
             75.0,
             109.0,
-            0.96,
+            confidence,
         ],
         dtype=np.float32,
     )
 
 
-def _slightly_turned_face_row():
+def _slightly_turned_face_row(*, confidence=0.91):
     return np.array(
         [
             207.79,
@@ -46,7 +52,7 @@ def _slightly_turned_face_row():
             342.16,
             311.31,
             348.41,
-            0.91,
+            confidence,
         ],
         dtype=np.float32,
     )
@@ -58,16 +64,22 @@ class _FakeFaceDetector:
         self.input_sizes = []
         self.score_thresholds = []
         self.detected_images = []
+        self.score_threshold = 0.0
 
     def setInputSize(self, input_size):
         self.input_sizes.append(input_size)
 
     def setScoreThreshold(self, score_threshold):
         self.score_thresholds.append(score_threshold)
+        self.score_threshold = score_threshold
 
     def detect(self, image):
         self.detected_images.append(image)
-        return 1, self.faces
+        if self.faces is None:
+            return 1, None
+        faces = np.asarray(self.faces)
+        matching_faces = faces[faces[:, 14] >= self.score_threshold]
+        return 1, matching_faces if len(matching_faces) else None
 
 
 class PersonDetectionTests(unittest.TestCase):
@@ -98,6 +110,41 @@ class PersonDetectionTests(unittest.TestCase):
         self.assertEqual(detector.input_sizes, [(320, 180)])
         self.assertEqual(detector.score_thresholds, [0.88])
         self.assertIs(detector.detected_images[0], frame)
+
+    def test_presence_accepts_moderate_confidence_slightly_turned_face(self):
+        detector = _FakeFaceDetector(
+            np.vstack([_slightly_turned_face_row(confidence=0.55)])
+        )
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        presence_count = person_detection.detect_presence_count(frame, model=detector)
+        camera_facing_count = person_detection.detect_person_count(frame, model=detector)
+
+        self.assertEqual(presence_count, 1)
+        self.assertEqual(camera_facing_count, 0)
+        self.assertEqual(
+            detector.score_thresholds,
+            [
+                person_detection.PRESENCE_DETECTION_CONFIDENCE,
+                person_detection.PERSON_DETECTION_CONFIDENCE,
+            ],
+        )
+
+    def test_non_frontal_face_is_presence_but_not_camera_facing_at_same_threshold(self):
+        detector = _FakeFaceDetector(
+            np.vstack([_face_row(nose_x=86.0, confidence=0.55)])
+        )
+        frame = np.zeros((180, 320, 3), dtype=np.uint8)
+
+        presence_faces = person_detection.detect_presence_faces(frame, model=detector)
+        camera_facing_faces = person_detection.detect_camera_facing_faces(
+            frame,
+            model=detector,
+            conf=person_detection.PRESENCE_DETECTION_CONFIDENCE,
+        )
+
+        self.assertEqual(len(presence_faces), 1)
+        self.assertEqual(camera_facing_faces, [])
 
     def test_detect_person_counts_retains_compatible_batch_function_name(self):
         detector = _FakeFaceDetector(np.vstack([_face_row()]))

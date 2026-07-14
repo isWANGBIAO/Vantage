@@ -1,8 +1,9 @@
-"""Camera-facing face detection used by the legacy person-presence APIs.
+"""YuNet face detection for presence and camera-facing classification.
 
-YuNet's five landmarks support a coarse frontal-pose geometry check. They do
-not reveal where a person is looking, so this module is not eye or gaze
-tracking.
+Presence uses raw YuNet detections at a moderate confidence threshold. YuNet's
+five landmarks additionally support a coarse frontal-pose geometry check for
+camera-facing classification. They do not reveal where a person is looking, so
+this module is not eye or gaze tracking.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from typing import Any, Iterable
 
 
 PERSON_DETECTION_CONFIDENCE = 0.75
+PRESENCE_DETECTION_CONFIDENCE = 0.50
 PERSON_DETECTION_MODEL = "face_detection_yunet_2023mar.onnx"
 FACE_DETECTION_MODEL_PATH_ENV = "VANTAGE_FACE_DETECTION_MODEL_PATH"
 FACE_DETECTION_INPUT_SIZE = (320, 320)
@@ -197,10 +199,10 @@ def _valid_image_size(source: Any) -> tuple[int, int] | None:
     return width, height
 
 
-def detect_camera_facing_faces(
+def detect_presence_faces(
     source: Any,
     model=None,
-    conf: float = PERSON_DETECTION_CONFIDENCE,
+    conf: float = PRESENCE_DETECTION_CONFIDENCE,
 ) -> list[Any]:
     image_size = _valid_image_size(source)
     if image_size is None:
@@ -215,7 +217,27 @@ def detect_camera_facing_faces(
 
     if faces is None:
         return []
-    return [face for face in faces if is_roughly_frontal_face(face)]
+    return list(faces)
+
+
+def detect_camera_facing_faces(
+    source: Any,
+    model=None,
+    conf: float = PERSON_DETECTION_CONFIDENCE,
+) -> list[Any]:
+    return [
+        face
+        for face in detect_presence_faces(source, model=model, conf=conf)
+        if is_roughly_frontal_face(face)
+    ]
+
+
+def detect_presence_count(
+    source: Any,
+    model=None,
+    conf: float = PRESENCE_DETECTION_CONFIDENCE,
+) -> int:
+    return len(detect_presence_faces(source, model=model, conf=conf))
 
 
 def detect_face_boxes(
