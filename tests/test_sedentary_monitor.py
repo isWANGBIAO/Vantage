@@ -561,6 +561,40 @@ def test_get_sedentary_stats_fails_closed_for_invalid_heartbeat(
 
 
 @pytest.mark.parametrize(
+    "stale_timeout",
+    [float("nan"), float("inf"), -1.0],
+    ids=("nan", "infinite", "negative"),
+)
+def test_get_sedentary_stats_fails_closed_for_invalid_stale_timeout(
+    stale_timeout,
+):
+    original_monitor = server.state.monitor
+    try:
+        server.state.monitor = SimpleNamespace(
+            continuous_sit_start=100.0,
+            last_presence_time=400.0,
+            last_observation_status="PRESENT",
+            sedentary_threshold=20 * 60,
+            last_monitor_heartbeat=590.0,
+            monitor_stale_timeout=stale_timeout,
+        )
+
+        with patch("src.server.time.time", return_value=600.0):
+            result = server.get_sedentary_stats()
+
+        assert result == {
+            "status": "active",
+            "detection_status": "unknown",
+            "is_sitting": True,
+            "duration_seconds": 300,
+            "duration_minutes": 5,
+            "threshold_minutes": 20,
+        }
+    finally:
+        server.state.monitor = original_monitor
+
+
+@pytest.mark.parametrize(
     ("start", "last_presence", "observation_status"),
     [
         (float("nan"), 400.0, "UNKNOWN"),
