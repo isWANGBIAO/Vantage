@@ -14,11 +14,29 @@ def detect_presence_face_count(image):
     return detect_presence_count(image, conf=PRESENCE_DETECTION_CONFIDENCE)
 
 
+def _is_valid_capture_frame(frame):
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return False
+    shape = getattr(frame, "shape", ())
+    return len(shape) >= 2 and int(shape[0]) > 0 and int(shape[1]) > 0
+
+
 def take_photo(cam, latitude, longitude, photos_path):
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking photo")
-    frame = capture_best_photo(cam)
-    if frame is None:
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Camera capture failed; skipping face detection")
+    try:
+        frame = capture_best_photo(cam)
+    except Exception as exc:
+        print(
+            f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+            f"Camera capture unavailable; skipping presence detection: {exc}"
+        )
+        return None, None
+
+    if not _is_valid_capture_frame(frame):
+        print(
+            f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+            "Camera capture unavailable; empty or invalid frame; skipping presence detection"
+        )
         return None, None
 
     try:

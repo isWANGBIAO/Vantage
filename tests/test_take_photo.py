@@ -26,18 +26,66 @@ class TakePhotoTests(unittest.TestCase):
         ), patch.object(
             take_a_photo,
             "detect_presence_face_count",
-            side_effect=AssertionError("detection should not run without a frame"),
-        ), patch.object(
+        ) as mock_detect, patch.object(
             take_a_photo,
             "save_image_with_gps",
-            side_effect=AssertionError("save should not run without a frame"),
-        ), patch("builtins.print") as mock_print:
+        ) as mock_save, patch("builtins.print") as mock_print:
             result = take_a_photo.take_photo(object(), 0.0, 0.0, tmpdir)
 
         self.assertEqual(result, (None, None))
+        mock_detect.assert_not_called()
+        mock_save.assert_not_called()
         log_text = "\n".join(str(item) for item in mock_print.call_args_list)
-        self.assertIn("skipping face detection", log_text)
+        self.assertIn("Camera capture unavailable", log_text)
         self.assertNotIn("YOLO", log_text)
+
+    def test_take_photo_returns_unknown_when_camera_capture_raises(self):
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "capture_best_photo",
+            side_effect=OSError("camera disconnected"),
+        ), patch.object(
+            take_a_photo,
+            "detect_presence_face_count",
+        ) as mock_detect, patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save, patch("builtins.print") as mock_print:
+            result = take_a_photo.take_photo(object(), 0.0, 0.0, tmpdir)
+
+        self.assertEqual(result, (None, None))
+        mock_detect.assert_not_called()
+        mock_save.assert_not_called()
+        log_text = "\n".join(str(item) for item in mock_print.call_args_list)
+        self.assertIn("Camera capture unavailable", log_text)
+        self.assertIn("camera disconnected", log_text)
+
+    def test_take_photo_returns_unknown_for_empty_or_invalid_frame(self):
+        invalid_frames = (
+            np.empty((0, 0, 3), dtype=np.uint8),
+            np.array([1, 2, 3], dtype=np.uint8),
+        )
+
+        for frame in invalid_frames:
+            with self.subTest(shape=frame.shape), tempfile.TemporaryDirectory() as tmpdir, patch.object(
+                take_a_photo,
+                "capture_best_photo",
+                return_value=frame,
+            ), patch.object(
+                take_a_photo,
+                "detect_presence_face_count",
+                return_value=0,
+            ) as mock_detect, patch.object(
+                take_a_photo,
+                "save_image_with_gps",
+            ) as mock_save, patch("builtins.print") as mock_print:
+                result = take_a_photo.take_photo(object(), 0.0, 0.0, tmpdir)
+
+            self.assertEqual(result, (None, None))
+            mock_detect.assert_not_called()
+            mock_save.assert_not_called()
+            log_text = "\n".join(str(item) for item in mock_print.call_args_list)
+            self.assertIn("Camera capture unavailable", log_text)
 
     def test_take_photo_saves_photo_when_presence_is_detected(self):
         frame = np.zeros((4, 4, 3), dtype=np.uint8)
