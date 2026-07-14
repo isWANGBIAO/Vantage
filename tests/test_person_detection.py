@@ -82,6 +82,29 @@ class _FakeFaceDetector:
         return 1, matching_faces if len(matching_faces) else None
 
 
+class _FakePersonDetector:
+    def __init__(self, boxes=None, error=None):
+        self.boxes = list(boxes or [])
+        self.error = error
+        self.calls = []
+
+    def detect_person_boxes(self, image, conf):
+        self.calls.append((image, conf))
+        if self.error is not None:
+            raise self.error
+        return self.boxes
+
+
+class _FailingFaceDetector(_FakeFaceDetector):
+    def __init__(self, error):
+        super().__init__(None)
+        self.error = error
+
+    def detect(self, image):
+        self.detected_images.append(image)
+        raise self.error
+
+
 class PersonDetectionTests(unittest.TestCase):
     def test_frontal_geometry_accepts_balanced_landmarks(self):
         self.assertTrue(person_detection.is_roughly_frontal_face(_face_row()))
@@ -129,6 +152,89 @@ class PersonDetectionTests(unittest.TestCase):
                 person_detection.PERSON_DETECTION_CONFIDENCE,
             ],
         )
+
+    def test_presence_accepts_body_when_face_is_not_visible(self):
+        face_detector = _FakeFaceDetector(None)
+        person_detector = _FakePersonDetector([(20, 30, 120, 220)])
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        presence_count = person_detection.detect_presence_count(
+            frame,
+            model=face_detector,
+            person_model=person_detector,
+        )
+
+        self.assertEqual(presence_count, 1)
+        self.assertEqual(len(person_detector.calls), 1)
+        self.assertIs(person_detector.calls[0][0], frame)
+        self.assertEqual(
+            person_detector.calls[0][1],
+            person_detection.PRESENCE_PERSON_DETECTION_CONFIDENCE,
+        )
+
+    def test_presence_does_not_double_count_face_and_body_signals(self):
+        face_detector = _FakeFaceDetector(np.vstack([_face_row()]))
+        person_detector = _FakePersonDetector([(20, 30, 120, 220)])
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        presence_count = person_detection.detect_presence_count(
+            frame,
+            model=face_detector,
+            person_model=person_detector,
+        )
+
+        self.assertEqual(presence_count, 1)
+        self.assertEqual(person_detector.calls, [])
+
+    def test_presence_accepts_body_when_face_detector_fails(self):
+        face_detector = _FailingFaceDetector(RuntimeError("face unavailable"))
+        person_detector = _FakePersonDetector([(20, 30, 120, 220)])
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        presence_count = person_detection.detect_presence_count(
+            frame,
+            model=face_detector,
+            person_model=person_detector,
+        )
+
+        self.assertEqual(presence_count, 1)
+
+    def test_presence_is_unavailable_when_face_is_empty_and_person_detector_fails(self):
+        face_detector = _FakeFaceDetector(None)
+        person_detector = _FakePersonDetector(error=RuntimeError("person unavailable"))
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        with self.assertRaises(person_detection.PresenceDetectionUnavailable):
+            person_detection.detect_presence_count(
+                frame,
+                model=face_detector,
+                person_model=person_detector,
+            )
+
+    def test_presence_is_unavailable_when_face_fails_and_body_is_empty(self):
+        face_detector = _FailingFaceDetector(RuntimeError("face unavailable"))
+        person_detector = _FakePersonDetector([])
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        with self.assertRaises(person_detection.PresenceDetectionUnavailable):
+            person_detection.detect_presence_count(
+                frame,
+                model=face_detector,
+                person_model=person_detector,
+            )
+
+    def test_presence_is_absent_only_when_both_detectors_succeed_without_a_match(self):
+        face_detector = _FakeFaceDetector(None)
+        person_detector = _FakePersonDetector([])
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        presence_count = person_detection.detect_presence_count(
+            frame,
+            model=face_detector,
+            person_model=person_detector,
+        )
+
+        self.assertEqual(presence_count, 0)
 
     def test_non_frontal_face_is_presence_but_not_camera_facing_at_same_threshold(self):
         detector = _FakeFaceDetector(
@@ -183,6 +289,51 @@ class PersonDetectionTests(unittest.TestCase):
             counts = person_detection.detect_person_counts([None, None])
 
         self.assertEqual(counts, [0, 0])
+
+    def test_empty_presence_frame_does_not_load_either_detector(self):
+        with patch.object(
+            person_detection,
+            "get_face_detector",
+            side_effect=AssertionError("empty frame should not load face detector"),
+        ), patch.object(
+            person_detection,
+            "get_person_presence_detector",
+            side_effect=AssertionError("empty frame should not load person detector"),
+        ):
+            count = person_detection.detect_presence_count(None)
+
+        self.assertEqual(count, 0)
+
+    def test_yolox_preprocessing_letterboxes_bgr_as_rgb_nchw(self):
+        frame = np.full((2, 4, 3), (10, 20, 30), dtype=np.uint8)
+
+        blob, scale = person_detection.prepare_yolox_input(frame)
+
+        self.assertEqual(blob.shape, (1, 3, 640, 640))
+        self.assertEqual(blob.dtype, np.float32)
+        np.testing.assert_array_equal(blob[0, :, 0, 0], [30.0, 20.0, 10.0])
+        np.testing.assert_array_equal(blob[0, :, -1, -1], [114.0, 114.0, 114.0])
+        self.assertEqual(scale, 160.0)
+
+    def test_yolox_postprocessing_keeps_only_person_above_threshold(self):
+        predictions = np.zeros((1, 8400, 85), dtype=np.float32)
+        predictions[0, 0, 4] = 1.0
+        predictions[0, 0, 5] = 0.51
+        predictions[0, 1, 4] = 1.0
+        predictions[0, 1, 5] = 0.49
+        predictions[0, 2, 4] = 1.0
+        predictions[0, 2, 5] = 0.60
+        predictions[0, 2, 6] = 0.90
+
+        boxes = person_detection.postprocess_yolox_person_boxes(
+            predictions,
+            letterbox_scale=1.0,
+            image_size=(640, 640),
+            conf=person_detection.PRESENCE_PERSON_DETECTION_CONFIDENCE,
+        )
+
+        self.assertEqual(len(boxes), 1)
+        self.assertEqual(len(boxes[0]), 4)
 
 
 if __name__ == "__main__":
