@@ -12,10 +12,19 @@ from src.manager.take_photo.get_best_photo import capture_best_photo
 
 
 class _CameraLoopCapture:
-    def __init__(self, *, opened=True, frame=None, read_error=None, on_read=None):
+    def __init__(
+        self,
+        *,
+        opened=True,
+        frame=None,
+        read_error=None,
+        release_error=None,
+        on_read=None,
+    ):
         self.opened = opened
         self.frame = frame
         self.read_error = read_error
+        self.release_error = release_error
         self.on_read = on_read
         self.release_count = 0
 
@@ -38,6 +47,8 @@ class _CameraLoopCapture:
 
     def release(self):
         self.release_count += 1
+        if self.release_error is not None:
+            raise self.release_error
 
 
 @pytest.fixture
@@ -49,6 +60,8 @@ def preserve_camera_loop_state():
             "renderer_camera": server.state.renderer_camera,
             "renderer_camera_frame": server.state.renderer_camera_frame,
             "renderer_camera_last_seen_at": server.state.renderer_camera_last_seen_at,
+            "camera_release_queue": list(server.state.camera_release_queue),
+            "camera_release_ids": set(server.state.camera_release_ids),
         }
     original_is_running = server.state.is_running
     try:
@@ -253,6 +266,29 @@ def test_camera_loop_clears_published_frame_when_read_becomes_unavailable(
     read_error,
 ):
     capture = _CameraLoopCapture(frame=read_result, read_error=read_error)
+    with server.state.lock:
+        server.state.camera = capture
+        server.state.latest_frame = np.full((8, 8, 3), 92, dtype=np.uint8)
+        server.state.is_running = True
+
+    monkeypatch.setattr(server.time, "sleep", lambda _seconds: None)
+
+    server.camera_loop()
+
+    with server.state.lock:
+        assert server.state.camera is None
+        assert server.state.latest_frame is None
+    assert capture.release_count == 1
+
+
+def test_camera_loop_consumes_release_error_once_without_losing_control(
+    monkeypatch,
+    preserve_camera_loop_state,
+):
+    capture = _CameraLoopCapture(
+        frame=(False, None),
+        release_error=OSError("release failed"),
+    )
     with server.state.lock:
         server.state.camera = capture
         server.state.latest_frame = np.full((8, 8, 3), 92, dtype=np.uint8)

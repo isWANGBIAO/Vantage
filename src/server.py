@@ -584,6 +584,8 @@ class SystemState:
         self.renderer_camera = None
         self.renderer_camera_frame = None
         self.renderer_camera_last_seen_at = 0.0
+        self.camera_release_queue = []
+        self.camera_release_ids = set()
         self.monitor = None
         self.latest_frame = None
         self.is_running = True
@@ -801,6 +803,37 @@ def _publish_camera_frame(camera, frame):
         return True
 
 
+def _queue_camera_release_locked(camera):
+    if camera is None or camera is state.renderer_camera:
+        return False
+    camera_id = id(camera)
+    if camera_id in state.camera_release_ids:
+        return False
+    state.camera_release_ids.add(camera_id)
+    state.camera_release_queue.append(camera)
+    return True
+
+
+def _queue_camera_release(camera):
+    with state.lock:
+        return _queue_camera_release_locked(camera)
+
+
+def _drain_camera_release_queue():
+    with state.lock:
+        pending = list(state.camera_release_queue)
+        state.camera_release_queue.clear()
+
+    for camera in pending:
+        try:
+            camera.release()
+        except Exception as exc:
+            print(f"Camera release error: {exc}")
+        finally:
+            with state.lock:
+                state.camera_release_ids.discard(id(camera))
+
+
 def _retire_camera_capture(camera):
     preserve_active_renderer = False
     retired = False
@@ -813,9 +846,9 @@ def _retire_camera_capture(camera):
                 state.camera = None
                 state.latest_frame = None
                 retired = True
+        if not preserve_active_renderer:
+            _queue_camera_release_locked(camera)
 
-    if camera is not None and not preserve_active_renderer:
-        camera.release()
     return retired
 
 
@@ -2207,13 +2240,11 @@ async def shutdown_event():
     for thread_name in state.background_thread_status:
         state.background_thread_status[thread_name] = False
 
-    camera = state.camera
-    state.camera = None
-    if camera is not None:
-        try:
-            camera.release()
-        except Exception as e:
-            print(f"Shutdown camera release error: {e}")
+    with state.lock:
+        camera = state.camera
+        state.camera = None
+        _queue_camera_release_locked(camera)
+    _drain_camera_release_queue()
 
 
 @asynccontextmanager
@@ -2271,6 +2302,7 @@ def camera_loop():
     blank_frame_streak = 0
     warmup_deadline = None
     while state.is_running:
+        _drain_camera_release_queue()
         if state.camera is None:
             idx = get_camera_index()
             candidate = None
@@ -2283,13 +2315,15 @@ def camera_loop():
                         interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
                     )
                     if candidate:
-                        candidate.release()
+                        _queue_camera_release(candidate)
                     _clear_latest_frame_if_camera_is(None)
+                    _drain_camera_release_queue()
                     sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
                     continue
 
                 if not _install_camera_capture(candidate):
-                    candidate.release()
+                    _queue_camera_release(candidate)
+                    _drain_camera_release_queue()
                     continue
 
                 # Request 4K resolution (16:9)
@@ -2318,6 +2352,7 @@ def camera_loop():
                     _clear_latest_frame_if_camera_is(None)
                 else:
                     _retire_camera_capture(candidate)
+                _drain_camera_release_queue()
                 sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
                 continue
 
@@ -2345,12 +2380,14 @@ def camera_loop():
                         retired = _retire_camera_capture(camera)
                         blank_frame_streak = 0
                         warmup_deadline = None
+                        _drain_camera_release_queue()
                         if retired:
                             sleep_while_running(0.5)
                 else:
                     print("Warning: Can't receive frame (stream end?). Exiting ...")
                     retired = _retire_camera_capture(camera)
                     warmup_deadline = None
+                    _drain_camera_release_queue()
                     if retired:
                         time.sleep(2)
             except Exception as e:
@@ -2358,6 +2395,7 @@ def camera_loop():
                 retired = _retire_camera_capture(camera)
                 blank_frame_streak = 0
                 warmup_deadline = None
+                _drain_camera_release_queue()
                 if retired:
                     time.sleep(1)
         else:
@@ -2367,8 +2405,10 @@ def camera_loop():
             else:
                 retired = _clear_latest_frame_if_camera_is(None)
             warmup_deadline = None
+            _drain_camera_release_queue()
             if retired:
                 sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
+        _drain_camera_release_queue()
         time.sleep(0.03)
 
 
@@ -2540,12 +2580,15 @@ async def receive_renderer_camera_frame(request: Request):
         return JSONResponse(status_code=400, content={"error": "Frame decode failed"})
 
     with state.lock:
+        displaced_camera = state.camera
         if state.renderer_camera is None:
             state.renderer_camera = RendererCameraCapture()
         state.renderer_camera_frame = frame
         state.renderer_camera_last_seen_at = time.time()
         state.latest_frame = frame.copy()
         state.camera = state.renderer_camera
+        if displaced_camera is not state.renderer_camera:
+            _queue_camera_release_locked(displaced_camera)
 
     return {
         "ok": True,
