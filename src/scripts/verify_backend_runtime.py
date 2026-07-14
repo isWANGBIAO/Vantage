@@ -47,6 +47,9 @@ BLOCKING_RUNTIME_PATTERNS = (
     "Missing packaged runtime module",
     "No module named",
     "Missing face detection model",
+    "Missing detection model",
+    "Failed to warm camera face detector",
+    "Failed to warm camera body detector",
 )
 
 
@@ -94,6 +97,7 @@ def _build_smoke_environment(layout: dict[str, Path]) -> dict[str, str]:
     env["VANTAGE_CONFIG_DIR"] = str(config_dir)
     env["VANTAGE_MACOS_SKIP_CAMERA_AUTH"] = "1"
     env["OPENCV_AVFOUNDATION_SKIP_AUTH"] = "1"
+    env["VANTAGE_PREWARM_FACE_DETECTION_ON_STARTUP"] = "1"
     env.pop("VANTAGE_PROJECT_ROOT", None)
     return env
 

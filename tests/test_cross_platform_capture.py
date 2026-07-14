@@ -60,6 +60,11 @@ def preserve_camera_loop_state():
         snapshot = {
             "camera": server.state.camera,
             "latest_frame": server.state.latest_frame,
+            "latest_frame_published_at": getattr(
+                server.state,
+                "latest_frame_published_at",
+                None,
+            ),
             "renderer_camera": server.state.renderer_camera,
             "renderer_camera_frame": server.state.renderer_camera_frame,
             "renderer_camera_last_seen_at": server.state.renderer_camera_last_seen_at,
@@ -78,6 +83,75 @@ def preserve_camera_loop_state():
 
 def test_monitor_capture_interval_defaults_to_one_minute():
     assert server.MONITOR_CAPTURE_INTERVAL_SECONDS == 60
+
+
+def test_monitor_frame_ttl_is_independent_from_renderer_ttl(monkeypatch):
+    monkeypatch.setattr(server, "RENDERER_CAMERA_FRAME_TTL_SECONDS", 0.25)
+
+    assert server.MONITOR_FRAME_TTL_SECONDS == 5.0
+
+
+def test_system_state_initializes_latest_frame_timestamp():
+    fresh_state = server.SystemState()
+
+    assert fresh_state.latest_frame is None
+    assert fresh_state.latest_frame_published_at is None
+
+
+def test_camera_frame_lifecycle_keeps_frame_and_timestamp_in_sync(
+    monkeypatch,
+    preserve_camera_loop_state,
+):
+    first_camera = _CameraLoopCapture(frame=(False, None))
+    second_camera = _CameraLoopCapture(frame=(False, None))
+    first_frame = np.full((8, 8, 3), 42, dtype=np.uint8)
+    second_frame = np.full((8, 8, 3), 84, dtype=np.uint8)
+
+    with server.state.lock:
+        server.state.camera = None
+        server.state.latest_frame = np.full((8, 8, 3), 1, dtype=np.uint8)
+        server.state.latest_frame_published_at = 1.0
+
+    assert server._install_camera_capture(first_camera) is True
+    assert server.state.latest_frame is None
+    assert server.state.latest_frame_published_at is None
+
+    monkeypatch.setattr(server.time, "monotonic", lambda: 101.5)
+    assert server._publish_camera_frame(first_camera, first_frame) is True
+    assert server.state.latest_frame is first_frame
+    assert server.state.latest_frame_published_at == 101.5
+
+    assert server._retire_camera_capture(first_camera) is True
+    assert server.state.latest_frame is None
+    assert server.state.latest_frame_published_at is None
+
+    assert server._install_camera_capture(second_camera) is True
+    assert server._publish_camera_frame(
+        second_camera,
+        second_frame,
+        published_at=202.5,
+    ) is True
+    assert server.state.latest_frame is second_frame
+    assert server.state.latest_frame_published_at == 202.5
+
+    assert server._clear_latest_frame_if_camera_is(second_camera) is True
+    assert server.state.latest_frame is None
+    assert server.state.latest_frame_published_at is None
+
+
+def test_shutdown_clears_latest_frame_and_timestamp(
+    preserve_camera_loop_state,
+):
+    with server.state.lock:
+        server.state.camera = None
+        server.state.latest_frame = np.full((8, 8, 3), 99, dtype=np.uint8)
+        server.state.latest_frame_published_at = 303.5
+
+    asyncio.run(server.shutdown_event())
+
+    with server.state.lock:
+        assert server.state.latest_frame is None
+        assert server.state.latest_frame_published_at is None
 
 
 def test_camera_backends_are_platform_specific():

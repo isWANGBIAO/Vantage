@@ -82,6 +82,7 @@ from src.services.person_detection import (
     detect_face_boxes,
     detect_presence_count,
     get_face_detector,
+    get_person_presence_detector,
 )
 from src.utils.data_loader import DataLoader
 from src.utils.sensitive_data import redact_sensitive_text
@@ -90,6 +91,7 @@ from src.utils.sensitive_data import redact_sensitive_text
 _cv2_module = None
 _face_analysis_pipeline_module = None
 RENDERER_CAMERA_FRAME_TTL_SECONDS = 5.0
+MONITOR_FRAME_TTL_SECONDS = 5.0
 RENDERER_CAMERA_MAX_FRAME_BYTES = 8 * 1024 * 1024
 RENDERER_CAMERA_FRAME_INTENT = "renderer-camera-frame"
 CAMERA_DARK_FRAME_MEAN_LUMA_THRESHOLD = 12.0
@@ -588,6 +590,7 @@ class SystemState:
         self.camera_release_ids = set()
         self.monitor = None
         self.latest_frame = None
+        self.latest_frame_published_at = None
         self.is_running = True
         self.camera_iteration_lock = threading.Lock()
         self.background_thread_status = {
@@ -733,15 +736,21 @@ def prewarm_runtime_models():
         except Exception as exc:
             print(f"Failed to warm face analysis runtime: {exc}")
 
-    try:
-        if not PREWARM_FACE_DETECTION_ON_STARTUP:
-            print("Camera face detector warmup deferred to background thread.")
-            return
+    if not PREWARM_FACE_DETECTION_ON_STARTUP:
+        print("Camera presence detector warmup deferred to background thread.")
+        return
 
+    try:
         get_face_detector()
         print("Camera face detector warmed up successfully.")
     except Exception as exc:
         print(f"Failed to warm camera face detector: {exc}")
+
+    try:
+        get_person_presence_detector()
+        print("Camera body detector warmed up successfully.")
+    except Exception as exc:
+        print(f"Failed to warm camera body detector: {exc}")
 
 
 def _camera_online():
@@ -782,6 +791,7 @@ def _clear_latest_frame_if_camera_is(expected_camera):
         if state.camera is not expected_camera:
             return False
         state.latest_frame = None
+        state.latest_frame_published_at = None
         return True
 
 
@@ -791,16 +801,20 @@ def _install_camera_capture(camera):
             return False
         state.camera = camera
         state.latest_frame = None
+        state.latest_frame_published_at = None
         return True
 
 
-def _publish_camera_frame(camera, frame):
+def _publish_camera_frame(camera, frame, published_at=None):
     with state.lock:
         if state.camera is not camera:
             return False
         if camera is state.renderer_camera and is_renderer_camera_active():
             return True
         state.latest_frame = frame
+        state.latest_frame_published_at = (
+            time.monotonic() if published_at is None else float(published_at)
+        )
         return True
 
 
@@ -846,6 +860,7 @@ def _retire_camera_capture(camera):
             if not preserve_active_renderer:
                 state.camera = None
                 state.latest_frame = None
+                state.latest_frame_published_at = None
                 retired = True
         if not preserve_active_renderer:
             _queue_camera_release_locked(camera)
@@ -2245,6 +2260,8 @@ async def shutdown_event():
         with state.lock:
             camera = state.camera
             state.camera = None
+            state.latest_frame = None
+            state.latest_frame_published_at = None
             _queue_camera_release_locked(camera)
         _drain_camera_release_queue()
 
@@ -2272,29 +2289,43 @@ def sleep_while_running(seconds: float):
 def run_monitor_capture_cycle():
     with state.lock:
         monitor = state.monitor
-        frame = state.latest_frame.copy() if state.latest_frame is not None else None
+        frame = state.latest_frame
+        published_at = state.latest_frame_published_at
+        now_monotonic = time.monotonic()
+        timestamp_is_fresh = (
+            isinstance(published_at, (int, float))
+            and not isinstance(published_at, bool)
+            and math.isfinite(published_at)
+            and published_at <= now_monotonic
+            and now_monotonic - published_at <= MONITOR_FRAME_TTL_SECONDS
+        )
+        frame = frame.copy() if frame is not None and timestamp_is_fresh else None
 
     if monitor is None:
-        return
+        return False
 
-    monitor.run_task(pre_captured_frame=frame)
+    observation_status = monitor.run_task(pre_captured_frame=frame)
 
     photo_path = state.paths.get("photo")
     if photo_path and photo_path != state.last_processed_face_photo_path:
         if process_captured_face_photo(photo_path):
             state.last_processed_face_photo_path = photo_path
 
+    return observation_status in {Monitor.PRESENT, Monitor.ABSENT}
+
 
 def monitor_loop():
     print(f"Starting monitor loop ({MONITOR_CAPTURE_INTERVAL_SECONDS}s interval)...")
     while state.is_running:
         cycle_started_at = time.monotonic()
+        capture_interval = MONITOR_CAMERA_WAIT_INTERVAL_SECONDS
         try:
-            run_monitor_capture_cycle()
+            if run_monitor_capture_cycle():
+                capture_interval = MONITOR_CAPTURE_INTERVAL_SECONDS
         except Exception as e:
             print(f"Monitor loop error: {e}")
         elapsed = time.monotonic() - cycle_started_at
-        sleep_while_running(MONITOR_CAPTURE_INTERVAL_SECONDS - elapsed)
+        sleep_while_running(capture_interval - elapsed)
 
 def camera_loop():
     print(
@@ -2592,6 +2623,7 @@ async def receive_renderer_camera_frame(request: Request):
         state.renderer_camera_frame = frame
         state.renderer_camera_last_seen_at = time.time()
         state.latest_frame = frame.copy()
+        state.latest_frame_published_at = time.monotonic()
         state.camera = state.renderer_camera
         if displaced_camera is not state.renderer_camera:
             _queue_camera_release_locked(displaced_camera)

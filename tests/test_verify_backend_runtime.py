@@ -33,6 +33,7 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
             self.assertEqual(env["VANTAGE_DATA_DIR"], str(layout["build_root"] / "smoke-data"))
             self.assertEqual(env["VANTAGE_MACOS_SKIP_CAMERA_AUTH"], "1")
             self.assertEqual(env["OPENCV_AVFOUNDATION_SKIP_AUTH"], "1")
+            self.assertEqual(env["VANTAGE_PREWARM_FACE_DETECTION_ON_STARTUP"], "1")
 
     def test_status_payload_must_match_current_runtime_layout(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -62,6 +63,8 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
                 "Camera face detector unavailable in thread: Missing face detection model",
                 "Live face analysis error: DLL load failed while importing _framework_bindings",
                 "Missing packaged runtime module(s): zhdate (No module named 'zhdate')",
+                "Failed to warm camera face detector: invalid YuNet model",
+                "Failed to warm camera body detector: Missing detection model yolox.onnx",
             ]
         )
 
@@ -75,6 +78,9 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
                 "Missing packaged runtime module",
                 "No module named",
                 "Missing face detection model",
+                "Missing detection model",
+                "Failed to warm camera face detector",
+                "Failed to warm camera body detector",
             ],
         )
 

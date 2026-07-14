@@ -1255,32 +1255,181 @@ def test_run_task_without_frame_keeps_legacy_photo_capture_call(tmp_path):
     )
 
 
-def test_monitor_capture_cycle_uses_a_copy_of_latest_published_frame():
+@pytest.mark.parametrize("status", [Monitor.PRESENT, Monitor.ABSENT])
+def test_monitor_capture_cycle_uses_fresh_copy_and_returns_trusted_status(status):
     published_frame = np.full((4, 4, 3), 41, dtype=np.uint8)
     received_frames = []
 
     class RecordingMonitor:
         def run_task(self, *, pre_captured_frame):
             received_frames.append(pre_captured_frame)
+            return status
 
     original_monitor = server.state.monitor
     original_frame = server.state.latest_frame
+    original_published_at = getattr(server.state, "latest_frame_published_at", None)
     original_paths = server.state.paths
     try:
         server.state.monitor = RecordingMonitor()
         server.state.latest_frame = published_frame
+        server.state.latest_frame_published_at = 98.0
         server.state.paths = {}
 
-        server.run_monitor_capture_cycle()
+        with patch.object(server.time, "monotonic", return_value=100.0):
+            trusted = server.run_monitor_capture_cycle()
         published_frame.fill(0)
 
+        assert trusted is True
         assert len(received_frames) == 1
         assert received_frames[0] is not published_frame
         assert np.all(received_frames[0] == 41)
     finally:
         server.state.monitor = original_monitor
         server.state.latest_frame = original_frame
+        server.state.latest_frame_published_at = original_published_at
         server.state.paths = original_paths
+
+
+@pytest.mark.parametrize(
+    ("published_frame", "published_at"),
+    [
+        (None, 100.0),
+        (np.full((2, 2, 3), 1, dtype=np.uint8), None),
+        (np.full((2, 2, 3), 2, dtype=np.uint8), float("nan")),
+        (np.full((2, 2, 3), 3, dtype=np.uint8), float("inf")),
+        (np.full((2, 2, 3), 4, dtype=np.uint8), 100.001),
+        (np.full((2, 2, 3), 5, dtype=np.uint8), 94.999),
+    ],
+    ids=("missing-frame", "missing-timestamp", "nan", "infinite", "future", "stale"),
+)
+def test_monitor_capture_cycle_rejects_untrustworthy_frame_metadata(
+    published_frame,
+    published_at,
+):
+    received_frames = []
+
+    class RecordingMonitor:
+        def run_task(self, *, pre_captured_frame):
+            received_frames.append(pre_captured_frame)
+            return Monitor.UNKNOWN
+
+    original_monitor = server.state.monitor
+    original_frame = server.state.latest_frame
+    original_published_at = getattr(server.state, "latest_frame_published_at", None)
+    original_paths = server.state.paths
+    try:
+        server.state.monitor = RecordingMonitor()
+        server.state.latest_frame = published_frame
+        server.state.latest_frame_published_at = published_at
+        server.state.paths = {}
+
+        with patch.object(server.time, "monotonic", return_value=100.0):
+            trusted = server.run_monitor_capture_cycle()
+
+        assert trusted is False
+        assert received_frames == [None]
+    finally:
+        server.state.monitor = original_monitor
+        server.state.latest_frame = original_frame
+        server.state.latest_frame_published_at = original_published_at
+        server.state.paths = original_paths
+
+
+def test_monitor_capture_cycle_returns_false_for_unknown_fresh_observation():
+    frame = np.full((2, 2, 3), 7, dtype=np.uint8)
+
+    class UnknownMonitor:
+        def run_task(self, *, pre_captured_frame):
+            assert np.array_equal(pre_captured_frame, frame)
+            return Monitor.UNKNOWN
+
+    original_monitor = server.state.monitor
+    original_frame = server.state.latest_frame
+    original_published_at = getattr(server.state, "latest_frame_published_at", None)
+    original_paths = server.state.paths
+    try:
+        server.state.monitor = UnknownMonitor()
+        server.state.latest_frame = frame
+        server.state.latest_frame_published_at = 99.0
+        server.state.paths = {}
+
+        with patch.object(server.time, "monotonic", return_value=100.0):
+            assert server.run_monitor_capture_cycle() is False
+    finally:
+        server.state.monitor = original_monitor
+        server.state.latest_frame = original_frame
+        server.state.latest_frame_published_at = original_published_at
+        server.state.paths = original_paths
+
+
+@pytest.mark.parametrize(
+    ("case", "frame", "published_at", "status", "expected_sleep"),
+    [
+        ("present", np.ones((2, 2, 3), dtype=np.uint8), 99.0, Monitor.PRESENT, 59.75),
+        ("absent", np.ones((2, 2, 3), dtype=np.uint8), 99.0, Monitor.ABSENT, 59.75),
+        ("missing", None, None, Monitor.UNKNOWN, 1.75),
+        ("stale", np.ones((2, 2, 3), dtype=np.uint8), 94.0, Monitor.UNKNOWN, 1.75),
+        ("unknown", np.ones((2, 2, 3), dtype=np.uint8), 99.0, Monitor.UNKNOWN, 1.75),
+    ],
+)
+def test_monitor_loop_selects_interval_from_observation_trust(
+    case,
+    frame,
+    published_at,
+    status,
+    expected_sleep,
+):
+    class OneCycleMonitor:
+        def run_task(self, *, pre_captured_frame):
+            server.state.is_running = False
+            return status
+
+    original_monitor = server.state.monitor
+    original_frame = server.state.latest_frame
+    original_published_at = getattr(server.state, "latest_frame_published_at", None)
+    original_paths = server.state.paths
+    original_running = server.state.is_running
+    try:
+        server.state.monitor = OneCycleMonitor()
+        server.state.latest_frame = frame
+        server.state.latest_frame_published_at = published_at
+        server.state.paths = {}
+        server.state.is_running = True
+
+        with (
+            patch.object(server.time, "monotonic", side_effect=[100.0, 100.0, 100.25]),
+            patch.object(server, "sleep_while_running") as sleep_mock,
+        ):
+            server.monitor_loop()
+
+        sleep_mock.assert_called_once_with(expected_sleep)
+    finally:
+        server.state.monitor = original_monitor
+        server.state.latest_frame = original_frame
+        server.state.latest_frame_published_at = original_published_at
+        server.state.paths = original_paths
+        server.state.is_running = original_running
+
+
+def test_monitor_loop_retries_quickly_after_exception():
+    original_running = server.state.is_running
+    try:
+        server.state.is_running = True
+
+        def fail_once():
+            server.state.is_running = False
+            raise RuntimeError("detector failed")
+
+        with (
+            patch.object(server, "run_monitor_capture_cycle", side_effect=fail_once),
+            patch.object(server.time, "monotonic", side_effect=[100.0, 100.25]),
+            patch.object(server, "sleep_while_running") as sleep_mock,
+        ):
+            server.monitor_loop()
+
+        sleep_mock.assert_called_once_with(1.75)
+    finally:
+        server.state.is_running = original_running
 
 
 def test_monitor_capture_cycle_without_published_frame_records_unknown_without_camera_read(
@@ -1295,10 +1444,12 @@ def test_monitor_capture_cycle_without_published_frame_records_unknown_without_c
     _record(monitor, True, 100.0)
     original_monitor = server.state.monitor
     original_frame = server.state.latest_frame
+    original_published_at = getattr(server.state, "latest_frame_published_at", None)
     original_paths = server.state.paths
     try:
         server.state.monitor = monitor
         server.state.latest_frame = None
+        server.state.latest_frame_published_at = None
         server.state.paths = {}
 
         with (
@@ -1309,7 +1460,7 @@ def test_monitor_capture_cycle_without_published_frame_records_unknown_without_c
             ) as mock_capture,
             patch("src.manager.manager_main.time.time", return_value=200.0),
         ):
-            server.run_monitor_capture_cycle()
+            assert server.run_monitor_capture_cycle() is False
 
         mock_capture.assert_not_called()
         assert monitor.continuous_sit_start == 100.0
@@ -1318,6 +1469,7 @@ def test_monitor_capture_cycle_without_published_frame_records_unknown_without_c
     finally:
         server.state.monitor = original_monitor
         server.state.latest_frame = original_frame
+        server.state.latest_frame_published_at = original_published_at
         server.state.paths = original_paths
 
 

@@ -40,6 +40,11 @@ class RendererCameraFrameTests(unittest.TestCase):
         self.original_renderer_frame = getattr(server.state, "renderer_camera_frame", None)
         self.original_renderer_last_seen_at = getattr(server.state, "renderer_camera_last_seen_at", None)
         self.original_latest_frame = getattr(server.state, "latest_frame", None)
+        self.original_latest_frame_published_at = getattr(
+            server.state,
+            "latest_frame_published_at",
+            None,
+        )
         self.original_is_running = server.state.is_running
         self.original_release_queue = list(server.state.camera_release_queue)
         self.original_release_ids = set(server.state.camera_release_ids)
@@ -50,6 +55,7 @@ class RendererCameraFrameTests(unittest.TestCase):
         server.state.renderer_camera_frame = self.original_renderer_frame
         server.state.renderer_camera_last_seen_at = self.original_renderer_last_seen_at
         server.state.latest_frame = self.original_latest_frame
+        server.state.latest_frame_published_at = self.original_latest_frame_published_at
         server.state.is_running = self.original_is_running
         server.state.camera_release_queue = self.original_release_queue
         server.state.camera_release_ids = self.original_release_ids
@@ -59,17 +65,18 @@ class RendererCameraFrameTests(unittest.TestCase):
         ok, encoded = server.cv2.imencode(".jpg", frame)
         self.assertTrue(ok)
 
-        payload = asyncio.run(
-            server.receive_renderer_camera_frame(
-                _FakeRequest(
-                    encoded.tobytes(),
-                    {
-                        "content-type": "image/jpeg",
-                        "x-vantage-intent": server.RENDERER_CAMERA_FRAME_INTENT,
-                    },
+        with patch.object(server.time, "monotonic", return_value=404.25):
+            payload = asyncio.run(
+                server.receive_renderer_camera_frame(
+                    _FakeRequest(
+                        encoded.tobytes(),
+                        {
+                            "content-type": "image/jpeg",
+                            "x-vantage-intent": server.RENDERER_CAMERA_FRAME_INTENT,
+                        },
+                    )
                 )
             )
-        )
 
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["camera_online"])
@@ -82,6 +89,7 @@ class RendererCameraFrameTests(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(captured.shape, (6, 8, 3))
         self.assertEqual(server.state.latest_frame.shape, (6, 8, 3))
+        self.assertEqual(server.state.latest_frame_published_at, 404.25)
 
     def test_renderer_upload_atomically_takes_ownership_from_open_physical_capture(self):
         renderer_input = np.full((6, 8, 3), 127, dtype=np.uint8)
@@ -147,6 +155,8 @@ class RendererCameraFrameTests(unittest.TestCase):
         self.assertEqual(physical_camera.release_count, 1)
         self.assertEqual(server.state.camera_release_queue, [])
         self.assertEqual(server.state.camera_release_ids, set())
+        self.assertIsNone(server.state.latest_frame)
+        self.assertIsNone(server.state.latest_frame_published_at)
 
     def test_shutdown_waits_for_inflight_read_and_releases_capture_once(self):
         read_started = threading.Event()
