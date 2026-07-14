@@ -14,6 +14,9 @@ from pathlib import Path
 from .get_location import get_location
 
 
+_PRE_CAPTURED_FRAME_UNSET = object()
+
+
 class Monitor:
     PRESENCE_STATE_VERSION = 1
     PRESENT = "PRESENT"
@@ -206,7 +209,7 @@ class Monitor:
 
         return status
 
-    def run_task(self):
+    def run_task(self, pre_captured_frame=_PRE_CAPTURED_FRAME_UNSET):
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---------------------------------------------")
 
         cycle_started_at = time.time()
@@ -226,7 +229,21 @@ class Monitor:
             print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Getting location")
             latitude, longitude = get_location()
             print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_photo()")
-            real_person, photo_path = take_photo(self.camera, latitude, longitude, self.photos_path)
+            if pre_captured_frame is _PRE_CAPTURED_FRAME_UNSET:
+                real_person, photo_path = take_photo(
+                    self.camera,
+                    latitude,
+                    longitude,
+                    self.photos_path,
+                )
+            else:
+                real_person, photo_path = take_photo(
+                    self.camera,
+                    latitude,
+                    longitude,
+                    self.photos_path,
+                    pre_captured_frame=pre_captured_frame,
+                )
 
             current_time = time.time()
             had_active_session = self.continuous_sit_start is not None

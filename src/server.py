@@ -809,12 +809,15 @@ def evaluate_camera_frame(
     warmup_deadline,
     now_monotonic=None,
 ):
+    now = time.monotonic() if now_monotonic is None else float(now_monotonic)
+    warmup_complete = warmup_deadline is None or now >= float(warmup_deadline)
+    if not warmup_complete:
+        return 0, False, False
+
     next_streak, should_reopen = update_camera_blank_frame_streak(
         frame,
         current_blank_streak,
     )
-    now = time.monotonic() if now_monotonic is None else float(now_monotonic)
-    warmup_complete = warmup_deadline is None or now >= float(warmup_deadline)
     should_publish = next_streak == 0 and not should_reopen and warmup_complete
     return next_streak, should_reopen, should_publish
 
@@ -2188,29 +2191,28 @@ def sleep_while_running(seconds: float):
         time.sleep(min(1.0, remaining))
 
 
+def run_monitor_capture_cycle():
+    with state.lock:
+        monitor = state.monitor
+        frame = state.latest_frame.copy() if state.latest_frame is not None else None
+
+    if monitor is None:
+        return
+
+    monitor.run_task(pre_captured_frame=frame)
+
+    photo_path = state.paths.get("photo")
+    if photo_path and photo_path != state.last_processed_face_photo_path:
+        if process_captured_face_photo(photo_path):
+            state.last_processed_face_photo_path = photo_path
+
+
 def monitor_loop():
     print(f"Starting monitor loop ({MONITOR_CAPTURE_INTERVAL_SECONDS}s interval)...")
     while state.is_running:
         cycle_started_at = time.monotonic()
         try:
-            if state.monitor:
-                # CRITICAL: Ensure Monitor uses the current active camera instance (initialized in camera_loop)
-                # If camera is not ready yet, skip this cycle to avoid errors or default-init
-                if state.camera is None or not state.camera.isOpened():
-                    # print("Monitor skipping: Camera not ready")
-                    sleep_while_running(MONITOR_CAMERA_WAIT_INTERVAL_SECONDS)
-                    continue
-                
-                # Update the camera reference in monitor to match the global state (which is 4K)
-                state.monitor.camera = state.camera
-                
-                # Run the periodic task (take photo, screenshot, etc.)
-                state.monitor.run_task()
-
-                photo_path = state.paths.get("photo")
-                if photo_path and photo_path != state.last_processed_face_photo_path:
-                    if process_captured_face_photo(photo_path):
-                        state.last_processed_face_photo_path = photo_path
+            run_monitor_capture_cycle()
         except Exception as e:
             print(f"Monitor loop error: {e}")
         elapsed = time.monotonic() - cycle_started_at

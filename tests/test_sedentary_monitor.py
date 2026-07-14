@@ -3,6 +3,7 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 from src.manager.manager_main import Monitor
@@ -299,6 +300,118 @@ def test_run_task_records_unknown_when_capture_cycle_raises_before_observation(t
     monitor.record_presence_observation(False, observed_at=231.0)
     assert monitor.continuous_sit_start == 100.0
     assert monitor.last_missing_time == 231.0
+
+
+def test_run_task_passes_pre_captured_frame_to_photo_pipeline(tmp_path):
+    frame = np.full((4, 4, 3), 23, dtype=np.uint8)
+    monitor = _make_monitor(tmp_path)
+
+    with (
+        patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
+        patch(
+            "src.manager.manager_main.take_photo",
+            return_value=(None, None),
+        ) as mock_take_photo,
+        patch("src.manager.manager_main.time.time", return_value=200.0),
+    ):
+        monitor.run_task(pre_captured_frame=frame)
+
+    mock_take_photo.assert_called_once()
+    assert mock_take_photo.call_args.args == (
+        monitor.camera,
+        0.0,
+        0.0,
+        str(tmp_path),
+    )
+    assert mock_take_photo.call_args.kwargs.keys() == {"pre_captured_frame"}
+    assert mock_take_photo.call_args.kwargs["pre_captured_frame"] is frame
+
+
+def test_run_task_without_frame_keeps_legacy_photo_capture_call(tmp_path):
+    monitor = _make_monitor(tmp_path)
+
+    with (
+        patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
+        patch(
+            "src.manager.manager_main.take_photo",
+            return_value=(None, None),
+        ) as mock_take_photo,
+        patch("src.manager.manager_main.time.time", return_value=200.0),
+    ):
+        monitor.run_task()
+
+    mock_take_photo.assert_called_once_with(
+        monitor.camera,
+        0.0,
+        0.0,
+        str(tmp_path),
+    )
+
+
+def test_monitor_capture_cycle_uses_a_copy_of_latest_published_frame():
+    published_frame = np.full((4, 4, 3), 41, dtype=np.uint8)
+    received_frames = []
+
+    class RecordingMonitor:
+        def run_task(self, *, pre_captured_frame):
+            received_frames.append(pre_captured_frame)
+
+    original_monitor = server.state.monitor
+    original_frame = server.state.latest_frame
+    original_paths = server.state.paths
+    try:
+        server.state.monitor = RecordingMonitor()
+        server.state.latest_frame = published_frame
+        server.state.paths = {}
+
+        server.run_monitor_capture_cycle()
+        published_frame.fill(0)
+
+        assert len(received_frames) == 1
+        assert received_frames[0] is not published_frame
+        assert np.all(received_frames[0] == 41)
+    finally:
+        server.state.monitor = original_monitor
+        server.state.latest_frame = original_frame
+        server.state.paths = original_paths
+
+
+def test_monitor_capture_cycle_without_published_frame_records_unknown_without_camera_read(
+    tmp_path,
+):
+    class ReadFailingCamera:
+        def read(self):
+            raise AssertionError("monitor must not read the physical camera")
+
+    monitor = _make_monitor(tmp_path)
+    monitor.camera = ReadFailingCamera()
+    monitor.continuous_sit_start = 100.0
+    original_monitor = server.state.monitor
+    original_frame = server.state.latest_frame
+    original_paths = server.state.paths
+    try:
+        server.state.monitor = monitor
+        server.state.latest_frame = None
+        server.state.paths = {}
+
+        with (
+            patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
+            patch(
+                "src.manager.take_photo.take_a_photo.capture_best_photo",
+                side_effect=AssertionError("monitor must not capture a fallback frame"),
+            ) as mock_capture,
+            patch("src.manager.manager_main.time.time", return_value=200.0),
+        ):
+            server.run_monitor_capture_cycle()
+
+        mock_capture.assert_not_called()
+        assert monitor.continuous_sit_start == 100.0
+        assert monitor.last_observation_status == "UNKNOWN"
+        assert monitor.last_missing_time is None
+    finally:
+        server.state.monitor = original_monitor
+        server.state.latest_frame = original_frame
+        server.state.paths = original_paths
 
 
 @pytest.mark.parametrize("new_screenshot_path", [None, ""])

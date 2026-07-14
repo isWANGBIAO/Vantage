@@ -18,21 +18,85 @@ from src.manager.take_photo import take_a_photo
 
 
 class TakePhotoTests(unittest.TestCase):
+    def test_take_photo_uses_pre_captured_frame_without_reading_camera(self):
+        frame = np.full((4, 4, 3), 7, dtype=np.uint8)
+        camera = object()
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "capture_best_photo",
+            side_effect=AssertionError("pre-captured frame must not read camera"),
+        ) as mock_capture, patch.object(
+            take_a_photo,
+            "detect_presence_face_count",
+            return_value=0,
+        ) as mock_detect, patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save:
+            result = take_a_photo.take_photo(
+                camera,
+                0.0,
+                0.0,
+                tmpdir,
+                pre_captured_frame=frame,
+            )
+
+        self.assertEqual(result, (False, None))
+        mock_capture.assert_not_called()
+        mock_detect.assert_called_once()
+        self.assertIs(mock_detect.call_args.args[0], frame)
+        mock_save.assert_not_called()
+
+    def test_take_photo_explicit_unavailable_frame_does_not_fall_back_to_camera(self):
+        invalid_frames = (
+            None,
+            np.empty((0, 0, 3), dtype=np.uint8),
+            np.array([1, 2, 3], dtype=np.uint8),
+        )
+
+        for frame in invalid_frames:
+            with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+                take_a_photo,
+                "capture_best_photo",
+                side_effect=AssertionError("explicit frame must not read camera"),
+            ) as mock_capture, patch.object(
+                take_a_photo,
+                "detect_presence_face_count",
+            ) as mock_detect, patch.object(
+                take_a_photo,
+                "save_image_with_gps",
+            ) as mock_save:
+                result = take_a_photo.take_photo(
+                    object(),
+                    0.0,
+                    0.0,
+                    tmpdir,
+                    pre_captured_frame=frame,
+                )
+
+            self.assertEqual(result, (None, None))
+            mock_capture.assert_not_called()
+            mock_detect.assert_not_called()
+            mock_save.assert_not_called()
+
     def test_take_photo_returns_unknown_without_running_detection_when_capture_fails(self):
+        camera = object()
         with tempfile.TemporaryDirectory() as tmpdir, patch.object(
             take_a_photo,
             "capture_best_photo",
             return_value=None,
-        ), patch.object(
+        ) as mock_capture, patch.object(
             take_a_photo,
             "detect_presence_face_count",
         ) as mock_detect, patch.object(
             take_a_photo,
             "save_image_with_gps",
         ) as mock_save, patch("builtins.print") as mock_print:
-            result = take_a_photo.take_photo(object(), 0.0, 0.0, tmpdir)
+            result = take_a_photo.take_photo(camera, 0.0, 0.0, tmpdir)
 
         self.assertEqual(result, (None, None))
+        mock_capture.assert_called_once_with(camera)
         mock_detect.assert_not_called()
         mock_save.assert_not_called()
         log_text = "\n".join(str(item) for item in mock_print.call_args_list)

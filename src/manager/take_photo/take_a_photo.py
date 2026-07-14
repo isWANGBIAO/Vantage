@@ -10,6 +10,9 @@ from src.services.person_detection import (
 )
 
 
+_PRE_CAPTURED_FRAME_UNSET = object()
+
+
 def detect_presence_face_count(image):
     return detect_presence_count(image, conf=PRESENCE_DETECTION_CONFIDENCE)
 
@@ -21,16 +24,25 @@ def _is_valid_capture_frame(frame):
     return len(shape) >= 2 and int(shape[0]) > 0 and int(shape[1]) > 0
 
 
-def take_photo(cam, latitude, longitude, photos_path):
+def take_photo(
+    cam,
+    latitude,
+    longitude,
+    photos_path,
+    pre_captured_frame=_PRE_CAPTURED_FRAME_UNSET,
+):
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking photo")
-    try:
-        frame = capture_best_photo(cam)
-    except Exception as exc:
-        print(
-            f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-            f"Camera capture unavailable; skipping presence detection: {exc}"
-        )
-        return None, None
+    if pre_captured_frame is _PRE_CAPTURED_FRAME_UNSET:
+        try:
+            frame = capture_best_photo(cam)
+        except Exception as exc:
+            print(
+                f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                f"Camera capture unavailable; skipping presence detection: {exc}"
+            )
+            return None, None
+    else:
+        frame = pre_captured_frame
 
     if not _is_valid_capture_frame(frame):
         print(

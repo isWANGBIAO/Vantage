@@ -133,6 +133,37 @@ def test_pure_black_camera_frame_is_never_published_after_warmup():
     assert should_publish is False
 
 
+def test_warmup_black_frames_do_not_carry_a_recovery_streak_past_deadline():
+    black_frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    streak = 0
+
+    for _ in range(server.CAMERA_BLANK_FRAME_RECOVERY_COUNT):
+        streak, should_reopen, should_publish = server.evaluate_camera_frame(
+            black_frame,
+            current_blank_streak=streak,
+            warmup_deadline=102.0,
+            now_monotonic=101.99,
+        )
+
+        assert streak == 0
+        assert should_reopen is False
+        assert should_publish is False
+
+    for frame_number in range(1, server.CAMERA_BLANK_FRAME_RECOVERY_COUNT + 1):
+        streak, should_reopen, should_publish = server.evaluate_camera_frame(
+            black_frame,
+            current_blank_streak=streak,
+            warmup_deadline=102.0,
+            now_monotonic=102.0,
+        )
+
+        assert streak == frame_number
+        assert should_reopen is (
+            frame_number == server.CAMERA_BLANK_FRAME_RECOVERY_COUNT
+        )
+        assert should_publish is False
+
+
 def test_macos_camera_open_does_not_fallback_to_cap_any_when_permission_is_missing():
     calls = []
 
