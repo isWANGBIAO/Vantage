@@ -2395,7 +2395,7 @@ def camera_loop():
                         warmup_deadline = None
                         _drain_camera_release_queue()
                         if retired:
-                            time.sleep(2)
+                            sleep_while_running(2)
                 except Exception as e:
                     print(f"Camera read error: {e}")
                     retired = _retire_camera_capture(camera)
@@ -2403,7 +2403,7 @@ def camera_loop():
                     warmup_deadline = None
                     _drain_camera_release_queue()
                     if retired:
-                        time.sleep(1)
+                        sleep_while_running(1)
             else:
                 print("Camera not opened, retrying...")
                 if camera:

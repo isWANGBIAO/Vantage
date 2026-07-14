@@ -1,5 +1,8 @@
+import asyncio
 import os
 import builtins
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -301,6 +304,57 @@ def test_camera_loop_consumes_release_error_once_without_losing_control(
     with server.state.lock:
         assert server.state.camera is None
         assert server.state.latest_frame is None
+    assert capture.release_count == 1
+
+
+@pytest.mark.parametrize(
+    "read_error",
+    [None, OSError("camera disconnected")],
+    ids=("read-returned-false", "read-raised"),
+)
+def test_shutdown_interrupts_camera_retry_delay_after_inflight_read(
+    preserve_camera_loop_state,
+    read_error,
+):
+    read_started = threading.Event()
+    allow_read_to_finish = threading.Event()
+    shutdown_finished = threading.Event()
+
+    def blocking_read():
+        read_started.set()
+        allow_read_to_finish.wait(timeout=5)
+        if read_error is not None:
+            raise read_error
+        return False, None
+
+    capture = _CameraLoopCapture(on_read=blocking_read)
+    with server.state.lock:
+        server.state.camera = capture
+        server.state.is_running = True
+
+    camera_thread = threading.Thread(target=server.camera_loop)
+
+    def run_shutdown():
+        asyncio.run(server.shutdown_event())
+        shutdown_finished.set()
+
+    shutdown_thread = threading.Thread(target=run_shutdown)
+    camera_thread.start()
+    assert read_started.wait(timeout=2)
+    shutdown_thread.start()
+
+    deadline = time.monotonic() + 2
+    while server.state.is_running and time.monotonic() < deadline:
+        time.sleep(0.01)
+    allow_read_to_finish.set()
+    shutdown_completed_promptly = shutdown_finished.wait(timeout=0.5)
+
+    camera_thread.join(timeout=3)
+    shutdown_thread.join(timeout=3)
+
+    assert shutdown_completed_promptly is True
+    assert camera_thread.is_alive() is False
+    assert shutdown_thread.is_alive() is False
     assert capture.release_count == 1
 
 
