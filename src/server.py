@@ -5263,14 +5263,12 @@ def get_sedentary_stats():
         observed_status = str(
             monitor_snapshot.get("last_observation_status") or ""
         ).lower()
-        if (
-            not heartbeat_is_valid
-            or not stale_timeout_is_valid
-            or not observation_is_current
-        ):
+        if not heartbeat_is_valid or not stale_timeout_is_valid:
             detection_status = "unknown"
         elif heartbeat_is_stale:
             detection_status = "stale"
+        elif not observation_is_current:
+            detection_status = "unknown"
         elif observed_status in {"present", "absent", "unknown"}:
             detection_status = observed_status
         else:

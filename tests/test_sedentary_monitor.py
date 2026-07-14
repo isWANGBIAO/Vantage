@@ -705,6 +705,42 @@ def test_get_sedentary_stats_does_not_reuse_present_status_after_stale_gap_reset
 
 
 @pytest.mark.parametrize(
+    "heartbeat",
+    [480.0, 479.0],
+    ids=("timeout-boundary", "past-timeout"),
+)
+def test_get_sedentary_stats_prioritizes_stale_over_incomplete_observation(
+    heartbeat,
+):
+    original_monitor = server.state.monitor
+    try:
+        server.state.monitor = SimpleNamespace(
+            continuous_sit_start=100.0,
+            last_presence_time=400.0,
+            last_observation_status="PRESENT",
+            last_observation_time=470.0,
+            sedentary_threshold=20 * 60,
+            last_monitor_heartbeat=heartbeat,
+            monitor_stale_timeout=2 * 60,
+        )
+
+        with patch("src.server.time.time", return_value=600.0):
+            result = server.get_sedentary_stats()
+
+        assert result == {
+            "status": "active",
+            "detection_status": "stale",
+            "is_sitting": False,
+            "duration_seconds": 300,
+            "duration_minutes": 5,
+            "threshold_minutes": 20,
+        }
+        assert server.state.monitor.continuous_sit_start == 100.0
+    finally:
+        server.state.monitor = original_monitor
+
+
+@pytest.mark.parametrize(
     ("start", "last_presence", "observation_status"),
     [
         (float("nan"), 400.0, "UNKNOWN"),
