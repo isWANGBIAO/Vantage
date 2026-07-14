@@ -199,9 +199,11 @@ class PersonDetectionTests(unittest.TestCase):
 
         self.assertEqual(presence_count, 1)
 
-    def test_presence_is_unavailable_when_face_is_empty_and_person_detector_fails(self):
+    def test_presence_is_unavailable_when_person_output_is_invalid(self):
         face_detector = _FakeFaceDetector(None)
-        person_detector = _FakePersonDetector(error=RuntimeError("person unavailable"))
+        person_detector = _FakePersonDetector(
+            error=ValueError("YOLOX box regression contains non-finite values")
+        )
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
 
         with self.assertRaises(person_detection.PresenceDetectionUnavailable):
@@ -334,6 +336,22 @@ class PersonDetectionTests(unittest.TestCase):
 
         self.assertEqual(len(boxes), 1)
         self.assertEqual(len(boxes[0]), 4)
+
+    def test_yolox_postprocessing_rejects_invalid_box_regression(self):
+        for invalid_logit in (np.nan, np.inf, 1000.0):
+            with self.subTest(invalid_logit=invalid_logit):
+                predictions = np.zeros((1, 8400, 85), dtype=np.float32)
+                predictions[0, 0, 2:4] = invalid_logit
+                predictions[0, 0, 4] = 1.0
+                predictions[0, 0, 5] = 0.90
+
+                with self.assertRaisesRegex(ValueError, "box regression"):
+                    person_detection.postprocess_yolox_person_boxes(
+                        predictions,
+                        letterbox_scale=1.0,
+                        image_size=(640, 640),
+                        conf=person_detection.PRESENCE_PERSON_DETECTION_CONFIDENCE,
+                    )
 
 
 if __name__ == "__main__":

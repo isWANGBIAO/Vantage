@@ -320,10 +320,20 @@ def postprocess_yolox_person_boxes(
         )
     if not math.isfinite(float(letterbox_scale)) or letterbox_scale <= 0:
         raise ValueError("YOLOX letterbox scale must be positive")
+    if not np.isfinite(predictions[:, :4]).all():
+        raise ValueError("YOLOX box regression contains non-finite values")
+    if not np.isfinite(predictions[:, 4 : 5 + YOLOX_CLASS_COUNT]).all():
+        raise ValueError("YOLOX confidence output contains non-finite values")
 
     decoded = predictions.astype(np.float32, copy=True)
     decoded[:, :2] = (decoded[:, :2] + grid[0]) * expanded_strides[0]
-    decoded[:, 2:4] = np.exp(decoded[:, 2:4]) * expanded_strides[0]
+    try:
+        with np.errstate(over="raise", invalid="raise"):
+            decoded[:, 2:4] = np.exp(decoded[:, 2:4]) * expanded_strides[0]
+    except FloatingPointError as exc:
+        raise ValueError("YOLOX box regression overflowed during decoding") from exc
+    if not np.isfinite(decoded[:, :4]).all():
+        raise ValueError("YOLOX box regression decoded to non-finite values")
 
     class_scores = decoded[:, 4:5] * decoded[:, 5 : 5 + YOLOX_CLASS_COUNT]
     class_ids = np.argmax(class_scores, axis=1)
