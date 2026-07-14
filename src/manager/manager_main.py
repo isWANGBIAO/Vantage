@@ -252,8 +252,10 @@ class Monitor:
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} take_and_save_screenshots()")
                 screenshot_path = take_and_save_screenshots(latitude, longitude, self.screenshots_path)
 
-                self.paths["photo"] = photo_path
-                self.paths["screenshot"] = screenshot_path
+                if photo_path:
+                    self.paths["photo"] = photo_path
+                if screenshot_path:
+                    self.paths["screenshot"] = screenshot_path
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Done. (Sedentary: {int(sit_duration / 60)} mins)")
             elif observation_status == self.ABSENT:
                 if had_active_session and self.continuous_sit_start is None:

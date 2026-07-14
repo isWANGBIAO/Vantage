@@ -301,6 +301,39 @@ def test_run_task_records_unknown_when_capture_cycle_raises_before_observation(t
     assert monitor.last_missing_time == 231.0
 
 
+@pytest.mark.parametrize("new_screenshot_path", [None, ""])
+def test_run_task_preserves_latest_media_when_present_capture_paths_are_empty(
+    tmp_path,
+    new_screenshot_path,
+):
+    monitor = _make_monitor(tmp_path)
+    monitor.paths.update(
+        {
+            "photo": "previous-photo.jpg",
+            "screenshot": "previous-screenshot.jpg",
+        }
+    )
+
+    with (
+        patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
+        patch("src.manager.manager_main.take_photo", return_value=(True, None)),
+        patch(
+            "src.manager.manager_main.take_and_save_screenshots",
+            return_value=new_screenshot_path,
+        ),
+        patch("src.manager.manager_main.time.time", return_value=200.0),
+    ):
+        monitor.run_task()
+
+    assert monitor.paths == {
+        "photo": "previous-photo.jpg",
+        "screenshot": "previous-screenshot.jpg",
+    }
+    assert monitor.continuous_sit_start == 200.0
+    assert monitor.last_presence_time == 200.0
+    assert monitor.last_observation_status == "PRESENT"
+
+
 def test_run_task_resets_sedentary_timer_after_stale_monitor_gap():
     with tempfile.TemporaryDirectory() as tmp_dir:
         monitor = Monitor(

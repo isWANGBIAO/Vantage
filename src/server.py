@@ -78,8 +78,9 @@ from src.services.model_call_recorder import (
 from src.services.person_detection import (
     PERSON_DETECTION_CONFIDENCE,
     PERSON_DETECTION_MODEL,
+    PRESENCE_DETECTION_CONFIDENCE,
     detect_face_boxes,
-    detect_person_count,
+    detect_presence_count,
     get_face_detector,
 )
 from src.utils.data_loader import DataLoader
@@ -2045,20 +2046,32 @@ def _prefer_primary_monitor_screenshot(screenshot_path):
     return str(primary_screenshot) if primary_screenshot.is_file() else screenshot_path
 
 
+def _read_image_file(image_path):
+    try:
+        import numpy as np
+
+        encoded = np.fromfile(os.fspath(image_path), dtype=np.uint8)
+        if encoded.size == 0:
+            return None
+        return cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    except Exception:
+        return None
+
+
 def _saved_photo_contains_person(photo_path):
     try:
-        image = cv2.imread(photo_path)
+        image = _read_image_file(photo_path)
         if image is None:
             print(f"Skipping latest photo that OpenCV cannot read: {photo_path}")
             return False
 
-        person_count = detect_person_count(image, conf=PERSON_DETECTION_CONFIDENCE)
+        person_count = detect_presence_count(image, conf=PRESENCE_DETECTION_CONFIDENCE)
         if person_count <= 0:
-            print(f"Skipping latest photo without a camera-facing face: {photo_path}")
+            print(f"Skipping latest photo without a detected person: {photo_path}")
             return False
         return True
     except Exception as exc:
-        print(f"Skipping latest photo because face validation failed: {photo_path}: {exc}")
+        print(f"Skipping latest photo because person validation failed: {photo_path}: {exc}")
         return False
 
 
