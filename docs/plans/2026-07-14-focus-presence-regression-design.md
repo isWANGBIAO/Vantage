@@ -86,8 +86,11 @@ reopening, replacing, or shutting down a camera clears the frame and timestamp
 together.
 
 The monitor accepts a frame only when its timestamp is finite, not in the
-future, and no older than five seconds. Missing or stale frames are passed to
-the monitor as unavailable observations. A trustworthy `present` or `absent`
+future, and no older than five seconds. It revalidates the original timestamp,
+the current published frame, and camera ownership after inference but before
+recording a trusted result. A slow task, camera retirement, or source change
+therefore becomes `unknown` instead of writing a late `present` or `absent`.
+Missing or stale frames are also unavailable observations. A trustworthy
 result uses the normal 60-second interval; missing, stale, unknown, or failed
 cycles retry after two seconds.
 
@@ -120,10 +123,12 @@ Only a fresh present focus timer can receive the near-limit warning treatment.
 
 When packaged smoke verification enables camera-detector prewarming, startup
 runs one real blank-frame inference through both YuNet and YOLOX. The verifier
-deletes the previous log pointer before launch, accepts only a log inside the
-current smoke-data server-log directory, inspects the current launch section,
-and requires both inference-success markers. Missing, unreadable, empty,
-out-of-scope, or incomplete logs fail closed even if `/api/status` responds.
+removes host model-path overrides and deletes the previous log pointer before
+launch, so the checks must use the bundled models and the current process. It
+accepts only a log inside the current smoke-data server-log directory, inspects
+the current launch section, and requires both inference-success markers.
+Missing, unreadable, empty, out-of-scope, or incomplete logs fail closed even
+if `/api/status` responds.
 
 ## Test strategy
 

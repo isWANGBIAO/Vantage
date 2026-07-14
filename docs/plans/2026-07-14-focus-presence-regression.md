@@ -68,6 +68,8 @@ available; and show durations in minute, hour, and day units.
 
 - Frame and monotonic publication timestamp update and clear atomically.
 - Missing, invalid, future, or older-than-five-second frames become unknown.
+- The frame, current source, and TTL are revalidated after inference and before
+  the observation changes timer state.
 - Present and absent cycles use the configured normal interval.
 - Missing, stale, unknown, and failed cycles retry after two seconds.
 - Renderer liveness uses monotonic time and preserves camera ownership rules.
@@ -84,6 +86,8 @@ available; and show durations in minute, hour, and day units.
 
 - The enabled prewarm path executes one real YuNet inference and one real YOLOX
   inference; either failure is reported without skipping the other detector.
+- Smoke verification removes host model-path overrides and therefore exercises
+  the models copied into the packaged runtime.
 - Smoke verification clears the old pointer and accepts only the current
   in-scope runtime log.
 - Both success markers are required; missing or unreadable evidence fails.
