@@ -124,6 +124,33 @@ class TakePhotoTests(unittest.TestCase):
         self.assertTrue(success)
         self.assertIsNone(photo_path)
 
+    def test_take_photo_keeps_presence_when_photo_directory_creation_fails(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "capture_best_photo",
+            return_value=frame,
+        ), patch.object(
+            take_a_photo,
+            "detect_presence_face_count",
+            return_value=1,
+        ), patch.object(
+            take_a_photo.os,
+            "makedirs",
+            side_effect=OSError("directory unavailable"),
+        ), patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save, patch("builtins.print") as mock_print:
+            success, photo_path = take_a_photo.take_photo(object(), 1.0, 2.0, tmpdir)
+
+        self.assertTrue(success)
+        self.assertIsNone(photo_path)
+        mock_save.assert_not_called()
+        log_text = "\n".join(str(item) for item in mock_print.call_args_list)
+        self.assertIn("Detected presence but failed to store photo", log_text)
+
 
 if __name__ == "__main__":
     unittest.main()
