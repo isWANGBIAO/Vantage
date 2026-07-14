@@ -520,6 +520,47 @@ def test_get_sedentary_stats_reports_detection_state_and_trusted_duration(
 
 
 @pytest.mark.parametrize(
+    "heartbeat_attributes",
+    [
+        {"last_monitor_heartbeat": float("nan")},
+        {"last_monitor_heartbeat": float("inf")},
+        {"last_monitor_heartbeat": 700.0},
+        {"last_monitor_heartbeat": -1.0},
+        {},
+    ],
+    ids=("nan", "infinite", "future", "negative", "missing"),
+)
+def test_get_sedentary_stats_fails_closed_for_invalid_heartbeat(
+    heartbeat_attributes,
+):
+    original_monitor = server.state.monitor
+    try:
+        server.state.monitor = SimpleNamespace(
+            continuous_sit_start=100.0,
+            last_presence_time=400.0,
+            last_observation_status="PRESENT",
+            sedentary_threshold=20 * 60,
+            monitor_stale_timeout=2 * 60,
+            **heartbeat_attributes,
+        )
+
+        with patch("src.server.time.time", return_value=600.0):
+            result = server.get_sedentary_stats()
+
+        assert result == {
+            "status": "active",
+            "detection_status": "unknown",
+            "is_sitting": True,
+            "duration_seconds": 300,
+            "duration_minutes": 5,
+            "threshold_minutes": 20,
+        }
+        assert server.state.monitor.continuous_sit_start == 100.0
+    finally:
+        server.state.monitor = original_monitor
+
+
+@pytest.mark.parametrize(
     ("start", "last_presence", "observation_status"),
     [
         (float("nan"), 400.0, "UNKNOWN"),

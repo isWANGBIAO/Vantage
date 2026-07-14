@@ -5236,17 +5236,22 @@ def get_sedentary_stats():
         monitor = state.monitor
         heartbeat = getattr(state.monitor, "last_monitor_heartbeat", None)
         stale_timeout = getattr(state.monitor, "monitor_stale_timeout", 120)
-        heartbeat_is_stale = (
+        heartbeat_is_valid = (
             _is_finite_nonnegative_number(heartbeat)
-            and _is_finite_nonnegative_number(stale_timeout)
             and heartbeat <= now
+        )
+        heartbeat_is_stale = (
+            heartbeat_is_valid
+            and _is_finite_nonnegative_number(stale_timeout)
             and (now - heartbeat) >= stale_timeout
         )
 
         observed_status = str(
             getattr(monitor, "last_observation_status", "") or ""
         ).lower()
-        if heartbeat_is_stale:
+        if not heartbeat_is_valid:
+            detection_status = "unknown"
+        elif heartbeat_is_stale:
             detection_status = "stale"
         elif observed_status in {"present", "absent", "unknown"}:
             detection_status = observed_status
