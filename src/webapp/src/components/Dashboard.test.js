@@ -23,3 +23,9 @@ test('Dashboard throttles repeated backend polling errors', () => {
   assert.ok(dashboardSource.includes('pollErrorLoggedRef'));
   assert.ok(dashboardSource.includes('logPollErrorOnce'));
 });
+
+test('Dashboard marks truncated storage scans as a lower-bound estimate', () => {
+  assert.ok(dashboardSource.includes('stats?.storage_scan_truncated'));
+  assert.ok(dashboardSource.includes("t('dashboard.stat.storage_partial')"));
+  assert.ok(dashboardSource.includes("'≥ '"));
+});

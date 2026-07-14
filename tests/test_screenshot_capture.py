@@ -91,3 +91,37 @@ def test_multi_monitor_capture_returns_primary_screen_for_latest_ui(
     assert os.path.basename(result).endswith("_monitor_1.jpg")
     assert saved_shapes[os.path.basename(result)] == (1080, 1920, 3)
     assert sorted(saved_shapes.values()) == [(1080, 1920, 3), (1920, 1080, 3)]
+
+
+def test_multi_monitor_capture_is_atomic_when_any_monitor_fails(monkeypatch, tmp_path):
+    saved_paths = []
+
+    class PartiallyUnavailableMssContext:
+        monitors = [
+            {"left": 0, "top": 0, "width": 3840, "height": 1080},
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            {"left": 1920, "top": 0, "width": 1920, "height": 1080},
+        ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def grab(self, monitor):
+            if monitor["left"] == 1920:
+                raise RuntimeError("secondary display unavailable")
+            return np.zeros((monitor["height"], monitor["width"], 4), dtype=np.uint8)
+
+    monkeypatch.setattr(screenshot_module.mss, "mss", lambda: PartiallyUnavailableMssContext())
+    monkeypatch.setattr(
+        screenshot_module,
+        "save_image_with_gps",
+        lambda path, *_args: saved_paths.append(path),
+    )
+
+    result = screenshot_module.take_and_save_screenshots(12.3, 45.6, str(tmp_path))
+
+    assert result is None
+    assert saved_paths == []

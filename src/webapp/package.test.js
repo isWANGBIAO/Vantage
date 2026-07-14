@@ -12,6 +12,16 @@ const signMacAdHocSource = readFileSync(new URL('./scripts/sign-mac-ad-hoc.cjs',
 const viteBuildScriptSource = readFileSync(new URL('./scripts/vite-build.mjs', import.meta.url), 'utf8');
 const runBatSource = readFileSync(new URL('../../RUN.bat', import.meta.url), 'utf8');
 
+test('tracked build info stays a neutral placeholder between packages', () => {
+  const buildInfo = JSON.parse(readFileSync(new URL('./build-info.json', import.meta.url), 'utf8'));
+
+  assert.deepEqual(buildInfo, {
+    version: null,
+    build_date: null,
+    build_commit: null,
+  });
+});
+
 test('package exposes frontend test and check scripts', () => {
   assert.ok(packageJson.scripts.test);
   assert.ok(packageJson.scripts.check);

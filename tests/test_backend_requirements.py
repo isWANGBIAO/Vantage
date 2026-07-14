@@ -168,12 +168,25 @@ def test_ci_requirements_cover_tests_without_gpu_runtime():
     assert not forbidden, f"requirements-ci.txt includes heavyweight runtime packages: {sorted(forbidden)}"
 
 
+def test_ci_covers_packaging_python_and_current_python_without_incompatible_numpy():
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    requirements = Path("requirements-ci.txt").read_text(encoding="utf-8")
+
+    assert 'python-version: ["3.11", "3.13"]' in workflow
+    assert "python-version: ${{ matrix.python-version }}" in workflow
+    assert 'numpy==2.2.6; python_version < "3.12"' in requirements
+    assert 'numpy==2.5.1; python_version >= "3.12"' in requirements
+
+
 def test_readme_recommends_environment_python_version():
     environment = Path("environment.yml").read_text(encoding="utf-8")
     readme = Path("README.md").read_text(encoding="utf-8")
 
     assert "python=3.11" in environment
-    assert "Python 3.11 recommended." in readme
+    assert (
+        "Python 3.11 recommended for local GPU packaging; CI also validates "
+        "Python 3.13."
+    ) in readme
     assert "Python 3.12 recommended." not in readme
 
 

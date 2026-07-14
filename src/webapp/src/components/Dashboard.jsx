@@ -494,9 +494,12 @@ export default function Dashboard({ isVisible = false }) {
           title={t('dashboard.stat.storage_used')}
           value={(() => {
             const mb = stats?.storage_used_mb || 0;
-            return mb > 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb} MB`;
+            const formattedValue = mb > 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb} MB`;
+            return `${stats?.storage_scan_truncated ? '≥ ' : ''}${formattedValue}`;
           })()}
-          subValue={t('dashboard.stat.group_size', { value: storageEstimate.groupSizeMB.toFixed(2) })}
+          subValue={stats?.storage_scan_truncated
+            ? t('dashboard.stat.storage_partial')
+            : t('dashboard.stat.group_size', { value: storageEstimate.groupSizeMB.toFixed(2) })}
           color="#55efc4"
         />
         <StatCard

@@ -11,6 +11,10 @@ paths.
   naturally; do not stop it with a short debug timeout.
 - Keep runtime data under the configured user data directory, not in the repo.
 - The only remote for this checkout is GitHub `origin`.
+- Multi-monitor screenshot capture is intentionally atomic. If any physical
+  monitor fails, discarding the whole capture cycle is expected behavior.
+- Validate Python packaging dependencies inside `.venv-backend-runtime-gpu`;
+  the machine-wide Python environment is shared with unrelated projects.
 
 ## README Badges
 

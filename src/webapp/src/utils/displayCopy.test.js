@@ -114,6 +114,11 @@ test('displayCopy includes provider mode and build info labels in both languages
   }
 });
 
+test('displayCopy includes partial storage scan labels in both languages', () => {
+  assert.ok(DISPLAY_COPY['en-US']['dashboard.stat.storage_partial']);
+  assert.ok(DISPLAY_COPY['zh-CN']['dashboard.stat.storage_partial']);
+});
+
 test('displayCopy includes Action Plan context limit warning labels in both languages', () => {
   for (const key of [
     'action_plan.context_limit.title',

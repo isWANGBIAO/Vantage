@@ -8,6 +8,9 @@ from src import server
 
 
 class StorageStatsTests(unittest.TestCase):
+    def test_storage_budget_warning_is_limited_to_at_most_once_per_hour(self):
+        self.assertGreaterEqual(server.STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS, 3600.0)
+
     def test_safe_directory_size_skips_files_that_disappear(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

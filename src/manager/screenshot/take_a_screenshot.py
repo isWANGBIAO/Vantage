@@ -60,6 +60,8 @@ def _save_macos_screencapture(latitude, longitude, daily_folder, timestamp):
 
 
 def take_and_save_screenshots(latitude, longitude, screenshots_path):
+    # A multi-monitor sample is intentionally atomic: if any display capture
+    # fails, discard the whole cycle instead of mixing timestamps across screens.
     try:
         with mss.mss() as sct:
             monitors = _ordered_physical_monitors(sct.monitors)

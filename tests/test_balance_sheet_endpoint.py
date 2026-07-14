@@ -82,6 +82,22 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(payload["rows"][0][0], "2026-01-01")
         self.assertEqual(payload["rows"][-1][0], "2026-07-24")
 
+    def test_sheet_payload_drops_only_trailing_columns_without_values(self):
+        frame = pd.DataFrame(
+            {
+                "Name": ["Laptop", "Phone"],
+                "Spacer": [None, None],
+                "Amount": [1000.0, 500.0],
+                "Unnamed: 16383": [None, None],
+                "Unnamed: 16384": [None, None],
+            }
+        )
+
+        payload = server._sheet_to_payload(frame, max_rows=None)
+
+        self.assertEqual(payload["columns"], ["Name", "Spacer", "Amount"])
+        self.assertEqual(payload["rows"], [["Laptop", None, 1000.0], ["Phone", None, 500.0]])
+
     def test_balance_sheet_route_is_registered_and_returns_payload(self):
         route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
 

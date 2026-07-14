@@ -59,7 +59,7 @@ the platform user-data directory, not in this repository.
 
 ## Requirements
 
-- Python 3.11 recommended.
+- Python 3.11 recommended for local GPU packaging; CI also validates Python 3.13.
 - Node.js 22 recommended for the frontend.
 - Windows is the primary packaging target. macOS scripts are included for source
   and packaged workflows.

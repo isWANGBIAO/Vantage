@@ -135,7 +135,7 @@ ACTION_PLAN_PROVIDER_READY_POLL_SECONDS = 2.0
 ACTION_PLAN_PROVIDER_READY_REQUEST_TIMEOUT_SECONDS = 3
 STORAGE_SCAN_MAX_SECONDS = 3.0
 STORAGE_SCAN_MAX_ENTRIES = 20000
-STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS = 300.0
+STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS = 3600.0
 LATEST_MEDIA_SCAN_MAX_SECONDS = 3.0
 LATEST_MEDIA_SCAN_MAX_ENTRIES = 30000
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
@@ -1458,6 +1458,12 @@ def _build_budget_summary(sheets):
 def _sheet_to_payload(df, max_rows=200):
     if df is None:
         return {"columns": [], "rows": [], "row_count": 0, "truncated": False}
+    populated_columns = df.notna().any(axis=0).tolist()
+    last_populated_index = next(
+        (index for index in range(len(populated_columns) - 1, -1, -1) if populated_columns[index]),
+        -1,
+    )
+    df = df.iloc[:, : last_populated_index + 1]
     columns = [str(c) for c in df.columns]
     row_count = len(df)
     truncated = max_rows is not None and row_count > max_rows
