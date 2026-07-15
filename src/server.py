@@ -78,8 +78,9 @@ from src.services.model_call_recorder import (
 from src.services.person_detection import (
     PERSON_DETECTION_CONFIDENCE,
     PERSON_DETECTION_MODEL,
-    detect_face_boxes,
-    detect_person_count,
+    PRESENCE_DETECTION_CONFIDENCE,
+    detect_foreground_presence_face_boxes,
+    detect_presence_count,
     get_face_detector,
 )
 from src.utils.data_loader import DataLoader
@@ -89,6 +90,7 @@ from src.utils.sensitive_data import redact_sensitive_text
 _cv2_module = None
 _face_analysis_pipeline_module = None
 RENDERER_CAMERA_FRAME_TTL_SECONDS = 5.0
+MONITOR_FRAME_TTL_SECONDS = 5.0
 RENDERER_CAMERA_MAX_FRAME_BYTES = 8 * 1024 * 1024
 RENDERER_CAMERA_FRAME_INTENT = "renderer-camera-frame"
 CAMERA_DARK_FRAME_MEAN_LUMA_THRESHOLD = 12.0
@@ -140,6 +142,7 @@ STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS = 3600.0
 LATEST_MEDIA_SCAN_MAX_SECONDS = 3.0
 LATEST_MEDIA_SCAN_MAX_ENTRIES = 30000
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
+FOCUS_PRESENCE_STATE_FILENAME = "focus-presence-state.json"
 
 FACE_ANALYSIS_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsing.farl.lapa.int8.onnx")
 FACE_ANALYSIS_DB_FILE = None
@@ -582,9 +585,13 @@ class SystemState:
         self.renderer_camera = None
         self.renderer_camera_frame = None
         self.renderer_camera_last_seen_at = 0.0
+        self.camera_release_queue = []
+        self.camera_release_ids = set()
         self.monitor = None
         self.latest_frame = None
+        self.latest_frame_published_at = None
         self.is_running = True
+        self.camera_iteration_lock = threading.Lock()
         self.background_thread_status = {
             "camera_loop": False,
             "face_live_loop": False,
@@ -728,12 +735,20 @@ def prewarm_runtime_models():
         except Exception as exc:
             print(f"Failed to warm face analysis runtime: {exc}")
 
-    try:
-        if not PREWARM_FACE_DETECTION_ON_STARTUP:
-            print("Camera face detector warmup deferred to background thread.")
-            return
+    if not PREWARM_FACE_DETECTION_ON_STARTUP:
+        print("Camera presence detector warmup deferred to background thread.")
+        return
 
-        get_face_detector()
+    try:
+        import numpy as np
+
+        face_detector = get_face_detector()
+        blank_frame = np.zeros((640, 640, 3), dtype=np.uint8)
+        detect_foreground_presence_face_boxes(
+            blank_frame,
+            model=face_detector,
+            conf=PRESENCE_DETECTION_CONFIDENCE,
+        )
         print("Camera face detector warmed up successfully.")
     except Exception as exc:
         print(f"Failed to warm camera face detector: {exc}")
@@ -746,12 +761,23 @@ def _camera_online():
     return is_renderer_camera_active()
 
 
-def is_renderer_camera_active(now_ts=None):
-    now_ts = float(now_ts if now_ts is not None else time.time())
-    last_seen_at = float(getattr(state, "renderer_camera_last_seen_at", 0.0) or 0.0)
+def is_renderer_camera_active(now_monotonic=None):
+    try:
+        now_monotonic = float(
+            time.monotonic() if now_monotonic is None else now_monotonic
+        )
+        last_seen_at = float(
+            getattr(state, "renderer_camera_last_seen_at", 0.0) or 0.0
+        )
+    except (TypeError, ValueError):
+        return False
+
+    age_seconds = now_monotonic - last_seen_at
     return (
         getattr(state, "renderer_camera_frame", None) is not None
-        and now_ts - last_seen_at <= RENDERER_CAMERA_FRAME_TTL_SECONDS
+        and math.isfinite(now_monotonic)
+        and math.isfinite(last_seen_at)
+        and 0.0 <= age_seconds <= RENDERER_CAMERA_FRAME_TTL_SECONDS
     )
 
 
@@ -770,6 +796,88 @@ class RendererCameraCapture:
 
     def release(self):
         return None
+
+
+def _clear_latest_frame_if_camera_is(expected_camera):
+    with state.lock:
+        if state.camera is not expected_camera:
+            return False
+        state.latest_frame = None
+        state.latest_frame_published_at = None
+        return True
+
+
+def _install_camera_capture(camera):
+    with state.lock:
+        if state.camera is not None:
+            return False
+        state.camera = camera
+        state.latest_frame = None
+        state.latest_frame_published_at = None
+        return True
+
+
+def _publish_camera_frame(camera, frame, published_at=None):
+    with state.lock:
+        if state.camera is not camera:
+            return False
+        if camera is state.renderer_camera and is_renderer_camera_active():
+            return True
+        state.latest_frame = frame
+        state.latest_frame_published_at = (
+            time.monotonic() if published_at is None else float(published_at)
+        )
+        return True
+
+
+def _queue_camera_release_locked(camera):
+    if camera is None or camera is state.renderer_camera:
+        return False
+    camera_id = id(camera)
+    if camera_id in state.camera_release_ids:
+        return False
+    state.camera_release_ids.add(camera_id)
+    state.camera_release_queue.append(camera)
+    return True
+
+
+def _queue_camera_release(camera):
+    with state.lock:
+        return _queue_camera_release_locked(camera)
+
+
+def _drain_camera_release_queue():
+    with state.lock:
+        pending = list(state.camera_release_queue)
+        state.camera_release_queue.clear()
+
+    for camera in pending:
+        try:
+            camera.release()
+        except Exception as exc:
+            print(f"Camera release error: {exc}")
+        finally:
+            with state.lock:
+                state.camera_release_ids.discard(id(camera))
+
+
+def _retire_camera_capture(camera):
+    preserve_active_renderer = False
+    retired = False
+    with state.lock:
+        if state.camera is camera:
+            preserve_active_renderer = (
+                camera is state.renderer_camera and is_renderer_camera_active()
+            )
+            if not preserve_active_renderer:
+                state.camera = None
+                state.latest_frame = None
+                state.latest_frame_published_at = None
+                retired = True
+        if not preserve_active_renderer:
+            _queue_camera_release_locked(camera)
+
+    return retired
 
 
 def calculate_frame_mean_luma(frame):
@@ -807,12 +915,15 @@ def evaluate_camera_frame(
     warmup_deadline,
     now_monotonic=None,
 ):
+    now = time.monotonic() if now_monotonic is None else float(now_monotonic)
+    warmup_complete = warmup_deadline is None or now >= float(warmup_deadline)
+    if not warmup_complete:
+        return 0, False, False
+
     next_streak, should_reopen = update_camera_blank_frame_streak(
         frame,
         current_blank_streak,
     )
-    now = time.monotonic() if now_monotonic is None else float(now_monotonic)
-    warmup_complete = warmup_deadline is None or now >= float(warmup_deadline)
     should_publish = next_streak == 0 and not should_reopen and warmup_complete
     return next_streak, should_reopen, should_publish
 
@@ -2044,20 +2155,32 @@ def _prefer_primary_monitor_screenshot(screenshot_path):
     return str(primary_screenshot) if primary_screenshot.is_file() else screenshot_path
 
 
+def _read_image_file(image_path):
+    try:
+        import numpy as np
+
+        encoded = np.fromfile(os.fspath(image_path), dtype=np.uint8)
+        if encoded.size == 0:
+            return None
+        return cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    except Exception:
+        return None
+
+
 def _saved_photo_contains_person(photo_path):
     try:
-        image = cv2.imread(photo_path)
+        image = _read_image_file(photo_path)
         if image is None:
             print(f"Skipping latest photo that OpenCV cannot read: {photo_path}")
             return False
 
-        person_count = detect_person_count(image, conf=PERSON_DETECTION_CONFIDENCE)
+        person_count = detect_presence_count(image, conf=PRESENCE_DETECTION_CONFIDENCE)
         if person_count <= 0:
-            print(f"Skipping latest photo without a camera-facing face: {photo_path}")
+            print(f"Skipping latest photo without a detected person: {photo_path}")
             return False
         return True
     except Exception as exc:
-        print(f"Skipping latest photo because face validation failed: {photo_path}: {exc}")
+        print(f"Skipping latest photo because person validation failed: {photo_path}: {exc}")
         return False
 
 
@@ -2106,7 +2229,13 @@ async def startup_event():
         print(f"[Storage] Screenshots Path: {state.screenshots_path}")
         print(f"----------------------------------------------------------------")
         
-        state.monitor = Monitor(state.camera, state.paths, state.photos_path, state.screenshots_path)
+        state.monitor = Monitor(
+            state.camera,
+            state.paths,
+            state.photos_path,
+            state.screenshots_path,
+            state_path=Path(Config.get_runtime_dir()) / FOCUS_PRESENCE_STATE_FILENAME,
+        )
         prewarm_runtime_models()
 
         thread_specs = (
@@ -2139,13 +2268,14 @@ async def shutdown_event():
     for thread_name in state.background_thread_status:
         state.background_thread_status[thread_name] = False
 
-    camera = state.camera
-    state.camera = None
-    if camera is not None:
-        try:
-            camera.release()
-        except Exception as e:
-            print(f"Shutdown camera release error: {e}")
+    with state.camera_iteration_lock:
+        with state.lock:
+            camera = state.camera
+            state.camera = None
+            state.latest_frame = None
+            state.latest_frame_published_at = None
+            _queue_camera_release_locked(camera)
+        _drain_camera_release_queue()
 
 
 @asynccontextmanager
@@ -2168,33 +2298,76 @@ def sleep_while_running(seconds: float):
         time.sleep(min(1.0, remaining))
 
 
+def _monitor_frame_timestamp_is_fresh(published_at, now_monotonic):
+    return (
+        isinstance(published_at, (int, float))
+        and not isinstance(published_at, bool)
+        and math.isfinite(published_at)
+        and published_at <= now_monotonic
+        and now_monotonic - published_at <= MONITOR_FRAME_TTL_SECONDS
+    )
+
+
+def run_monitor_capture_cycle():
+    with state.lock:
+        monitor = state.monitor
+        source_camera = state.camera
+        frame = state.latest_frame
+        published_at = state.latest_frame_published_at
+        now_monotonic = time.monotonic()
+        timestamp_is_fresh = _monitor_frame_timestamp_is_fresh(
+            published_at,
+            now_monotonic,
+        )
+        frame = frame.copy() if frame is not None and timestamp_is_fresh else None
+
+    if monitor is None:
+        return False
+
+    def validate_observation_at_completion():
+        with state.lock:
+            completed_at = time.monotonic()
+            current_frame = state.latest_frame
+            current_published_at = state.latest_frame_published_at
+            return (
+                state.camera is source_camera
+                and _monitor_frame_timestamp_is_fresh(
+                    published_at,
+                    completed_at,
+                )
+                and current_frame is not None
+                and _monitor_frame_timestamp_is_fresh(
+                    current_published_at,
+                    completed_at,
+                )
+                and current_published_at >= published_at
+            )
+
+    observation_status = monitor.run_task(
+        pre_captured_frame=frame,
+        observation_validator=validate_observation_at_completion,
+    )
+
+    photo_path = state.paths.get("photo")
+    if photo_path and photo_path != state.last_processed_face_photo_path:
+        if process_captured_face_photo(photo_path):
+            state.last_processed_face_photo_path = photo_path
+
+    return observation_status in {Monitor.PRESENT, Monitor.ABSENT}
+
+
 def monitor_loop():
     print(f"Starting monitor loop ({MONITOR_CAPTURE_INTERVAL_SECONDS}s interval)...")
     while state.is_running:
         cycle_started_at = time.monotonic()
+        capture_interval = MONITOR_CAMERA_WAIT_INTERVAL_SECONDS
         try:
-            if state.monitor:
-                # CRITICAL: Ensure Monitor uses the current active camera instance (initialized in camera_loop)
-                # If camera is not ready yet, skip this cycle to avoid errors or default-init
-                if state.camera is None or not state.camera.isOpened():
-                    # print("Monitor skipping: Camera not ready")
-                    sleep_while_running(MONITOR_CAMERA_WAIT_INTERVAL_SECONDS)
-                    continue
-                
-                # Update the camera reference in monitor to match the global state (which is 4K)
-                state.monitor.camera = state.camera
-                
-                # Run the periodic task (take photo, screenshot, etc.)
-                state.monitor.run_task()
-
-                photo_path = state.paths.get("photo")
-                if photo_path and photo_path != state.last_processed_face_photo_path:
-                    if process_captured_face_photo(photo_path):
-                        state.last_processed_face_photo_path = photo_path
+            if run_monitor_capture_cycle():
+                capture_interval = MONITOR_CAPTURE_INTERVAL_SECONDS
         except Exception as e:
             print(f"Monitor loop error: {e}")
         elapsed = time.monotonic() - cycle_started_at
-        sleep_while_running(MONITOR_CAPTURE_INTERVAL_SECONDS - elapsed)
+        sleep_while_running(capture_interval - elapsed)
 
 def camera_loop():
     print(
@@ -2204,89 +2377,117 @@ def camera_loop():
     blank_frame_streak = 0
     warmup_deadline = None
     while state.is_running:
-        if state.camera is None:
-            idx = get_camera_index()
-            try:
-                state.camera = open_camera_capture(idx)
-                if not state.camera or not state.camera.isOpened():
-                    _rate_limited_status_log(
-                        ("camera", "offline", idx),
-                        f"Camera index {idx} is offline; retrying in {CAMERA_RETRY_INTERVAL_SECONDS:.0f}s",
-                        interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
-                    )
-                    if state.camera:
-                        state.camera.release()
-                    state.camera = None
+        with state.camera_iteration_lock:
+            if not state.is_running:
+                break
+
+            _drain_camera_release_queue()
+            if state.camera is None:
+                idx = get_camera_index()
+                candidate = None
+                try:
+                    candidate = open_camera_capture(idx)
+                    if not candidate or not candidate.isOpened():
+                        _rate_limited_status_log(
+                            ("camera", "offline", idx),
+                            f"Camera index {idx} is offline; retrying in {CAMERA_RETRY_INTERVAL_SECONDS:.0f}s",
+                            interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
+                        )
+                        if candidate:
+                            _queue_camera_release(candidate)
+                        _clear_latest_frame_if_camera_is(None)
+                        _drain_camera_release_queue()
+                        sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
+                        continue
+
+                    if not _install_camera_capture(candidate):
+                        _queue_camera_release(candidate)
+                        _drain_camera_release_queue()
+                        continue
+
+                    # Request 4K resolution (16:9)
+                    target_w, target_h = 3840, 2160
+                    candidate.set(cv2.CAP_PROP_FRAME_WIDTH, target_w)
+                    candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
+
+                    # Verify actual resolution
+                    actual_w = candidate.get(cv2.CAP_PROP_FRAME_WIDTH)
+                    actual_h = candidate.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                    reset_camera_status_logs()
+                    blank_frame_streak = 0
+                    warmup_deadline = get_camera_warmup_deadline()
+                    print(f"Camera Initialized: Requested {target_w}x{target_h}, Got {int(actual_w)}x{int(actual_h)}")
+
+                    # If 4K failed (e.g. got low res), try strict 1080p fallback
+                    if actual_w < 1280:
+                        print("4K failed or ignored, trying strict 1080p force...")
+                        candidate.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+                        candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+                        print(f"Fallback resolution: {int(candidate.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(candidate.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+
+                except Exception as e:
+                    print(f"Camera init failed: {e}")
+                    if candidate is None:
+                        _clear_latest_frame_if_camera_is(None)
+                    else:
+                        _retire_camera_capture(candidate)
+                    _drain_camera_release_queue()
                     sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
                     continue
 
-                # Request 4K resolution (16:9)
-                target_w, target_h = 3840, 2160
-                state.camera.set(cv2.CAP_PROP_FRAME_WIDTH, target_w)
-                state.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, target_h)
-
-                # Verify actual resolution
-                actual_w = state.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
-                actual_h = state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
-                reset_camera_status_logs()
-                blank_frame_streak = 0
-                warmup_deadline = get_camera_warmup_deadline()
-                print(f"Camera Initialized: Requested {target_w}x{target_h}, Got {int(actual_w)}x{int(actual_h)}")
-
-                # If 4K failed (e.g. got low res), try strict 1080p fallback
-                if actual_w < 1280:
-                    print("4K failed or ignored, trying strict 1080p force...")
-                    state.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-                    state.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-                    print(f"Fallback resolution: {int(state.camera.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(state.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
-
-            except Exception as e:
-                print(f"Camera init failed: {e}")
-                sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
-                continue
-
-        if state.camera and state.camera.isOpened():
-            try:
-                ret, frame = state.camera.read()
-                if ret:
-                    (
-                        blank_frame_streak,
-                        should_reopen_camera,
-                        should_publish_frame,
-                    ) = evaluate_camera_frame(
-                        frame, blank_frame_streak, warmup_deadline
-                    )
-                    if should_publish_frame:
-                        with state.lock:
-                            state.latest_frame = frame
-                        warmup_deadline = None
-                    if should_reopen_camera:
-                        _rate_limited_status_log(
-                            ("camera", "blank-frame-recovery"),
-                            "Camera returned persistent blank frames; reopening capture",
-                            interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
+            camera = state.camera
+            if camera and camera.isOpened():
+                try:
+                    ret, frame = camera.read()
+                    if ret:
+                        (
+                            blank_frame_streak,
+                            should_reopen_camera,
+                            should_publish_frame,
+                        ) = evaluate_camera_frame(
+                            frame, blank_frame_streak, warmup_deadline
                         )
-                        state.camera.release()
-                        state.camera = None
-                        blank_frame_streak = 0
+                        if should_publish_frame:
+                            _publish_camera_frame(camera, frame)
+                            warmup_deadline = None
+                        if should_reopen_camera:
+                            _rate_limited_status_log(
+                                ("camera", "blank-frame-recovery"),
+                                "Camera returned persistent blank frames; reopening capture",
+                                interval_seconds=CAMERA_STATUS_LOG_INTERVAL_SECONDS,
+                            )
+                            retired = _retire_camera_capture(camera)
+                            blank_frame_streak = 0
+                            warmup_deadline = None
+                            _drain_camera_release_queue()
+                            if retired:
+                                sleep_while_running(0.5)
+                    else:
+                        print("Warning: Can't receive frame (stream end?). Exiting ...")
+                        retired = _retire_camera_capture(camera)
                         warmup_deadline = None
-                        sleep_while_running(0.5)
-                else:
-                    print("Warning: Can't receive frame (stream end?). Exiting ...")
-                    state.camera.release()
-                    state.camera = None
+                        _drain_camera_release_queue()
+                        if retired:
+                            sleep_while_running(2)
+                except Exception as e:
+                    print(f"Camera read error: {e}")
+                    retired = _retire_camera_capture(camera)
+                    blank_frame_streak = 0
                     warmup_deadline = None
-                    time.sleep(2)
-            except Exception as e:
-                print(f"Camera read error: {e}")
-                time.sleep(1)
-        else:
-             print("Camera not opened, retrying...")
-             if state.camera:
-                 state.camera.release()
-             state.camera = None
-             warmup_deadline = None
-             sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
+                    _drain_camera_release_queue()
+                    if retired:
+                        sleep_while_running(1)
+            else:
+                print("Camera not opened, retrying...")
+                if camera:
+                    retired = _retire_camera_capture(camera)
+                else:
+                    retired = _clear_latest_frame_if_camera_is(None)
+                warmup_deadline = None
+                _drain_camera_release_queue()
+                if retired:
+                    sleep_while_running(CAMERA_RETRY_INTERVAL_SECONDS)
+            _drain_camera_release_queue()
         time.sleep(0.03)
 
 
@@ -2341,16 +2542,18 @@ def face_detection_loop():
 
         if frame_copy is not None:
             try:
-                boxes = detect_face_boxes(
+                boxes = detect_foreground_presence_face_boxes(
                     frame_copy,
                     model=detector,
-                    conf=PERSON_DETECTION_CONFIDENCE,
+                    conf=PRESENCE_DETECTION_CONFIDENCE,
                 )
 
                 with state.lock:
                     state.person_boxes = boxes
 
             except Exception as e:
+                with state.lock:
+                    state.person_boxes = []
                 print(f"Camera face detection error: {e}")
 
         time.sleep(0.1)
@@ -2458,13 +2661,17 @@ async def receive_renderer_camera_frame(request: Request):
         return JSONResponse(status_code=400, content={"error": "Frame decode failed"})
 
     with state.lock:
-        state.renderer_camera_frame = frame
-        state.renderer_camera_last_seen_at = time.time()
-        state.latest_frame = frame.copy()
+        displaced_camera = state.camera
+        published_at = time.monotonic()
         if state.renderer_camera is None:
             state.renderer_camera = RendererCameraCapture()
-        if state.camera is None or not state.camera.isOpened():
-            state.camera = state.renderer_camera
+        state.renderer_camera_frame = frame
+        state.renderer_camera_last_seen_at = published_at
+        state.latest_frame = frame.copy()
+        state.latest_frame_published_at = published_at
+        state.camera = state.renderer_camera
+        if displaced_camera is not state.renderer_camera:
+            _queue_camera_release_locked(displaced_camera)
 
     return {
         "ok": True,
@@ -5092,43 +5299,135 @@ async def get_face_progress():
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
+def _is_finite_nonnegative_number(value):
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+
+
 @app.get("/api/health/sedentary")
 def get_sedentary_stats():
     """Returns the current continuous sitting duration from the monitor."""
     try:
-        if not state.monitor:
-             return {"status": "inactive"}
+        monitor = state.monitor
+        if not monitor:
+            return {"status": "inactive"}
 
         now = time.time()
-        heartbeat = getattr(state.monitor, "last_monitor_heartbeat", None)
-        stale_timeout = getattr(state.monitor, "monitor_stale_timeout", 120)
-        if heartbeat is not None and stale_timeout is not None and (now - heartbeat) >= stale_timeout:
-             return {
-                 "status": "active",
-                 "is_sitting": False,
-                 "duration_minutes": 0,
-                 "threshold_minutes": state.monitor.sedentary_threshold // 60
-             }
+        snapshot_provider = getattr(monitor, "get_sedentary_snapshot", None)
+        if callable(snapshot_provider):
+            timer_snapshot = snapshot_provider(now=now)
+            detection_status = timer_snapshot.get("detection_status", "unknown")
+            focus_duration = timer_snapshot.get("focus_duration_seconds", 0)
+            away_duration = timer_snapshot.get("away_duration_seconds", 0)
+            active_timer = timer_snapshot.get("active_timer", "none")
+            has_focus_session = timer_snapshot.get("has_focus_session", False)
+            snapshot_is_valid = (
+                detection_status in {"present", "absent", "unknown", "stale"}
+                and _is_finite_nonnegative_number(focus_duration)
+                and _is_finite_nonnegative_number(away_duration)
+                and active_timer in {"focus", "away", "none"}
+                and isinstance(has_focus_session, bool)
+            )
+            if not snapshot_is_valid:
+                detection_status = "unknown"
+                focus_duration = 0
+                away_duration = 0
+                active_timer = "none"
+                has_focus_session = False
 
-        start = state.monitor.continuous_sit_start
-        if start is None:
-             return {
-                 "status": "active",
-                 "is_sitting": False,
-                 "duration_minutes": 0,
-                 "threshold_minutes": state.monitor.sedentary_threshold // 60
-             }
+            threshold_seconds = timer_snapshot.get("sedentary_threshold", 0)
+            threshold_minutes = (
+                int(threshold_seconds // 60)
+                if _is_finite_nonnegative_number(threshold_seconds)
+                else 0
+            )
+            duration_sec = int(focus_duration)
+            away_duration_sec = int(away_duration)
+            return {
+                "status": "active",
+                "detection_status": detection_status,
+                "is_sitting": (
+                    has_focus_session and detection_status != "stale"
+                ),
+                "duration_minutes": int(duration_sec // 60),
+                "duration_seconds": duration_sec,
+                "away_duration_seconds": away_duration_sec,
+                "active_timer": active_timer,
+                "threshold_minutes": threshold_minutes,
+            }
 
-        duration_sec = now - start
+        monitor_snapshot = vars(monitor).copy()
+        heartbeat = monitor_snapshot.get("last_monitor_heartbeat")
+        stale_timeout = monitor_snapshot.get("monitor_stale_timeout", 120)
+        last_observation_time = monitor_snapshot.get("last_observation_time")
+        heartbeat_is_valid = (
+            _is_finite_nonnegative_number(heartbeat)
+            and heartbeat <= now
+        )
+        stale_timeout_is_valid = _is_finite_nonnegative_number(stale_timeout)
+        observation_is_current = (
+            heartbeat_is_valid
+            and _is_finite_nonnegative_number(last_observation_time)
+            and heartbeat <= last_observation_time <= now
+        )
+        heartbeat_is_stale = (
+            heartbeat_is_valid
+            and stale_timeout_is_valid
+            and (now - heartbeat) >= stale_timeout
+        )
+
+        observed_status = str(
+            monitor_snapshot.get("last_observation_status") or ""
+        ).lower()
+        if not heartbeat_is_valid or not stale_timeout_is_valid:
+            detection_status = "unknown"
+        elif heartbeat_is_stale:
+            detection_status = "stale"
+        elif not observation_is_current:
+            detection_status = "unknown"
+        elif observed_status in {"present", "absent", "unknown"}:
+            detection_status = observed_status
+        else:
+            detection_status = "unknown"
+
+        start = monitor_snapshot.get("continuous_sit_start")
+        last_presence = monitor_snapshot.get("last_presence_time")
+        trusted_end = (
+            now
+            if detection_status == "present"
+            else last_presence
+        )
+        has_trusted_session = (
+            _is_finite_nonnegative_number(start)
+            and _is_finite_nonnegative_number(last_presence)
+            and _is_finite_nonnegative_number(trusted_end)
+            and start <= last_presence <= now
+            and start <= trusted_end <= now
+        )
+        duration_sec = int(trusted_end - start) if has_trusted_session else 0
+
+        threshold_seconds = monitor_snapshot.get("sedentary_threshold", 0)
+        threshold_minutes = (
+            int(threshold_seconds // 60)
+            if _is_finite_nonnegative_number(threshold_seconds)
+            else 0
+        )
         return {
-             "status": "active",
-             "is_sitting": True,
-             "duration_minutes": int(duration_sec // 60),
-             "duration_seconds": int(duration_sec),
-             "threshold_minutes": state.monitor.sedentary_threshold // 60
+            "status": "active",
+            "detection_status": detection_status,
+            "is_sitting": has_trusted_session and detection_status != "stale",
+            "duration_minutes": int(duration_sec // 60),
+            "duration_seconds": int(duration_sec),
+            "away_duration_seconds": 0,
+            "active_timer": "focus" if has_trusted_session else "none",
+            "threshold_minutes": threshold_minutes,
         }
     except Exception as e:
-         return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": str(e)}
 
 @app.get("/api/project_progress")
 async def get_project_progress():

@@ -1,8 +1,9 @@
-"""Camera-facing face detection used by the legacy person-presence APIs.
+"""YuNet face signals for presence and camera-facing classification.
 
-YuNet's five landmarks support a coarse frontal-pose geometry check. They do
-not reveal where a person is looking, so this module is not eye or gaze
-tracking.
+Presence uses the largest sufficiently foreground YuNet face without imposing
+a head-pose constraint. YuNet's five landmarks separately support the stricter
+historical camera-facing classification. They do not reveal where a person is
+looking, so this module is not eye or gaze tracking.
 """
 
 from __future__ import annotations
@@ -16,17 +17,22 @@ from typing import Any, Iterable
 
 
 PERSON_DETECTION_CONFIDENCE = 0.75
+PRESENCE_DETECTION_CONFIDENCE = 0.50
+PRESENCE_MIN_FACE_AREA_RATIO = 0.005
 PERSON_DETECTION_MODEL = "face_detection_yunet_2023mar.onnx"
 FACE_DETECTION_MODEL_PATH_ENV = "VANTAGE_FACE_DETECTION_MODEL_PATH"
 FACE_DETECTION_INPUT_SIZE = (320, 320)
 FACE_DETECTION_NMS_THRESHOLD = 0.3
 FACE_DETECTION_TOP_K = 5000
-
 _FACE_DETECTOR = None
 _FACE_DETECTOR_LOCK = threading.RLock()
 
 
-def _model_path_candidates() -> list[Path]:
+class PresenceDetectionUnavailable(RuntimeError):
+    """Raised when absence cannot be trusted because a detector failed."""
+
+
+def _model_path_candidates(model_name: str) -> list[Path]:
     source_src_dir = Path(__file__).resolve().parents[1]
     candidates = []
 
@@ -34,24 +40,24 @@ def _model_path_candidates() -> list[Path]:
     if meipass_root:
         candidates.extend(
             [
-                Path(meipass_root) / PERSON_DETECTION_MODEL,
-                Path(meipass_root) / "src" / "models" / PERSON_DETECTION_MODEL,
-                Path(meipass_root) / "models" / PERSON_DETECTION_MODEL,
+                Path(meipass_root) / model_name,
+                Path(meipass_root) / "src" / "models" / model_name,
+                Path(meipass_root) / "models" / model_name,
             ]
         )
 
-    candidates.append(source_src_dir / "models" / PERSON_DETECTION_MODEL)
+    candidates.append(source_src_dir / "models" / model_name)
 
     executable_parent = Path(sys.executable).resolve().parent
     candidates.extend(
         [
-            executable_parent / "_internal" / PERSON_DETECTION_MODEL,
-            executable_parent / "_internal" / "src" / "models" / PERSON_DETECTION_MODEL,
-            executable_parent / "_internal" / "models" / PERSON_DETECTION_MODEL,
-            executable_parent / PERSON_DETECTION_MODEL,
-            executable_parent / "src" / "models" / PERSON_DETECTION_MODEL,
-            executable_parent / "models" / PERSON_DETECTION_MODEL,
-            Path.cwd() / "src" / "models" / PERSON_DETECTION_MODEL,
+            executable_parent / "_internal" / model_name,
+            executable_parent / "_internal" / "src" / "models" / model_name,
+            executable_parent / "_internal" / "models" / model_name,
+            executable_parent / model_name,
+            executable_parent / "src" / "models" / model_name,
+            executable_parent / "models" / model_name,
+            Path.cwd() / "src" / "models" / model_name,
         ]
     )
 
@@ -65,25 +71,32 @@ def _model_path_candidates() -> list[Path]:
     return unique_candidates
 
 
-def resolve_face_detection_model_path() -> Path:
-    configured_path = os.environ.get(FACE_DETECTION_MODEL_PATH_ENV)
+def _resolve_detection_model_path(model_name: str, environment_variable: str) -> Path:
+    configured_path = os.environ.get(environment_variable)
     if configured_path:
         model_path = Path(configured_path).expanduser()
         if model_path.is_file():
             return model_path.resolve()
         raise FileNotFoundError(
-            f"Configured face detection model does not exist: {model_path} "
-            f"({FACE_DETECTION_MODEL_PATH_ENV})"
+            f"Configured detection model does not exist: {model_path} "
+            f"({environment_variable})"
         )
 
-    candidates = _model_path_candidates()
+    candidates = _model_path_candidates(model_name)
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()
 
     searched_paths = ", ".join(str(candidate) for candidate in candidates)
     raise FileNotFoundError(
-        f"Missing face detection model {PERSON_DETECTION_MODEL}; searched: {searched_paths}"
+        f"Missing detection model {model_name}; searched: {searched_paths}"
+    )
+
+
+def resolve_face_detection_model_path() -> Path:
+    return _resolve_detection_model_path(
+        PERSON_DETECTION_MODEL,
+        FACE_DETECTION_MODEL_PATH_ENV,
     )
 
 
@@ -197,7 +210,7 @@ def _valid_image_size(source: Any) -> tuple[int, int] | None:
     return width, height
 
 
-def detect_camera_facing_faces(
+def _detect_yunet_faces(
     source: Any,
     model=None,
     conf: float = PERSON_DETECTION_CONFIDENCE,
@@ -215,7 +228,114 @@ def detect_camera_facing_faces(
 
     if faces is None:
         return []
-    return [face for face in faces if is_roughly_frontal_face(face)]
+    return list(faces)
+
+
+def _validated_presence_face(
+    face: Any,
+    image_size: tuple[int, int],
+) -> tuple[Any, float, tuple[float, float, float, float]]:
+    try:
+        raw_values = list(face)
+        values = [float(value) for value in raw_values[:15]]
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise PresenceDetectionUnavailable("Invalid YuNet presence output") from exc
+
+    if len(values) < 15 or not all(math.isfinite(value) for value in values[:15]):
+        raise PresenceDetectionUnavailable("Invalid YuNet presence output")
+
+    x, y, width, height = values[:4]
+    if width <= 0 or height <= 0:
+        raise PresenceDetectionUnavailable("Invalid YuNet presence output")
+
+    image_width, image_height = image_size
+    x1 = max(0.0, min(float(image_width), x))
+    y1 = max(0.0, min(float(image_height), y))
+    x2 = max(0.0, min(float(image_width), x + width))
+    y2 = max(0.0, min(float(image_height), y + height))
+    if x2 <= x1 or y2 <= y1:
+        raise PresenceDetectionUnavailable("Invalid YuNet presence output")
+
+    area = (x2 - x1) * (y2 - y1)
+    return face, area, (x1, y1, x2, y2)
+
+
+def detect_presence_faces(
+    source: Any,
+    model=None,
+    conf: float = PRESENCE_DETECTION_CONFIDENCE,
+) -> list[Any]:
+    """Return the largest YuNet face occupying at least 0.5% of the frame."""
+
+    image_size = _valid_image_size(source)
+    if image_size is None:
+        return []
+
+    try:
+        faces = _detect_yunet_faces(source, model=model, conf=conf)
+        candidates = [_validated_presence_face(face, image_size) for face in faces]
+    except PresenceDetectionUnavailable:
+        raise
+    except Exception as exc:
+        raise PresenceDetectionUnavailable("YuNet presence detection unavailable") from exc
+
+    frame_area = float(image_size[0] * image_size[1])
+    qualifying = [
+        candidate
+        for candidate in candidates
+        if candidate[1] / frame_area >= PRESENCE_MIN_FACE_AREA_RATIO
+    ]
+    if not qualifying:
+        return []
+    return [max(qualifying, key=lambda candidate: candidate[1])[0]]
+
+
+def detect_camera_facing_faces(
+    source: Any,
+    model=None,
+    conf: float = PERSON_DETECTION_CONFIDENCE,
+) -> list[Any]:
+    return [
+        face
+        for face in _detect_yunet_faces(source, model=model, conf=conf)
+        if is_roughly_frontal_face(face)
+    ]
+
+
+def detect_presence_count(
+    source: Any,
+    model=None,
+    conf: float = PRESENCE_DETECTION_CONFIDENCE,
+) -> int:
+    if _valid_image_size(source) is None:
+        return 0
+    return int(bool(detect_presence_faces(source, model=model, conf=conf)))
+
+
+def detect_foreground_presence_face_boxes(
+    source: Any,
+    model=None,
+    conf: float = PRESENCE_DETECTION_CONFIDENCE,
+) -> list[tuple[int, int, int, int]]:
+    """Return the single qualifying foreground presence face as corner bounds."""
+
+    image_size = _valid_image_size(source)
+    if image_size is None:
+        return []
+
+    image_width, image_height = image_size
+    boxes = []
+    for face in detect_presence_faces(source, model=model, conf=conf):
+        _, _, (x1, y1, x2, y2) = _validated_presence_face(face, image_size)
+        boxes.append(
+            (
+                max(0, min(image_width - 1, int(round(x1)))),
+                max(0, min(image_height - 1, int(round(y1)))),
+                max(0, min(image_width - 1, int(round(x2)))),
+                max(0, min(image_height - 1, int(round(y2)))),
+            )
+        )
+    return boxes
 
 
 def detect_face_boxes(

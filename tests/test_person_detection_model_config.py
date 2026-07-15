@@ -14,11 +14,29 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
     def tearDown(self):
         person_detection._FACE_DETECTOR = None
 
-    def test_shared_model_constant_switches_to_yunet(self):
+    def test_shared_model_constant_uses_yunet(self):
         self.assertEqual(
             person_detection.PERSON_DETECTION_MODEL,
             "face_detection_yunet_2023mar.onnx",
         )
+
+    def test_presence_uses_half_confidence_and_half_percent_area(self):
+        self.assertEqual(person_detection.PRESENCE_DETECTION_CONFIDENCE, 0.50)
+        self.assertEqual(person_detection.PRESENCE_MIN_FACE_AREA_RATIO, 0.005)
+
+    def test_yolox_presence_api_is_removed(self):
+        removed_names = (
+            "PRESENCE_PERSON_DETECTION_MODEL",
+            "PRESENCE_PERSON_DETECTION_CONFIDENCE",
+            "PERSON_PRESENCE_MODEL_PATH_ENV",
+            "resolve_person_presence_model_path",
+            "get_person_presence_detector",
+            "OpenCvYoloXPersonDetector",
+        )
+
+        for name in removed_names:
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(person_detection, name))
 
     def test_server_uses_shared_model_and_confidence_constants(self):
         self.assertEqual(server.PERSON_DETECTION_MODEL, person_detection.PERSON_DETECTION_MODEL)
@@ -50,9 +68,7 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
             model_path.write_bytes(b"onnx")
 
             with patch.dict(os.environ, {}, clear=True), patch.object(
-                person_detection,
-                "__file__",
-                str(source_file),
+                person_detection, "__file__", str(source_file)
             ):
                 resolved = person_detection.resolve_face_detection_model_path()
 
@@ -65,10 +81,7 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
             model_path.write_bytes(b"onnx")
 
             with patch.dict(os.environ, {}, clear=True), patch.object(
-                person_detection.sys,
-                "_MEIPASS",
-                tmpdir,
-                create=True,
+                person_detection.sys, "_MEIPASS", tmpdir, create=True
             ):
                 resolved = person_detection.resolve_face_detection_model_path()
 
@@ -80,10 +93,7 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
             model_path.write_bytes(b"onnx")
 
             with patch.dict(os.environ, {}, clear=True), patch.object(
-                person_detection.sys,
-                "_MEIPASS",
-                tmpdir,
-                create=True,
+                person_detection.sys, "_MEIPASS", tmpdir, create=True
             ):
                 resolved = person_detection.resolve_face_detection_model_path()
 
@@ -103,9 +113,7 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
             model_path.write_bytes(b"onnx")
 
             with patch.dict(os.environ, {}, clear=True), patch.object(
-                person_detection.sys,
-                "executable",
-                str(executable),
+                person_detection.sys, "executable", str(executable)
             ), patch.object(
                 person_detection,
                 "__file__",
@@ -123,9 +131,7 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
             model_path.write_bytes(b"onnx")
 
             with patch.dict(os.environ, {}, clear=True), patch.object(
-                person_detection.sys,
-                "executable",
-                str(executable),
+                person_detection.sys, "executable", str(executable)
             ), patch.object(
                 person_detection,
                 "__file__",
@@ -162,14 +168,22 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
             person_detection.FACE_DETECTION_TOP_K,
         )
 
-    def test_server_and_detector_sources_do_not_import_ultralytics_or_log_yolo(self):
+    def test_sources_have_no_yolox_or_body_presence_runtime(self):
+        for path in (Path("src/services/person_detection.py"), Path("src/server.py")):
+            source = path.read_text(encoding="utf-8").lower()
+            with self.subTest(path=path):
+                self.assertNotIn("yolox", source)
+                self.assertNotIn("vantage_person_presence_model_path", source)
+                self.assertNotIn("get_person_presence_detector", source)
+
+    def test_server_and_detector_sources_do_not_import_heavy_inference_runtimes(self):
         server_source = Path("src/server.py").read_text(encoding="utf-8")
         detector_source = Path("src/services/person_detection.py").read_text(encoding="utf-8")
 
-        self.assertNotIn("ultralytics", server_source.lower())
-        self.assertNotIn("ultralytics", detector_source.lower())
-        self.assertNotIn("yolo", server_source.lower())
-        self.assertNotIn("yolo", detector_source.lower())
+        combined_source = f"{server_source}\n{detector_source}".lower()
+        self.assertNotIn("ultralytics", combined_source)
+        self.assertNotIn("import torch", combined_source)
+        self.assertNotIn("onnxruntime", combined_source)
 
 
 if __name__ == "__main__":

@@ -4,10 +4,73 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
 from src import server
 
 
+def _write_synthetic_jpeg(path):
+    image = np.zeros((9, 13, 3), dtype=np.uint8)
+    image[:, :, 1] = 180
+    encoded_ok, encoded = server.get_cv2_module().imencode(".jpg", image)
+    if not encoded_ok:
+        raise AssertionError("OpenCV failed to encode synthetic JPEG")
+    path.write_bytes(encoded.tobytes())
+    return image.shape
+
+
 class LatestImagesEndpointTests(unittest.TestCase):
+    def test_read_image_file_loads_jpeg_from_unicode_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            photo_path = Path(tmpdir) / "合成照片-测试.jpg"
+            expected_shape = _write_synthetic_jpeg(photo_path)
+
+            image = server._read_image_file(photo_path)
+
+        self.assertIsInstance(image, np.ndarray)
+        self.assertEqual(image.shape, expected_shape)
+
+    def test_saved_photo_uses_raw_presence_detection_for_unicode_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            photo_path = Path(tmpdir) / "侧脸历史照片.jpg"
+            expected_shape = _write_synthetic_jpeg(photo_path)
+
+            with patch.object(
+                server,
+                "detect_presence_count",
+                return_value=1,
+            ) as detect_presence:
+                contains_person = server._saved_photo_contains_person(photo_path)
+
+        self.assertTrue(contains_person)
+        detected_image = detect_presence.call_args.args[0]
+        self.assertIsInstance(detected_image, np.ndarray)
+        self.assertEqual(detected_image.shape, expected_shape)
+        self.assertEqual(
+            detect_presence.call_args.kwargs["conf"],
+            server.PRESENCE_DETECTION_CONFIDENCE,
+        )
+
+    def test_saved_photo_rejects_corrupt_and_unreadable_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            empty_path = tmp / "空照片.jpg"
+            empty_path.write_bytes(b"")
+            corrupt_path = tmp / "损坏照片.jpg"
+            corrupt_path.write_bytes(b"not an image")
+            unreadable_path = tmp / "不存在照片.jpg"
+
+            for photo_path in (empty_path, corrupt_path, unreadable_path):
+                with self.subTest(photo_path=photo_path):
+                    self.assertIsNone(server._read_image_file(photo_path))
+                    with patch.object(
+                        server,
+                        "detect_presence_count",
+                        create=True,
+                    ) as detect_presence:
+                        self.assertFalse(server._saved_photo_contains_person(photo_path))
+                    detect_presence.assert_not_called()
+
     def test_get_latest_images_reports_scan_truncation_flag(self):
         original_paths = dict(server.state.paths)
         original_photos_path = server.state.photos_path

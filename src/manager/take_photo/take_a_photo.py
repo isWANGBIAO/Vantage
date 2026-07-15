@@ -5,61 +5,90 @@ from datetime import datetime
 from .get_best_photo import capture_best_photo
 from ..get_location import save_image_with_gps
 from src.services.person_detection import (
-    PERSON_DETECTION_CONFIDENCE,
-    detect_person_count,
+    PRESENCE_DETECTION_CONFIDENCE,
+    detect_presence_count,
 )
 
 
-def detect_camera_facing_face_count(image):
-    return detect_person_count(image, conf=PERSON_DETECTION_CONFIDENCE)
+_PRE_CAPTURED_FRAME_UNSET = object()
 
 
-def take_photo(cam, latitude, longitude, photos_path):
+def detect_presence_face_count(image):
+    return detect_presence_count(image, conf=PRESENCE_DETECTION_CONFIDENCE)
+
+
+def _is_valid_capture_frame(frame):
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return False
+    shape = getattr(frame, "shape", ())
+    return len(shape) >= 2 and int(shape[0]) > 0 and int(shape[1]) > 0
+
+
+def take_photo(
+    cam,
+    latitude,
+    longitude,
+    photos_path,
+    pre_captured_frame=_PRE_CAPTURED_FRAME_UNSET,
+):
     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Taking photo")
-    frame = capture_best_photo(cam)
-    if frame is None:
-        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Camera capture failed; skipping face detection")
-        return False, None
+    if pre_captured_frame is _PRE_CAPTURED_FRAME_UNSET:
+        try:
+            frame = capture_best_photo(cam)
+        except Exception as exc:
+            print(
+                f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+                f"Camera capture unavailable; skipping presence detection: {exc}"
+            )
+            return None, None
+    else:
+        frame = pre_captured_frame
+
+    if not _is_valid_capture_frame(frame):
+        print(
+            f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+            "Camera capture unavailable; empty or invalid frame; skipping presence detection"
+        )
+        return None, None
 
     try:
         t1 = cv2.getTickCount()
-        face_count = detect_camera_facing_face_count(frame)
+        face_count = detect_presence_face_count(frame)
         t2 = cv2.getTickCount()
         elapsed = (t2 - t1) / cv2.getTickFrequency()
         fps = 1.0 / elapsed if elapsed else 0.0
     except Exception as exc:
         print(
             f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-            f"Face detection unavailable; skipping photo save: {exc}"
+            f"Presence detection unavailable; skipping photo save: {exc}"
         )
-        return False, None
+        return None, None
 
     if face_count:
         print(
             f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-            f"Detected {face_count} camera-facing face(s) in the photo Time: {elapsed}, FPS: {fps}"
+            f"Detected {face_count} face(s) indicating presence in the photo Time: {elapsed}, FPS: {fps}"
         )
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Saving photo")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         photo_name = f"photo_{timestamp}.jpg"
 
-        now = datetime.now()
-        daily_folder = os.path.join(
-            photos_path,
-            now.strftime("%Y"),
-            now.strftime("%m"),
-            now.strftime("%d"),
-            now.strftime("%H"),
-        )
-        os.makedirs(daily_folder, exist_ok=True)
-        photo_path = os.path.join(daily_folder, photo_name)
-
         try:
+            now = datetime.now()
+            daily_folder = os.path.join(
+                photos_path,
+                now.strftime("%Y"),
+                now.strftime("%m"),
+                now.strftime("%d"),
+                now.strftime("%H"),
+            )
+            os.makedirs(daily_folder, exist_ok=True)
+            photo_path = os.path.join(daily_folder, photo_name)
             save_image_with_gps(photo_path, frame, latitude, longitude)
         except Exception as exc:
             print(
                 f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-                f"Detected presence but failed to save photo: {exc}"
+                f"Detected presence but failed to store photo: {exc}"
             )
             return True, None
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Photo taken and saved as {photo_path}")

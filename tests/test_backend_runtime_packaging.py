@@ -52,8 +52,13 @@ def test_resolve_backend_runtime_layout_uses_fixed_output_tree(tmp_path):
     assert layout["entry_script"] == tmp_path / "src" / "scripts" / "run_server_background.py"
 
 
-def test_collect_backend_runtime_resources_includes_required_yunet_model_and_prompts(tmp_path):
+def test_collect_backend_runtime_resources_includes_only_yunet_detection_model(tmp_path):
     _create_required_runtime_resources(tmp_path)
+    models_dir = tmp_path / "src" / "models"
+    (models_dir / "object_detection_yolox_2022nov_int8bq.onnx").write_bytes(b"legacy")
+    (models_dir / "LICENSE.object_detection_yolox.txt").write_text(
+        "legacy\n", encoding="utf-8"
+    )
 
     resources = collect_backend_runtime_resources(tmp_path)
 
@@ -62,6 +67,7 @@ def test_collect_backend_runtime_resources_includes_required_yunet_model_and_pro
     assert Path("scienceplots") / "styles" in packaged_paths
     assert Path("src") / "models" / "face_detection_yunet_2023mar.onnx" in packaged_paths
     assert Path("src") / "models" / "LICENSE.face_detection_yunet.txt" in packaged_paths
+    assert not any("yolox" in str(path).lower() for path in packaged_paths)
     for resource_name in REQUIRED_ROOT_RESOURCE_NAMES:
         assert Path(resource_name) in packaged_paths
 
@@ -155,6 +161,7 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         f"{tmp_path / 'src' / 'models' / 'LICENSE.face_detection_yunet.txt'}{separator}"
         "src/models"
     ) in args
+    assert not any("yolox" in value.lower() for value in args)
     assert any(
         value.endswith(f"{separator}scienceplots/styles") and "scienceplots" in value and "styles" in value
         for value in args
@@ -225,6 +232,7 @@ def test_build_backend_runtime_manifest_records_relative_outputs(tmp_path):
     assert manifest["app_mode"] == "packaged"
     assert "src/models/face_detection_yunet_2023mar.onnx" in manifest["resource_outputs"]
     assert "src/models/LICENSE.face_detection_yunet.txt" in manifest["resource_outputs"]
+    assert not any("yolox" in path.lower() for path in manifest["resource_outputs"])
 
 
 def test_backend_runtime_executable_and_pyinstaller_separator_are_platform_specific():

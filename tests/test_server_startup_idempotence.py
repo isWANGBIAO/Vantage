@@ -65,13 +65,19 @@ def test_startup_event_is_idempotent_for_static_mounts_and_threads():
             screenshots_path.mkdir()
 
             _DummyThread.started_count = 0
+            monitor_calls = []
+
+            def create_monitor(*args, **kwargs):
+                monitor_calls.append((args, kwargs))
+                return object()
 
             with (
                 patch.object(server, "identify_logs_folder", return_value=(str(photos_path), str(screenshots_path))),
                 patch.object(server, "find_latest_file_recursive", return_value=None),
-                patch.object(server, "Monitor", side_effect=lambda *args, **kwargs: object()),
+                patch.object(server, "Monitor", side_effect=create_monitor),
                 patch.object(server.threading, "Thread", _DummyThread),
                 patch.object(server.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
+                patch.object(server.Config, "get_runtime_dir", return_value=tmp_path / "runtime"),
             ):
                 asyncio.run(server.startup_event())
                 after_first_startup = _static_route_directories()
@@ -85,6 +91,11 @@ def test_startup_event_is_idempotent_for_static_mounts_and_threads():
             }
             assert after_second_startup == after_first_startup
             assert _DummyThread.started_count == 7
+            assert len(monitor_calls) == 2
+            assert all(
+                kwargs["state_path"] == tmp_path / "runtime" / "focus-presence-state.json"
+                for _, kwargs in monitor_calls
+            )
     finally:
         server.app.router.routes[:] = original_routes
         server.state.photos_path = original_photos

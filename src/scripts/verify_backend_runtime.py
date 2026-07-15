@@ -47,7 +47,13 @@ BLOCKING_RUNTIME_PATTERNS = (
     "Missing packaged runtime module",
     "No module named",
     "Missing face detection model",
+    "Missing detection model",
+    "Failed to warm camera face detector",
 )
+REQUIRED_RUNTIME_LOG_MARKERS = (
+    "Camera face detector warmed up successfully.",
+)
+RUNTIME_LAUNCH_BANNER_PREFIX = "=== Background server launch "
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -94,7 +100,9 @@ def _build_smoke_environment(layout: dict[str, Path]) -> dict[str, str]:
     env["VANTAGE_CONFIG_DIR"] = str(config_dir)
     env["VANTAGE_MACOS_SKIP_CAMERA_AUTH"] = "1"
     env["OPENCV_AVFOUNDATION_SKIP_AUTH"] = "1"
+    env["VANTAGE_PREWARM_FACE_DETECTION_ON_STARTUP"] = "1"
     env.pop("VANTAGE_PROJECT_ROOT", None)
+    env.pop("VANTAGE_FACE_DETECTION_MODEL_PATH", None)
     return env
 
 
@@ -128,9 +136,12 @@ def _wait_for_status(timeout_seconds: int) -> dict[str, object]:
 
 
 def _tail_text_file(path: Path, max_lines: int = 40) -> str:
-    if not path.exists():
+    try:
+        if not path.exists():
+            return ""
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
         return ""
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     return "\n".join(lines[-max_lines:])
 
 
@@ -152,11 +163,64 @@ def _resolve_runtime_server_log(smoke_data_dir: Path) -> Path | None:
         return None
 
     try:
-        target = Path(pointer_path.read_text(encoding="utf-8").strip())
+        target_text = pointer_path.read_text(encoding="utf-8").strip()
+        if not target_text:
+            return None
+        target = Path(target_text).resolve(strict=True)
+        server_logs_root = (smoke_data_dir / "logs" / "server").resolve()
+        target.relative_to(server_logs_root)
     except OSError:
         return None
+    except ValueError:
+        return None
 
-    return target if target.exists() else None
+    return target if target.is_file() else None
+
+
+def _clear_runtime_server_log_pointer(smoke_data_dir: Path) -> None:
+    pointer_path = smoke_data_dir / "logs" / "server.latest.log"
+    try:
+        pointer_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _read_verified_runtime_server_log(
+    smoke_data_dir: Path,
+) -> tuple[Path | None, str, list[str]]:
+    runtime_log_path = _resolve_runtime_server_log(smoke_data_dir)
+    if runtime_log_path is None:
+        return None, "", ["Packaged backend runtime log is missing or invalid."]
+
+    try:
+        runtime_log_text = runtime_log_path.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        return runtime_log_path, "", [
+            f"Packaged backend runtime log is unreadable: {exc}"
+        ]
+
+    validation_errors = []
+    launch_banner_index = runtime_log_text.rfind(RUNTIME_LAUNCH_BANNER_PREFIX)
+    if launch_banner_index >= 0:
+        current_launch_text = runtime_log_text[launch_banner_index:]
+    else:
+        current_launch_text = runtime_log_text
+        validation_errors.append(
+            "Packaged backend runtime log is missing the current launch banner."
+        )
+
+    if not current_launch_text.strip():
+        validation_errors.append("Packaged backend runtime log is empty.")
+    for marker in REQUIRED_RUNTIME_LOG_MARKERS:
+        if marker not in current_launch_text:
+            validation_errors.append(
+                f"Packaged backend runtime log is missing success marker: {marker}"
+            )
+
+    return runtime_log_path, current_launch_text, validation_errors
 
 
 def _iter_packaged_backend_processes(executable_name: str | None = None):
@@ -211,6 +275,12 @@ def main() -> int:
     smoke_log_path = verify_dir / "backend-runtime-smoke.log"
     smoke_data_dir = layout["build_root"] / "smoke-data"
 
+    try:
+        _clear_runtime_server_log_pointer(smoke_data_dir)
+    except OSError as exc:
+        print(f"Could not clear previous packaged backend runtime log pointer: {exc}")
+        return 1
+
     env = _build_smoke_environment(layout)
     executable_path = layout["executable_path"]
 
@@ -234,9 +304,12 @@ def main() -> int:
             print(log_tail)
         return 1
 
-    runtime_log_path = _resolve_runtime_server_log(smoke_data_dir)
-    runtime_log_text = (
-        runtime_log_path.read_text(encoding="utf-8", errors="replace") if runtime_log_path else ""
+    (
+        runtime_log_path,
+        runtime_log_text,
+        runtime_log_validation_errors,
+    ) = _read_verified_runtime_server_log(
+        smoke_data_dir
     )
     runtime_blockers = _find_runtime_blockers(runtime_log_text)
     status_matches_runtime = _status_matches_runtime_layout(status_payload, layout)
@@ -254,6 +327,16 @@ def main() -> int:
 
     if runtime_blockers:
         print("Packaged backend runtime log contains blocking errors: " + ", ".join(runtime_blockers))
+        if runtime_log_path:
+            print("--- runtime log tail ---")
+            print(_tail_text_file(runtime_log_path))
+        return 1
+
+    if runtime_log_validation_errors:
+        print(
+            "Packaged backend runtime log validation failed: "
+            + "; ".join(runtime_log_validation_errors)
+        )
         if runtime_log_path:
             print("--- runtime log tail ---")
             print(_tail_text_file(runtime_log_path))
