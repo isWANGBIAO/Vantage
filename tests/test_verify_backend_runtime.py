@@ -9,7 +9,6 @@ from src.scripts import verify_backend_runtime
 
 
 FACE_PREWARM_SUCCESS = "Camera face detector warmed up successfully."
-BODY_PREWARM_SUCCESS = "Camera body detector warmed up successfully."
 CURRENT_LAUNCH_BANNER = "=== Background server launch 2026-07-15T10:00:00 ==="
 
 
@@ -69,9 +68,7 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
                     "VANTAGE_FACE_DETECTION_MODEL_PATH": str(
                         tmp_path / "external-face.onnx"
                     ),
-                    "VANTAGE_PERSON_PRESENCE_MODEL_PATH": str(
-                        tmp_path / "external-body.onnx"
-                    ),
+                    "VANTAGE_PERSON_PRESENCE_MODEL_PATH": "unused-legacy-value",
                     "VANTAGE_PROJECT_ROOT": str(tmp_path / "external-project"),
                 },
                 clear=False,
@@ -79,7 +76,9 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
                 env = verify_backend_runtime._build_smoke_environment(layout)
 
             self.assertNotIn("VANTAGE_FACE_DETECTION_MODEL_PATH", env)
-            self.assertNotIn("VANTAGE_PERSON_PRESENCE_MODEL_PATH", env)
+            self.assertEqual(
+                env["VANTAGE_PERSON_PRESENCE_MODEL_PATH"], "unused-legacy-value"
+            )
             self.assertNotIn("VANTAGE_PROJECT_ROOT", env)
             self.assertIn(host_path, env["PATH"].split(os.pathsep))
 
@@ -112,7 +111,7 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
                 "Live face analysis error: DLL load failed while importing _framework_bindings",
                 "Missing packaged runtime module(s): zhdate (No module named 'zhdate')",
                 "Failed to warm camera face detector: invalid YuNet model",
-                "Failed to warm camera body detector: Missing detection model yolox.onnx",
+                "Failed to warm camera body detector: legacy detector failure",
             ]
         )
 
@@ -126,9 +125,7 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
                 "Missing packaged runtime module",
                 "No module named",
                 "Missing face detection model",
-                "Missing detection model",
                 "Failed to warm camera face detector",
-                "Failed to warm camera body detector",
             ],
         )
 
@@ -138,7 +135,7 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
             smoke_data_dir = tmp_path / "smoke-data"
             outside_log = tmp_path / "unrelated-server.log"
             outside_log.write_text(
-                f"{FACE_PREWARM_SUCCESS}\n{BODY_PREWARM_SUCCESS}\n",
+                f"{FACE_PREWARM_SUCCESS}\n",
                 encoding="utf-8",
             )
             pointer = smoke_data_dir / "logs" / "server.latest.log"
@@ -155,7 +152,7 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
             unrelated_log = smoke_data_dir / "logs" / "unrelated.log"
             unrelated_log.parent.mkdir(parents=True, exist_ok=True)
             unrelated_log.write_text(
-                f"{FACE_PREWARM_SUCCESS}\n{BODY_PREWARM_SUCCESS}\n",
+                f"{FACE_PREWARM_SUCCESS}\n",
                 encoding="utf-8",
             )
             pointer = smoke_data_dir / "logs" / "server.latest.log"
@@ -239,21 +236,19 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
             self.assertEqual(log_text, "")
             self.assertTrue(any("empty" in error for error in errors))
 
-    def test_runtime_log_validation_requires_both_prewarm_success_markers(self):
+    def test_runtime_log_validation_requires_face_prewarm_success_marker(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             smoke_data_dir = Path(tmpdir) / "smoke-data"
             _write_runtime_log(
                 smoke_data_dir,
-                f"{CURRENT_LAUNCH_BANNER}\n{FACE_PREWARM_SUCCESS}\n",
+                f"{CURRENT_LAUNCH_BANNER}\n",
             )
 
             _, _, errors = verify_backend_runtime._read_verified_runtime_server_log(
                 smoke_data_dir
             )
 
-            self.assertTrue(
-                any(BODY_PREWARM_SUCCESS in error for error in errors)
-            )
+            self.assertTrue(any(FACE_PREWARM_SUCCESS in error for error in errors))
 
     def test_runtime_log_validation_ignores_success_markers_before_current_launch(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -264,9 +259,7 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
                     [
                         "=== Background server launch old ===",
                         FACE_PREWARM_SUCCESS,
-                        BODY_PREWARM_SUCCESS,
                         CURRENT_LAUNCH_BANNER,
-                        FACE_PREWARM_SUCCESS,
                         "",
                     ]
                 ),
@@ -279,16 +272,14 @@ class VerifyBackendRuntimeTests(unittest.TestCase):
             )
 
             self.assertTrue(current_log_text.startswith(CURRENT_LAUNCH_BANNER))
-            self.assertTrue(
-                any(BODY_PREWARM_SUCCESS in error for error in errors)
-            )
+            self.assertTrue(any(FACE_PREWARM_SUCCESS in error for error in errors))
 
     def test_runtime_log_validation_accepts_current_complete_log(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             smoke_data_dir = Path(tmpdir) / "smoke-data"
             expected_text = (
                 f"{CURRENT_LAUNCH_BANNER}\n"
-                f"{FACE_PREWARM_SUCCESS}\n{BODY_PREWARM_SUCCESS}\n"
+                f"{FACE_PREWARM_SUCCESS}\n"
             )
             runtime_log = _write_runtime_log(smoke_data_dir, expected_text)
 

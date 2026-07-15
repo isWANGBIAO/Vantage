@@ -6,18 +6,33 @@ from unittest.mock import patch
 
 import numpy as np
 
-sys.modules.setdefault(
-    "cv2",
-    types.SimpleNamespace(
+try:
+    from src.manager.take_photo import take_a_photo
+except ModuleNotFoundError as exc:
+    if exc.name != "cv2":
+        raise
+    fake_cv2 = types.SimpleNamespace(
         getTickCount=lambda: 1,
         getTickFrequency=lambda: 1.0,
-    ),
-)
-
-from src.manager.take_photo import take_a_photo
+    )
+    with patch.dict(sys.modules, {"cv2": fake_cv2}):
+        from src.manager.take_photo import take_a_photo
 
 
 class TakePhotoTests(unittest.TestCase):
+    def test_presence_face_count_delegates_to_yunet_presence_at_half_confidence(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        with patch.object(
+            take_a_photo,
+            "detect_presence_count",
+            return_value=1,
+        ) as mock_detect:
+            result = take_a_photo.detect_presence_face_count(frame)
+
+        self.assertEqual(result, 1)
+        mock_detect.assert_called_once_with(frame, conf=0.50)
+
     def test_take_photo_uses_pre_captured_frame_without_reading_camera(self):
         frame = np.full((4, 4, 3), 7, dtype=np.uint8)
         camera = object()
