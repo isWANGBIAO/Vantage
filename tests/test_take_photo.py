@@ -209,6 +209,70 @@ class TakePhotoTests(unittest.TestCase):
         self.assertIsNone(photo_path)
         mock_save.assert_not_called()
 
+    def test_unavailable_presence_clears_previous_live_box_and_returns_unknown(self):
+        from src import server
+        from src.services.person_detection import PresenceDetectionUnavailable
+
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        previous_box = (0, 0, 3, 3)
+        boxes_seen_before_failure = []
+
+        def detect_live_presence(*_args, **_kwargs):
+            if not boxes_seen_before_failure:
+                boxes_seen_before_failure.append(None)
+                return [previous_box]
+            boxes_seen_before_failure[0] = list(server.state.person_boxes)
+            server.state.is_running = False
+            raise PresenceDetectionUnavailable("YuNet inference unavailable")
+
+        with server.state.lock:
+            original_is_running = server.state.is_running
+            original_latest_frame = server.state.latest_frame
+            original_person_boxes = list(server.state.person_boxes)
+            server.state.is_running = True
+            server.state.latest_frame = frame
+            server.state.person_boxes = []
+
+        try:
+            with (
+                patch.object(server, "get_face_detector", return_value=object()),
+                patch.object(server, "should_run_face_detection", return_value=True),
+                patch.object(
+                    server,
+                    "detect_foreground_presence_face_boxes",
+                    side_effect=detect_live_presence,
+                ),
+                patch.object(server.time, "sleep"),
+                patch("builtins.print"),
+            ):
+                server.face_detection_loop()
+
+            with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+                take_a_photo,
+                "detect_presence_face_count",
+                side_effect=PresenceDetectionUnavailable(
+                    "YuNet inference unavailable"
+                ),
+            ), patch.object(take_a_photo, "save_image_with_gps") as mock_save:
+                presence_status, photo_path = take_a_photo.take_photo(
+                    object(),
+                    1.0,
+                    2.0,
+                    tmpdir,
+                    pre_captured_frame=frame,
+                )
+
+            self.assertEqual(boxes_seen_before_failure[0], [previous_box])
+            self.assertEqual(server.state.person_boxes, [])
+            self.assertIsNone(presence_status)
+            self.assertIsNone(photo_path)
+            mock_save.assert_not_called()
+        finally:
+            with server.state.lock:
+                server.state.is_running = original_is_running
+                server.state.latest_frame = original_latest_frame
+                server.state.person_boxes = original_person_boxes
+
     def test_take_photo_returns_absent_after_successful_detection_finds_no_presence(self):
         frame = np.zeros((4, 4, 3), dtype=np.uint8)
 

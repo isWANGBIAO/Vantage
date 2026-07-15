@@ -2552,6 +2552,8 @@ def face_detection_loop():
                     state.person_boxes = boxes
 
             except Exception as e:
+                with state.lock:
+                    state.person_boxes = []
                 print(f"Camera face detection error: {e}")
 
         time.sleep(0.1)
