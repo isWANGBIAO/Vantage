@@ -1,3 +1,7 @@
+> **Superseded:** The dual YuNet/YOLOX presence design in this document has
+> been replaced by the [YuNet-only foreground presence design](2026-07-15-yunet-only-foreground-presence-design.md).
+> The remaining historical design context is preserved below.
+
 # Focus Presence Regression Design
 
 ## Goal
