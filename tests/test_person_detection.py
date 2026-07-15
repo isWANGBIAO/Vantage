@@ -260,6 +260,15 @@ class PersonDetectionTests(unittest.TestCase):
                 with self.assertRaises(person_detection.PresenceDetectionUnavailable):
                     person_detection.detect_presence_count(frame, model=detector)
 
+    def test_presence_validation_uses_only_the_first_fifteen_yunet_fields(self):
+        face = [*_face_row(), object()]
+        detector = _RawFaceDetector([face])
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        count = person_detection.detect_presence_count(frame, model=detector)
+
+        self.assertEqual(count, 1)
+
     def test_face_detector_failure_makes_presence_unavailable(self):
         detector = _FailingFaceDetector(RuntimeError("face unavailable"))
         frame = np.zeros((480, 640, 3), dtype=np.uint8)

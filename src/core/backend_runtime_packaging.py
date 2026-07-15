@@ -43,8 +43,6 @@ REQUIRED_ROOT_RESOURCE_NAMES = (
 REQUIRED_RESOURCE_SPECS = (
     ("src/models/face_detection_yunet_2023mar.onnx", "src/models"),
     ("src/models/LICENSE.face_detection_yunet.txt", "src/models"),
-    ("src/models/object_detection_yolox_2022nov_int8bq.onnx", "src/models"),
-    ("src/models/LICENSE.object_detection_yolox.txt", "src/models"),
 )
 
 OPTIONAL_RESOURCE_SPECS: tuple[tuple[str, str], ...] = ()

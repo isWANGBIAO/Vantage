@@ -49,11 +49,9 @@ BLOCKING_RUNTIME_PATTERNS = (
     "Missing face detection model",
     "Missing detection model",
     "Failed to warm camera face detector",
-    "Failed to warm camera body detector",
 )
 REQUIRED_RUNTIME_LOG_MARKERS = (
     "Camera face detector warmed up successfully.",
-    "Camera body detector warmed up successfully.",
 )
 RUNTIME_LAUNCH_BANNER_PREFIX = "=== Background server launch "
 
@@ -105,7 +103,6 @@ def _build_smoke_environment(layout: dict[str, Path]) -> dict[str, str]:
     env["VANTAGE_PREWARM_FACE_DETECTION_ON_STARTUP"] = "1"
     env.pop("VANTAGE_PROJECT_ROOT", None)
     env.pop("VANTAGE_FACE_DETECTION_MODEL_PATH", None)
-    env.pop("VANTAGE_PERSON_PRESENCE_MODEL_PATH", None)
     return env
 
 

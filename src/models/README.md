@@ -7,18 +7,11 @@
 - License: MIT; see `LICENSE.face_detection_yunet.txt`
 - SHA-256: `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`
 
-Vantage loads this ONNX model with OpenCV `FaceDetectorYN`. The five returned
-landmarks are used only for a coarse camera-facing head-pose check. They do not
-measure eye direction and must not be described as gaze tracking.
+Vantage loads this ONNX model with OpenCV `FaceDetectorYN`. Live presence uses
+a `0.50` confidence threshold and accepts only the largest face whose clipped
+box occupies at least `0.5%` of the frame. It does not require frontal landmark
+geometry, so a sufficiently visible turned face can still maintain presence.
 
-## YOLOX person detector
-
-- File: `object_detection_yolox_2022nov_int8bq.onnx`
-- Upstream: <https://github.com/opencv/opencv_zoo/tree/main/models/object_detection_yolox>
-- License: Apache-2.0; see `LICENSE.object_detection_yolox.txt`
-- SHA-256: `dcaae0aaa2fea4167f89235ee340eb869d3707b25712218d4c7ce921ac90e2ba`
-
-Vantage loads this block-quantized ONNX model through OpenCV DNN and uses only
-COCO class `0` (`person`) at a `0.50` confidence threshold. It supplements the
-face signal for seated presence without adding PyTorch, Ultralytics, or a
-separate ONNX Runtime dependency.
+Historical camera-facing analysis keeps the stricter `0.75` confidence
+threshold and five-landmark head-pose check. The landmarks do not measure eye
+direction and must not be described as gaze tracking.

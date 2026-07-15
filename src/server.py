@@ -79,10 +79,9 @@ from src.services.person_detection import (
     PERSON_DETECTION_CONFIDENCE,
     PERSON_DETECTION_MODEL,
     PRESENCE_DETECTION_CONFIDENCE,
-    detect_face_boxes,
+    detect_foreground_presence_face_boxes,
     detect_presence_count,
     get_face_detector,
-    get_person_presence_detector,
 )
 from src.utils.data_loader import DataLoader
 from src.utils.sensitive_data import redact_sensitive_text
@@ -745,24 +744,14 @@ def prewarm_runtime_models():
 
         face_detector = get_face_detector()
         blank_frame = np.zeros((640, 640, 3), dtype=np.uint8)
-        detect_face_boxes(
+        detect_foreground_presence_face_boxes(
             blank_frame,
             model=face_detector,
-            conf=PERSON_DETECTION_CONFIDENCE,
+            conf=PRESENCE_DETECTION_CONFIDENCE,
         )
         print("Camera face detector warmed up successfully.")
     except Exception as exc:
         print(f"Failed to warm camera face detector: {exc}")
-
-    try:
-        import numpy as np
-
-        body_detector = get_person_presence_detector()
-        blank_frame = np.zeros((640, 640, 3), dtype=np.uint8)
-        body_detector.detect_person_boxes(blank_frame)
-        print("Camera body detector warmed up successfully.")
-    except Exception as exc:
-        print(f"Failed to warm camera body detector: {exc}")
 
 
 def _camera_online():
@@ -2553,10 +2542,10 @@ def face_detection_loop():
 
         if frame_copy is not None:
             try:
-                boxes = detect_face_boxes(
+                boxes = detect_foreground_presence_face_boxes(
                     frame_copy,
                     model=detector,
-                    conf=PERSON_DETECTION_CONFIDENCE,
+                    conf=PRESENCE_DETECTION_CONFIDENCE,
                 )
 
                 with state.lock:
