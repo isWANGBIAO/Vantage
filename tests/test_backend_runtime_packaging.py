@@ -1,3 +1,4 @@
+import importlib
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -166,6 +167,39 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         value.endswith(f"{separator}scienceplots/styles") and "scienceplots" in value and "styles" in value
         for value in args
     )
+
+
+def test_location_trust_service_is_importable_collected_and_fingerprinted(tmp_path):
+    module = importlib.import_module("src.services.location_trust")
+    assert module.LocationTrustResolver is not None
+
+    _create_required_runtime_resources(tmp_path)
+    location_service = tmp_path / "src" / "services" / "location_trust.py"
+    location_service.parent.mkdir(parents=True, exist_ok=True)
+    location_service.write_text("TRUST_VERSION = 1\n", encoding="utf-8")
+    (tmp_path / "requirements-backend-runtime-gpu.txt").write_text(
+        "fastapi==0.1\n", encoding="utf-8"
+    )
+    layout = resolve_backend_runtime_layout(tmp_path)
+    resources = collect_backend_runtime_resources(tmp_path)
+
+    args = build_pyinstaller_arguments(
+        project_root=tmp_path,
+        layout=layout,
+        resources=resources,
+    )
+    collect_index = args.index("--collect-submodules")
+    assert args[collect_index + 1] == "src"
+
+    before = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+    location_service.write_text("TRUST_VERSION = 2\n", encoding="utf-8")
+    after = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+
+    assert any(
+        entry["path"] == "src/services/location_trust.py"
+        for entry in before["inputs"]
+    )
+    assert before["digest"] != after["digest"]
 
 
 def test_remove_conflicting_runtime_libraries_deletes_known_vc_runtime_copies(tmp_path):

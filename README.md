@@ -149,6 +149,13 @@ the providers you use. Never commit real secrets. Voice transcription normally
 uses Settings; `VANTAGE_TRANSCRIBE_*` variables provide CLI/subprocess fallback
 configuration for local development.
 
+Location is fail-closed: when Vantage cannot obtain a current, trustworthy
+device position, AQI reports location unavailable and captured images omit GPS
+metadata instead of guessing a city. For a stationary installation, set both
+`VANTAGE_STATIC_LATITUDE` and `VANTAGE_STATIC_LONGITUDE` only as an explicit
+user-declared fixed-location override; leave both empty for normal device
+location handling.
+
 ## Optional Model Assets
 
 The required YuNet face detector and its MIT license are tracked under

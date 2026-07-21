@@ -63,6 +63,15 @@ def test_env_example_documents_media_root_migration_keys():
     assert "VANTAGE_PHOTO_ROOTS" in keys
 
 
+def test_env_example_documents_explicit_fail_closed_location_override():
+    text = Path(".env.example").read_text(encoding="utf-8")
+
+    assert "user-declared fixed location override" in text
+    assert "location remains unavailable and no city is guessed" in text
+    assert "VANTAGE_STATIC_LATITUDE=" in text
+    assert "VANTAGE_STATIC_LONGITUDE=" in text
+
+
 def test_env_example_documents_llm_env_fallback_keys_used_by_llm_client():
     keys = _env_example_keys()
     expected = _llm_client_env_fallback_keys()
