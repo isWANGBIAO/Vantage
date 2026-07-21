@@ -11,6 +11,21 @@ test('Dashboard keeps startup prewarm polling active while delegating geolocatio
   assert.ok(dashboardSource.includes('isVisible = false'));
 });
 
+test('Dashboard forwards the complete browser position through the location query helper', () => {
+  assert.ok(dashboardSource.includes("import { buildBrowserLocationQuery } from '../utils/locationSample.js';"));
+  assert.ok(dashboardSource.includes('const locationQuery = buildBrowserLocationQuery(position);'));
+  assert.ok(dashboardSource.includes("const url = locationQuery ? `/api/aqi?${locationQuery}` : '/api/aqi';"));
+  assert.ok(dashboardSource.includes('void fetchAqiBackend(position);'));
+});
+
+test('Dashboard requests a fresh high-accuracy fix without changing permission or visibility policy', () => {
+  assert.ok(dashboardSource.includes('shouldUseDashboardGeolocation({ isVisible: allowPrompt, permissionState })'));
+  assert.ok(dashboardSource.includes('navigator.geolocation.getCurrentPosition('));
+  assert.ok(dashboardSource.includes('enableHighAccuracy: true'));
+  assert.ok(dashboardSource.includes('maximumAge: 0'));
+  assert.ok(dashboardSource.includes('timeout: 10000'));
+});
+
 test('Dashboard passes visibility into CameraFeed so hidden prewarm does not stream video', () => {
   assert.ok(dashboardSource.includes('<CameraFeed isVisible={isVisible} privacyRevealed={mediaPrivacyRevealed} />'));
 });

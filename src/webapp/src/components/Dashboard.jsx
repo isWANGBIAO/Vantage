@@ -14,6 +14,7 @@ import {
   Heart,
 } from 'lucide-react';
 import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
+import { buildBrowserLocationQuery } from '../utils/locationSample.js';
 import { shouldUseDashboardGeolocation } from './dashboardAqiPolicy.js';
 import {
   degradeFocusHealthSnapshot,
@@ -106,12 +107,10 @@ export default function Dashboard({ isVisible = false }) {
     }
   }, [estimateStorage, logPollErrorOnce]);
 
-  const fetchAqiBackend = useCallback(async (lat, lon) => {
+  const fetchAqiBackend = useCallback(async (position = null) => {
     try {
-      let url = '/api/aqi';
-      if (lat !== null && lon !== null) {
-        url += `?lat=${lat}&lon=${lon}`;
-      }
+      const locationQuery = buildBrowserLocationQuery(position);
+      const url = locationQuery ? `/api/aqi?${locationQuery}` : '/api/aqi';
 
       const res = await fetchBackend(url, { retryPolicy: 'poll', allowHttpError: true });
       if (!res.ok) {
@@ -127,28 +126,27 @@ export default function Dashboard({ isVisible = false }) {
 
   const fetchAqi = useCallback(async ({ allowPrompt = false } = {}) => {
     if (!navigator.geolocation) {
-      void fetchAqiBackend(null, null);
+      void fetchAqiBackend();
       return;
     }
 
     const permissionState = await getGeolocationPermissionState();
     if (!shouldUseDashboardGeolocation({ isVisible: allowPrompt, permissionState })) {
-      void fetchAqiBackend(null, null);
+      void fetchAqiBackend();
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const { latitude, longitude } = position.coords;
-        void fetchAqiBackend(latitude, longitude);
+        void fetchAqiBackend(position);
       },
       (error) => {
         if (error.code !== 1) {
           console.error('Geolocation error:', error);
         }
-        void fetchAqiBackend(null, null);
+        void fetchAqiBackend();
       },
-      { timeout: 10000, maximumAge: 600000 },
+      { timeout: 10000, maximumAge: 0, enableHighAccuracy: true },
     );
   }, [fetchAqiBackend]);
 
