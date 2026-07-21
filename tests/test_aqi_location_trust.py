@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -295,3 +296,19 @@ def test_aqi_endpoint_source_contains_no_shanghai_fallback():
         "121.433",
     ):
         assert forbidden not in source
+
+
+def test_server_disables_access_logs_that_would_expose_aqi_coordinates(
+    monkeypatch,
+):
+    uvicorn_run = Mock()
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        SimpleNamespace(run=uvicorn_run),
+    )
+
+    server.main()
+
+    uvicorn_run.assert_called_once()
+    assert uvicorn_run.call_args.kwargs["access_log"] is False

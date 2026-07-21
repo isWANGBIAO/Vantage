@@ -5531,7 +5531,7 @@ async def get_project_progress():
 
 def main():
     import uvicorn
-    uvicorn.run(app, host=_get_backend_bind_host(), port=8000)
+    uvicorn.run(app, host=_get_backend_bind_host(), port=8000, access_log=False)
 
 
 if __name__ == "__main__":
