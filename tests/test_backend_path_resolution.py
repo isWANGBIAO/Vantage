@@ -64,6 +64,10 @@ class BackendPathResolutionTests(unittest.TestCase):
 
     def test_aqi_endpoint_degrades_when_upstream_times_out(self):
         with patch.object(
+            server,
+            "get_trusted_location_async",
+            return_value=(31.2304, 121.4737),
+        ) as mock_location, patch.object(
             server.asyncio,
             "to_thread",
             side_effect=TimeoutError("boom"),
@@ -75,6 +79,7 @@ class BackendPathResolutionTests(unittest.TestCase):
         self.assertIsNone(payload["aqi"])
         self.assertEqual(payload["status"], "unavailable")
         self.assertIn("error", payload)
+        mock_location.assert_awaited_once()
 
     def test_identify_logs_folder_prefers_d_drive_over_user_home(self):
         with tempfile.TemporaryDirectory() as tmpdir:

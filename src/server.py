@@ -47,7 +47,7 @@ import uuid
 from collections import deque
 from contextlib import closing, suppress
 from contextlib import asynccontextmanager
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, Request, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
@@ -70,6 +70,7 @@ from src.core.user_config import (
 )
 from src.core.media_storage import DEFAULT_LEGACY_MEDIA_ROOT, get_media_paths_settings_file, resolve_media_storage_paths
 from src.manager.manager_main import Monitor
+from src.manager.get_location import get_trusted_location_async
 from src.services.llm_client import LLMClient
 from src.services.model_call_recorder import (
     get_session_usage_summary,
@@ -82,6 +83,12 @@ from src.services.person_detection import (
     detect_foreground_presence_face_boxes,
     detect_presence_count,
     get_face_detector,
+)
+from src.services.location_trust import (
+    LocationPurpose,
+    LocationSample,
+    LocationStatus,
+    LocationTrustResolver,
 )
 from src.utils.data_loader import DataLoader
 from src.utils.sensitive_data import redact_sensitive_text
@@ -129,6 +136,7 @@ def get_face_analysis_pipeline_module():
 
 
 app = FastAPI()
+_AQI_LOCATION_TRUST_RESOLVER = LocationTrustResolver()
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
 DEFAULT_BACKEND_BIND_HOST = "127.0.0.1"
@@ -2766,8 +2774,17 @@ async def open_folder(request: Request):
     return JSONResponse(status_code=404, content={"error": "Folder path not found or not set"})
 
 @app.get("/api/aqi")
-async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None):
-    """Fetch current AQI (US) based on Location (Default: SJTU Minhang)"""
+async def get_aqi_stats(
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    accuracy: Optional[float] = None,
+    timestamp_ms: Optional[float] = None,
+):
+    """Fetch current AQI (US) only when a current location is trusted."""
+    target_lat = None
+    target_lon = None
+    city = "Location unavailable"
+
     def build_unavailable_payload(error_message: str | None = None):
         payload = {
             "aqi": None,
@@ -2783,30 +2800,54 @@ async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None
         return payload
 
     try:
-        # Default to Shanghai Jiao Tong University Minhang Campus
-        # Lat: 31.025, Lon: 121.433
-        target_lat = 31.025
-        target_lon = 121.433
-        city = "SJTU Minhang"
-        
-        # Only use provided coordinates if they seem valid and distinct from a generic VPN exit?
-        # User requested "Directly display...", so let's prefer the hardcoded value 
-        # unless we are very sure about the frontend provided ones.
-        # But for now, to satisfy "Then just display...", I will default to these 
-        # and only override if the frontend EXPLICITLY sends something different 
-        # AND we trust it. 
-        # Actually, let's just make it the default fallback instead of IP.
-        # If frontend sends coordinates (permission granted), it might be accurate.
-        # If permission denied, frontend sends null, we use SJTU.
-        
-        if lat is not None and lon is not None:
-             target_lat = lat
-             target_lon = lon
-             city = "Current Location" 
-        
-        print(f"[AQI] Fetching for Lat: {target_lat}, Lon: {target_lon}, City: {city}")
+        browser_values = (lat, lon, accuracy, timestamp_ms)
+        if all(value is not None for value in browser_values):
+            try:
+                if any(isinstance(value, bool) for value in browser_values):
+                    raise ValueError("boolean browser location metadata")
+                browser_sample = LocationSample(
+                    latitude=float(lat),
+                    longitude=float(lon),
+                    accuracy_m=float(accuracy),
+                    captured_at=datetime.fromtimestamp(
+                        float(timestamp_ms) / 1_000,
+                        tz=timezone.utc,
+                    ),
+                    source="browser",
+                    is_remote_source=False,
+                )
+                browser_decision = _AQI_LOCATION_TRUST_RESOLVER.resolve(
+                    browser_sample,
+                    LocationPurpose.AQI,
+                )
+            except (OverflowError, OSError, TypeError, ValueError):
+                browser_decision = None
 
-        # 2. Get API (US Standard) from Open-Meteo
+            if (
+                browser_decision is not None
+                and browser_decision.status is LocationStatus.TRUSTED
+                and browser_decision.sample is not None
+            ):
+                target_lat = browser_decision.sample.latitude
+                target_lon = browser_decision.sample.longitude
+
+        if target_lat is None or target_lon is None:
+            try:
+                backend_lat, backend_lon = await get_trusted_location_async(
+                    LocationPurpose.AQI
+                )
+            except Exception:
+                backend_lat, backend_lon = None, None
+            if backend_lat is not None and backend_lon is not None:
+                target_lat = backend_lat
+                target_lon = backend_lon
+
+        if target_lat is None or target_lon is None:
+            return build_unavailable_payload()
+
+        city = "Current Location"
+        print("[AQI] Fetching for trusted current location")
+
         aqi_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={target_lat}&longitude={target_lon}&current=us_aqi"
         
         aqi_res = await asyncio.to_thread(requests.get, aqi_url, timeout=5)
@@ -2850,7 +2891,7 @@ async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None
         }
         
     except Exception as e:
-        print(f"AQI Error: {e}")
+        print("AQI Error: upstream request failed")
         return build_unavailable_payload(str(e))
 
 @app.get("/api/latest_images")
