@@ -190,6 +190,12 @@ def test_location_trust_service_is_importable_collected_and_fingerprinted(tmp_pa
     )
     collect_index = args.index("--collect-submodules")
     assert args[collect_index + 1] == "src"
+    excluded_modules = {
+        args[index + 1]
+        for index, value in enumerate(args)
+        if value == "--exclude-module"
+    }
+    assert "src.services.location_trust" not in excluded_modules
 
     before = build_backend_runtime_fingerprint(tmp_path, resources=resources)
     location_service.write_text("TRUST_VERSION = 2\n", encoding="utf-8")
