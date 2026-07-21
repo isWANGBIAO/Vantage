@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -115,6 +116,24 @@ def test_exif_requires_100_meter_accuracy():
     assert rejected_decision.sample is None
 
 
+@pytest.mark.parametrize("source", ["configured", "satellite", "wi_fi"])
+def test_aqi_metadata_rich_sources_accept_5000_meters_and_reject_more(source):
+    accepted = sample(source=source, accuracy_m=5_000.0)
+    rejected = sample(source=source, accuracy_m=5_000.1)
+
+    accepted_decision = LocationTrustResolver().resolve(
+        accepted, LocationPurpose.AQI, now=NOW
+    )
+    rejected_decision = LocationTrustResolver().resolve(
+        rejected, LocationPurpose.AQI, now=NOW
+    )
+
+    assert accepted_decision.status is LocationStatus.TRUSTED
+    assert accepted_decision.sample is accepted
+    assert rejected_decision.status is LocationStatus.UNKNOWN
+    assert rejected_decision.sample is None
+
+
 def test_aqi_and_exif_use_purpose_specific_maximum_ages():
     sixty_seconds_old = sample(captured_at=NOW - timedelta(seconds=60))
     sixty_one_seconds_old = sample(captured_at=NOW - timedelta(seconds=61))
@@ -140,6 +159,23 @@ def test_aqi_and_exif_use_purpose_specific_maximum_ages():
         .status
         is LocationStatus.TRUSTED
     )
+
+
+def test_future_tolerance_accepts_30_seconds_and_rejects_more():
+    at_tolerance = sample(captured_at=NOW + timedelta(seconds=30))
+    beyond_tolerance = sample(captured_at=NOW + timedelta(seconds=30.1))
+
+    accepted_decision = LocationTrustResolver().resolve(
+        at_tolerance, LocationPurpose.AQI, now=NOW
+    )
+    rejected_decision = LocationTrustResolver().resolve(
+        beyond_tolerance, LocationPurpose.AQI, now=NOW
+    )
+
+    assert accepted_decision.status is LocationStatus.TRUSTED
+    assert accepted_decision.sample is at_tolerance
+    assert rejected_decision.status is LocationStatus.UNKNOWN
+    assert rejected_decision.sample is None
 
 
 @pytest.mark.parametrize(
@@ -229,6 +265,34 @@ def test_continuity_subtracts_both_accuracy_radii_from_distance():
     assert decision.sample is uncertain_fix
 
 
+def test_continuity_accepts_exact_speed_limit_and_rejects_slightly_more():
+    def decision_for_effective_distance(effective_distance_m):
+        resolver = LocationTrustResolver()
+        baseline = sample(latitude=0.0, longitude=0.0, accuracy_m=1.0)
+        next_time = NOW + timedelta(seconds=1)
+        longitude = math.degrees((effective_distance_m + 2.0) / 6_371_000)
+        moved = sample(
+            latitude=0.0,
+            longitude=longitude,
+            accuracy_m=1.0,
+            captured_at=next_time,
+        )
+
+        assert (
+            resolver.resolve(baseline, LocationPurpose.AQI, now=NOW).status
+            is LocationStatus.TRUSTED
+        )
+        return resolver.resolve(moved, LocationPurpose.AQI, now=next_time)
+
+    at_limit = decision_for_effective_distance(150.0)
+    above_limit = decision_for_effective_distance(150.1)
+
+    assert at_limit.status is LocationStatus.TRUSTED
+    assert at_limit.sample is not None
+    assert above_limit.status is LocationStatus.UNKNOWN
+    assert above_limit.sample is None
+
+
 @pytest.mark.parametrize("seconds_delta", [0, -1])
 def test_continuity_rejects_non_increasing_capture_times(seconds_delta):
     resolver = LocationTrustResolver()
@@ -243,6 +307,63 @@ def test_continuity_rejects_non_increasing_capture_times(seconds_delta):
 
     assert decision.status is LocationStatus.UNKNOWN
     assert decision.sample is None
+
+
+def test_continuity_window_includes_exactly_300_seconds():
+    resolver = LocationTrustResolver()
+    baseline = sample(latitude=0.0, longitude=0.0, accuracy_m=1.0)
+    at_window_end = NOW + timedelta(seconds=300)
+    implausible = sample(
+        latitude=0.0,
+        longitude=1.0,
+        accuracy_m=1.0,
+        captured_at=at_window_end,
+    )
+
+    assert (
+        resolver.resolve(baseline, LocationPurpose.AQI, now=NOW).status
+        is LocationStatus.TRUSTED
+    )
+    decision = resolver.resolve(implausible, LocationPurpose.AQI, now=at_window_end)
+
+    assert decision.status is LocationStatus.UNKNOWN
+    assert decision.sample is None
+
+
+def test_rejected_sample_does_not_replace_last_accepted_sample():
+    resolver = LocationTrustResolver()
+    baseline = sample(latitude=0.0, longitude=0.0, accuracy_m=1.0)
+    rejected_time = NOW + timedelta(seconds=1)
+    rejected_jump = sample(
+        latitude=0.0,
+        longitude=1.0,
+        accuracy_m=1.0,
+        captured_at=rejected_time,
+    )
+    followup_time = NOW + timedelta(seconds=300)
+    plausible_from_baseline = sample(
+        latitude=0.0,
+        longitude=0.27,
+        accuracy_m=1.0,
+        captured_at=followup_time,
+    )
+
+    assert (
+        resolver.resolve(baseline, LocationPurpose.AQI, now=NOW).status
+        is LocationStatus.TRUSTED
+    )
+    assert (
+        resolver.resolve(
+            rejected_jump, LocationPurpose.AQI, now=rejected_time
+        ).status
+        is LocationStatus.UNKNOWN
+    )
+    decision = resolver.resolve(
+        plausible_from_baseline, LocationPurpose.AQI, now=followup_time
+    )
+
+    assert decision.status is LocationStatus.TRUSTED
+    assert decision.sample is plausible_from_baseline
 
 
 def test_long_gap_allows_a_new_trusted_baseline():
