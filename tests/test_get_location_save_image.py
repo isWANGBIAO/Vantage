@@ -94,6 +94,69 @@ def test_get_location_uses_configured_static_coordinates(monkeypatch):
     assert get_location.get_trusted_location(resolver=resolver) == (12.5, 34.75)
 
 
+@pytest.mark.parametrize(
+    ("latitude", "longitude"),
+    [
+        ("", ""),
+        ("   ", "\t"),
+    ],
+)
+def test_blank_static_coordinates_are_unconfigured_and_use_winrt(
+    monkeypatch, latitude, longitude
+):
+    monkeypatch.setenv("VANTAGE_STATIC_LATITUDE", latitude)
+    monkeypatch.setenv("VANTAGE_STATIC_LONGITUDE", longitude)
+    install_fake_geolocator(monkeypatch, fake_position())
+
+    assert get_location.get_trusted_location(
+        resolver=LocationTrustResolver()
+    ) == (31.2304, 121.4737)
+
+
+@pytest.mark.parametrize(
+    ("configured_name", "configured_value", "other_name", "other_value"),
+    [
+        ("VANTAGE_STATIC_LATITUDE", "12.5", "VANTAGE_STATIC_LONGITUDE", ""),
+        ("VANTAGE_STATIC_LONGITUDE", "34.75", "VANTAGE_STATIC_LATITUDE", "   "),
+        ("VANTAGE_STATIC_LATITUDE", "12.5", "VANTAGE_STATIC_LONGITUDE", None),
+        ("VANTAGE_STATIC_LONGITUDE", "34.75", "VANTAGE_STATIC_LATITUDE", None),
+    ],
+)
+def test_partial_static_configuration_fails_closed_without_winrt_fallback(
+    monkeypatch, configured_name, configured_value, other_name, other_value
+):
+    monkeypatch.setenv(configured_name, configured_value)
+    if other_value is None:
+        monkeypatch.delenv(other_name, raising=False)
+    else:
+        monkeypatch.setenv(other_name, other_value)
+
+    class UnexpectedGeolocator:
+        def __init__(self):
+            raise AssertionError("partial static configuration must not fall back")
+
+    monkeypatch.setattr(get_location, "Geolocator", UnexpectedGeolocator)
+
+    assert get_location.get_trusted_location(
+        resolver=LocationTrustResolver()
+    ) == (None, None)
+
+
+def test_invalid_static_configuration_fails_closed_without_winrt_fallback(monkeypatch):
+    monkeypatch.setenv("VANTAGE_STATIC_LATITUDE", "not-a-number")
+    monkeypatch.setenv("VANTAGE_STATIC_LONGITUDE", "34.75")
+
+    class UnexpectedGeolocator:
+        def __init__(self):
+            raise AssertionError("invalid static configuration must not fall back")
+
+    monkeypatch.setattr(get_location, "Geolocator", UnexpectedGeolocator)
+
+    assert get_location.get_trusted_location(
+        resolver=LocationTrustResolver()
+    ) == (None, None)
+
+
 def test_fresh_local_wifi_position_is_trusted_for_exif(monkeypatch, capsys):
     clear_static_location(monkeypatch)
     install_fake_geolocator(monkeypatch, fake_position(accuracy=100.0))

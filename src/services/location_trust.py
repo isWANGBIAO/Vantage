@@ -66,6 +66,8 @@ class LocationTrustResolver:
     ) -> LocationDecision:
         if not _is_valid_sample(sample):
             return _unknown("invalid_sample")
+        if not isinstance(sample.is_remote_source, bool):
+            return _unknown("invalid_remote_metadata")
         if sample.is_remote_source:
             return _unknown("remote_source")
 

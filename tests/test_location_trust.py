@@ -223,6 +223,44 @@ def test_invalid_remote_stale_and_future_samples_are_unknown(location_sample):
     assert decision.sample is None
 
 
+@pytest.mark.parametrize("is_remote_source", [None, 0, 1, "false", "true"])
+def test_non_boolean_remote_source_metadata_is_rejected(is_remote_source):
+    decision = LocationTrustResolver().resolve(
+        sample(is_remote_source=is_remote_source),
+        LocationPurpose.AQI,
+        now=NOW,
+    )
+
+    assert decision.status is LocationStatus.UNKNOWN
+    assert decision.sample is None
+    assert decision.reason == "invalid_remote_metadata"
+
+
+def test_explicit_local_remote_source_metadata_remains_trusted():
+    location_sample = sample(is_remote_source=False)
+
+    decision = LocationTrustResolver().resolve(
+        location_sample,
+        LocationPurpose.AQI,
+        now=NOW,
+    )
+
+    assert decision.status is LocationStatus.TRUSTED
+    assert decision.sample is location_sample
+
+
+def test_explicit_remote_source_metadata_remains_rejected():
+    decision = LocationTrustResolver().resolve(
+        sample(is_remote_source=True),
+        LocationPurpose.AQI,
+        now=NOW,
+    )
+
+    assert decision.status is LocationStatus.UNKNOWN
+    assert decision.sample is None
+    assert decision.reason == "remote_source"
+
+
 def test_implausible_short_interval_jump_is_rejected():
     resolver = LocationTrustResolver()
     baseline = sample(latitude=31.2304, longitude=121.4737)

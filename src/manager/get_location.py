@@ -70,7 +70,9 @@ def _log_location_result(source, accuracy, status, reason):
 def _configured_static_location_sample():
     latitude = os.environ.get("VANTAGE_STATIC_LATITUDE")
     longitude = os.environ.get("VANTAGE_STATIC_LONGITUDE")
-    is_configured = latitude is not None or longitude is not None
+    is_configured = any(
+        value is not None and value.strip() for value in (latitude, longitude)
+    )
     if not is_configured:
         return False, None
 
