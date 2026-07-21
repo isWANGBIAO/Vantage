@@ -1,8 +1,11 @@
 import math
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from src.services import location_trust
 from src.services.location_trust import (
     LocationPurpose,
     LocationSample,
@@ -178,6 +181,23 @@ def test_future_tolerance_accepts_30_seconds_and_rejects_more():
     assert rejected_decision.sample is None
 
 
+def test_future_tolerance_sample_does_not_poison_continuity_baseline():
+    resolver = LocationTrustResolver()
+    future = sample(captured_at=NOW + timedelta(seconds=30))
+    current = sample(
+        latitude=39.9042,
+        longitude=116.4074,
+        captured_at=NOW,
+    )
+
+    future_decision = resolver.resolve(future, LocationPurpose.AQI, now=NOW)
+    current_decision = resolver.resolve(current, LocationPurpose.AQI, now=NOW)
+
+    assert future_decision.status is LocationStatus.TRUSTED
+    assert current_decision.status is LocationStatus.TRUSTED
+    assert current_decision.sample is current
+
+
 @pytest.mark.parametrize(
     "location_sample",
     [
@@ -297,7 +317,10 @@ def test_continuity_accepts_exact_speed_limit_and_rejects_slightly_more():
 def test_continuity_rejects_non_increasing_capture_times(seconds_delta):
     resolver = LocationTrustResolver()
     baseline = sample()
-    non_increasing = sample(captured_at=NOW + timedelta(seconds=seconds_delta))
+    non_increasing = sample(
+        longitude=121.4738,
+        captured_at=NOW + timedelta(seconds=seconds_delta),
+    )
 
     assert (
         resolver.resolve(baseline, LocationPurpose.AQI, now=NOW).status
@@ -307,6 +330,63 @@ def test_continuity_rejects_non_increasing_capture_times(seconds_delta):
 
     assert decision.status is LocationStatus.UNKNOWN
     assert decision.sample is None
+
+
+def test_same_sample_is_idempotently_trusted_for_aqi_then_exif():
+    resolver = LocationTrustResolver()
+    shared_sample = sample(accuracy_m=50.0)
+
+    aqi_decision = resolver.resolve(shared_sample, LocationPurpose.AQI, now=NOW)
+    exif_decision = resolver.resolve(shared_sample, LocationPurpose.EXIF, now=NOW)
+
+    assert aqi_decision.status is LocationStatus.TRUSTED
+    assert exif_decision.status is LocationStatus.TRUSTED
+    assert exif_decision.sample is shared_sample
+
+
+def test_concurrent_candidates_are_serialized_against_latest_baseline(monkeypatch):
+    resolver = LocationTrustResolver()
+    baseline = sample(latitude=0.0, longitude=0.0, accuracy_m=1.0)
+    contender_time = NOW + timedelta(seconds=1)
+    contenders = [
+        sample(
+            latitude=0.0,
+            longitude=longitude,
+            accuracy_m=1.0,
+            captured_at=contender_time,
+        )
+        for longitude in (-0.001, 0.001)
+    ]
+    original_distance = location_trust._distance_m
+    rendezvous = threading.Barrier(2)
+
+    def synchronized_distance(first, second):
+        if first is baseline:
+            try:
+                rendezvous.wait(timeout=1)
+            except threading.BrokenBarrierError:
+                pass
+        return original_distance(first, second)
+
+    monkeypatch.setattr(location_trust, "_distance_m", synchronized_distance)
+    assert (
+        resolver.resolve(baseline, LocationPurpose.AQI, now=NOW).status
+        is LocationStatus.TRUSTED
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        decisions = list(
+            executor.map(
+                lambda contender: resolver.resolve(
+                    contender, LocationPurpose.AQI, now=contender_time
+                ),
+                contenders,
+            )
+        )
+
+    statuses = [decision.status for decision in decisions]
+    assert statuses.count(LocationStatus.TRUSTED) == 1
+    assert statuses.count(LocationStatus.UNKNOWN) == 1
 
 
 def test_continuity_window_includes_exactly_300_seconds():

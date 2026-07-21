@@ -1,7 +1,8 @@
+import math
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-import math
 
 
 AQI_MAX_SAMPLE_AGE_SECONDS = 120
@@ -44,6 +45,7 @@ class LocationDecision:
 class LocationTrustResolver:
     def __init__(self) -> None:
         self._last_accepted_sample: LocationSample | None = None
+        self._lock = threading.RLock()
 
     def resolve(
         self,
@@ -51,6 +53,16 @@ class LocationTrustResolver:
         purpose: LocationPurpose,
         *,
         now: datetime | None = None,
+    ) -> LocationDecision:
+        with self._lock:
+            return self._resolve_locked(sample, purpose, now=now)
+
+    def _resolve_locked(
+        self,
+        sample: LocationSample,
+        purpose: LocationPurpose,
+        *,
+        now: datetime | None,
     ) -> LocationDecision:
         if not _is_valid_sample(sample):
             return _unknown("invalid_sample")
@@ -81,12 +93,15 @@ class LocationTrustResolver:
         if continuity_rejection is not None:
             return _unknown(continuity_rejection)
 
-        self._last_accepted_sample = sample
+        if age_seconds >= 0:
+            self._last_accepted_sample = sample
         return LocationDecision(LocationStatus.TRUSTED, sample, "trusted")
 
     def _continuity_rejection(self, sample: LocationSample) -> str | None:
         previous = self._last_accepted_sample
         if previous is None:
+            return None
+        if sample == previous:
             return None
 
         elapsed_seconds = (sample.captured_at - previous.captured_at).total_seconds()
