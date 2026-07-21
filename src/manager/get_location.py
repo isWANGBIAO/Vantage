@@ -1,7 +1,6 @@
 import asyncio
 import os
 import sys
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,6 +27,7 @@ else:
 # Use the EXIF acceptance ceiling so it remains opt-in but is never presented as
 # more precise than the trust policy can justify.
 CONFIGURED_STATIC_ACCURACY_M = 100.0
+WINRT_LOCATION_TIMEOUT_SECONDS = 10
 
 _POSITION_SOURCE_NAMES = {
     "CELLULAR": "cellular",
@@ -144,7 +144,7 @@ def _resolve_location_sample(sample, purpose, resolver):
     return None, None
 
 
-def get_trusted_location(
+async def get_trusted_location_async(
     purpose=LocationPurpose.EXIF,
     resolver=None,
 ):
@@ -173,66 +173,75 @@ def get_trusted_location(
         )
         return None, None
 
-    async def fetch_location():
-        try:
-            locator = Geolocator()
-            position = await locator.get_geoposition_async()
-            coordinate = getattr(position, "coordinate", _MISSING)
-            if coordinate is _MISSING:
-                _log_location_result(
-                    "winrt",
-                    "unknown",
-                    LocationStatus.UNKNOWN.value,
-                    "incomplete_metadata",
-                )
-                return None, None
-            sample = _winrt_coordinate_to_location_sample(coordinate)
-            if sample is None:
-                _log_location_result(
-                    "winrt",
-                    "unknown",
-                    LocationStatus.UNKNOWN.value,
-                    "incomplete_metadata",
-                )
-                return None, None
-            return _resolve_location_sample(sample, purpose, active_resolver)
-        except Exception:
-            _log_location_result(
-                "winrt",
-                "unknown",
-                LocationStatus.UNKNOWN.value,
-                "api_error",
-            )
-            return None, None
-
-    def run_async_in_thread(result_holder):
-        loop = asyncio.new_event_loop()
-        try:
-            asyncio.set_event_loop(loop)
-            result_holder["coordinates"] = loop.run_until_complete(fetch_location())
-        except Exception:
-            _log_location_result(
-                "winrt",
-                "unknown",
-                LocationStatus.UNKNOWN.value,
-                "api_error",
-            )
-            result_holder["coordinates"] = (None, None)
-        finally:
-            loop.close()
+    try:
+        locator = Geolocator()
+        position = await asyncio.wait_for(
+            locator.get_geoposition_async(),
+            timeout=WINRT_LOCATION_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        _log_location_result(
+            "winrt",
+            "unknown",
+            LocationStatus.UNKNOWN.value,
+            "timeout",
+        )
+        return None, None
+    except Exception:
+        _log_location_result(
+            "winrt",
+            "unknown",
+            LocationStatus.UNKNOWN.value,
+            "api_error",
+        )
+        return None, None
 
     try:
-        running_loop = asyncio.get_running_loop()
-    except RuntimeError:
-        running_loop = None
+        coordinate = getattr(position, "coordinate", _MISSING)
+        if coordinate is _MISSING:
+            _log_location_result(
+                "winrt",
+                "unknown",
+                LocationStatus.UNKNOWN.value,
+                "incomplete_metadata",
+            )
+            return None, None
+        sample = _winrt_coordinate_to_location_sample(coordinate)
+        if sample is None:
+            _log_location_result(
+                "winrt",
+                "unknown",
+                LocationStatus.UNKNOWN.value,
+                "incomplete_metadata",
+            )
+            return None, None
+        return _resolve_location_sample(sample, purpose, active_resolver)
+    except Exception:
+        _log_location_result(
+            "winrt",
+            "unknown",
+            LocationStatus.UNKNOWN.value,
+            "api_error",
+        )
+        return None, None
 
-    if running_loop is not None:
-        result_holder = {}
-        thread = threading.Thread(target=run_async_in_thread, args=(result_holder,))
-        thread.start()
-        thread.join()
-        return result_holder.get("coordinates", (None, None))
-    return asyncio.run(fetch_location())
+
+def get_trusted_location(
+    purpose=LocationPurpose.EXIF,
+    resolver=None,
+):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(get_trusted_location_async(purpose, resolver))
+
+    _log_location_result(
+        "winrt",
+        "unknown",
+        LocationStatus.UNKNOWN.value,
+        "sync_called_in_event_loop",
+    )
+    return None, None
 
 
 def get_location():

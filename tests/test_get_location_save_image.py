@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -235,14 +236,98 @@ def test_get_location_remains_an_exif_wrapper(monkeypatch):
     assert calls == [(LocationPurpose.EXIF, None)]
 
 
-def test_get_trusted_location_works_inside_running_asyncio_loop(monkeypatch):
+def test_get_trusted_location_async_works_inside_running_asyncio_loop(monkeypatch):
     clear_static_location(monkeypatch)
     install_fake_geolocator(monkeypatch, fake_position())
 
-    async def call_synchronous_api_from_loop():
-        return get_location.get_trusted_location(resolver=LocationTrustResolver())
+    async def call_async_api_from_loop():
+        return await get_location.get_trusted_location_async(
+            resolver=LocationTrustResolver()
+        )
 
-    assert asyncio.run(call_synchronous_api_from_loop()) == (31.2304, 121.4737)
+    assert asyncio.run(call_async_api_from_loop()) == (31.2304, 121.4737)
+
+
+def test_async_winrt_timeout_does_not_block_event_loop(monkeypatch, capsys):
+    clear_static_location(monkeypatch)
+    assert get_location.WINRT_LOCATION_TIMEOUT_SECONDS == 10
+    monkeypatch.setattr(get_location, "WINRT_LOCATION_TIMEOUT_SECONDS", 0.01)
+
+    async def exercise_timeout():
+        operation_started = asyncio.Event()
+        event_loop_progressed = asyncio.Event()
+
+        class HangingGeolocator:
+            async def get_geoposition_async(self):
+                operation_started.set()
+                await asyncio.Event().wait()
+
+        monkeypatch.setattr(get_location, "Geolocator", HangingGeolocator)
+        location_task = asyncio.create_task(
+            get_location.get_trusted_location_async(
+                resolver=LocationTrustResolver()
+            )
+        )
+        await asyncio.wait_for(operation_started.wait(), timeout=0.1)
+        asyncio.get_running_loop().call_soon(event_loop_progressed.set)
+        await asyncio.wait_for(event_loop_progressed.wait(), timeout=0.1)
+        return await asyncio.wait_for(location_task, timeout=0.2)
+
+    assert asyncio.run(exercise_timeout()) == (None, None)
+    output = capsys.readouterr().out
+    assert "status=unknown" in output
+    assert "reason=timeout" in output
+
+
+def test_async_winrt_metadata_error_degrades_without_exposing_details(
+    monkeypatch, capsys
+):
+    clear_static_location(monkeypatch)
+
+    class PositionWithBrokenCoordinate:
+        @property
+        def coordinate(self):
+            raise RuntimeError("secret coordinates 31.2304, 121.4737")
+
+    install_fake_geolocator(monkeypatch, PositionWithBrokenCoordinate())
+
+    async def read_broken_position():
+        return await get_location.get_trusted_location_async(
+            resolver=LocationTrustResolver()
+        )
+
+    assert asyncio.run(read_broken_position()) == (None, None)
+    output = capsys.readouterr().out
+    assert "status=unknown" in output
+    assert "reason=api_error" in output
+    assert "31.2304" not in output
+    assert "121.4737" not in output
+
+
+def test_sync_location_call_inside_event_loop_fails_closed_without_blocking(
+    monkeypatch, capsys
+):
+    clear_static_location(monkeypatch)
+
+    class SlowGeolocator:
+        async def get_geoposition_async(self):
+            await asyncio.sleep(0.2)
+            return fake_position()
+
+    monkeypatch.setattr(get_location, "Geolocator", SlowGeolocator)
+
+    async def misuse_sync_api():
+        started_at = time.monotonic()
+        result = get_location.get_trusted_location(resolver=LocationTrustResolver())
+        return result, time.monotonic() - started_at
+
+    result, elapsed_seconds = asyncio.run(misuse_sync_api())
+
+    assert result == (None, None)
+    assert elapsed_seconds < 0.1
+    output = capsys.readouterr().out
+    assert "status=unknown" in output
+    assert "reason=sync_called_in_event_loop" in output
 
 
 def test_winrt_api_failure_returns_unknown_without_logging_exception_details(
