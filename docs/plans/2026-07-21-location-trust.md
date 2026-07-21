@@ -24,7 +24,7 @@ Add focused tests for:
 def test_default_and_ip_sources_are_rejected_even_with_small_accuracy(): ...
 def test_satellite_and_wifi_samples_are_trusted_for_aqi_and_exif(): ...
 def test_cellular_is_only_trusted_for_aqi(): ...
-def test_browser_requires_high_accuracy(): ...
+def test_browser_is_high_accuracy_aqi_only_and_never_exif(): ...
 def test_invalid_remote_stale_and_future_samples_are_unknown(): ...
 def test_implausible_short_interval_jump_is_rejected(): ...
 def test_long_gap_allows_a_new_trusted_baseline(): ...
@@ -73,15 +73,15 @@ class LocationDecision:
 
 Implement `LocationTrustResolver.resolve(sample, purpose, *, now=None)` with named constants:
 
-- maximum age: 120 seconds
+- maximum age: 120 seconds for AQI and 60 seconds for EXIF
 - future clock skew: 30 seconds
 - continuity window: 300 seconds
-- maximum plausible speed: 350 m/s
-- EXIF accuracy: 1,000 m
+- maximum plausible speed: 150 m/s after subtracting both accuracy radii
+- EXIF accuracy: 100 m
 - AQI accuracy: 5,000 m for metadata-rich sources
-- browser accuracy: 1,000 m for both purposes
+- browser accuracy: 1,000 m for AQI; browser samples are never trusted for EXIF
 
-Accept explicit `configured`, `satellite`, and `wi_fi`; accept `cellular` only for AQI; reject `ip_address`, `default`, `unknown`, `obfuscated`, remote, invalid, stale, and future samples. Store the last accepted sample only for continuity checking; never return it as a fallback.
+Accept explicit `configured`, `satellite`, and `wi_fi`; accept `cellular` only for AQI; accept a high-accuracy browser sample only for AQI; reject `ip_address`, `default`, `unknown`, `obfuscated`, remote, invalid, stale, and future samples. Continuity requires strictly increasing capture times and computes speed from `max(0, distance - previous_accuracy - current_accuracy)`. Store the last accepted sample only for continuity checking; never return it as a fallback.
 
 **Step 4: Verify GREEN**
 
@@ -126,8 +126,11 @@ Expected: new metadata trust assertions fail because `get_location()` still retu
 
 **Step 3: Implement the WinRT adapter**
 
-- Add a helper that converts `Geocoordinate` metadata into `LocationSample`.
+- Add a helper that converts `Geocoordinate` metadata into `LocationSample`; use
+  `coordinate.timestamp` for freshness and never `position_source_timestamp`.
 - Map WinRT enum names to normalized lowercase source names.
+- Treat an unavailable `is_remote_source` property as unknown and fail closed;
+  do not silently coerce missing metadata to `False`.
 - Add `get_trusted_location(purpose=LocationPurpose.EXIF, resolver=None)`.
 - Preserve `get_location()` as the existing EXIF-compatible tuple wrapper.
 - Build explicit configured coordinates as a fresh `configured` sample.
