@@ -110,7 +110,7 @@ GitHub Releases are automated for version tags. Keep
 tag:
 
 ```powershell
-git tag v1.0.65
+git tag -a v1.0.65 -m "Vantage 1.0.65"
 git push origin v1.0.65
 ```
 
