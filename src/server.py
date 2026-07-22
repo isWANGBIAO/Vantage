@@ -47,7 +47,7 @@ import uuid
 from collections import deque
 from contextlib import closing, suppress
 from contextlib import asynccontextmanager
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, Request, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
@@ -70,6 +70,7 @@ from src.core.user_config import (
 )
 from src.core.media_storage import DEFAULT_LEGACY_MEDIA_ROOT, get_media_paths_settings_file, resolve_media_storage_paths
 from src.manager.manager_main import Monitor
+from src.manager.get_location import get_trusted_location_sample_async
 from src.services.llm_client import LLMClient
 from src.services.model_call_recorder import (
     get_session_usage_summary,
@@ -82,6 +83,14 @@ from src.services.person_detection import (
     detect_foreground_presence_face_boxes,
     detect_presence_count,
     get_face_detector,
+)
+from src.services.location_trust import (
+    browser_location_rejection,
+    compare_browser_location,
+    LocationPurpose,
+    LocationSample,
+    LocationStatus,
+    LocationTrustResolver,
 )
 from src.utils.data_loader import DataLoader
 from src.utils.sensitive_data import redact_sensitive_text
@@ -129,6 +138,7 @@ def get_face_analysis_pipeline_module():
 
 
 app = FastAPI()
+_AQI_LOCATION_TRUST_RESOLVER = LocationTrustResolver()
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
 DEFAULT_BACKEND_BIND_HOST = "127.0.0.1"
@@ -148,7 +158,8 @@ FACE_ANALYSIS_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsin
 FACE_ANALYSIS_DB_FILE = None
 FACE_REPORT_PLOT_OUTPUT_DIR = None
 FACE_LIVE_WINDOW_SECONDS = 60
-FACE_LIVE_SAMPLE_INTERVAL_SECONDS = 0.1
+FACE_LIVE_SAMPLE_INTERVAL_SECONDS = 1.0
+FACE_DETECTION_SAMPLE_INTERVAL_SECONDS = 1.0
 FACE_LIVE_IDLE_INTERVAL_SECONDS = 1.0
 FACE_LIVE_VIEWER_TTL_SECONDS = 5.0
 MONITOR_CAPTURE_INTERVAL_SECONDS = int(os.environ.get("VANTAGE_CAPTURE_INTERVAL_SECONDS", "60"))
@@ -169,7 +180,6 @@ PREWARM_FACE_DETECTION_ON_STARTUP = os.environ.get(
     "VANTAGE_PREWARM_FACE_DETECTION_ON_STARTUP",
     "0",
 ) == "1"
-BACKGROUND_MODE_CACHE_TTL_SECONDS = 2.0
 FACE_OVERLAY_BASE_SCORE_FONT_SCALE = 1.9
 FACE_OVERLAY_SCORE_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
 FACE_OVERLAY_SCORE_THICKNESS = 8
@@ -621,11 +631,6 @@ class SystemState:
 state = SystemState()
 _status_log_records = {}
 _status_log_lock = threading.Lock()
-_background_mode_cache = {
-    "mode": None,
-    "loaded_at": 0.0,
-}
-_background_mode_cache_lock = threading.Lock()
 
 
 def _rate_limited_status_log(key, message, *, interval_seconds, now_fn=None):
@@ -1007,36 +1012,8 @@ def has_active_face_live_viewer(now_ts=None):
     return (now_ts - last_seen_at) <= FACE_LIVE_VIEWER_TTL_SECONDS
 
 
-def sanitize_background_mode(value):
-    return value if value in {"balanced", "prewarm", "power_saver"} else "balanced"
-
-
-def load_background_mode(now_ts=None):
-    now_ts = now_ts if now_ts is not None else time.time()
-    with _background_mode_cache_lock:
-        cached_mode = _background_mode_cache.get("mode")
-        cached_at = float(_background_mode_cache.get("loaded_at") or 0.0)
-        if cached_mode and now_ts - cached_at < BACKGROUND_MODE_CACHE_TTL_SECONDS:
-            return cached_mode
-
-    try:
-        settings = load_settings()
-        mode = sanitize_background_mode(settings.get("background_mode"))
-    except Exception as exc:
-        print(f"Failed to load background mode setting: {exc}")
-        mode = "balanced"
-
-    with _background_mode_cache_lock:
-        _background_mode_cache["mode"] = mode
-        _background_mode_cache["loaded_at"] = now_ts
-    return mode
-
-
 def should_run_face_live_analysis(now_ts=None):
-    background_mode = load_background_mode()
-    if background_mode == "prewarm":
-        return True
-    return has_active_face_live_viewer(now_ts=now_ts)
+    return True
 
 
 def register_video_stream_client():
@@ -1055,11 +1032,8 @@ def has_active_video_stream_client():
 
 
 def should_run_face_detection():
-    if not state.show_person_box:
-        return False
-    if load_background_mode() == "prewarm":
-        return True
-    return has_active_video_stream_client()
+    with state.lock:
+        return bool(state.show_person_box)
 
 
 def refresh_face_report_cache(db_file=None, output_dir=None):
@@ -2298,6 +2272,28 @@ def sleep_while_running(seconds: float):
         time.sleep(min(1.0, remaining))
 
 
+def wait_for_next_inference_start(
+    last_started_at: float | None,
+    interval_seconds: float,
+    *,
+    monotonic_fn=None,
+    sleep_fn=None,
+):
+    monotonic_fn = monotonic_fn or time.monotonic
+    sleep_fn = sleep_fn or time.sleep
+    next_allowed_at = (
+        None
+        if last_started_at is None
+        else last_started_at + max(0.0, interval_seconds)
+    )
+
+    while True:
+        now = monotonic_fn()
+        if next_allowed_at is None or now >= next_allowed_at:
+            return now
+        sleep_fn(next_allowed_at - now)
+
+
 def _monitor_frame_timestamp_is_fresh(published_at, now_monotonic):
     return (
         isinstance(published_at, (int, float))
@@ -2493,20 +2489,37 @@ def camera_loop():
 
 def face_live_loop():
     print("Starting live face analysis loop...")
+    last_inference_started_at = None
     while state.is_running:
         if not should_run_face_live_analysis():
             time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
             continue
 
-        frame_copy = None
         with state.lock:
-            if state.latest_frame is not None:
-                frame_copy = state.latest_frame.copy()
+            frame_available = state.latest_frame is not None
 
-        if frame_copy is not None:
+        if frame_available:
             try:
                 detector, parser, config = get_face_analysis_runtime()
-                result = get_face_analysis_pipeline_module().analyze_image_data(
+                pipeline = get_face_analysis_pipeline_module()
+                wait_for_next_inference_start(
+                    last_inference_started_at,
+                    FACE_LIVE_SAMPLE_INTERVAL_SECONDS,
+                )
+                if not state.is_running:
+                    break
+
+                with state.lock:
+                    frame_copy = (
+                        state.latest_frame.copy()
+                        if state.latest_frame is not None
+                        else None
+                    )
+                if frame_copy is None:
+                    continue
+
+                last_inference_started_at = time.monotonic()
+                result = pipeline.analyze_image_data(
                     frame_copy,
                     detector=detector,
                     parser=parser,
@@ -2516,8 +2529,10 @@ def face_live_loop():
                 store_live_face_result(result)
             except Exception as exc:
                 print(f"Live face analysis error: {exc}")
-
-        time.sleep(FACE_LIVE_SAMPLE_INTERVAL_SECONDS)
+                if state.is_running:
+                    time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
+        else:
+            time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
 
 def face_detection_loop():
     print("Starting camera-facing face detection background thread...")
@@ -2528,6 +2543,7 @@ def face_detection_loop():
         print(f"Camera face detector unavailable in thread: {e}")
         return
 
+    last_inference_started_at = None
     while state.is_running:
         if not should_run_face_detection():
             with state.lock:
@@ -2535,12 +2551,33 @@ def face_detection_loop():
             time.sleep(1)
             continue
             
-        frame_copy = None
         with state.lock:
-            if state.latest_frame is not None:
-                frame_copy = state.latest_frame.copy()
+            frame_available = state.latest_frame is not None
 
-        if frame_copy is not None:
+        if frame_available:
+            wait_for_next_inference_start(
+                last_inference_started_at,
+                FACE_DETECTION_SAMPLE_INTERVAL_SECONDS,
+            )
+            if not state.is_running:
+                break
+            with state.lock:
+                detection_enabled = state.show_person_box
+                if not detection_enabled:
+                    state.person_boxes = []
+                    frame_copy = None
+                else:
+                    frame_copy = (
+                        state.latest_frame.copy()
+                        if state.latest_frame is not None
+                        else None
+                    )
+            if not detection_enabled:
+                continue
+            if frame_copy is None:
+                continue
+
+            last_inference_started_at = time.monotonic()
             try:
                 boxes = detect_foreground_presence_face_boxes(
                     frame_copy,
@@ -2549,14 +2586,15 @@ def face_detection_loop():
                 )
 
                 with state.lock:
-                    state.person_boxes = boxes
+                    state.person_boxes = boxes if state.show_person_box else []
 
             except Exception as e:
                 with state.lock:
                     state.person_boxes = []
                 print(f"Camera face detection error: {e}")
 
-        time.sleep(0.1)
+        else:
+            time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
 
 
 def generate_frames():
@@ -2766,8 +2804,17 @@ async def open_folder(request: Request):
     return JSONResponse(status_code=404, content={"error": "Folder path not found or not set"})
 
 @app.get("/api/aqi")
-async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None):
-    """Fetch current AQI (US) based on Location (Default: SJTU Minhang)"""
+async def get_aqi_stats(
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    accuracy: Optional[float] = None,
+    timestamp_ms: Optional[float] = None,
+):
+    """Fetch current AQI (US) only when a current location is trusted."""
+    target_lat = None
+    target_lon = None
+    city = "Location unavailable"
+
     def build_unavailable_payload(error_message: str | None = None):
         payload = {
             "aqi": None,
@@ -2783,30 +2830,63 @@ async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None
         return payload
 
     try:
-        # Default to Shanghai Jiao Tong University Minhang Campus
-        # Lat: 31.025, Lon: 121.433
-        target_lat = 31.025
-        target_lon = 121.433
-        city = "SJTU Minhang"
-        
-        # Only use provided coordinates if they seem valid and distinct from a generic VPN exit?
-        # User requested "Directly display...", so let's prefer the hardcoded value 
-        # unless we are very sure about the frontend provided ones.
-        # But for now, to satisfy "Then just display...", I will default to these 
-        # and only override if the frontend EXPLICITLY sends something different 
-        # AND we trust it. 
-        # Actually, let's just make it the default fallback instead of IP.
-        # If frontend sends coordinates (permission granted), it might be accurate.
-        # If permission denied, frontend sends null, we use SJTU.
-        
-        if lat is not None and lon is not None:
-             target_lat = lat
-             target_lon = lon
-             city = "Current Location" 
-        
-        print(f"[AQI] Fetching for Lat: {target_lat}, Lon: {target_lon}, City: {city}")
+        browser_values = (lat, lon, accuracy, timestamp_ms)
+        browser_metadata_present = any(value is not None for value in browser_values)
+        browser_sample = None
+        if browser_metadata_present and all(
+            value is not None for value in browser_values
+        ):
+            try:
+                if any(isinstance(value, bool) for value in browser_values):
+                    raise ValueError("boolean browser location metadata")
+                browser_sample = LocationSample(
+                    latitude=float(lat),
+                    longitude=float(lon),
+                    accuracy_m=float(accuracy),
+                    captured_at=datetime.fromtimestamp(
+                        float(timestamp_ms) / 1_000,
+                        tz=timezone.utc,
+                    ),
+                    source="browser",
+                    is_remote_source=False,
+                )
+            except (OverflowError, OSError, TypeError, ValueError):
+                browser_sample = None
 
-        # 2. Get API (US Standard) from Open-Meteo
+        if browser_metadata_present:
+            if browser_sample is None:
+                return build_unavailable_payload()
+            if browser_location_rejection(browser_sample) is not None:
+                return build_unavailable_payload()
+
+        try:
+            backend_sample = await get_trusted_location_sample_async(
+                LocationPurpose.AQI,
+                resolver=_AQI_LOCATION_TRUST_RESOLVER,
+            )
+        except Exception:
+            backend_sample = None
+
+        if backend_sample is None:
+            return build_unavailable_payload()
+
+        if browser_metadata_present:
+            browser_decision = compare_browser_location(
+                browser_sample,
+                backend_sample,
+            )
+            if (
+                browser_decision.status is not LocationStatus.TRUSTED
+                or browser_decision.sample is None
+            ):
+                return build_unavailable_payload()
+
+        target_lat = backend_sample.latitude
+        target_lon = backend_sample.longitude
+
+        city = "Current Location"
+        print("[AQI] Fetching for trusted current location")
+
         aqi_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={target_lat}&longitude={target_lon}&current=us_aqi"
         
         aqi_res = await asyncio.to_thread(requests.get, aqi_url, timeout=5)
@@ -2850,7 +2930,7 @@ async def get_aqi_stats(lat: Optional[float] = None, lon: Optional[float] = None
         }
         
     except Exception as e:
-        print(f"AQI Error: {e}")
+        print("AQI Error: upstream request failed")
         return build_unavailable_payload(str(e))
 
 @app.get("/api/latest_images")
@@ -5490,7 +5570,7 @@ async def get_project_progress():
 
 def main():
     import uvicorn
-    uvicorn.run(app, host=_get_backend_bind_host(), port=8000)
+    uvicorn.run(app, host=_get_backend_bind_host(), port=8000, access_log=False)
 
 
 if __name__ == "__main__":

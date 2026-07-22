@@ -644,7 +644,6 @@
 }
 
 .settings-sidebar button,
-.settings-mode-list button,
 .settings-segmented button {
   background: transparent;
   background-image: none;
@@ -662,7 +661,6 @@
 }
 
 .settings-sidebar button.is-active,
-.settings-mode-list button.is-active,
 .settings-segmented button.is-active {
   border-color: rgba(108, 92, 231, 0.45);
   background: rgba(108, 92, 231, 0.12);
@@ -773,15 +771,13 @@
   color: var(--text-primary);
 }
 
-.settings-segmented,
-.settings-mode-list {
+.settings-segmented {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
 }
 
-.settings-segmented button,
-.settings-mode-list button {
+.settings-segmented button {
   border-radius: 8px;
   padding: 0.55rem 0.75rem;
 }

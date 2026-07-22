@@ -108,9 +108,9 @@ function AppShell() {
   const [systemTheme, setSystemTheme] = useState(() => resolveSystemTheme());
   const theme = resolveEffectiveTheme(themeMode, systemTheme);
   const [settingsState, setSettingsState] = useState(null);
+  const settingsReady = Boolean(settingsState);
   const [backgroundTabsReady, setBackgroundTabsReady] = useState(false);
-  const backgroundMode = settingsState?.settings?.backgroundMode || 'balanced';
-  const shouldRenderBackgroundTabs = backgroundMode === 'prewarm' && backgroundTabsReady;
+  const shouldRenderBackgroundTabs = backgroundTabsReady;
   const lastAppliedOnboardingLanguageRef = useRef(null);
   const [onboardingState, setOnboardingState] = useState(() => ({
     loading: true,
@@ -215,11 +215,7 @@ function AppShell() {
   useEffect(() => {
     let cancelled = false;
 
-    if (!settingsState) {
-      return undefined;
-    }
-
-    if (backgroundMode === 'power_saver') {
+    if (!settingsReady) {
       return undefined;
     }
 
@@ -230,7 +226,7 @@ function AppShell() {
         console.warn('Some background tabs failed to preload.', failedPreloads);
       }
       if (!cancelled) {
-        setBackgroundTabsReady(backgroundMode === 'prewarm');
+        setBackgroundTabsReady(true);
       }
     };
 
@@ -239,7 +235,7 @@ function AppShell() {
     return () => {
       cancelled = true;
     };
-  }, [backgroundMode, settingsState]);
+  }, [settingsReady]);
 
   useEffect(() => {
     if (onboardingState.loading || !onboardingState.displayLanguage) {
@@ -268,7 +264,6 @@ function AppShell() {
         theme: nextTheme,
         themeMode: nextTheme,
         launchAtLogin: Boolean(currentState.settings?.launchAtLogin),
-        backgroundMode: currentState.settings?.backgroundMode || 'balanced',
         actionPlanAutoGenerate: currentState.settings?.actionPlanAutoGenerate !== false,
         voiceProviderMode: currentState.settings?.voiceProviderMode,
         voiceBaseUrl: currentState.settings?.voiceBaseUrl,

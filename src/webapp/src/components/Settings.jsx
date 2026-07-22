@@ -6,7 +6,6 @@ import {
   EyeOff,
   FolderOpen,
   Info,
-  MonitorCog,
   Plus,
   RefreshCw,
   Save,
@@ -47,12 +46,6 @@ const DEFAULT_VOICE_MODEL = 'FunAudioLLM/SenseVoiceSmall';
 const PROVIDER_MODE_OPTIONS = [
   { value: 'inherit_ai', labelKey: 'settings.provider.mode.inherit_ai' },
   { value: 'custom', labelKey: 'settings.provider.mode.custom' },
-];
-
-const BACKGROUND_MODE_OPTIONS = [
-  { value: 'balanced', labelKey: 'settings.performance.balanced' },
-  { value: 'prewarm', labelKey: 'settings.performance.prewarm' },
-  { value: 'power_saver', labelKey: 'settings.performance.power_saver' },
 ];
 
 const PATH_LABELS = [
@@ -182,7 +175,6 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     theme: currentTheme,
     themeMode: currentThemeMode,
     launchAtLogin: false,
-    backgroundMode: 'balanced',
     actionPlanAutoGenerate: true,
     voiceProviderMode: 'inherit_ai',
     voiceBaseUrl: '',
@@ -236,7 +228,6 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         theme: nextState.settings.theme || currentTheme,
         themeMode: nextState.settings.themeMode || nextState.settings.theme || currentThemeMode,
         launchAtLogin: Boolean(nextState.settings.launchAtLogin),
-        backgroundMode: nextState.settings.backgroundMode || 'balanced',
         actionPlanAutoGenerate: nextState.settings.actionPlanAutoGenerate !== false,
         voiceProviderMode: nextState.settings.voiceProviderMode || 'inherit_ai',
         voiceBaseUrl: nextState.settings.voiceBaseUrl || '',
@@ -284,7 +275,6 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       `language=${form.displayLanguage}`,
       `theme=${form.theme}`,
       `themeMode=${form.themeMode}`,
-      `backgroundMode=${form.backgroundMode}`,
       `actionPlanAutoGenerate=${form.actionPlanAutoGenerate}`,
       `voiceProviderMode=${form.voiceProviderMode}`,
       `voiceBaseUrl=${form.voiceBaseUrl || ''}`,
@@ -295,7 +285,6 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       `provider=${form.providerConfig.selected_provider || ''}`,
     ].join('\n');
   }, [
-    form.backgroundMode,
     form.actionPlanAutoGenerate,
     form.displayLanguage,
     form.providerConfig.selected_provider,
@@ -563,7 +552,6 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         theme: savedState.settings.theme,
         themeMode: savedState.settings.themeMode,
         launchAtLogin: Boolean(savedState.settings.launchAtLogin),
-        backgroundMode: savedState.settings.backgroundMode,
         actionPlanAutoGenerate: savedState.settings.actionPlanAutoGenerate !== false,
         voiceProviderMode: savedState.settings.voiceProviderMode || 'inherit_ai',
         voiceBaseUrl: savedState.settings.voiceBaseUrl || '',
@@ -960,21 +948,6 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
 
   const renderPerformance = () => (
     <section className="settings-section">
-      <SettingsRow label={t('settings.performance.background_mode')}>
-        <div className="settings-mode-list">
-          {BACKGROUND_MODE_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className={form.backgroundMode === option.value ? 'is-active' : ''}
-              onClick={() => setForm((prev) => ({ ...prev, backgroundMode: option.value }))}
-            >
-              <MonitorCog size={16} />
-              {t(option.labelKey)}
-            </button>
-          ))}
-        </div>
-      </SettingsRow>
       <label className="settings-checkbox-row">
         <input
           type="checkbox"

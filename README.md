@@ -110,13 +110,13 @@ GitHub Releases are automated for version tags. Keep
 tag:
 
 ```powershell
-git tag v1.0.59
-git push origin v1.0.59
+git tag -a v1.0.65 -m "Vantage 1.0.65"
+git push origin v1.0.65
 ```
 
 The `Release` workflow builds the Windows installer, generates `SHA256SUMS.txt`,
 and publishes the assets to the matching GitHub Release. The tag must match the
-frontend package version, for example `v1.0.59` for package version `1.0.59`.
+frontend package version, for example `v1.0.65` for package version `1.0.65`.
 
 macOS full build, install, and launch:
 
@@ -148,6 +148,13 @@ Copy [.env.example](.env.example) to `.env` for local development and fill only
 the providers you use. Never commit real secrets. Voice transcription normally
 uses Settings; `VANTAGE_TRANSCRIBE_*` variables provide CLI/subprocess fallback
 configuration for local development.
+
+Location is fail-closed: when Vantage cannot obtain a current, trustworthy
+device position, AQI reports location unavailable and captured images omit GPS
+metadata instead of guessing a city. For a stationary installation, set both
+`VANTAGE_STATIC_LATITUDE` and `VANTAGE_STATIC_LONGITUDE` only as an explicit
+user-declared fixed-location override; leave both empty for normal device
+location handling.
 
 ## Optional Model Assets
 

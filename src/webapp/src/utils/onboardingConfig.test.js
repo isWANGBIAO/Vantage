@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import fs from 'node:fs';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
@@ -9,6 +10,7 @@ const require = createRequire(import.meta.url);
 const {
   buildSettingsState,
   getOnboardingState,
+  loadSettings,
   maskProviderConfig,
   sanitizeProviderConfig,
   saveSettingsPayload,
@@ -64,7 +66,7 @@ test('getOnboardingState defaults to incomplete when settings file is missing', 
   });
 });
 
-test('loadSettings defaults formal theme and background mode settings', () => {
+test('loadSettings defaults formal settings without background mode', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'vantage-settings-'));
   const runtimePaths = {
     configDir: path.join(root, 'config'),
@@ -82,7 +84,7 @@ test('loadSettings defaults formal theme and background mode settings', () => {
 
   assert.equal(state.settings.theme, 'dark');
   assert.equal(state.settings.themeMode, 'dark');
-  assert.equal(state.settings.backgroundMode, 'balanced');
+  assert.equal(Object.hasOwn(state.settings, 'backgroundMode'), false);
   assert.equal(state.settings.actionPlanAutoGenerate, true);
   assert.equal(state.settings.voiceProviderMode, 'inherit_ai');
   assert.equal(state.settings.voiceBaseUrl, '');
@@ -101,6 +103,92 @@ test('loadSettings defaults formal theme and background mode settings', () => {
   assert.equal(state.app.version, '1.2.3');
   assert.equal(state.app.mode, 'packaged');
   assert.equal(state.systemLocale, 'zh-CN');
+});
+
+test('loadSettings migrates every v1 background mode to v2 without losing other settings', () => {
+  for (const legacyMode of ['balanced', 'prewarm', 'power_saver']) {
+    const root = mkdtempSync(path.join(tmpdir(), 'vantage-settings-v1-'));
+    const runtimePaths = {
+      configDir: path.join(root, 'config'),
+      migrationDir: path.join(root, 'migration'),
+      dataDir: path.join(root, 'data'),
+    };
+    mkdirSync(runtimePaths.configDir, { recursive: true });
+    writeFileSync(
+      path.join(runtimePaths.configDir, 'settings.json'),
+      JSON.stringify({
+        version: 1,
+        onboarding_completed: true,
+        launch_at_login: true,
+        display_language: 'zh-CN',
+        theme: 'light',
+        theme_mode: 'auto',
+        background_mode: legacyMode,
+        action_plan_auto_generate: false,
+        voice_provider_mode: 'custom',
+        voice_base_url: 'https://voice.example.invalid/v1',
+        voice_api_key: 'sk-voice',
+        voice_model: 'sensevoice',
+        voice_models: ['sensevoice', 'sensevoice-large'],
+      }),
+      'utf8',
+    );
+
+    const state = buildSettingsState({ runtimePaths, projectRoot: root });
+    const persisted = JSON.parse(
+      readFileSync(path.join(runtimePaths.configDir, 'settings.json'), 'utf8'),
+    );
+
+    assert.equal(Object.hasOwn(state.settings, 'backgroundMode'), false);
+    assert.equal(state.settings.displayLanguage, 'zh-CN');
+    assert.equal(state.settings.themeMode, 'auto');
+    assert.equal(state.settings.launchAtLogin, true);
+    assert.equal(state.settings.actionPlanAutoGenerate, false);
+    assert.equal(state.settings.voiceProviderMode, 'custom');
+    assert.deepEqual(state.settings.voiceModels, ['sensevoice', 'sensevoice-large']);
+    assert.equal(persisted.version, 2);
+    assert.equal(Object.hasOwn(persisted, 'background_mode'), false);
+    assert.equal(persisted.theme_mode, 'auto');
+    assert.equal(persisted.action_plan_auto_generate, false);
+    assert.deepEqual(persisted.voice_models, ['sensevoice', 'sensevoice-large']);
+  }
+});
+
+test('loadSettings does not rewrite an already migrated v2 settings file', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-settings-stable-v2-'));
+  const runtimePaths = { configDir: path.join(root, 'config') };
+  mkdirSync(runtimePaths.configDir, { recursive: true });
+  writeFileSync(
+    path.join(runtimePaths.configDir, 'settings.json'),
+    JSON.stringify({
+      version: 1,
+      onboarding_completed: true,
+      launch_at_login: true,
+      display_language: 'zh-CN',
+      theme: 'light',
+      theme_mode: 'auto',
+      background_mode: 'prewarm',
+      action_plan_auto_generate: false,
+    }),
+    'utf8',
+  );
+
+  loadSettings(runtimePaths);
+
+  const originalWriteFileSync = fs.writeFileSync;
+  let writeCount = 0;
+  fs.writeFileSync = (...args) => {
+    writeCount += 1;
+    return originalWriteFileSync(...args);
+  };
+  try {
+    const second = loadSettings(runtimePaths);
+    assert.equal(second.version, 2);
+    assert.equal(Object.hasOwn(second, 'background_mode'), false);
+    assert.equal(writeCount, 0);
+  } finally {
+    fs.writeFileSync = originalWriteFileSync;
+  }
 });
 
 test('saveSettingsPayload persists general settings and provider config', () => {
@@ -160,7 +248,7 @@ test('saveSettingsPayload persists general settings and provider config', () => 
   assert.equal(state.settings.theme, 'light');
   assert.equal(state.settings.themeMode, 'auto');
   assert.equal(state.settings.launchAtLogin, true);
-  assert.equal(state.settings.backgroundMode, 'power_saver');
+  assert.equal(Object.hasOwn(state.settings, 'backgroundMode'), false);
   assert.equal(state.settings.actionPlanAutoGenerate, false);
   assert.equal(state.settings.voiceProviderMode, 'custom');
   assert.equal(state.settings.voiceBaseUrl, 'https://voice.example.invalid/v1');
@@ -178,13 +266,12 @@ test('saveSettingsPayload persists general settings and provider config', () => 
   assert.equal(state.settings.imageLastRefreshedAt, '2026-05-03T12:01:00+08:00');
   assert.equal(state.provider.providers.cliproxyapi.api_key, '********');
   assert.deepEqual(settings, {
-    version: 1,
+    version: 2,
     onboarding_completed: false,
     launch_at_login: true,
     display_language: 'en-US',
     theme: 'light',
     theme_mode: 'auto',
-    background_mode: 'power_saver',
     action_plan_auto_generate: false,
     voice_provider_mode: 'custom',
     voice_base_url: 'https://voice.example.invalid/v1',
@@ -259,7 +346,6 @@ test('saveSettingsPayload persists multi provider settings without losing masked
       displayLanguage: 'zh-CN',
       theme: 'dark',
       launchAtLogin: false,
-      backgroundMode: 'balanced',
       providerConfig: {
         version: 2,
         selected_provider: 'cloud',
@@ -422,7 +508,6 @@ test('saveSettingsPayload does not switch to an empty submitted provider', () =>
       displayLanguage: 'zh-CN',
       theme: 'light',
       launchAtLogin: false,
-      backgroundMode: 'balanced',
       provider: {
         route: 'cliproxyapi',
         apiKey: '',
@@ -552,20 +637,25 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
 
   assert.equal(result.completed, true);
   assert.deepEqual(settings, {
-    version: 1,
+    version: 2,
     onboarding_completed: true,
     launch_at_login: true,
     display_language: 'en-US',
     theme: 'dark',
     theme_mode: 'dark',
-    background_mode: 'balanced',
     action_plan_auto_generate: true,
+    voice_provider_mode: 'inherit_ai',
     voice_base_url: '',
     voice_api_key: '',
     voice_model: 'FunAudioLLM/SenseVoiceSmall',
+    voice_models: ['FunAudioLLM/SenseVoiceSmall'],
+    voice_last_refreshed_at: null,
+    image_provider_mode: 'inherit_ai',
     image_base_url: '',
     image_api_key: '',
     image_model: '',
+    image_models: [],
+    image_last_refreshed_at: null,
   });
   assert.deepEqual(providers, {
     version: 2,
@@ -583,6 +673,83 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
         last_refreshed_at: null,
       },
     },
+  });
+});
+
+test('saveOnboardingCompletion preserves every formal setting while migrating full v1 config', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-onboarding-full-v1-'));
+  const runtimePaths = {
+    configDir: path.join(root, 'config'),
+    historyDir: path.join(root, 'history'),
+    migrationDir: path.join(root, 'migration'),
+    dataDir: path.join(root, 'data'),
+  };
+  mkdirSync(runtimePaths.configDir, { recursive: true });
+  writeFileSync(
+    path.join(runtimePaths.configDir, 'settings.json'),
+    JSON.stringify({
+      version: 1,
+      onboarding_completed: false,
+      launch_at_login: false,
+      display_language: 'en-US',
+      theme: 'light',
+      theme_mode: 'auto',
+      background_mode: 'power_saver',
+      action_plan_auto_generate: false,
+      voice_provider_mode: 'custom',
+      voice_base_url: 'https://voice.example.invalid/v1',
+      voice_api_key: 'sk-voice',
+      voice_model: 'sensevoice',
+      voice_models: ['sensevoice', 'sensevoice-large'],
+      voice_last_refreshed_at: '2026-05-03T12:00:00+08:00',
+      image_provider_mode: 'custom',
+      image_base_url: 'https://images.example.invalid/v1',
+      image_api_key: 'sk-image',
+      image_model: 'image-model',
+      image_models: ['image-model', 'image-large'],
+      image_last_refreshed_at: '2026-05-03T12:01:00+08:00',
+    }),
+    'utf8',
+  );
+
+  saveOnboardingCompletion({
+    runtimePaths,
+    submission: {
+      launchAtLogin: true,
+      selectedProvider: 'openai',
+      apiKey: '',
+      baseUrl: '',
+      model: '',
+      displayLanguage: 'zh-CN',
+      skipChatSetup: true,
+      importLegacyData: false,
+      legacyRoot: null,
+    },
+  });
+
+  const settings = JSON.parse(
+    readFileSync(path.join(runtimePaths.configDir, 'settings.json'), 'utf8'),
+  );
+  assert.deepEqual(settings, {
+    version: 2,
+    onboarding_completed: true,
+    launch_at_login: true,
+    display_language: 'zh-CN',
+    theme: 'light',
+    theme_mode: 'auto',
+    action_plan_auto_generate: false,
+    voice_provider_mode: 'custom',
+    voice_base_url: 'https://voice.example.invalid/v1',
+    voice_api_key: 'sk-voice',
+    voice_model: 'sensevoice',
+    voice_models: ['sensevoice', 'sensevoice-large'],
+    voice_last_refreshed_at: '2026-05-03T12:00:00+08:00',
+    image_provider_mode: 'custom',
+    image_base_url: 'https://images.example.invalid/v1',
+    image_api_key: 'sk-image',
+    image_model: 'image-model',
+    image_models: ['image-model', 'image-large'],
+    image_last_refreshed_at: '2026-05-03T12:01:00+08:00',
   });
 });
 

@@ -58,13 +58,18 @@ test('Settings saves provider config and refreshes available LLM models', () => 
   assert.ok(settingsSource.includes("vantage:llm-models-updated"));
   assert.ok(settingsSource.includes('providerConfig'));
   assert.ok(settingsSource.includes('default_model'));
-  assert.ok(settingsSource.includes('backgroundMode'));
+  assert.equal(settingsSource.includes('backgroundMode'), false);
 });
 
 test('Settings exposes Action Plan startup autogeneration as a performance setting', () => {
   assert.ok(settingsSource.includes('actionPlanAutoGenerate'));
   assert.ok(settingsSource.includes('settings.performance.action_plan_auto_generate'));
   assert.ok(settingsSource.includes('settings.performance.action_plan_auto_generate_hint'));
+  assert.equal(settingsSource.includes('BACKGROUND_MODE_OPTIONS'), false);
+  assert.equal(settingsSource.includes('settings.performance.background_mode'), false);
+  assert.equal(settingsSource.includes('settings.performance.balanced'), false);
+  assert.equal(settingsSource.includes('settings.performance.prewarm'), false);
+  assert.equal(settingsSource.includes('settings.performance.power_saver'), false);
 });
 
 test('Settings renders multi-provider controls and discover refresh', () => {

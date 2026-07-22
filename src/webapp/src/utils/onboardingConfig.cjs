@@ -2,13 +2,12 @@ const fs = require('fs');
 const path = require('path');
 
 const DEFAULT_SETTINGS = {
-  version: 1,
+  version: 2,
   onboarding_completed: false,
   launch_at_login: false,
   display_language: 'system',
   theme: 'dark',
   theme_mode: 'dark',
-  background_mode: 'balanced',
   action_plan_auto_generate: true,
   voice_provider_mode: 'inherit_ai',
   voice_base_url: '',
@@ -117,12 +116,6 @@ function sanitizeThemeMode(value, fallbackTheme = DEFAULT_SETTINGS.theme) {
   return sanitizeTheme(fallbackTheme);
 }
 
-function sanitizeBackgroundMode(value) {
-  return value === 'balanced' || value === 'prewarm' || value === 'power_saver'
-    ? value
-    : DEFAULT_SETTINGS.background_mode;
-}
-
 function sanitizeSpecialProviderMode(value, safePayload, prefix) {
   if (value === 'custom' || value === 'inherit_ai') {
     return value;
@@ -139,7 +132,7 @@ function sanitizeSpecialProviderMode(value, safePayload, prefix) {
 function sanitizeSettings(payload) {
   const safePayload = payload && typeof payload === 'object' ? payload : {};
   return {
-    version: 1,
+    version: DEFAULT_SETTINGS.version,
     onboarding_completed:
       typeof safePayload.onboarding_completed === 'boolean'
         ? safePayload.onboarding_completed
@@ -151,7 +144,6 @@ function sanitizeSettings(payload) {
     display_language: sanitizeDisplayLanguage(safePayload.display_language),
     theme: sanitizeTheme(safePayload.theme),
     theme_mode: sanitizeThemeMode(safePayload.theme_mode, safePayload.theme),
-    background_mode: sanitizeBackgroundMode(safePayload.background_mode),
     action_plan_auto_generate:
       typeof safePayload.action_plan_auto_generate === 'boolean'
         ? safePayload.action_plan_auto_generate
@@ -273,7 +265,13 @@ function sanitizeMigrationState(payload) {
 }
 
 function loadSettings(runtimePaths) {
-  return sanitizeSettings(readJsonFile(getSettingsFile(runtimePaths)));
+  const settingsFile = getSettingsFile(runtimePaths);
+  const rawSettings = readJsonFile(settingsFile);
+  const sanitizedSettings = sanitizeSettings(rawSettings);
+  if (JSON.stringify(rawSettings) !== JSON.stringify(sanitizedSettings)) {
+    writeJsonFile(settingsFile, sanitizedSettings);
+  }
+  return sanitizedSettings;
 }
 
 function loadProviderConfig(runtimePaths) {
@@ -412,7 +410,6 @@ function buildSettingsState({
       theme: settings.theme,
       themeMode: settings.theme_mode,
       launchAtLogin: settings.launch_at_login,
-      backgroundMode: settings.background_mode,
       actionPlanAutoGenerate: settings.action_plan_auto_generate,
       voiceProviderMode: settings.voice_provider_mode,
       voiceBaseUrl: settings.voice_base_url,
@@ -562,7 +559,6 @@ function saveSettingsPayload({
       typeof safePayload.launchAtLogin === 'boolean'
         ? safePayload.launchAtLogin
         : currentSettings.launch_at_login,
-    background_mode: sanitizeBackgroundMode(safePayload.backgroundMode),
     action_plan_auto_generate:
       typeof safePayload.actionPlanAutoGenerate === 'boolean'
         ? safePayload.actionPlanAutoGenerate
@@ -758,25 +754,15 @@ function migrateLegacyHistory({ runtimePaths, legacyRoot, importLegacyData, now 
 
 function saveOnboardingCompletion({ runtimePaths, submission, projectRoot, now = () => new Date().toISOString() }) {
   const currentSettings = loadSettings(runtimePaths);
-  const settings = {
-    version: 1,
+  const settings = saveSettings(runtimePaths, {
+    ...currentSettings,
+    version: DEFAULT_SETTINGS.version,
     onboarding_completed: true,
     launch_at_login: Boolean(submission.launchAtLogin),
     display_language: sanitizeDisplayLanguage(
       submission.displayLanguage ?? currentSettings.display_language,
     ),
-    theme: currentSettings.theme,
-    theme_mode: currentSettings.theme_mode,
-    background_mode: currentSettings.background_mode,
-    action_plan_auto_generate: currentSettings.action_plan_auto_generate,
-    voice_base_url: currentSettings.voice_base_url,
-    voice_api_key: currentSettings.voice_api_key,
-    voice_model: currentSettings.voice_model,
-    image_base_url: currentSettings.image_base_url,
-    image_api_key: currentSettings.image_api_key,
-    image_model: currentSettings.image_model,
-  };
-  writeJsonFile(getSettingsFile(runtimePaths), settings);
+  });
 
   const providerConfig = buildProviderConfigFromSubmission(submission);
   writeJsonFile(getProvidersFile(runtimePaths), providerConfig);
@@ -811,7 +797,6 @@ module.exports = {
   loadProviderConfig,
   loadSettings,
   maskProviderConfig,
-  sanitizeBackgroundMode,
   sanitizeDisplayLanguage,
   sanitizeMigrationState,
   sanitizeProviderConfig,

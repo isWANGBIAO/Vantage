@@ -5,7 +5,6 @@ const DEFAULT_SETTINGS_STATE = {
     theme: 'dark',
     themeMode: 'dark',
     launchAtLogin: false,
-    backgroundMode: 'balanced',
     voiceProviderMode: 'inherit_ai',
     voiceBaseUrl: '',
     voiceApiKey: '',
@@ -84,10 +83,6 @@ function normalizeSettings(payload, mode) {
         typeof safeSettings.launchAtLogin === 'boolean'
           ? safeSettings.launchAtLogin
           : defaults.settings.launchAtLogin,
-      backgroundMode:
-        ['balanced', 'prewarm', 'power_saver'].includes(safeSettings.backgroundMode)
-          ? safeSettings.backgroundMode
-          : defaults.settings.backgroundMode,
       voiceProviderMode:
         safeSettings.voiceProviderMode === 'custom' ? 'custom' : defaults.settings.voiceProviderMode,
       voiceBaseUrl:
@@ -213,7 +208,6 @@ export async function saveSettingsState(submission, electronAPI) {
           theme: submission?.theme,
           themeMode: submission?.themeMode,
           launchAtLogin: Boolean(submission?.launchAtLogin),
-          backgroundMode: submission?.backgroundMode,
           voiceProviderMode: submission?.voiceProviderMode,
           voiceBaseUrl: submission?.voiceBaseUrl,
           voiceApiKey: submission?.voiceApiKey,
@@ -241,7 +235,9 @@ export async function saveSettingsState(submission, electronAPI) {
     return normalized;
   }
 
-  const payload = await resolvedElectronAPI.saveSettings(submission);
+  const sanitizedSubmission = { ...(submission || {}) };
+  delete sanitizedSubmission.backgroundMode;
+  const payload = await resolvedElectronAPI.saveSettings(sanitizedSubmission);
   return normalizeSettings(payload, 'electron');
 }
 

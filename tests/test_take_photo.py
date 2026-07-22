@@ -239,6 +239,12 @@ class TakePhotoTests(unittest.TestCase):
                 patch.object(server, "should_run_face_detection", return_value=True),
                 patch.object(
                     server,
+                    "wait_for_next_inference_start",
+                    side_effect=[0.0, 1.0],
+                    create=True,
+                ),
+                patch.object(
+                    server,
                     "detect_foreground_presence_face_boxes",
                     side_effect=detect_live_presence,
                 ),
