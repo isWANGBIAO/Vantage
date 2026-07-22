@@ -158,7 +158,8 @@ FACE_ANALYSIS_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsin
 FACE_ANALYSIS_DB_FILE = None
 FACE_REPORT_PLOT_OUTPUT_DIR = None
 FACE_LIVE_WINDOW_SECONDS = 60
-FACE_LIVE_SAMPLE_INTERVAL_SECONDS = 0.1
+FACE_LIVE_SAMPLE_INTERVAL_SECONDS = 1.0
+FACE_DETECTION_SAMPLE_INTERVAL_SECONDS = 1.0
 FACE_LIVE_IDLE_INTERVAL_SECONDS = 1.0
 FACE_LIVE_VIEWER_TTL_SECONDS = 5.0
 MONITOR_CAPTURE_INTERVAL_SECONDS = int(os.environ.get("VANTAGE_CAPTURE_INTERVAL_SECONDS", "60"))
@@ -179,7 +180,6 @@ PREWARM_FACE_DETECTION_ON_STARTUP = os.environ.get(
     "VANTAGE_PREWARM_FACE_DETECTION_ON_STARTUP",
     "0",
 ) == "1"
-BACKGROUND_MODE_CACHE_TTL_SECONDS = 2.0
 FACE_OVERLAY_BASE_SCORE_FONT_SCALE = 1.9
 FACE_OVERLAY_SCORE_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
 FACE_OVERLAY_SCORE_THICKNESS = 8
@@ -631,11 +631,6 @@ class SystemState:
 state = SystemState()
 _status_log_records = {}
 _status_log_lock = threading.Lock()
-_background_mode_cache = {
-    "mode": None,
-    "loaded_at": 0.0,
-}
-_background_mode_cache_lock = threading.Lock()
 
 
 def _rate_limited_status_log(key, message, *, interval_seconds, now_fn=None):
@@ -1017,36 +1012,8 @@ def has_active_face_live_viewer(now_ts=None):
     return (now_ts - last_seen_at) <= FACE_LIVE_VIEWER_TTL_SECONDS
 
 
-def sanitize_background_mode(value):
-    return value if value in {"balanced", "prewarm", "power_saver"} else "balanced"
-
-
-def load_background_mode(now_ts=None):
-    now_ts = now_ts if now_ts is not None else time.time()
-    with _background_mode_cache_lock:
-        cached_mode = _background_mode_cache.get("mode")
-        cached_at = float(_background_mode_cache.get("loaded_at") or 0.0)
-        if cached_mode and now_ts - cached_at < BACKGROUND_MODE_CACHE_TTL_SECONDS:
-            return cached_mode
-
-    try:
-        settings = load_settings()
-        mode = sanitize_background_mode(settings.get("background_mode"))
-    except Exception as exc:
-        print(f"Failed to load background mode setting: {exc}")
-        mode = "balanced"
-
-    with _background_mode_cache_lock:
-        _background_mode_cache["mode"] = mode
-        _background_mode_cache["loaded_at"] = now_ts
-    return mode
-
-
 def should_run_face_live_analysis(now_ts=None):
-    background_mode = load_background_mode()
-    if background_mode == "prewarm":
-        return True
-    return has_active_face_live_viewer(now_ts=now_ts)
+    return True
 
 
 def register_video_stream_client():
@@ -1065,11 +1032,8 @@ def has_active_video_stream_client():
 
 
 def should_run_face_detection():
-    if not state.show_person_box:
-        return False
-    if load_background_mode() == "prewarm":
-        return True
-    return has_active_video_stream_client()
+    with state.lock:
+        return bool(state.show_person_box)
 
 
 def refresh_face_report_cache(db_file=None, output_dir=None):
@@ -2308,6 +2272,28 @@ def sleep_while_running(seconds: float):
         time.sleep(min(1.0, remaining))
 
 
+def wait_for_next_inference_start(
+    last_started_at: float | None,
+    interval_seconds: float,
+    *,
+    monotonic_fn=None,
+    sleep_fn=None,
+):
+    monotonic_fn = monotonic_fn or time.monotonic
+    sleep_fn = sleep_fn or time.sleep
+    next_allowed_at = (
+        None
+        if last_started_at is None
+        else last_started_at + max(0.0, interval_seconds)
+    )
+
+    while True:
+        now = monotonic_fn()
+        if next_allowed_at is None or now >= next_allowed_at:
+            return now
+        sleep_fn(next_allowed_at - now)
+
+
 def _monitor_frame_timestamp_is_fresh(published_at, now_monotonic):
     return (
         isinstance(published_at, (int, float))
@@ -2503,6 +2489,7 @@ def camera_loop():
 
 def face_live_loop():
     print("Starting live face analysis loop...")
+    last_inference_started_at = None
     while state.is_running:
         if not should_run_face_live_analysis():
             time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
@@ -2514,6 +2501,13 @@ def face_live_loop():
                 frame_copy = state.latest_frame.copy()
 
         if frame_copy is not None:
+            inference_started_at = wait_for_next_inference_start(
+                last_inference_started_at,
+                FACE_LIVE_SAMPLE_INTERVAL_SECONDS,
+            )
+            if not state.is_running:
+                break
+            last_inference_started_at = inference_started_at
             try:
                 detector, parser, config = get_face_analysis_runtime()
                 result = get_face_analysis_pipeline_module().analyze_image_data(
@@ -2526,8 +2520,8 @@ def face_live_loop():
                 store_live_face_result(result)
             except Exception as exc:
                 print(f"Live face analysis error: {exc}")
-
-        time.sleep(FACE_LIVE_SAMPLE_INTERVAL_SECONDS)
+        else:
+            time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
 
 def face_detection_loop():
     print("Starting camera-facing face detection background thread...")
@@ -2538,6 +2532,7 @@ def face_detection_loop():
         print(f"Camera face detector unavailable in thread: {e}")
         return
 
+    last_inference_started_at = None
     while state.is_running:
         if not should_run_face_detection():
             with state.lock:
@@ -2551,6 +2546,19 @@ def face_detection_loop():
                 frame_copy = state.latest_frame.copy()
 
         if frame_copy is not None:
+            inference_started_at = wait_for_next_inference_start(
+                last_inference_started_at,
+                FACE_DETECTION_SAMPLE_INTERVAL_SECONDS,
+            )
+            with state.lock:
+                detection_enabled = state.show_person_box
+                if not detection_enabled:
+                    state.person_boxes = []
+            if not state.is_running:
+                break
+            if not detection_enabled:
+                continue
+            last_inference_started_at = inference_started_at
             try:
                 boxes = detect_foreground_presence_face_boxes(
                     frame_copy,
@@ -2559,14 +2567,15 @@ def face_detection_loop():
                 )
 
                 with state.lock:
-                    state.person_boxes = boxes
+                    state.person_boxes = boxes if state.show_person_box else []
 
             except Exception as e:
                 with state.lock:
                     state.person_boxes = []
                 print(f"Camera face detection error: {e}")
 
-        time.sleep(0.1)
+        else:
+            time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
 
 
 def generate_frames():

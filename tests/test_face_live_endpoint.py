@@ -1,6 +1,7 @@
 import asyncio
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from src import server
 
@@ -13,6 +14,22 @@ class _DummyCamera:
         return self._opened
 
 
+class _DummyFrame:
+    def copy(self):
+        return self
+
+
+class _FakeClock:
+    def __init__(self):
+        self.current = 0.0
+
+    def monotonic(self):
+        return self.current
+
+    def sleep(self, seconds):
+        self.current += max(0.0, seconds)
+
+
 class FaceLiveEndpointTests(unittest.TestCase):
     def setUp(self):
         self.original_points = getattr(server.state, "live_face_points", None)
@@ -23,6 +40,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
         self.original_show_person_box = getattr(server.state, "show_person_box", None)
         self.original_person_boxes = getattr(server.state, "person_boxes", None)
         self.original_video_stream_client_count = getattr(server.state, "video_stream_client_count", None)
+        self.original_is_running = server.state.is_running
 
     def tearDown(self):
         server.state.live_face_points = [] if self.original_points is None else self.original_points
@@ -36,6 +54,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
             delattr(server.state, "video_stream_client_count")
         else:
             server.state.video_stream_client_count = self.original_video_stream_client_count
+        server.state.is_running = self.original_is_running
 
     def test_store_live_face_result_keeps_only_passing_points_within_window(self):
         server.state.live_face_points = []
@@ -96,8 +115,9 @@ class FaceLiveEndpointTests(unittest.TestCase):
         self.assertIsNone(payload["latest_score"])
         self.assertEqual(payload["latest_datetime"], "")
 
-    def test_live_sampling_interval_is_100ms(self):
-        self.assertEqual(server.FACE_LIVE_SAMPLE_INTERVAL_SECONDS, 0.1)
+    def test_live_inference_intervals_are_one_second(self):
+        self.assertEqual(server.FACE_LIVE_SAMPLE_INTERVAL_SECONDS, 1.0)
+        self.assertEqual(server.FACE_DETECTION_SAMPLE_INTERVAL_SECONDS, 1.0)
 
     def test_face_live_viewer_activity_expires_without_visible_polling(self):
         server.mark_face_live_viewer_active(now_ts=100.0)
@@ -105,19 +125,16 @@ class FaceLiveEndpointTests(unittest.TestCase):
         self.assertTrue(server.has_active_face_live_viewer(now_ts=102.0))
         self.assertFalse(server.has_active_face_live_viewer(now_ts=110.0))
 
-    def test_background_mode_controls_face_live_analysis_gating(self):
+    def test_face_live_analysis_remains_eligible_without_visible_viewer(self):
         server.state.face_live_last_seen_at = 0.0
 
-        with patch.object(server, "load_background_mode", return_value="balanced"):
-            self.assertFalse(server.should_run_face_live_analysis(now_ts=100.0))
-
-        with patch.object(server, "load_background_mode", return_value="prewarm"):
+        with patch.object(
+            server,
+            "load_background_mode",
+            return_value="balanced",
+            create=True,
+        ):
             self.assertTrue(server.should_run_face_live_analysis(now_ts=100.0))
-
-        server.mark_face_live_viewer_active(now_ts=100.0)
-        with patch.object(server, "load_background_mode", return_value="power_saver"):
-            self.assertTrue(server.should_run_face_live_analysis(now_ts=102.0))
-            self.assertFalse(server.should_run_face_live_analysis(now_ts=110.0))
 
     def test_get_face_live_only_marks_viewer_active_when_requested(self):
         server.state.camera = _DummyCamera(True)
@@ -131,27 +148,125 @@ class FaceLiveEndpointTests(unittest.TestCase):
 
         self.assertEqual(server.state.face_live_last_seen_at, 123.0)
 
-    def test_face_detection_requires_enabled_boxes_and_active_video_stream_client(self):
+    def test_face_detection_only_depends_on_enabled_boxes(self):
         server.state.show_person_box = True
         server.state.video_stream_client_count = 0
 
-        with patch.object(server, "load_background_mode", return_value="balanced"):
-            self.assertFalse(server.should_run_face_detection())
-
-        server.register_video_stream_client()
-        with patch.object(server, "load_background_mode", return_value="balanced"):
+        with patch.object(
+            server,
+            "load_background_mode",
+            return_value="balanced",
+            create=True,
+        ):
             self.assertTrue(server.should_run_face_detection())
 
         server.state.show_person_box = False
-        with patch.object(server, "load_background_mode", return_value="balanced"):
+        with patch.object(
+            server,
+            "load_background_mode",
+            return_value="prewarm",
+            create=True,
+        ):
             self.assertFalse(server.should_run_face_detection())
 
-    def test_face_detection_prewarm_mode_can_run_without_video_stream_client(self):
-        server.state.show_person_box = True
-        server.state.video_stream_client_count = 0
+    def test_runtime_inference_has_no_background_mode_helpers(self):
+        self.assertFalse(hasattr(server, "load_background_mode"))
+        self.assertFalse(hasattr(server, "sanitize_background_mode"))
+        self.assertFalse(hasattr(server, "_background_mode_cache"))
 
-        with patch.object(server, "load_background_mode", return_value="prewarm"):
-            self.assertTrue(server.should_run_face_detection())
+    def test_face_live_loop_caps_consecutive_inference_starts_at_one_hertz(self):
+        clock = _FakeClock()
+        inference_starts = []
+        server.state.is_running = True
+        server.state.latest_frame = _DummyFrame()
+
+        def analyze(*_args, **_kwargs):
+            inference_starts.append(clock.monotonic())
+            if len(inference_starts) == 3:
+                server.state.is_running = False
+            return {"passed": False}
+
+        pipeline = SimpleNamespace(analyze_image_data=analyze)
+        with (
+            patch.object(server, "should_run_face_live_analysis", return_value=True),
+            patch.object(server, "get_face_analysis_runtime", return_value=(object(), object(), object())),
+            patch.object(server, "get_face_analysis_pipeline_module", return_value=pipeline),
+            patch.object(server.time, "monotonic", side_effect=clock.monotonic),
+            patch.object(server.time, "sleep", side_effect=clock.sleep),
+            patch("builtins.print"),
+        ):
+            server.face_live_loop()
+
+        self.assertEqual(len(inference_starts), 3)
+        self.assertTrue(
+            all(
+                later - earlier >= 1.0
+                for earlier, later in zip(inference_starts, inference_starts[1:])
+            )
+        )
+
+    def test_face_detection_loop_caps_consecutive_inference_starts_at_one_hertz(self):
+        clock = _FakeClock()
+        inference_starts = []
+        server.state.is_running = True
+        server.state.show_person_box = True
+        server.state.latest_frame = _DummyFrame()
+
+        def detect(*_args, **_kwargs):
+            inference_starts.append(clock.monotonic())
+            if len(inference_starts) == 3:
+                server.state.is_running = False
+            return []
+
+        with (
+            patch.object(server, "get_face_detector", return_value=object()),
+            patch.object(server, "should_run_face_detection", return_value=True),
+            patch.object(server, "detect_foreground_presence_face_boxes", side_effect=detect),
+            patch.object(server.time, "monotonic", side_effect=clock.monotonic),
+            patch.object(server.time, "sleep", side_effect=clock.sleep),
+            patch("builtins.print"),
+        ):
+            server.face_detection_loop()
+
+        self.assertEqual(len(inference_starts), 3)
+        self.assertTrue(
+            all(
+                later - earlier >= 1.0
+                for earlier, later in zip(inference_starts, inference_starts[1:])
+            )
+        )
+
+    def test_disabling_boxes_during_rate_limit_wait_prevents_next_inference(self):
+        detector = Mock(return_value=[])
+        wait_count = 0
+        server.state.is_running = True
+        server.state.show_person_box = True
+        server.state.latest_frame = _DummyFrame()
+        server.state.person_boxes = [(1, 2, 3, 4)]
+
+        def wait_for_slot(*_args, **_kwargs):
+            nonlocal wait_count
+            wait_count += 1
+            if wait_count == 2:
+                with server.state.lock:
+                    server.state.show_person_box = False
+                    server.state.person_boxes = []
+            return float(wait_count - 1)
+
+        def stop_loop(_seconds):
+            server.state.is_running = False
+
+        with (
+            patch.object(server, "get_face_detector", return_value=object()),
+            patch.object(server, "wait_for_next_inference_start", side_effect=wait_for_slot),
+            patch.object(server, "detect_foreground_presence_face_boxes", detector),
+            patch.object(server.time, "sleep", side_effect=stop_loop),
+            patch("builtins.print"),
+        ):
+            server.face_detection_loop()
+
+        self.assertEqual(detector.call_count, 1)
+        self.assertEqual(server.state.person_boxes, [])
 
     def test_video_stream_client_count_never_goes_below_zero(self):
         server.state.video_stream_client_count = 0
