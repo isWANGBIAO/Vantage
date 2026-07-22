@@ -9,17 +9,19 @@ test('App passes the current theme into chart-heavy screens', () => {
   assert.ok(appSource.includes('<Plots theme={theme} />'));
 });
 
-test('App code-splits non-default tabs and honors the configured background mode', () => {
+test('App code-splits and always preloads background tabs after settings load', () => {
   assert.ok(appSource.includes('function lazyWithPreload'));
   assert.ok(appSource.includes('lazyWithPreload(() => import('));
   assert.ok(appSource.includes('backgroundTabsReady'));
-  assert.ok(appSource.includes('settingsState?.settings?.backgroundMode'));
-  assert.ok(appSource.includes("backgroundMode === 'prewarm'"));
-  assert.ok(appSource.includes("backgroundMode === 'power_saver'"));
   assert.ok(appSource.includes('Promise.allSettled(BACKGROUND_TAB_COMPONENTS.map('));
   assert.ok(appSource.includes('.preload()'));
+  assert.ok(appSource.includes('setBackgroundTabsReady(true)'));
   assert.ok(appSource.includes('<Suspense fallback={null}>'));
   assert.equal(appSource.includes("import Dashboard from './components/Dashboard'"), false);
+  assert.equal(appSource.includes('backgroundMode'), false);
+  assert.equal(appSource.includes("'balanced'"), false);
+  assert.equal(appSource.includes("'prewarm'"), false);
+  assert.equal(appSource.includes("'power_saver'"), false);
 });
 
 test('App exposes Settings through a top-right gear without adding it to tab prewarm', () => {

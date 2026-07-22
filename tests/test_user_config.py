@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from src.core.config import Config
 
 
@@ -21,13 +23,12 @@ def test_load_settings_creates_default_settings_file(tmp_path):
         payload = user_config.load_settings()
 
     expected = {
-        "version": 1,
+        "version": 2,
         "onboarding_completed": False,
         "launch_at_login": False,
         "display_language": "system",
         "theme": "dark",
         "theme_mode": "dark",
-        "background_mode": "balanced",
         "action_plan_auto_generate": True,
         "voice_provider_mode": "inherit_ai",
         "voice_base_url": "",
@@ -191,13 +192,12 @@ def test_save_settings_normalizes_partial_payload(tmp_path):
     )
 
     expected = {
-        "version": 1,
+        "version": 2,
         "onboarding_completed": False,
         "launch_at_login": True,
         "display_language": "system",
         "theme": "dark",
         "theme_mode": "dark",
-        "background_mode": "balanced",
         "action_plan_auto_generate": True,
         "voice_provider_mode": "inherit_ai",
         "voice_base_url": "",
@@ -236,13 +236,12 @@ def test_load_settings_repairs_invalid_display_language(tmp_path):
     payload = user_config.load_settings(settings_file=settings_file)
 
     expected = {
-        "version": 1,
+        "version": 2,
         "onboarding_completed": True,
         "launch_at_login": False,
         "display_language": "system",
         "theme": "dark",
         "theme_mode": "dark",
-        "background_mode": "balanced",
         "action_plan_auto_generate": True,
         "voice_provider_mode": "inherit_ai",
         "voice_base_url": "",
@@ -261,20 +260,55 @@ def test_load_settings_repairs_invalid_display_language(tmp_path):
     assert json.loads(settings_file.read_text(encoding="utf-8")) == expected
 
 
-def test_save_settings_accepts_theme_and_background_mode(tmp_path):
+@pytest.mark.parametrize("legacy_mode", ["balanced", "prewarm", "power_saver"])
+def test_load_settings_migrates_v1_and_discards_background_mode(tmp_path, legacy_mode):
     user_config = _load_user_config_module()
     settings_file = tmp_path / "config" / "settings.json"
-
-    payload = user_config.save_settings(
-        {
-            "theme": "light",
-            "background_mode": "power_saver",
-        },
-        settings_file=settings_file,
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+    settings_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "onboarding_completed": True,
+                "launch_at_login": True,
+                "display_language": "zh-CN",
+                "theme": "light",
+                "theme_mode": "auto",
+                "background_mode": legacy_mode,
+                "action_plan_auto_generate": False,
+                "voice_provider_mode": "custom",
+                "voice_base_url": "https://voice.example.invalid/v1",
+                "voice_api_key": "sk-voice",
+                "voice_model": "sensevoice",
+                "voice_models": ["sensevoice", "sensevoice-large"],
+                "voice_last_refreshed_at": "2026-05-03T12:00:00+08:00",
+                "image_provider_mode": "custom",
+                "image_base_url": "https://images.example.invalid/v1",
+                "image_api_key": "sk-image",
+                "image_model": "image-model",
+                "image_models": ["image-model"],
+                "image_last_refreshed_at": "2026-05-03T12:01:00+08:00",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
     )
 
+    payload = user_config.load_settings(settings_file=settings_file)
+    persisted = json.loads(settings_file.read_text(encoding="utf-8"))
+
+    assert payload["version"] == 2
     assert payload["theme"] == "light"
-    assert payload["background_mode"] == "power_saver"
+    assert payload["theme_mode"] == "auto"
+    assert payload["display_language"] == "zh-CN"
+    assert payload["launch_at_login"] is True
+    assert payload["action_plan_auto_generate"] is False
+    assert payload["voice_provider_mode"] == "custom"
+    assert payload["voice_models"] == ["sensevoice", "sensevoice-large"]
+    assert payload["image_provider_mode"] == "custom"
+    assert payload["image_model"] == "image-model"
+    assert "background_mode" not in payload
+    assert persisted == payload
 
 
 def test_save_settings_accepts_auto_theme_and_voice_provider(tmp_path):

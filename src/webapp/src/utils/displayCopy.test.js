@@ -74,6 +74,19 @@ test('displayCopy keeps en-US and zh-CN key sets aligned', () => {
   assert.deepEqual(zhKeys, enKeys);
 });
 
+test('displayCopy removes obsolete background performance mode labels', () => {
+  for (const language of ['en-US', 'zh-CN']) {
+    for (const key of [
+      'settings.performance.background_mode',
+      'settings.performance.balanced',
+      'settings.performance.prewarm',
+      'settings.performance.power_saver',
+    ]) {
+      assert.equal(key in DISPLAY_COPY[language], false, language + ' should not define ' + key);
+    }
+  }
+});
+
 test('camera detection copy describes camera-facing face detection', () => {
   assert.equal(DISPLAY_COPY['en-US']['camera_feed.enable_detection'], 'Enable camera-facing face detection');
   assert.equal(DISPLAY_COPY['zh-CN']['camera_feed.enable_detection'], '开启面向摄像头的人脸检测');

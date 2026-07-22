@@ -24,7 +24,7 @@ test('loadSettingsState falls back to browser defaults without Electron', async 
   assert.equal(state.settings.displayLanguage, 'system');
   assert.equal(state.settings.theme, 'dark');
   assert.equal(state.settings.themeMode, 'dark');
-  assert.equal(state.settings.backgroundMode, 'balanced');
+  assert.equal(Object.hasOwn(state.settings, 'backgroundMode'), false);
   assert.equal(state.settings.voiceProviderMode, 'inherit_ai');
   assert.equal(state.settings.voiceBaseUrl, '');
   assert.equal(state.settings.voiceApiKey, '');
@@ -98,7 +98,10 @@ test('saveSettingsState forwards payload to Electron settings bridge', async () 
     },
   });
 
-  assert.deepEqual(received, payload);
+  const { backgroundMode: _legacyBackgroundMode, ...expectedSubmission } = payload;
+  assert.equal(Object.hasOwn(received, 'backgroundMode'), false);
+  assert.deepEqual(received, expectedSubmission);
+  assert.equal(Object.hasOwn(result.settings, 'backgroundMode'), false);
   assert.equal(result.settings.theme, 'light');
   assert.equal(result.settings.themeMode, 'auto');
   assert.equal(result.settings.voiceApiKey, '********');
@@ -146,12 +149,12 @@ test('browser settings fallback persists to localStorage and returns deep copies
       actionPlanAutoGenerate: false,
     }, undefined);
 
-    assert.equal(saved.settings.backgroundMode, 'power_saver');
+    assert.equal(Object.hasOwn(saved.settings, 'backgroundMode'), false);
 
     const loaded = await loadSettingsState(undefined);
     assert.equal(loaded.settings.displayLanguage, 'zh-CN');
     assert.equal(loaded.settings.themeMode, 'auto');
-    assert.equal(loaded.settings.backgroundMode, 'power_saver');
+    assert.equal(Object.hasOwn(loaded.settings, 'backgroundMode'), false);
     assert.equal(loaded.settings.voiceProviderMode, 'custom');
     assert.equal(loaded.settings.voiceModel, 'sensevoice');
     assert.deepEqual(loaded.settings.voiceModels, ['sensevoice']);
@@ -160,9 +163,10 @@ test('browser settings fallback persists to localStorage and returns deep copies
     assert.deepEqual(loaded.settings.imageModels, ['image-model']);
     assert.equal(loaded.settings.actionPlanAutoGenerate, false);
 
-    loaded.settings.backgroundMode = 'prewarm';
+    loaded.settings.theme = 'dark';
     const loadedAgain = await loadSettingsState(undefined);
-    assert.equal(loadedAgain.settings.backgroundMode, 'power_saver');
+    assert.equal(Object.hasOwn(loadedAgain.settings, 'backgroundMode'), false);
+    assert.equal(loadedAgain.settings.theme, 'light');
   } finally {
     globalThis.window = originalWindow;
     globalThis.localStorage = originalLocalStorage;

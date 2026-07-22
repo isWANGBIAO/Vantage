@@ -8,7 +8,7 @@ SETTINGS_FILE_NAME = "settings.json"
 PROVIDERS_FILE_NAME = "providers.json"
 MIGRATION_STATE_FILE_NAME = "migration-state.json"
 
-SETTINGS_VERSION = 1
+SETTINGS_VERSION = 2
 PROVIDERS_VERSION = 2
 PROVIDER_TYPE_OPENAI_COMPATIBLE = "openai-compatible"
 MIGRATION_STATE_VERSION = 1
@@ -32,7 +32,6 @@ DEFAULT_SETTINGS = {
     "display_language": "system",
     "theme": "dark",
     "theme_mode": "dark",
-    "background_mode": "balanced",
     "action_plan_auto_generate": True,
     "voice_provider_mode": PROVIDER_MODE_INHERIT_AI,
     "voice_base_url": "",
@@ -217,13 +216,6 @@ def _coerce_theme_mode(payload: dict | None, key: str = "theme_mode") -> str:
     return _coerce_theme(payload)
 
 
-def _coerce_background_mode(payload: dict | None, key: str = "background_mode") -> str:
-    value = payload.get(key) if isinstance(payload, dict) else None
-    if value in {"balanced", "prewarm", "power_saver"}:
-        return value
-    return "balanced"
-
-
 def _sanitize_provider_entry(route: str, entry: dict | None) -> dict:
     raw_model = _coerce_optional_str(entry, "model") or ""
     model = "" if _contains_removed_provider(raw_model) else raw_model
@@ -253,7 +245,6 @@ def _sanitize_settings(payload: dict | None) -> dict:
         "display_language": _coerce_display_language(payload),
         "theme": _coerce_theme(payload),
         "theme_mode": _coerce_theme_mode(payload),
-        "background_mode": _coerce_background_mode(payload),
         "action_plan_auto_generate": _coerce_bool(payload, "action_plan_auto_generate", True),
         "voice_provider_mode": _coerce_special_provider_mode(payload, prefix="voice"),
         "voice_base_url": _coerce_optional_str(payload, "voice_base_url") or "",
