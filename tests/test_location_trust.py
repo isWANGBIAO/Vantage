@@ -113,6 +113,14 @@ def test_browser_comparison_accepts_exact_timestamp_and_effective_distance_limit
     assert decision.sample is backend
 
 
+def test_browser_basic_validation_does_not_grant_trust_or_require_backend():
+    browser = sample(source="browser", accuracy_m=1_000.0)
+
+    rejection = location_trust.browser_location_rejection(browser, now=NOW)
+
+    assert rejection is None
+
+
 @pytest.mark.parametrize(
     ("browser_overrides", "backend_overrides", "reason"),
     [

@@ -125,6 +125,37 @@ class LocationTrustResolver:
         return None
 
 
+def browser_location_rejection(
+    browser_sample: LocationSample,
+    *,
+    now: datetime | None = None,
+) -> str | None:
+    """Return a rejection reason without granting browser metadata trust."""
+    if not _is_valid_sample(browser_sample):
+        return "browser_invalid_sample"
+    if not isinstance(browser_sample.is_remote_source, bool):
+        return "browser_invalid_remote_metadata"
+    if browser_sample.is_remote_source:
+        return "browser_remote_source"
+    if not isinstance(browser_sample.source, str) or (
+        browser_sample.source.strip().lower() != "browser"
+    ):
+        return "browser_source_required"
+
+    current_time = _normalized_datetime(now or datetime.now(timezone.utc))
+    browser_captured_at = _normalized_datetime(browser_sample.captured_at)
+    if current_time is None or browser_captured_at is None:
+        return "browser_invalid_timestamp"
+    browser_age_seconds = (current_time - browser_captured_at).total_seconds()
+    if browser_age_seconds < -FUTURE_TOLERANCE_SECONDS:
+        return "browser_future_sample"
+    if browser_age_seconds > AQI_MAX_SAMPLE_AGE_SECONDS:
+        return "browser_stale_sample"
+    if browser_sample.accuracy_m > BROWSER_MAX_ACCURACY_M:
+        return "browser_insufficient_accuracy"
+    return None
+
+
 def compare_browser_location(
     browser_sample: LocationSample,
     backend_sample: LocationSample,
@@ -132,33 +163,18 @@ def compare_browser_location(
     now: datetime | None = None,
 ) -> LocationDecision:
     """Use browser metadata only to corroborate an independently trusted sample."""
-    if not _is_valid_sample(browser_sample):
-        return _unknown("browser_invalid_sample")
-    if not isinstance(browser_sample.is_remote_source, bool):
-        return _unknown("browser_invalid_remote_metadata")
-    if browser_sample.is_remote_source:
-        return _unknown("browser_remote_source")
-    if not isinstance(browser_sample.source, str) or (
-        browser_sample.source.strip().lower() != "browser"
-    ):
-        return _unknown("browser_source_required")
-
-    current_time = _normalized_datetime(now or datetime.now(timezone.utc))
-    browser_captured_at = _normalized_datetime(browser_sample.captured_at)
-    if current_time is None or browser_captured_at is None:
-        return _unknown("browser_invalid_timestamp")
-    browser_age_seconds = (current_time - browser_captured_at).total_seconds()
-    if browser_age_seconds < -FUTURE_TOLERANCE_SECONDS:
-        return _unknown("browser_future_sample")
-    if browser_age_seconds > AQI_MAX_SAMPLE_AGE_SECONDS:
-        return _unknown("browser_stale_sample")
-    if browser_sample.accuracy_m > BROWSER_MAX_ACCURACY_M:
-        return _unknown("browser_insufficient_accuracy")
+    comparison_time = now if now is not None else datetime.now(timezone.utc)
+    browser_rejection = browser_location_rejection(
+        browser_sample,
+        now=comparison_time,
+    )
+    if browser_rejection is not None:
+        return _unknown(browser_rejection)
 
     backend_decision = LocationTrustResolver().resolve(
         backend_sample,
         LocationPurpose.AQI,
-        now=current_time,
+        now=comparison_time,
     )
     if (
         backend_decision.status is not LocationStatus.TRUSTED
@@ -166,8 +182,9 @@ def compare_browser_location(
     ):
         return _unknown("backend_source_not_allowed")
 
+    browser_captured_at = _normalized_datetime(browser_sample.captured_at)
     backend_captured_at = _normalized_datetime(backend_sample.captured_at)
-    if backend_captured_at is None:
+    if browser_captured_at is None or backend_captured_at is None:
         return _unknown("backend_invalid_timestamp")
     timestamp_skew_seconds = abs(
         (browser_captured_at - backend_captured_at).total_seconds()

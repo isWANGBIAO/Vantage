@@ -85,6 +85,7 @@ from src.services.person_detection import (
     get_face_detector,
 )
 from src.services.location_trust import (
+    browser_location_rejection,
     compare_browser_location,
     LocationPurpose,
     LocationSample,
@@ -2824,6 +2825,12 @@ async def get_aqi_stats(
             except (OverflowError, OSError, TypeError, ValueError):
                 browser_sample = None
 
+        if browser_metadata_present:
+            if browser_sample is None:
+                return build_unavailable_payload()
+            if browser_location_rejection(browser_sample) is not None:
+                return build_unavailable_payload()
+
         try:
             backend_sample = await get_trusted_location_sample_async(
                 LocationPurpose.AQI,
@@ -2836,8 +2843,6 @@ async def get_aqi_stats(
             return build_unavailable_payload()
 
         if browser_metadata_present:
-            if browser_sample is None:
-                return build_unavailable_payload()
             browser_decision = compare_browser_location(
                 browser_sample,
                 backend_sample,

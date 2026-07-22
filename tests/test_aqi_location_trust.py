@@ -117,7 +117,7 @@ def test_incomplete_browser_metadata_is_rejected_without_upstream(
     payload = run_aqi(**browser_parameters)
 
     assert_location_unavailable(payload)
-    backend_location.assert_awaited_once()
+    backend_location.assert_not_awaited()
     upstream.assert_not_called()
 
 
@@ -177,7 +177,7 @@ def test_untrusted_browser_samples_fail_closed_without_upstream(
     payload = run_aqi(**browser_parameters)
 
     assert_location_unavailable(payload)
-    backend_location.assert_awaited_once()
+    backend_location.assert_not_awaited()
     upstream.assert_not_called()
 
 
@@ -238,7 +238,7 @@ def test_invalid_browser_sample_does_not_fallback_to_trusted_backend(
     )
 
     assert_location_unavailable(payload)
-    backend_location.assert_awaited_once()
+    backend_location.assert_not_awaited()
     server.requests.get.assert_not_called()
 
 
