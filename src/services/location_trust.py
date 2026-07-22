@@ -13,6 +13,8 @@ MAX_PLAUSIBLE_SPEED_M_S = 150
 EXIF_MAX_ACCURACY_M = 100
 AQI_METADATA_MAX_ACCURACY_M = 5_000
 BROWSER_MAX_ACCURACY_M = 1_000
+BROWSER_BACKEND_MAX_TIMESTAMP_SKEW_SECONDS = 30
+BROWSER_BACKEND_MAX_EFFECTIVE_DISTANCE_M = 1_000
 
 
 class LocationPurpose(str, Enum):
@@ -123,6 +125,75 @@ class LocationTrustResolver:
         return None
 
 
+def compare_browser_location(
+    browser_sample: LocationSample,
+    backend_sample: LocationSample,
+    *,
+    now: datetime | None = None,
+) -> LocationDecision:
+    """Use browser metadata only to corroborate an independently trusted sample."""
+    if not _is_valid_sample(browser_sample):
+        return _unknown("browser_invalid_sample")
+    if not isinstance(browser_sample.is_remote_source, bool):
+        return _unknown("browser_invalid_remote_metadata")
+    if browser_sample.is_remote_source:
+        return _unknown("browser_remote_source")
+    if not isinstance(browser_sample.source, str) or (
+        browser_sample.source.strip().lower() != "browser"
+    ):
+        return _unknown("browser_source_required")
+
+    current_time = _normalized_datetime(now or datetime.now(timezone.utc))
+    browser_captured_at = _normalized_datetime(browser_sample.captured_at)
+    if current_time is None or browser_captured_at is None:
+        return _unknown("browser_invalid_timestamp")
+    browser_age_seconds = (current_time - browser_captured_at).total_seconds()
+    if browser_age_seconds < -FUTURE_TOLERANCE_SECONDS:
+        return _unknown("browser_future_sample")
+    if browser_age_seconds > AQI_MAX_SAMPLE_AGE_SECONDS:
+        return _unknown("browser_stale_sample")
+    if browser_sample.accuracy_m > BROWSER_MAX_ACCURACY_M:
+        return _unknown("browser_insufficient_accuracy")
+
+    backend_decision = LocationTrustResolver().resolve(
+        backend_sample,
+        LocationPurpose.AQI,
+        now=current_time,
+    )
+    if (
+        backend_decision.status is not LocationStatus.TRUSTED
+        or backend_decision.sample is None
+    ):
+        return _unknown("backend_source_not_allowed")
+
+    backend_captured_at = _normalized_datetime(backend_sample.captured_at)
+    if backend_captured_at is None:
+        return _unknown("backend_invalid_timestamp")
+    timestamp_skew_seconds = abs(
+        (browser_captured_at - backend_captured_at).total_seconds()
+    )
+    if timestamp_skew_seconds > BROWSER_BACKEND_MAX_TIMESTAMP_SKEW_SECONDS:
+        return _unknown("location_timestamp_mismatch")
+
+    effective_distance_m = max(
+        0,
+        _distance_m(browser_sample, backend_sample)
+        - browser_sample.accuracy_m
+        - backend_sample.accuracy_m,
+    )
+    exceeds_distance_limit = (
+        effective_distance_m > BROWSER_BACKEND_MAX_EFFECTIVE_DISTANCE_M
+        and not math.isclose(
+            effective_distance_m,
+            BROWSER_BACKEND_MAX_EFFECTIVE_DISTANCE_M,
+            abs_tol=1e-6,
+        )
+    )
+    if exceeds_distance_limit:
+        return _unknown("location_mismatch")
+    return LocationDecision(LocationStatus.TRUSTED, backend_sample, "locations_match")
+
+
 def _unknown(reason: str) -> LocationDecision:
     return LocationDecision(LocationStatus.UNKNOWN, None, reason)
 
@@ -163,8 +234,6 @@ def _accuracy_limit(source: object, purpose: LocationPurpose) -> float | None:
         return None
 
     normalized_source = source.strip().lower()
-    if normalized_source == "browser":
-        return BROWSER_MAX_ACCURACY_M if purpose is LocationPurpose.AQI else None
     if normalized_source == "cellular":
         return AQI_METADATA_MAX_ACCURACY_M if purpose is LocationPurpose.AQI else None
     if normalized_source in {"configured", "satellite", "wi_fi"}:

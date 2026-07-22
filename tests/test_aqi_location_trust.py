@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from src import server
-from src.services.location_trust import LocationTrustResolver
+from src.services.location_trust import LocationSample, LocationTrustResolver
 
 
 UNAVAILABLE_KEYS = {"aqi", "city", "level", "color", "status", "lat", "lon"}
@@ -26,6 +26,18 @@ def successful_response(aqi=42):
     )
 
 
+def backend_sample(**overrides):
+    values = {
+        "latitude": 39.9042,
+        "longitude": 116.4074,
+        "accuracy_m": 25.0,
+        "captured_at": datetime.now(timezone.utc),
+        "source": "satellite",
+    }
+    values.update(overrides)
+    return LocationSample(**values)
+
+
 @pytest.fixture(autouse=True)
 def isolated_aqi_location_dependencies(monkeypatch):
     monkeypatch.setattr(
@@ -34,10 +46,10 @@ def isolated_aqi_location_dependencies(monkeypatch):
         LocationTrustResolver(),
         raising=False,
     )
-    backend_location = AsyncMock(return_value=(None, None))
+    backend_location = AsyncMock(return_value=None)
     monkeypatch.setattr(
         server,
-        "get_trusted_location_async",
+        "get_trusted_location_sample_async",
         backend_location,
         raising=False,
     )
@@ -169,15 +181,11 @@ def test_untrusted_browser_samples_fail_closed_without_upstream(
     upstream.assert_not_called()
 
 
-def test_fresh_accurate_browser_sample_fetches_current_location_aqi(
-    monkeypatch,
+def test_browser_sample_without_backend_fails_closed_without_upstream(
     isolated_aqi_location_dependencies,
     capsys,
 ):
     backend_location, _ = isolated_aqi_location_dependencies
-    upstream = Mock(return_value=successful_response(42))
-    monkeypatch.setattr(server.requests, "get", upstream)
-
     payload = run_aqi(
         lat=31.2304,
         lon=121.4737,
@@ -185,49 +193,25 @@ def test_fresh_accurate_browser_sample_fetches_current_location_aqi(
         timestamp_ms=current_timestamp_ms(),
     )
 
-    assert payload == {
-        "aqi": 42,
-        "city": "Current Location",
-        "level": "Good",
-        "color": "#00e400",
-        "status": "ok",
-        "lat": 31.2304,
-        "lon": 121.4737,
-    }
-    backend_location.assert_not_awaited()
-    upstream.assert_called_once()
-    requested_url = upstream.call_args.args[0]
-    assert "latitude=31.2304" in requested_url
-    assert "longitude=121.4737" in requested_url
-    assert upstream.call_args.kwargs["timeout"] == 5
+    assert_location_unavailable(payload)
+    backend_location.assert_awaited_once()
+    upstream = server.requests.get
+    upstream.assert_not_called()
     output = capsys.readouterr().out
     assert "31.2304" not in output
     assert "121.4737" not in output
 
 
-@pytest.mark.parametrize(
-    "browser_parameters",
-    [
-        {},
-        {
-            "lat": 31.2304,
-            "lon": 121.4737,
-            "accuracy": 1_000.1,
-            "timestamp_ms": current_timestamp_ms(),
-        },
-    ],
-)
-def test_backend_trusted_location_is_used_when_browser_is_missing_or_rejected(
-    browser_parameters,
+def test_backend_trusted_location_is_used_when_browser_is_missing(
     monkeypatch,
     isolated_aqi_location_dependencies,
 ):
     backend_location, _ = isolated_aqi_location_dependencies
-    backend_location.return_value = (39.9042, 116.4074)
+    backend_location.return_value = backend_sample()
     upstream = Mock(return_value=successful_response(88))
     monkeypatch.setattr(server.requests, "get", upstream)
 
-    payload = run_aqi(**browser_parameters)
+    payload = run_aqi()
 
     assert payload["status"] == "ok"
     assert payload["city"] == "Current Location"
@@ -240,6 +224,79 @@ def test_backend_trusted_location_is_used_when_browser_is_missing_or_rejected(
     assert "longitude=116.4074" in upstream.call_args.args[0]
 
 
+def test_invalid_browser_sample_does_not_fallback_to_trusted_backend(
+    isolated_aqi_location_dependencies,
+):
+    backend_location, _ = isolated_aqi_location_dependencies
+    backend_location.return_value = backend_sample()
+
+    payload = run_aqi(
+        lat=31.2304,
+        lon=121.4737,
+        accuracy=1_000.1,
+        timestamp_ms=current_timestamp_ms(),
+    )
+
+    assert_location_unavailable(payload)
+    backend_location.assert_awaited_once()
+    server.requests.get.assert_not_called()
+
+
+def test_matching_browser_and_backend_uses_backend_coordinates(
+    monkeypatch,
+    isolated_aqi_location_dependencies,
+):
+    backend_location, _ = isolated_aqi_location_dependencies
+    backend_location.return_value = backend_sample(
+        latitude=31.2305,
+        longitude=121.4738,
+        source="configured",
+    )
+    upstream = Mock(return_value=successful_response(42))
+    monkeypatch.setattr(server.requests, "get", upstream)
+
+    payload = run_aqi(
+        lat=31.2304,
+        lon=121.4737,
+        accuracy=25.0,
+        timestamp_ms=current_timestamp_ms(),
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["lat"] == 31.2305
+    assert payload["lon"] == 121.4738
+    requested_url = upstream.call_args.args[0]
+    assert "latitude=31.2305" in requested_url
+    assert "longitude=121.4738" in requested_url
+    assert "latitude=31.2304" not in requested_url
+    assert "longitude=121.4737" not in requested_url
+
+
+@pytest.mark.parametrize(
+    "backend_overrides",
+    [
+        {"captured_at": datetime.now(timezone.utc) - timedelta(seconds=31)},
+        {"latitude": 32.2304, "longitude": 122.4737},
+    ],
+)
+def test_mismatched_browser_and_backend_fail_closed(
+    backend_overrides,
+    isolated_aqi_location_dependencies,
+):
+    backend_location, upstream = isolated_aqi_location_dependencies
+    backend_location.return_value = backend_sample(**backend_overrides)
+
+    payload = run_aqi(
+        lat=31.2304,
+        lon=121.4737,
+        accuracy=25.0,
+        timestamp_ms=current_timestamp_ms(),
+    )
+
+    assert_location_unavailable(payload)
+    upstream.assert_not_called()
+
+
 @pytest.mark.parametrize("upstream_failure", ["timeout", "not_ok", "no_aqi"])
 def test_upstream_failures_preserve_unavailable_contract_for_trusted_location(
     upstream_failure,
@@ -248,7 +305,7 @@ def test_upstream_failures_preserve_unavailable_contract_for_trusted_location(
     capsys,
 ):
     backend_location, _ = isolated_aqi_location_dependencies
-    backend_location.return_value = (39.9042, 116.4074)
+    backend_location.return_value = backend_sample()
     if upstream_failure == "timeout":
         upstream = Mock(
             side_effect=TimeoutError(

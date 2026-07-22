@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import sys
 import types
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ from src import server
 from src.core.media_storage import get_media_paths_settings_file, save_media_paths_settings
 from src.scripts import plot
 from src.utils.data_loader import DataLoader
+from src.services.location_trust import LocationSample
 
 jieba_stub = types.ModuleType("jieba")
 jieba_stub.cut = lambda text, cut_all=False: list(text)
@@ -63,10 +65,17 @@ class BackendPathResolutionTests(unittest.TestCase):
                 self.assertEqual(server._get_runtime_workdir(), project_root)
 
     def test_aqi_endpoint_degrades_when_upstream_times_out(self):
+        location_sample = LocationSample(
+            latitude=31.2304,
+            longitude=121.4737,
+            accuracy_m=25.0,
+            captured_at=datetime.now(timezone.utc),
+            source="wi_fi",
+        )
         with patch.object(
             server,
-            "get_trusted_location_async",
-            return_value=(31.2304, 121.4737),
+            "get_trusted_location_sample_async",
+            return_value=location_sample,
         ) as mock_location, patch.object(
             server.asyncio,
             "to_thread",

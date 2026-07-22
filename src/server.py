@@ -70,7 +70,7 @@ from src.core.user_config import (
 )
 from src.core.media_storage import DEFAULT_LEGACY_MEDIA_ROOT, get_media_paths_settings_file, resolve_media_storage_paths
 from src.manager.manager_main import Monitor
-from src.manager.get_location import get_trusted_location_async
+from src.manager.get_location import get_trusted_location_sample_async
 from src.services.llm_client import LLMClient
 from src.services.model_call_recorder import (
     get_session_usage_summary,
@@ -85,6 +85,7 @@ from src.services.person_detection import (
     get_face_detector,
 )
 from src.services.location_trust import (
+    compare_browser_location,
     LocationPurpose,
     LocationSample,
     LocationStatus,
@@ -2801,7 +2802,11 @@ async def get_aqi_stats(
 
     try:
         browser_values = (lat, lon, accuracy, timestamp_ms)
-        if all(value is not None for value in browser_values):
+        browser_metadata_present = any(value is not None for value in browser_values)
+        browser_sample = None
+        if browser_metadata_present and all(
+            value is not None for value in browser_values
+        ):
             try:
                 if any(isinstance(value, bool) for value in browser_values):
                     raise ValueError("boolean browser location metadata")
@@ -2816,34 +2821,35 @@ async def get_aqi_stats(
                     source="browser",
                     is_remote_source=False,
                 )
-                browser_decision = _AQI_LOCATION_TRUST_RESOLVER.resolve(
-                    browser_sample,
-                    LocationPurpose.AQI,
-                )
             except (OverflowError, OSError, TypeError, ValueError):
-                browser_decision = None
+                browser_sample = None
 
-            if (
-                browser_decision is not None
-                and browser_decision.status is LocationStatus.TRUSTED
-                and browser_decision.sample is not None
-            ):
-                target_lat = browser_decision.sample.latitude
-                target_lon = browser_decision.sample.longitude
+        try:
+            backend_sample = await get_trusted_location_sample_async(
+                LocationPurpose.AQI,
+                resolver=_AQI_LOCATION_TRUST_RESOLVER,
+            )
+        except Exception:
+            backend_sample = None
 
-        if target_lat is None or target_lon is None:
-            try:
-                backend_lat, backend_lon = await get_trusted_location_async(
-                    LocationPurpose.AQI
-                )
-            except Exception:
-                backend_lat, backend_lon = None, None
-            if backend_lat is not None and backend_lon is not None:
-                target_lat = backend_lat
-                target_lon = backend_lon
-
-        if target_lat is None or target_lon is None:
+        if backend_sample is None:
             return build_unavailable_payload()
+
+        if browser_metadata_present:
+            if browser_sample is None:
+                return build_unavailable_payload()
+            browser_decision = compare_browser_location(
+                browser_sample,
+                backend_sample,
+            )
+            if (
+                browser_decision.status is not LocationStatus.TRUSTED
+                or browser_decision.sample is None
+            ):
+                return build_unavailable_payload()
+
+        target_lat = backend_sample.latitude
+        target_lon = backend_sample.longitude
 
         city = "Current Location"
         print("[AQI] Fetching for trusted current location")

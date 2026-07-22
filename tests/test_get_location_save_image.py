@@ -8,7 +8,11 @@ import numpy as np
 import pytest
 
 from src.manager import get_location
-from src.services.location_trust import LocationPurpose, LocationTrustResolver
+from src.services.location_trust import (
+    LocationPurpose,
+    LocationSample,
+    LocationTrustResolver,
+)
 
 
 class NamedPositionSource:
@@ -309,6 +313,54 @@ def test_get_trusted_location_async_works_inside_running_asyncio_loop(monkeypatc
         )
 
     assert asyncio.run(call_async_api_from_loop()) == (31.2304, 121.4737)
+
+
+def test_get_trusted_location_sample_async_preserves_winrt_metadata(monkeypatch):
+    clear_static_location(monkeypatch)
+    captured_at = datetime.now(timezone.utc)
+    install_fake_geolocator(
+        monkeypatch,
+        fake_position(
+            accuracy=25.0,
+            timestamp=captured_at,
+            position_source=NamedPositionSource("WI_FI"),
+        ),
+    )
+
+    location_sample = asyncio.run(
+        get_location.get_trusted_location_sample_async(
+            purpose=LocationPurpose.AQI,
+            resolver=LocationTrustResolver(),
+        )
+    )
+
+    assert location_sample == LocationSample(
+        latitude=31.2304,
+        longitude=121.4737,
+        accuracy_m=25.0,
+        captured_at=captured_at,
+        source="wi_fi",
+        is_remote_source=False,
+    )
+
+
+def test_get_trusted_location_sample_async_returns_configured_metadata(monkeypatch):
+    monkeypatch.setenv("VANTAGE_STATIC_LATITUDE", "12.5")
+    monkeypatch.setenv("VANTAGE_STATIC_LONGITUDE", "34.75")
+    monkeypatch.setattr(get_location, "Geolocator", None)
+
+    location_sample = asyncio.run(
+        get_location.get_trusted_location_sample_async(
+            purpose=LocationPurpose.AQI,
+            resolver=LocationTrustResolver(),
+        )
+    )
+
+    assert location_sample is not None
+    assert location_sample.latitude == 12.5
+    assert location_sample.longitude == 34.75
+    assert location_sample.accuracy_m == get_location.CONFIGURED_STATIC_ACCURACY_M
+    assert location_sample.source == "configured"
 
 
 def test_async_winrt_timeout_does_not_block_event_loop(monkeypatch, capsys):

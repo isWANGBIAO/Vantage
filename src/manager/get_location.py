@@ -142,11 +142,11 @@ def _resolve_location_sample(sample, purpose, resolver):
         decision.reason,
     )
     if decision.status is LocationStatus.TRUSTED and decision.sample is not None:
-        return decision.sample.latitude, decision.sample.longitude
-    return None, None
+        return decision.sample
+    return None
 
 
-async def get_trusted_location_async(
+async def get_trusted_location_sample_async(
     purpose=LocationPurpose.EXIF,
     resolver=None,
 ):
@@ -163,7 +163,7 @@ async def get_trusted_location_async(
                 LocationStatus.UNKNOWN.value,
                 "invalid_configuration",
             )
-            return None, None
+            return None
         return _resolve_location_sample(static_sample, purpose, active_resolver)
 
     if Geolocator is None:
@@ -173,7 +173,7 @@ async def get_trusted_location_async(
             LocationStatus.UNKNOWN.value,
             "service_unavailable",
         )
-        return None, None
+        return None
 
     try:
         locator = Geolocator()
@@ -188,7 +188,7 @@ async def get_trusted_location_async(
             LocationStatus.UNKNOWN.value,
             "timeout",
         )
-        return None, None
+        return None
     except Exception:
         _log_location_result(
             "winrt",
@@ -196,7 +196,7 @@ async def get_trusted_location_async(
             LocationStatus.UNKNOWN.value,
             "api_error",
         )
-        return None, None
+        return None
 
     try:
         coordinate = getattr(position, "coordinate", _MISSING)
@@ -207,7 +207,7 @@ async def get_trusted_location_async(
                 LocationStatus.UNKNOWN.value,
                 "incomplete_metadata",
             )
-            return None, None
+            return None
         sample = _winrt_coordinate_to_location_sample(coordinate)
         if sample is None:
             _log_location_result(
@@ -216,7 +216,7 @@ async def get_trusted_location_async(
                 LocationStatus.UNKNOWN.value,
                 "incomplete_metadata",
             )
-            return None, None
+            return None
         return _resolve_location_sample(sample, purpose, active_resolver)
     except Exception:
         _log_location_result(
@@ -225,7 +225,17 @@ async def get_trusted_location_async(
             LocationStatus.UNKNOWN.value,
             "api_error",
         )
+        return None
+
+
+async def get_trusted_location_async(
+    purpose=LocationPurpose.EXIF,
+    resolver=None,
+):
+    sample = await get_trusted_location_sample_async(purpose, resolver)
+    if sample is None:
         return None, None
+    return sample.latitude, sample.longitude
 
 
 def get_trusted_location(

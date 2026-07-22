@@ -80,26 +80,107 @@ def test_cellular_is_only_trusted_for_aqi():
     assert exif_decision.sample is None
 
 
-def test_browser_is_only_trusted_for_high_accuracy_aqi():
-    accepted = sample(source="browser", accuracy_m=1_000.0)
-    rejected = sample(source="browser", accuracy_m=1_000.1)
-
-    accepted_decision = LocationTrustResolver().resolve(
-        accepted, LocationPurpose.AQI, now=NOW
-    )
-    rejected_decision = LocationTrustResolver().resolve(
-        rejected, LocationPurpose.AQI, now=NOW
-    )
-    exif_decision = LocationTrustResolver().resolve(
-        sample(source="browser", accuracy_m=1.0), LocationPurpose.EXIF, now=NOW
+@pytest.mark.parametrize("purpose", [LocationPurpose.AQI, LocationPurpose.EXIF])
+def test_browser_is_never_a_trusted_resolver_source(purpose):
+    decision = LocationTrustResolver().resolve(
+        sample(source="browser", accuracy_m=1.0), purpose, now=NOW
     )
 
-    assert accepted_decision.status is LocationStatus.TRUSTED
-    assert accepted_decision.sample is accepted
-    assert rejected_decision.status is LocationStatus.UNKNOWN
-    assert rejected_decision.sample is None
-    assert exif_decision.status is LocationStatus.UNKNOWN
-    assert exif_decision.sample is None
+    assert decision.status is LocationStatus.UNKNOWN
+    assert decision.sample is None
+    assert decision.reason == "source_not_allowed"
+
+
+def test_browser_comparison_accepts_exact_timestamp_and_effective_distance_limits():
+    browser = sample(
+        latitude=0.0,
+        longitude=math.degrees((1_000.0 + 30.0) / 6_371_000),
+        accuracy_m=20.0,
+        captured_at=NOW - timedelta(seconds=30),
+        source="browser",
+    )
+    backend = sample(
+        latitude=0.0,
+        longitude=0.0,
+        accuracy_m=10.0,
+        captured_at=NOW,
+        source="satellite",
+    )
+
+    decision = location_trust.compare_browser_location(browser, backend, now=NOW)
+
+    assert decision.status is LocationStatus.TRUSTED
+    assert decision.sample is backend
+
+
+@pytest.mark.parametrize(
+    ("browser_overrides", "backend_overrides", "reason"),
+    [
+        ({"accuracy_m": 1_000.1}, {}, "browser_insufficient_accuracy"),
+        (
+            {"captured_at": NOW - timedelta(seconds=120.1)},
+            {},
+            "browser_stale_sample",
+        ),
+        (
+            {"captured_at": NOW + timedelta(seconds=30.1)},
+            {},
+            "browser_future_sample",
+        ),
+        (
+            {"captured_at": NOW - timedelta(seconds=30.1)},
+            {},
+            "location_timestamp_mismatch",
+        ),
+        (
+            {
+                "latitude": 0.0,
+                "longitude": math.degrees((1_000.1 + 20.0) / 6_371_000),
+                "accuracy_m": 10.0,
+            },
+            {"latitude": 0.0, "longitude": 0.0, "accuracy_m": 10.0},
+            "location_mismatch",
+        ),
+        ({"source": "wi_fi"}, {}, "browser_source_required"),
+        ({}, {"source": "browser"}, "backend_source_not_allowed"),
+    ],
+)
+def test_browser_comparison_rejects_invalid_or_mismatched_samples(
+    browser_overrides, backend_overrides, reason
+):
+    browser_values = {"source": "browser"}
+    browser_values.update(browser_overrides)
+    browser = sample(**browser_values)
+    backend = sample(**backend_overrides)
+
+    decision = location_trust.compare_browser_location(browser, backend, now=NOW)
+
+    assert decision.status is LocationStatus.UNKNOWN
+    assert decision.sample is None
+    assert decision.reason == reason
+
+
+def test_rejected_browser_does_not_modify_resolver_continuity_baseline():
+    resolver = LocationTrustResolver()
+    browser = sample(latitude=0.0, longitude=0.0, source="browser")
+    assert (
+        resolver.resolve(browser, LocationPurpose.AQI, now=NOW).status
+        is LocationStatus.UNKNOWN
+    )
+
+    far_away = sample(
+        latitude=39.9042,
+        longitude=116.4074,
+        captured_at=NOW + timedelta(seconds=1),
+        source="satellite",
+    )
+    decision = resolver.resolve(
+        far_away,
+        LocationPurpose.AQI,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    assert decision.status is LocationStatus.TRUSTED
 
 
 def test_exif_requires_100_meter_accuracy():
