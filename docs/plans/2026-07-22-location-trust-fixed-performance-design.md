@@ -126,16 +126,22 @@ migration, and frontend removal. Targeted Python and focused frontend tests run
 before the complete Python suite, frontend suite, lint, and production build.
 
 `RUN.bat` must finish naturally. After the installed backend is stable for two
-minutes, locate its PID through the port 8000 listener, sample that process's CPU
-time for 30 seconds, and divide the CPU-time delta by elapsed wall time and the
-logical processor count. Its normalized average must be below 25%; a missing or
-restarted PID invalidates the measurement. Also verify `/api/status`,
-`/api/health/sedentary`, trusted and unavailable `/api/aqi` paths, packaged
-version/commit, runtime manifest, and absence of raw coordinates in fresh logs.
+minutes, use `Get-Counter '\Processor(_Total)\% Processor Time'` to collect 30
+one-second samples; the total-machine `CookedValue` average must be below 25%.
+Locate the port 8000 listener and measure its normalized CPU-time delta, working
+set, and private memory over the same window as diagnostics, but do not use the
+backend-only result as the release gate. A missing or restarted listener PID or
+an incomplete 30-sample set invalidates the measurement. Also verify
+`/api/status`, `/api/health/sedentary`, trusted and unavailable `/api/aqi` paths,
+packaged version/commit, runtime manifest, and absence of raw coordinates in
+fresh logs.
 
 Only then push `feature/location-trust`, open a ready PR to `main`, complete
 specification and quality review, and wait for Python 3.11/3.13, frontend build,
 and CodeQL checks. Merge with a normal merge commit, fast-forward the local
 `main`, create and push annotated tag `v1.0.65`, and verify the release assets,
-blockmap, and `SHA256SUMS.txt`. A CPU result at or above 25% blocks pushing,
-merging, tagging, and release until investigated.
+blockmap, and `SHA256SUMS.txt`. A total-machine CPU result at or above 25%
+blocks pushing, merging, tagging, and release until investigated. After the
+merged-main installation and release checks pass, remove the feature worktree,
+delete the local feature branch, reconfirm the PR merge, and delete the remote
+feature branch as a separate command.

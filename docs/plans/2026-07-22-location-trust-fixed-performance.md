@@ -320,9 +320,10 @@ frames.
 
 **Step 4: Measure CPU for the release gate**
 
-From the repository root, identify the process listening on backend port 8000,
-wait two minutes for startup/model stabilization, then calculate its 30-second
-CPU-time delta as a percentage of total logical-processor capacity:
+From the repository root, identify the process listening on backend port 8000
+and wait two minutes for startup/model stabilization. During the same 30-second
+window, collect 30 one-second total-machine CPU samples for the release gate and
+retain normalized backend CPU plus memory as a diagnostic breakdown:
 
 ```powershell
 $listener = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction Stop |
@@ -337,30 +338,43 @@ Start-Sleep -Seconds 120
 $startProcess = Get-Process -Id $backendPid -ErrorAction Stop
 $startCpuSeconds = [double]$startProcess.CPU
 $sampleStart = Get-Date
-Start-Sleep -Seconds 30
+$machineCounter = Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -MaxSamples 30
 $endProcess = Get-Process -Id $backendPid -ErrorAction Stop
 $elapsedSeconds = ((Get-Date) - $sampleStart).TotalSeconds
-$cpuDeltaSeconds = [double]$endProcess.CPU - $startCpuSeconds
-$averageCpuPercent = 100.0 * $cpuDeltaSeconds / ($elapsedSeconds * $logicalProcessors)
+$backendCpuDeltaSeconds = [double]$endProcess.CPU - $startCpuSeconds
+$backendAverageCpuPercent = 100.0 * $backendCpuDeltaSeconds / ($elapsedSeconds * $logicalProcessors)
+$machineCpuSamples = @($machineCounter.CounterSamples | ForEach-Object { [double]$_.CookedValue })
+if ($machineCpuSamples.Count -ne 30) {
+  throw "Release blocked: expected 30 total-machine CPU samples."
+}
+$machineAverageCpuPercent = [double](
+  ($machineCpuSamples | Measure-Object -Average).Average
+)
 
 [pscustomobject]@{
-  Pid = $backendPid
+  BackendPid = $backendPid
   LogicalProcessors = $logicalProcessors
   ElapsedSeconds = [math]::Round($elapsedSeconds, 2)
-  CpuDeltaSeconds = [math]::Round($cpuDeltaSeconds, 2)
-  AverageCpuPercent = [math]::Round($averageCpuPercent, 2)
+  MachineSampleCount = $machineCpuSamples.Count
+  MachineAverageCpuPercent = [math]::Round($machineAverageCpuPercent, 2)
+  BackendCpuDeltaSeconds = [math]::Round($backendCpuDeltaSeconds, 2)
+  BackendAverageCpuPercent = [math]::Round($backendAverageCpuPercent, 2)
+  BackendWorkingSetMiB = [math]::Round($endProcess.WorkingSet64 / 1MB, 2)
+  BackendPrivateMemoryMiB = [math]::Round($endProcess.PrivateMemorySize64 / 1MB, 2)
 } | Format-List
 
-if ($averageCpuPercent -ge 25.0) {
-  throw "Release blocked: backend average CPU is not below 25%."
+if ($machineAverageCpuPercent -ge 25.0) {
+  throw "Release blocked: total-machine average CPU is not below 25%."
 }
 ```
 
 The listener must keep the same PID throughout the sample; `Get-Process` failing
-therefore invalidates the measurement. Record the output in the private release
-check notes, not in the public repository. At or above 25%, stop before pushing,
-merging, or tagging, identify the remaining hot loop, add a failing regression
-test, and correct it.
+therefore invalidates the measurement. The backend CPU and memory fields are
+diagnostics and do not replace the total-machine gate. Record the output in the
+private release check notes, not in the public repository. If the total-machine
+average is at or above 25%, stop before pushing, merging, or tagging, identify
+the load source, add a failing regression test when it is a Vantage defect, and
+correct it.
 
 **Step 5: Re-run changed tests after any correction**
 
@@ -377,7 +391,8 @@ If no correction was required, do not create an empty commit.
 git push -u origin feature/location-trust
 $pythonSummary = Read-Host "Paste the exact final pytest summary"
 $frontendSummary = Read-Host "Paste the exact final frontend test summary"
-$cpuSummary = Read-Host "Paste the measured average backend CPU percentage"
+$machineCpuSummary = Read-Host "Paste the measured total-machine average CPU percentage"
+$backendResourceSummary = Read-Host "Paste the backend CPU and memory diagnostic summary"
 $prBodyFile = Join-Path ([System.IO.Path]::GetTempPath()) "vantage-location-trust-pr.md"
 @"
 ## Summary
@@ -389,7 +404,8 @@ $prBodyFile = Join-Path ([System.IO.Path]::GetTempPath()) "vantage-location-trus
 ## Verification
 - Python: $pythonSummary
 - Frontend: $frontendSummary
-- Installed backend CPU: $cpuSummary
+- Total-machine average CPU: $machineCpuSummary
+- Backend CPU and memory diagnostics: $backendResourceSummary
 - Installed `/api/status`, `/api/health/sedentary`, and AQI trust paths verified.
 - Fresh logs checked for coordinate disclosure.
 "@ | Set-Content -LiteralPath $prBodyFile -Encoding utf8
@@ -415,7 +431,7 @@ Address review findings with new commits and repeat relevant local verification.
 Merge from the feature worktree:
 
 ```powershell
-gh pr merge --merge --delete-branch
+gh pr merge --merge
 ```
 
 Then open a shell at the existing `main` worktree repository root and
@@ -450,3 +466,40 @@ checksums against downloaded assets.
 Run `RUN.bat` from synchronized `main` and let it finish naturally. Confirm the
 installed app reports version `1.0.65`, the merge commit, healthy status and
 sedentary endpoints, correct AQI trust behavior, and no coordinate logging.
+
+**Step 7: Remove the feature worktree and branches after release verification**
+
+Only after the PR is merged, the release assets are verified, and the final
+installation from `main` passes, run the following from the `main` worktree
+repository root. Discover and remove the feature worktree first, then delete its
+local branch:
+
+```powershell
+$featureWorktree = $null
+$candidateWorktree = $null
+foreach ($line in @(git worktree list --porcelain)) {
+  if ($line.StartsWith('worktree ')) {
+    $candidateWorktree = $line.Substring('worktree '.Length)
+  } elseif ($line -eq 'branch refs/heads/feature/location-trust') {
+    $featureWorktree = $candidateWorktree
+  }
+}
+if (-not $featureWorktree) {
+  throw "feature/location-trust worktree was not found."
+}
+git worktree remove -- $featureWorktree
+if ($LASTEXITCODE -ne 0) { throw "Feature worktree removal failed." }
+git branch -d feature/location-trust
+if ($LASTEXITCODE -ne 0) { throw "Local feature branch deletion failed." }
+```
+
+Confirm GitHub still reports the PR as merged, then delete the remote branch as
+a separate cleanup operation:
+
+```powershell
+$prState = gh pr view feature/location-trust --json state,mergedAt | ConvertFrom-Json
+if ($prState.state -ne 'MERGED' -or -not $prState.mergedAt) {
+  throw "Remote branch cleanup blocked: PR merge is not confirmed."
+}
+git push origin --delete feature/location-trust
+```
