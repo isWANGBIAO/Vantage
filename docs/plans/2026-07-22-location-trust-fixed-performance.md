@@ -1,7 +1,5 @@
 # Trusted Location Cross-Check and Fixed 1 Hz Performance Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task.
-
 **Goal:** Cross-check browser AQI coordinates against a trusted backend sample, replace three background modes with one fixed prewarmed behavior, cap both live inference loops at 1 Hz, and release the verified result as Vantage 1.0.65.
 
 **Architecture:** Preserve trusted location metadata through a new sample-returning backend adapter, then require browser and backend samples to pass freshness, timestamp-skew, and effective-distance checks before AQI uses the backend coordinate. Remove persisted performance-mode state across Python, Electron, and React; keep prewarmed mounting semantics and enforce a shared monotonic 1 Hz inference gate in the two server loops.
@@ -203,7 +201,9 @@ Assert that:
 **Step 5: Verify frontend RED**
 
 ```powershell
-npm --prefix src/webapp test -- --run src/utils/onboardingConfig.test.js src/utils/settingsState.test.js src/components/Settings.test.js src/App.test.js
+Push-Location .\src\webapp
+node --test .\src\utils\onboardingConfig.test.js .\src\utils\settingsState.test.js .\src\components\Settings.test.js .\src\App.test.js
+Pop-Location
 ```
 
 Expected: FAIL because legacy mode state and UI are still present.
@@ -320,10 +320,47 @@ frames.
 
 **Step 4: Measure CPU for the release gate**
 
-Sample total-machine CPU for 30 seconds after the two-minute stabilization
-period. Record the average and relevant Vantage process breakdown. Expected:
-average total-machine CPU below 25%. At or above 25%, stop before push/tagging,
-identify the remaining hot loop, add a failing regression test, and correct it.
+From the repository root, identify the process listening on backend port 8000,
+wait two minutes for startup/model stabilization, then calculate its 30-second
+CPU-time delta as a percentage of total logical-processor capacity:
+
+```powershell
+$listener = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction Stop |
+  Select-Object -First 1
+if (-not $listener) { throw "No backend listener found on port 8000." }
+
+$backendPid = [int]$listener.OwningProcess
+$logicalProcessors = [Environment]::ProcessorCount
+if ($logicalProcessors -le 0) { throw "Logical processor count is unavailable." }
+
+Start-Sleep -Seconds 120
+$startProcess = Get-Process -Id $backendPid -ErrorAction Stop
+$startCpuSeconds = [double]$startProcess.CPU
+$sampleStart = Get-Date
+Start-Sleep -Seconds 30
+$endProcess = Get-Process -Id $backendPid -ErrorAction Stop
+$elapsedSeconds = ((Get-Date) - $sampleStart).TotalSeconds
+$cpuDeltaSeconds = [double]$endProcess.CPU - $startCpuSeconds
+$averageCpuPercent = 100.0 * $cpuDeltaSeconds / ($elapsedSeconds * $logicalProcessors)
+
+[pscustomobject]@{
+  Pid = $backendPid
+  LogicalProcessors = $logicalProcessors
+  ElapsedSeconds = [math]::Round($elapsedSeconds, 2)
+  CpuDeltaSeconds = [math]::Round($cpuDeltaSeconds, 2)
+  AverageCpuPercent = [math]::Round($averageCpuPercent, 2)
+} | Format-List
+
+if ($averageCpuPercent -ge 25.0) {
+  throw "Release blocked: backend average CPU is not below 25%."
+}
+```
+
+The listener must keep the same PID throughout the sample; `Get-Process` failing
+therefore invalidates the measurement. Record the output in the private release
+check notes, not in the public repository. At or above 25%, stop before pushing,
+merging, or tagging, identify the remaining hot loop, add a failing regression
+test, and correct it.
 
 **Step 5: Re-run changed tests after any correction**
 
@@ -338,7 +375,30 @@ If no correction was required, do not create an empty commit.
 
 ```powershell
 git push -u origin feature/location-trust
-gh pr create --base main --head feature/location-trust --title "fix: trust location and cap live inference at 1 Hz" --body-file <reviewed-pr-body-file>
+$pythonSummary = Read-Host "Paste the exact final pytest summary"
+$frontendSummary = Read-Host "Paste the exact final frontend test summary"
+$cpuSummary = Read-Host "Paste the measured average backend CPU percentage"
+$prBodyFile = Join-Path ([System.IO.Path]::GetTempPath()) "vantage-location-trust-pr.md"
+@"
+## Summary
+- Cross-check browser AQI coordinates with a fresh trusted backend sample.
+- Replace three background modes with one fixed prewarmed 1 Hz policy.
+- Migrate settings to schema v2 and remove the legacy performance selector.
+- Prepare Vantage 1.0.65.
+
+## Verification
+- Python: $pythonSummary
+- Frontend: $frontendSummary
+- Installed backend CPU: $cpuSummary
+- Installed `/api/status`, `/api/health/sedentary`, and AQI trust paths verified.
+- Fresh logs checked for coordinate disclosure.
+"@ | Set-Content -LiteralPath $prBodyFile -Encoding utf8
+try {
+  gh pr create --base main --head feature/location-trust --title "fix: trust location and cap live inference at 1 Hz" --body-file $prBodyFile
+  if ($LASTEXITCODE -ne 0) { throw "PR creation failed." }
+} finally {
+  Remove-Item -LiteralPath $prBodyFile -ErrorAction SilentlyContinue
+}
 ```
 
 The PR body must summarize behavior, schema migration, privacy guarantees,
@@ -352,9 +412,18 @@ Address review findings with new commits and repeat relevant local verification.
 
 **Step 3: Merge normally and synchronize local main**
 
+Merge from the feature worktree:
+
 ```powershell
 gh pr merge --merge --delete-branch
-git -C D:\WANGBIAO\code\Vantage pull --ff-only origin main
+```
+
+Then open a shell at the existing `main` worktree repository root and
+synchronize it with relative Git commands:
+
+```powershell
+git fetch origin
+git pull --ff-only origin main
 ```
 
 Expected: PR merged with a merge commit and local `main` exactly matches
@@ -363,8 +432,8 @@ Expected: PR merged with a merge commit and local `main` exactly matches
 **Step 4: Tag and push 1.0.65**
 
 ```powershell
-git -C D:\WANGBIAO\code\Vantage tag -a v1.0.65 -m "Vantage 1.0.65"
-git -C D:\WANGBIAO\code\Vantage push origin v1.0.65
+git tag -a v1.0.65 -m "Vantage 1.0.65"
+git push origin v1.0.65
 ```
 
 Tag only the verified merge commit and only after confirming its package version

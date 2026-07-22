@@ -122,18 +122,20 @@ not leak through request logs.
 ## Verification and Release Gate
 
 Implementation follows TDD for location matching, loop throttling, schema
-migration, and frontend removal. Targeted Python and frontend tests run before
-the complete Python suite, frontend suite, lint, and production build.
+migration, and frontend removal. Targeted Python and focused frontend tests run
+before the complete Python suite, frontend suite, lint, and production build.
 
 `RUN.bat` must finish naturally. After the installed backend is stable for two
-minutes, measure total-machine CPU for 30 seconds; the average must be below
-25%. Also verify `/api/status`, `/api/health/sedentary`, trusted and unavailable
-`/api/aqi` paths, packaged version/commit, runtime manifest, and absence of raw
-coordinates in fresh logs.
+minutes, locate its PID through the port 8000 listener, sample that process's CPU
+time for 30 seconds, and divide the CPU-time delta by elapsed wall time and the
+logical processor count. Its normalized average must be below 25%; a missing or
+restarted PID invalidates the measurement. Also verify `/api/status`,
+`/api/health/sedentary`, trusted and unavailable `/api/aqi` paths, packaged
+version/commit, runtime manifest, and absence of raw coordinates in fresh logs.
 
 Only then push `feature/location-trust`, open a ready PR to `main`, complete
 specification and quality review, and wait for Python 3.11/3.13, frontend build,
 and CodeQL checks. Merge with a normal merge commit, fast-forward the local
 `main`, create and push annotated tag `v1.0.65`, and verify the release assets,
-blockmap, and `SHA256SUMS.txt`. A CPU result at or above 25% blocks tagging and
-release until investigated.
+blockmap, and `SHA256SUMS.txt`. A CPU result at or above 25% blocks pushing,
+merging, tagging, and release until investigated.
