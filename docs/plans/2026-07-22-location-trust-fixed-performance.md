@@ -147,6 +147,33 @@ git add src/server.py tests/test_face_live_endpoint.py
 git commit -m "perf: cap live face inference at one hertz" -m "Keep the single high-performance runtime continuously ready while limiting YuNet and live face analysis to one start per second. Remove background-mode gating without changing camera frame rate, focus tracking, or the away grace period."
 ```
 
+### Task 2A: Bound the real-time YuNet input after the installed CPU gate
+
+The first installed 30-second gate averaged about 60% total-machine CPU. An
+A/B run with green boxes disabled fell below 18%, and an isolated benchmark
+showed that the 4K YuNet call consumed roughly five CPU seconds while a
+640-pixel-long-edge input used well below one CPU second. The fixed 1 Hz policy
+therefore needs a bounded inference input in addition to start-time pacing.
+
+Add failing tests proving that the real-time foreground-box interface:
+
+- resizes a 3840x2160 frame to 640x360 before YuNet inference;
+- maps the selected box back to original-frame coordinates;
+- preserves the normalized 0.5% foreground-area boundary and largest-face rule;
+- keeps small inputs unchanged and invalid output unavailable; and
+- does not change photo presence or strict historical analysis inputs.
+
+Implement the resize only in
+`detect_foreground_presence_face_boxes()`. Keep the confidence, model, identity
+boundary, photo cadence, and historical analysis path unchanged. Re-run the
+person-detection, live-loop, prewarm, photo, sedentary, packaging, and complete
+test suites before repeating `RUN.bat` and the installed CPU gate.
+
+```powershell
+git add src/services/person_detection.py tests/test_person_detection.py docs/plans/2026-07-22-location-trust-fixed-performance-design.md docs/plans/2026-07-22-location-trust-fixed-performance.md
+git commit -m "perf: bound realtime YuNet input size" -m "Preserve the foreground face contract while scaling only the live green-box inference input to a 640-pixel longest edge and mapping its selected box back to the original frame. Keep photo presence and strict historical analysis on their existing input paths."
+```
+
 ### Task 3: Migrate settings to schema v2 and remove the mode UI
 
 **Files:**

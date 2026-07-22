@@ -244,6 +244,82 @@ class PersonDetectionTests(unittest.TestCase):
 
         self.assertEqual(boxes, [(200, 100, 300, 170)])
 
+    def test_realtime_foreground_boxes_bound_4k_yunet_input_and_remap_coordinates(self):
+        detector = _FakeFaceDetector(
+            np.vstack(
+                [
+                    _face_row(
+                        x=100,
+                        y=50,
+                        width=200,
+                        height=180,
+                    )
+                ]
+            )
+        )
+        frame = np.zeros((2160, 3840, 3), dtype=np.uint8)
+
+        boxes = person_detection.detect_foreground_presence_face_boxes(
+            frame,
+            model=detector,
+        )
+
+        self.assertEqual(
+            person_detection.REALTIME_PRESENCE_MAX_INPUT_DIMENSION,
+            640,
+        )
+        self.assertEqual(detector.input_sizes, [(640, 360)])
+        self.assertEqual(detector.detected_images[0].shape, (360, 640, 3))
+        self.assertEqual(boxes, [(600, 300, 1800, 1380)])
+
+    def test_realtime_foreground_boxes_keep_small_input_unchanged(self):
+        detector = _FakeFaceDetector(np.vstack([_face_row()]))
+        frame = np.zeros((360, 640, 3), dtype=np.uint8)
+
+        boxes = person_detection.detect_foreground_presence_face_boxes(
+            frame,
+            model=detector,
+        )
+
+        self.assertIs(detector.detected_images[0], frame)
+        self.assertEqual(detector.input_sizes, [(640, 360)])
+        self.assertEqual(boxes, [(10, 20, 110, 140)])
+
+    def test_realtime_foreground_area_threshold_is_normalized_after_downscale(self):
+        detector = _FakeFaceDetector(
+            np.vstack([_face_row(x=10, y=20, width=48, height=24)])
+        )
+        frame = np.zeros((2160, 3840, 3), dtype=np.uint8)
+
+        boxes = person_detection.detect_foreground_presence_face_boxes(
+            frame,
+            model=detector,
+        )
+
+        self.assertEqual(boxes, [(60, 120, 348, 264)])
+
+    def test_realtime_foreground_invalid_scaled_output_remains_unavailable(self):
+        detector = _RawFaceDetector([_face_row(width=0)])
+        frame = np.zeros((2160, 3840, 3), dtype=np.uint8)
+
+        with self.assertRaises(person_detection.PresenceDetectionUnavailable):
+            person_detection.detect_foreground_presence_face_boxes(
+                frame,
+                model=detector,
+            )
+
+    def test_presence_count_keeps_original_resolution_semantics(self):
+        detector = _FakeFaceDetector(
+            np.vstack([_face_row(width=240, height=180)])
+        )
+        frame = np.zeros((2160, 3840, 3), dtype=np.uint8)
+
+        count = person_detection.detect_presence_count(frame, model=detector)
+
+        self.assertEqual(count, 1)
+        self.assertIs(detector.detected_images[0], frame)
+        self.assertEqual(detector.input_sizes, [(3840, 2160)])
+
     def test_invalid_raw_yunet_rows_make_presence_unavailable(self):
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         invalid_rows = [

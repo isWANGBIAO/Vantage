@@ -19,6 +19,7 @@ from typing import Any, Iterable
 PERSON_DETECTION_CONFIDENCE = 0.75
 PRESENCE_DETECTION_CONFIDENCE = 0.50
 PRESENCE_MIN_FACE_AREA_RATIO = 0.005
+REALTIME_PRESENCE_MAX_INPUT_DIMENSION = 640
 PERSON_DETECTION_MODEL = "face_detection_yunet_2023mar.onnx"
 FACE_DETECTION_MODEL_PATH_ENV = "VANTAGE_FACE_DETECTION_MODEL_PATH"
 FACE_DETECTION_INPUT_SIZE = (320, 320)
@@ -324,15 +325,43 @@ def detect_foreground_presence_face_boxes(
         return []
 
     image_width, image_height = image_size
+    inference_source = source
+    inference_width, inference_height = image_size
+    longest_dimension = max(image_size)
+    if longest_dimension > REALTIME_PRESENCE_MAX_INPUT_DIMENSION:
+        inference_scale = REALTIME_PRESENCE_MAX_INPUT_DIMENSION / float(
+            longest_dimension
+        )
+        inference_width = max(1, int(round(image_width * inference_scale)))
+        inference_height = max(1, int(round(image_height * inference_scale)))
+        try:
+            import cv2
+
+            inference_source = cv2.resize(
+                source,
+                (inference_width, inference_height),
+                interpolation=cv2.INTER_AREA,
+            )
+        except Exception as exc:
+            raise PresenceDetectionUnavailable(
+                "YuNet realtime presence resize unavailable"
+            ) from exc
+
+    scale_x = image_width / float(inference_width)
+    scale_y = image_height / float(inference_height)
     boxes = []
-    for face in detect_presence_faces(source, model=model, conf=conf):
-        _, _, (x1, y1, x2, y2) = _validated_presence_face(face, image_size)
+    inference_size = (inference_width, inference_height)
+    for face in detect_presence_faces(inference_source, model=model, conf=conf):
+        _, _, (x1, y1, x2, y2) = _validated_presence_face(
+            face,
+            inference_size,
+        )
         boxes.append(
             (
-                max(0, min(image_width - 1, int(round(x1)))),
-                max(0, min(image_height - 1, int(round(y1)))),
-                max(0, min(image_width - 1, int(round(x2)))),
-                max(0, min(image_height - 1, int(round(y2)))),
+                max(0, min(image_width - 1, int(round(x1 * scale_x)))),
+                max(0, min(image_height - 1, int(round(y1 * scale_y)))),
+                max(0, min(image_width - 1, int(round(x2 * scale_x)))),
+                max(0, min(image_height - 1, int(round(y2 * scale_y)))),
             )
         )
     return boxes

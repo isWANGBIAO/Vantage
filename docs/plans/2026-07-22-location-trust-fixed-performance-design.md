@@ -47,6 +47,17 @@ the maximum 1 Hz rate and avoids accumulating an extra second on top of model
 runtime. Idle waits remain interruptible through the existing server-running
 condition.
 
+The installed CPU gate also bounds the YuNet input used by the real-time green
+box interface. A 4K camera frame made one YuNet call consume roughly five CPU
+seconds across OpenCV's native worker threads, so a 1 Hz start limit alone did
+not bound total CPU use. `detect_foreground_presence_face_boxes()` therefore
+preserves aspect ratio while reducing frames larger than 640 pixels on their
+longest edge, applies the same confidence and normalized 0.5% foreground-area
+rule, and maps the selected box back to original-frame coordinates. This is
+limited to the real-time overlay interface: photo presence checks and strict
+historical camera-facing analysis continue to use their original inputs and
+semantics.
+
 The frontend retains background component preloading and mounting, but removes
 all dependence on a selected mode. Once settings are loaded, background tab
 chunks preload; once ready, the existing hidden Dashboard and FaceHistory
@@ -117,7 +128,8 @@ not leak through request logs.
   behavior.
 - No API query field or JSON response key is removed.
 - Model loading/prewarming, camera capture, video encoding, focus persistence,
-  and EXIF trust thresholds remain unchanged.
+  and EXIF trust thresholds remain unchanged. Only the explicit real-time
+  foreground-box interface applies the bounded YuNet input described above.
 
 ## Verification and Release Gate
 
