@@ -16,6 +16,9 @@ test('App code-splits and always preloads background tabs after settings load', 
   assert.ok(appSource.includes('Promise.allSettled(BACKGROUND_TAB_COMPONENTS.map('));
   assert.ok(appSource.includes('.preload()'));
   assert.ok(appSource.includes('setBackgroundTabsReady(true)'));
+  assert.ok(appSource.includes('const settingsReady = Boolean(settingsState);'));
+  assert.ok(appSource.includes('}, [settingsReady]);'));
+  assert.equal(appSource.includes('}, [settingsState]);'), false);
   assert.ok(appSource.includes('<Suspense fallback={null}>'));
   assert.equal(appSource.includes("import Dashboard from './components/Dashboard'"), false);
   assert.equal(appSource.includes('backgroundMode'), false);

@@ -108,6 +108,7 @@ function AppShell() {
   const [systemTheme, setSystemTheme] = useState(() => resolveSystemTheme());
   const theme = resolveEffectiveTheme(themeMode, systemTheme);
   const [settingsState, setSettingsState] = useState(null);
+  const settingsReady = Boolean(settingsState);
   const [backgroundTabsReady, setBackgroundTabsReady] = useState(false);
   const shouldRenderBackgroundTabs = backgroundTabsReady;
   const lastAppliedOnboardingLanguageRef = useRef(null);
@@ -214,7 +215,7 @@ function AppShell() {
   useEffect(() => {
     let cancelled = false;
 
-    if (!settingsState) {
+    if (!settingsReady) {
       return undefined;
     }
 
@@ -234,7 +235,7 @@ function AppShell() {
     return () => {
       cancelled = true;
     };
-  }, [settingsState]);
+  }, [settingsReady]);
 
   useEffect(() => {
     if (onboardingState.loading || !onboardingState.displayLanguage) {

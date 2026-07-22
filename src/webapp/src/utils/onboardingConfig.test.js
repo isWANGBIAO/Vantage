@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import fs from 'node:fs';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
@@ -9,6 +10,7 @@ const require = createRequire(import.meta.url);
 const {
   buildSettingsState,
   getOnboardingState,
+  loadSettings,
   maskProviderConfig,
   sanitizeProviderConfig,
   saveSettingsPayload,
@@ -149,6 +151,43 @@ test('loadSettings migrates every v1 background mode to v2 without losing other 
     assert.equal(persisted.theme_mode, 'auto');
     assert.equal(persisted.action_plan_auto_generate, false);
     assert.deepEqual(persisted.voice_models, ['sensevoice', 'sensevoice-large']);
+  }
+});
+
+test('loadSettings does not rewrite an already migrated v2 settings file', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-settings-stable-v2-'));
+  const runtimePaths = { configDir: path.join(root, 'config') };
+  mkdirSync(runtimePaths.configDir, { recursive: true });
+  writeFileSync(
+    path.join(runtimePaths.configDir, 'settings.json'),
+    JSON.stringify({
+      version: 1,
+      onboarding_completed: true,
+      launch_at_login: true,
+      display_language: 'zh-CN',
+      theme: 'light',
+      theme_mode: 'auto',
+      background_mode: 'prewarm',
+      action_plan_auto_generate: false,
+    }),
+    'utf8',
+  );
+
+  loadSettings(runtimePaths);
+
+  const originalWriteFileSync = fs.writeFileSync;
+  let writeCount = 0;
+  fs.writeFileSync = (...args) => {
+    writeCount += 1;
+    return originalWriteFileSync(...args);
+  };
+  try {
+    const second = loadSettings(runtimePaths);
+    assert.equal(second.version, 2);
+    assert.equal(Object.hasOwn(second, 'background_mode'), false);
+    assert.equal(writeCount, 0);
+  } finally {
+    fs.writeFileSync = originalWriteFileSync;
   }
 });
 
@@ -605,12 +644,18 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
     theme: 'dark',
     theme_mode: 'dark',
     action_plan_auto_generate: true,
+    voice_provider_mode: 'inherit_ai',
     voice_base_url: '',
     voice_api_key: '',
     voice_model: 'FunAudioLLM/SenseVoiceSmall',
+    voice_models: ['FunAudioLLM/SenseVoiceSmall'],
+    voice_last_refreshed_at: null,
+    image_provider_mode: 'inherit_ai',
     image_base_url: '',
     image_api_key: '',
     image_model: '',
+    image_models: [],
+    image_last_refreshed_at: null,
   });
   assert.deepEqual(providers, {
     version: 2,
@@ -628,6 +673,83 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
         last_refreshed_at: null,
       },
     },
+  });
+});
+
+test('saveOnboardingCompletion preserves every formal setting while migrating full v1 config', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-onboarding-full-v1-'));
+  const runtimePaths = {
+    configDir: path.join(root, 'config'),
+    historyDir: path.join(root, 'history'),
+    migrationDir: path.join(root, 'migration'),
+    dataDir: path.join(root, 'data'),
+  };
+  mkdirSync(runtimePaths.configDir, { recursive: true });
+  writeFileSync(
+    path.join(runtimePaths.configDir, 'settings.json'),
+    JSON.stringify({
+      version: 1,
+      onboarding_completed: false,
+      launch_at_login: false,
+      display_language: 'en-US',
+      theme: 'light',
+      theme_mode: 'auto',
+      background_mode: 'power_saver',
+      action_plan_auto_generate: false,
+      voice_provider_mode: 'custom',
+      voice_base_url: 'https://voice.example.invalid/v1',
+      voice_api_key: 'sk-voice',
+      voice_model: 'sensevoice',
+      voice_models: ['sensevoice', 'sensevoice-large'],
+      voice_last_refreshed_at: '2026-05-03T12:00:00+08:00',
+      image_provider_mode: 'custom',
+      image_base_url: 'https://images.example.invalid/v1',
+      image_api_key: 'sk-image',
+      image_model: 'image-model',
+      image_models: ['image-model', 'image-large'],
+      image_last_refreshed_at: '2026-05-03T12:01:00+08:00',
+    }),
+    'utf8',
+  );
+
+  saveOnboardingCompletion({
+    runtimePaths,
+    submission: {
+      launchAtLogin: true,
+      selectedProvider: 'openai',
+      apiKey: '',
+      baseUrl: '',
+      model: '',
+      displayLanguage: 'zh-CN',
+      skipChatSetup: true,
+      importLegacyData: false,
+      legacyRoot: null,
+    },
+  });
+
+  const settings = JSON.parse(
+    readFileSync(path.join(runtimePaths.configDir, 'settings.json'), 'utf8'),
+  );
+  assert.deepEqual(settings, {
+    version: 2,
+    onboarding_completed: true,
+    launch_at_login: true,
+    display_language: 'zh-CN',
+    theme: 'light',
+    theme_mode: 'auto',
+    action_plan_auto_generate: false,
+    voice_provider_mode: 'custom',
+    voice_base_url: 'https://voice.example.invalid/v1',
+    voice_api_key: 'sk-voice',
+    voice_model: 'sensevoice',
+    voice_models: ['sensevoice', 'sensevoice-large'],
+    voice_last_refreshed_at: '2026-05-03T12:00:00+08:00',
+    image_provider_mode: 'custom',
+    image_base_url: 'https://images.example.invalid/v1',
+    image_api_key: 'sk-image',
+    image_model: 'image-model',
+    image_models: ['image-model', 'image-large'],
+    image_last_refreshed_at: '2026-05-03T12:01:00+08:00',
   });
 });
 

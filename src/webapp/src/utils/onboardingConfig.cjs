@@ -754,24 +754,15 @@ function migrateLegacyHistory({ runtimePaths, legacyRoot, importLegacyData, now 
 
 function saveOnboardingCompletion({ runtimePaths, submission, projectRoot, now = () => new Date().toISOString() }) {
   const currentSettings = loadSettings(runtimePaths);
-  const settings = {
+  const settings = saveSettings(runtimePaths, {
+    ...currentSettings,
     version: DEFAULT_SETTINGS.version,
     onboarding_completed: true,
     launch_at_login: Boolean(submission.launchAtLogin),
     display_language: sanitizeDisplayLanguage(
       submission.displayLanguage ?? currentSettings.display_language,
     ),
-    theme: currentSettings.theme,
-    theme_mode: currentSettings.theme_mode,
-    action_plan_auto_generate: currentSettings.action_plan_auto_generate,
-    voice_base_url: currentSettings.voice_base_url,
-    voice_api_key: currentSettings.voice_api_key,
-    voice_model: currentSettings.voice_model,
-    image_base_url: currentSettings.image_base_url,
-    image_api_key: currentSettings.image_api_key,
-    image_model: currentSettings.image_model,
-  };
-  writeJsonFile(getSettingsFile(runtimePaths), settings);
+  });
 
   const providerConfig = buildProviderConfigFromSubmission(submission);
   writeJsonFile(getProvidersFile(runtimePaths), providerConfig);
