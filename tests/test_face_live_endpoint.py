@@ -30,6 +30,16 @@ class _FakeClock:
         self.current += max(0.0, seconds)
 
 
+class _TimestampedFrame:
+    def __init__(self, clock):
+        self.clock = clock
+        self.copy_times = []
+
+    def copy(self):
+        self.copy_times.append(self.clock.monotonic())
+        return self
+
+
 class FaceLiveEndpointTests(unittest.TestCase):
     def setUp(self):
         self.original_points = getattr(server.state, "live_face_points", None)
@@ -177,8 +187,9 @@ class FaceLiveEndpointTests(unittest.TestCase):
     def test_face_live_loop_caps_consecutive_inference_starts_at_one_hertz(self):
         clock = _FakeClock()
         inference_starts = []
+        frame = _TimestampedFrame(clock)
         server.state.is_running = True
-        server.state.latest_frame = _DummyFrame()
+        server.state.latest_frame = frame
 
         def analyze(*_args, **_kwargs):
             inference_starts.append(clock.monotonic())
@@ -198,6 +209,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
             server.face_live_loop()
 
         self.assertEqual(len(inference_starts), 3)
+        self.assertEqual(frame.copy_times, inference_starts)
         self.assertTrue(
             all(
                 later - earlier >= 1.0
@@ -205,12 +217,67 @@ class FaceLiveEndpointTests(unittest.TestCase):
             )
         )
 
+    def test_face_live_lazy_runtime_delay_does_not_collapse_actual_start_gap(self):
+        clock = _FakeClock()
+        inference_starts = []
+        runtime_loads = 0
+        server.state.is_running = True
+        server.state.latest_frame = _DummyFrame()
+
+        def get_runtime():
+            nonlocal runtime_loads
+            runtime_loads += 1
+            if runtime_loads == 1:
+                clock.sleep(2.0)
+            return object(), object(), object()
+
+        def analyze(*_args, **_kwargs):
+            inference_starts.append(clock.monotonic())
+            if len(inference_starts) == 2:
+                server.state.is_running = False
+            return {"passed": False}
+
+        pipeline = SimpleNamespace(analyze_image_data=analyze)
+        with (
+            patch.object(server, "get_face_analysis_runtime", side_effect=get_runtime),
+            patch.object(server, "get_face_analysis_pipeline_module", return_value=pipeline),
+            patch.object(server.time, "monotonic", side_effect=clock.monotonic),
+            patch.object(server.time, "sleep", side_effect=clock.sleep),
+            patch("builtins.print"),
+        ):
+            server.face_live_loop()
+
+        self.assertEqual(inference_starts, [2.0, 3.0])
+
+    def test_face_live_runtime_preparation_failures_do_not_busy_spin(self):
+        clock = _FakeClock()
+        preparation_attempts = []
+        server.state.is_running = True
+        server.state.latest_frame = _DummyFrame()
+
+        def fail_runtime_preparation():
+            preparation_attempts.append(clock.monotonic())
+            if len(preparation_attempts) == 3:
+                server.state.is_running = False
+            raise RuntimeError("runtime unavailable")
+
+        with (
+            patch.object(server, "get_face_analysis_runtime", side_effect=fail_runtime_preparation),
+            patch.object(server.time, "monotonic", side_effect=clock.monotonic),
+            patch.object(server.time, "sleep", side_effect=clock.sleep),
+            patch("builtins.print"),
+        ):
+            server.face_live_loop()
+
+        self.assertEqual(preparation_attempts, [0.0, 1.0, 2.0])
+
     def test_face_detection_loop_caps_consecutive_inference_starts_at_one_hertz(self):
         clock = _FakeClock()
         inference_starts = []
+        frame = _TimestampedFrame(clock)
         server.state.is_running = True
         server.state.show_person_box = True
-        server.state.latest_frame = _DummyFrame()
+        server.state.latest_frame = frame
 
         def detect(*_args, **_kwargs):
             inference_starts.append(clock.monotonic())
@@ -229,12 +296,78 @@ class FaceLiveEndpointTests(unittest.TestCase):
             server.face_detection_loop()
 
         self.assertEqual(len(inference_starts), 3)
+        self.assertEqual(frame.copy_times, inference_starts)
         self.assertTrue(
             all(
                 later - earlier >= 1.0
                 for earlier, later in zip(inference_starts, inference_starts[1:])
             )
         )
+
+    def test_face_detection_model_load_delay_keeps_actual_start_gap(self):
+        clock = _FakeClock()
+        inference_starts = []
+        server.state.is_running = True
+        server.state.show_person_box = True
+        server.state.latest_frame = _DummyFrame()
+
+        def get_detector():
+            clock.sleep(2.0)
+            return object()
+
+        def detect(*_args, **_kwargs):
+            inference_starts.append(clock.monotonic())
+            if len(inference_starts) == 2:
+                server.state.is_running = False
+            return []
+
+        with (
+            patch.object(server, "get_face_detector", side_effect=get_detector),
+            patch.object(server, "detect_foreground_presence_face_boxes", side_effect=detect),
+            patch.object(server.time, "monotonic", side_effect=clock.monotonic),
+            patch.object(server.time, "sleep", side_effect=clock.sleep),
+            patch("builtins.print"),
+        ):
+            server.face_detection_loop()
+
+        self.assertEqual(inference_starts, [2.0, 3.0])
+
+    def test_frame_disappearing_during_wait_does_not_consume_inference_slot(self):
+        clock = _FakeClock()
+        detector = Mock(return_value=[])
+        wait_baselines = []
+        server.state.is_running = True
+        server.state.show_person_box = True
+        server.state.latest_frame = _DummyFrame()
+
+        def wait_for_slot(last_started_at, *_args, **_kwargs):
+            wait_baselines.append(last_started_at)
+            if len(wait_baselines) == 1:
+                with server.state.lock:
+                    server.state.latest_frame = None
+            return clock.monotonic()
+
+        def idle_sleep(seconds):
+            clock.sleep(seconds)
+            with server.state.lock:
+                server.state.latest_frame = _DummyFrame()
+
+        def detect(*_args, **_kwargs):
+            server.state.is_running = False
+            return []
+
+        detector.side_effect = detect
+        with (
+            patch.object(server, "get_face_detector", return_value=object()),
+            patch.object(server, "wait_for_next_inference_start", side_effect=wait_for_slot),
+            patch.object(server, "detect_foreground_presence_face_boxes", detector),
+            patch.object(server.time, "sleep", side_effect=idle_sleep),
+            patch("builtins.print"),
+        ):
+            server.face_detection_loop()
+
+        self.assertEqual(wait_baselines, [None, None])
+        self.assertEqual(detector.call_count, 1)
 
     def test_disabling_boxes_during_rate_limit_wait_prevents_next_inference(self):
         detector = Mock(return_value=[])

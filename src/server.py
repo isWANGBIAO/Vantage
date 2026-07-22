@@ -2495,22 +2495,31 @@ def face_live_loop():
             time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
             continue
 
-        frame_copy = None
         with state.lock:
-            if state.latest_frame is not None:
-                frame_copy = state.latest_frame.copy()
+            frame_available = state.latest_frame is not None
 
-        if frame_copy is not None:
-            inference_started_at = wait_for_next_inference_start(
-                last_inference_started_at,
-                FACE_LIVE_SAMPLE_INTERVAL_SECONDS,
-            )
-            if not state.is_running:
-                break
-            last_inference_started_at = inference_started_at
+        if frame_available:
             try:
                 detector, parser, config = get_face_analysis_runtime()
-                result = get_face_analysis_pipeline_module().analyze_image_data(
+                pipeline = get_face_analysis_pipeline_module()
+                wait_for_next_inference_start(
+                    last_inference_started_at,
+                    FACE_LIVE_SAMPLE_INTERVAL_SECONDS,
+                )
+                if not state.is_running:
+                    break
+
+                with state.lock:
+                    frame_copy = (
+                        state.latest_frame.copy()
+                        if state.latest_frame is not None
+                        else None
+                    )
+                if frame_copy is None:
+                    continue
+
+                last_inference_started_at = time.monotonic()
+                result = pipeline.analyze_image_data(
                     frame_copy,
                     detector=detector,
                     parser=parser,
@@ -2520,6 +2529,8 @@ def face_live_loop():
                 store_live_face_result(result)
             except Exception as exc:
                 print(f"Live face analysis error: {exc}")
+                if state.is_running:
+                    time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
         else:
             time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
 
@@ -2540,25 +2551,33 @@ def face_detection_loop():
             time.sleep(1)
             continue
             
-        frame_copy = None
         with state.lock:
-            if state.latest_frame is not None:
-                frame_copy = state.latest_frame.copy()
+            frame_available = state.latest_frame is not None
 
-        if frame_copy is not None:
-            inference_started_at = wait_for_next_inference_start(
+        if frame_available:
+            wait_for_next_inference_start(
                 last_inference_started_at,
                 FACE_DETECTION_SAMPLE_INTERVAL_SECONDS,
             )
+            if not state.is_running:
+                break
             with state.lock:
                 detection_enabled = state.show_person_box
                 if not detection_enabled:
                     state.person_boxes = []
-            if not state.is_running:
-                break
+                    frame_copy = None
+                else:
+                    frame_copy = (
+                        state.latest_frame.copy()
+                        if state.latest_frame is not None
+                        else None
+                    )
             if not detection_enabled:
                 continue
-            last_inference_started_at = inference_started_at
+            if frame_copy is None:
+                continue
+
+            last_inference_started_at = time.monotonic()
             try:
                 boxes = detect_foreground_presence_face_boxes(
                     frame_copy,
