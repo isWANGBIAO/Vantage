@@ -4,7 +4,7 @@
 
 **Goal:** Prevent broken Electron console pipes from recursively filling disk and keep all Electron logs within a deterministic retention budget.
 
-**Architecture:** Extract main-process logging into a dependency-free CommonJS utility that performs bounded synchronous file writes and best-effort console mirroring. The logger rotates before an append would exceed the configured file limit, prunes matching Electron logs to a global file-count limit, and bounds oversized legacy logs during construction.
+**Architecture:** Extract main-process logging into a dependency-free CommonJS utility that performs bounded synchronous file writes and best-effort console mirroring. The logger rotates before an append would exceed the configured file limit, prunes matching Electron logs to a global file-count limit, and bounds oversized legacy logs through explicit cleanup after the primary-instance lock succeeds.
 
 **Tech Stack:** Node.js CommonJS, built-in `fs`/`path`, Node test runner, Electron main process.
 
@@ -128,7 +128,8 @@ Expected: all logger tests pass and every fixture file stays within its limit.
 **Step 1: Write failing startup-cleanup tests**
 
 Pre-create multiple matching Electron logs, including an oversized legacy daily
-log, plus an unrelated `server` log. Construct the logger and assert:
+log, plus an unrelated `server` log. Construct the logger, explicitly call
+cleanup as the primary process would after obtaining its lock, and assert:
 
 - matching files are individually bounded;
 - no more than `maxFiles` matching files remain;

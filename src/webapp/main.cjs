@@ -47,12 +47,11 @@ ensureRuntimeDirs(runtimePaths);
 
 const logsDir = runtimePaths.logDir;
 const logFile = path.join(logsDir, `electron_${new Date().toISOString().split('T')[0]}.log`);
-const log = createBoundedLogger({
-    logFile,
-    consoleObject: console,
-    stdout: process.stdout,
-    stderr: process.stderr,
-});
+let log = {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+};
 const isDev = runtimePaths.appMode !== 'packaged' && !app.isPackaged && process.env.NODE_ENV !== 'production';
 const shouldManageLoginItem = runtimePaths.appMode === 'packaged' || app.isPackaged;
 buildInfo = resolveAppBuildInfo({
@@ -695,9 +694,14 @@ function createTray() {
 const gotTheLock = app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
-    log.warn('Another instance is already running. Quitting this instance.');
     app.quit();
 } else {
+    log = createBoundedLogger({
+        logFile,
+        consoleObject: console,
+        stdout: process.stdout,
+        stderr: process.stderr,
+    });
     log.cleanup();
     log.info('Vantage Electron starting...');
     log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
