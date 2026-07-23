@@ -50,7 +50,8 @@ Expected: FAIL because `boundedLogger.cjs` does not exist.
 Export `createBoundedLogger()`. Build entries with the existing timestamp and
 level format, append synchronously, and wrap console mirroring in `try/catch`.
 After any console failure, disable future console mirroring. Never call the
-application logger from the fallback path.
+application logger from the fallback path. Later tasks extend this with
+stdout/stderr error listeners so asynchronous `EPIPE` is isolated too.
 
 **Step 4: Run the test to verify it passes**
 
@@ -146,11 +147,11 @@ Expected: FAIL because startup cleanup is not implemented.
 
 **Step 3: Implement startup cleanup**
 
-Scan only the configured log directory and only names matching
-`electron*.log*`. For an oversized matching file, replace it atomically with
-its newest `maxBytes` bytes. Then prune the oldest matching files to
-`maxFiles`. Ignore disappeared files so concurrent cleanup does not crash
-startup.
+Expose cleanup as an explicit logger method. Scan only the configured log
+directory and only names matching `electron*.log*`. For an oversized matching
+file, replace it atomically with its newest `maxBytes` bytes. Then prune the
+oldest matching files to `maxFiles`. Ignore disappeared files so concurrent
+cleanup does not crash startup.
 
 **Step 4: Run the tests to verify GREEN**
 
@@ -168,20 +169,23 @@ Expected: all logger tests pass.
 - Modify: `src/webapp/main.cjs:14-18`
 - Modify: `src/webapp/main.cjs:47-49`
 - Modify: `src/webapp/main.cjs:112-134`
-- Modify: `src/webapp/package.test.js`
+- Modify: `src/webapp/main.test.js`
+- Modify: `src/webapp/package.json`
 
 **Step 1: Write a failing packaging-contract test**
 
 Assert that `main.cjs` imports `createBoundedLogger`, no longer contains direct
-`console.log(logEntry)` or `console.error(logEntry)` calls, and constructs the
-logger for the configured Electron log file.
+`console.log(logEntry)` or `console.error(logEntry)` calls, constructs the
+logger for the configured Electron log file, and invokes retention cleanup only
+after the single-instance lock succeeds. Add `main.test.js` to the package test
+script so the contract runs under `npm test`.
 
 **Step 2: Run the contract test to verify RED**
 
 Run:
 
 ```powershell
-node --test package.test.js
+node --test main.test.js
 ```
 
 Expected: FAIL because `main.cjs` still contains the recursive logger.
@@ -189,15 +193,16 @@ Expected: FAIL because `main.cjs` still contains the recursive logger.
 **Step 3: Replace the inline logger**
 
 Import `createBoundedLogger` from `src/utils/boundedLogger.cjs`, construct it
-with `logFile`, and keep all existing `log.info`, `log.warn`, and `log.error`
-call sites unchanged.
+with `logFile`, `process.stdout`, and `process.stderr`; keep all existing
+`log.info`, `log.warn`, and `log.error` call sites unchanged. Invoke the
+logger's cleanup method only after `app.requestSingleInstanceLock()` succeeds.
 
 **Step 4: Run focused and full Node tests**
 
 Run:
 
 ```powershell
-node --test package.test.js src/utils/boundedLogger.test.js
+node --test main.test.js src/utils/boundedLogger.test.js
 npm test
 ```
 
@@ -206,7 +211,7 @@ Expected: focused tests pass; full suite reports zero failures.
 **Step 5: Commit**
 
 ```powershell
-git add src/webapp/main.cjs src/webapp/package.test.js src/webapp/src/utils/boundedLogger.cjs src/webapp/src/utils/boundedLogger.test.js
+git add src/webapp/main.cjs src/webapp/main.test.js src/webapp/package.json src/webapp/src/utils/boundedLogger.cjs src/webapp/src/utils/boundedLogger.test.js
 git commit -m "fix: bound Electron logs and isolate broken pipes"
 ```
 

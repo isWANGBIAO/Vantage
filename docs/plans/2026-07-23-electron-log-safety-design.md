@@ -52,20 +52,26 @@ small and directly testable.
 
 - The active file remains `electron_YYYY-MM-DD.log`.
 - The default maximum active-file size is 10 MiB.
-- Five rotated files are retained (`.1` through `.5`), limiting one day's
-  Electron logs to roughly 60 MiB including the active file.
+- No more than six matching Electron log files are retained globally, including
+  the active file and rotated or older daily files. Combined with the per-file
+  limit, this caps retained Electron logs at roughly 60 MiB across days.
 - Before each append, the logger rotates if the pending entry would exceed the
   active-file limit.
-- At construction, the logger scans only matching Electron logs in the
-  configured log directory. Oversized legacy files are truncated to their most
-  recent 10 MiB and then rotated through the same bounded retention path.
+- After the application has acquired the single-instance lock, the logger scans
+  only matching Electron logs in the configured log directory. Oversized
+  legacy files are truncated to their most recent 10 MiB, then the oldest
+  matching files are pruned to the global file-count limit. A second instance
+  therefore cannot clean up a file owned by the primary instance.
 - Console mirroring is best-effort. `EPIPE` and destroyed/non-writable streams
   disable further console mirroring without calling the application logger.
+  Both synchronous console failures and asynchronous stdout/stderr error events
+  are guarded.
 - File-write failures are swallowed only after one best-effort console report;
   the fallback itself cannot call back into file logging.
 
-`main.cjs` constructs the logger once and keeps the existing `log.info`,
-`log.warn`, and `log.error` call sites unchanged.
+`main.cjs` constructs the logger once, invokes its explicit retention cleanup
+only after acquiring the single-instance lock, and keeps the existing
+`log.info`, `log.warn`, and `log.error` call sites unchanged.
 
 ## Error flow
 
