@@ -18,6 +18,7 @@ const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimeP
 const { applyLaunchAtLoginSetting } = require('./src/utils/autoLaunch.cjs');
 const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
 const { resolveAppBuildInfo } = require('./src/utils/buildInfo.cjs');
+const { createBoundedLogger } = require('./src/utils/boundedLogger.cjs');
 const {
     buildSettingsState,
     getOnboardingState,
@@ -46,6 +47,11 @@ ensureRuntimeDirs(runtimePaths);
 
 const logsDir = runtimePaths.logDir;
 const logFile = path.join(logsDir, `electron_${new Date().toISOString().split('T')[0]}.log`);
+let log = {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+};
 const isDev = runtimePaths.appMode !== 'packaged' && !app.isPackaged && process.env.NODE_ENV !== 'production';
 const shouldManageLoginItem = runtimePaths.appMode === 'packaged' || app.isPackaged;
 buildInfo = resolveAppBuildInfo({
@@ -108,30 +114,6 @@ function getWindowChromeOptions() {
 
     return options;
 }
-
-function writeLog(level, message, error = null) {
-    const timestamp = new Date().toISOString();
-    let logEntry = `[${timestamp}] [${level}] ${message}`;
-
-    if (error) {
-        logEntry += `\n  Stack: ${error.stack || error}`;
-    }
-
-    logEntry += '\n';
-    fs.appendFileSync(logFile, logEntry);
-
-    if (level === 'ERROR') {
-        console.error(logEntry);
-    } else {
-        console.log(logEntry);
-    }
-}
-
-const log = {
-    info: (message) => writeLog('INFO', message),
-    warn: (message) => writeLog('WARN', message),
-    error: (message, error = null) => writeLog('ERROR', message, error),
-};
 
 const CAMERA_PERMISSION_PRIME_CHANNEL = 'camera:prime-renderer-access';
 const CAMERA_PERMISSION_RESULT_CHANNEL = 'camera:renderer-access-result';
@@ -711,15 +693,21 @@ function createTray() {
 
 const gotTheLock = app.requestSingleInstanceLock();
 
-log.info('Vantage Electron starting...');
-log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
-log.info(`Log file: ${logFile}`);
-log.info(`Runtime data dir: ${runtimePaths.dataDir}`);
-
 if (!gotTheLock) {
-    log.warn('Another instance is already running. Quitting this instance.');
     app.quit();
 } else {
+    log = createBoundedLogger({
+        logFile,
+        consoleObject: console,
+        stdout: process.stdout,
+        stderr: process.stderr,
+    });
+    log.cleanup();
+    log.info('Vantage Electron starting...');
+    log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
+    log.info(`Log file: ${logFile}`);
+    log.info(`Runtime data dir: ${runtimePaths.dataDir}`);
+
     app.on('second-instance', () => {
         log.info('Second instance detected, focusing existing window');
         if (mainWindow) {

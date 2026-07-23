@@ -11,10 +11,10 @@
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Windows supported" src="https://img.shields.io/badge/Windows-supported-0078D4?style=flat-square&amp;logo=windows&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#features"><img alt="macOS supported" src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&amp;logo=apple&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Python 3.11" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Node.js 22" src="https://img.shields.io/badge/Node.js-22-5FA04E?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Node.js 24.18.0" src="https://img.shields.io/badge/Node.js-24.18.0-5FA04E?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/blob/main/requirements.txt"><img alt="FastAPI 0.139.0" src="https://img.shields.io/badge/FastAPI-0.139.0-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="React 19.2.7" src="https://img.shields.io/badge/React-19.2.7-61DAFB?style=flat-square&amp;logo=react&amp;logoColor=black"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="Electron 42.6.0" src="https://img.shields.io/badge/Electron-42.6.0-47848F?style=flat-square&amp;logo=electron&amp;logoColor=white"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="Electron 42.6.1" src="https://img.shields.io/badge/Electron-42.6.1-47848F?style=flat-square&amp;logo=electron&amp;logoColor=white"></a>
 </p>
 <p align="center">
   <a href="https://github.com/isWANGBIAO/Vantage/commits/main"><img alt="Last commit on main" src="https://img.shields.io/github/last-commit/isWANGBIAO/Vantage/main?style=flat-square&amp;label=Last%20Commit"></a>
@@ -62,7 +62,7 @@ the platform user-data directory, not in this repository.
 ## Requirements
 
 - Python 3.11 recommended for local backend packaging; CI also validates Python 3.13.
-- Node.js 22 recommended for the frontend.
+- Node.js 24.18.0 recommended for the frontend.
 - Windows is the primary packaging target. macOS scripts are included for source
   and packaged workflows.
 
