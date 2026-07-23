@@ -3,6 +3,59 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const mainSource = readFileSync(new URL('./main.cjs', import.meta.url), 'utf8');
+const packageJson = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+);
+
+test('Electron main process constructs the bounded logger with process streams', () => {
+  assert.match(
+    mainSource,
+    /const\s*\{\s*createBoundedLogger\s*\}\s*=\s*require\(['"]\.\/src\/utils\/boundedLogger\.cjs['"]\);/,
+  );
+  assert.match(
+    mainSource,
+    /const\s+log\s*=\s*createBoundedLogger\(\{\s*logFile,\s*consoleObject:\s*console,\s*stdout:\s*process\.stdout,\s*stderr:\s*process\.stderr,\s*\}\);/,
+  );
+});
+
+test('Electron main process has no recursive inline file and console logger', () => {
+  assert.doesNotMatch(mainSource, /function\s+writeLog\s*\(/);
+  assert.doesNotMatch(mainSource, /fs\.appendFileSync\(logFile,/);
+  assert.doesNotMatch(mainSource, /console\.(?:log|error)\(logEntry\)/);
+});
+
+test('Electron main process cleans logs only after obtaining the primary-instance lock', () => {
+  const lockCall = 'const gotTheLock = app.requestSingleInstanceLock();';
+  const lockIndex = mainSource.indexOf(lockCall);
+  assert.notEqual(lockIndex, -1);
+
+  const singleInstanceBranch = mainSource
+    .slice(lockIndex + lockCall.length)
+    .match(
+      /^\s*if\s*\(!gotTheLock\)\s*\{(?<secondary>[\s\S]*?)\}\s*else\s*\{(?<primaryPrefix>[\s\S]*?)app\.on\('second-instance'/,
+    );
+
+  assert.ok(singleInstanceBranch, 'expected cleanup to be scoped by the single-instance branch');
+
+  const { secondary, primaryPrefix } = singleInstanceBranch.groups;
+  assert.doesNotMatch(secondary, /log\.cleanup\(\)/);
+  assert.match(secondary, /log\.warn\(/);
+  assert.match(secondary, /app\.quit\(\)/);
+
+  const cleanupIndex = primaryPrefix.indexOf('log.cleanup();');
+  const startupIndex = primaryPrefix.indexOf("log.info('Vantage Electron starting...');");
+  assert.notEqual(cleanupIndex, -1);
+  assert.notEqual(startupIndex, -1);
+  assert.ok(cleanupIndex < startupIndex, 'cleanup must precede primary-instance startup logs');
+  assert.equal(mainSource.match(/log\.cleanup\(\)/g)?.length, 1);
+});
+
+test('npm test explicitly runs the Electron main-process contract', () => {
+  assert.match(packageJson.scripts.test, /(?:^|\s)main\.test\.js(?:\s|$)/);
+  assert.match(packageJson.scripts.test, /vite\.config\.test\.js/);
+  assert.match(packageJson.scripts.test, /package\.test\.js/);
+  assert.match(packageJson.scripts.test, /src\/\*\*\/\*\.test\.js/);
+});
 
 test('Electron main window hides native chrome while keeping native window controls', () => {
   assert.ok(mainSource.includes('Menu.setApplicationMenu(null)'));

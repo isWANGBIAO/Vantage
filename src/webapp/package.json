@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node scripts/vite-build.mjs",
-    "test": "node --test vite.config.test.js package.test.js \"src/**/*.test.js\"",
+    "test": "node --test vite.config.test.js package.test.js main.test.js \"src/**/*.test.js\"",
     "check": "npm run lint && npm run test && npm run build",
     "lint": "eslint .",
     "preview": "vite preview",
