@@ -8,16 +8,64 @@ const UTF8_BOUNDARY_BYTES = 3;
 
 let temporaryFileSequence = 0;
 
-function boundUtf8Tail(buffer, maxBytes) {
-  if (buffer.length <= maxBytes) {
+function utf8SequenceLength(firstByte) {
+  if (firstByte <= 0x7f) {
+    return 1;
+  }
+  if (firstByte >= 0xc2 && firstByte <= 0xdf) {
+    return 2;
+  }
+  if (firstByte >= 0xe0 && firstByte <= 0xef) {
+    return 3;
+  }
+  if (firstByte >= 0xf0 && firstByte <= 0xf4) {
+    return 4;
+  }
+  return 0;
+}
+
+function trimIncompleteUtf8End(buffer) {
+  if (buffer.length === 0) {
     return buffer;
   }
 
-  let start = buffer.length - maxBytes;
-  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
-    start += 1;
+  let sequenceStart = buffer.length - 1;
+  while (
+    sequenceStart >= 0
+    && (buffer[sequenceStart] & 0xc0) === 0x80
+  ) {
+    sequenceStart -= 1;
   }
-  return buffer.subarray(start);
+
+  if (sequenceStart < 0) {
+    return buffer.subarray(0, 0);
+  }
+
+  const sequenceLength = utf8SequenceLength(buffer[sequenceStart]);
+  const availableBytes = buffer.length - sequenceStart;
+  if (sequenceLength === 0) {
+    return buffer.subarray(0, sequenceStart);
+  }
+  if (availableBytes < sequenceLength) {
+    return buffer.subarray(0, sequenceStart);
+  }
+  if (availableBytes > sequenceLength) {
+    return buffer.subarray(0, sequenceStart + sequenceLength);
+  }
+  return buffer;
+}
+
+function boundUtf8Tail(buffer, maxBytes) {
+  let bounded = buffer;
+  if (buffer.length > maxBytes) {
+    let start = buffer.length - maxBytes;
+    while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
+      start += 1;
+    }
+    bounded = buffer.subarray(start);
+  }
+
+  return trimIncompleteUtf8End(bounded);
 }
 
 function nextRotationPath(logFile) {
@@ -68,7 +116,7 @@ function collectElectronLogs(logFile) {
   return candidates;
 }
 
-function pruneElectronLogs(logFile, maxFiles) {
+function pruneElectronLogs(logFile, maxFiles, protectedFiles = new Set()) {
   const candidates = collectElectronLogs(logFile);
 
   candidates.sort((left, right) => {
@@ -83,7 +131,10 @@ function pruneElectronLogs(logFile, maxFiles) {
     if (excess <= 0) {
       break;
     }
-    if (candidate.isActive) {
+    if (
+      candidate.isActive
+      || protectedFiles.has(path.resolve(candidate.file))
+    ) {
       continue;
     }
 
@@ -96,32 +147,70 @@ function pruneElectronLogs(logFile, maxFiles) {
   }
 }
 
-function readBoundedUtf8Tail(file, size, maxBytes) {
+function sameFileVersion(left, right) {
+  return (
+    left.isFile()
+    && right.isFile()
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs
+  );
+}
+
+function readBoundedUtf8Tail(descriptor, size, maxBytes) {
   const readLength = Math.min(size, maxBytes + UTF8_BOUNDARY_BYTES);
   const buffer = Buffer.allocUnsafe(readLength);
   const start = size - readLength;
-  const descriptor = fs.openSync(file, 'r');
   let totalBytesRead = 0;
 
-  try {
-    while (totalBytesRead < readLength) {
-      const bytesRead = fs.readSync(
-        descriptor,
-        buffer,
-        totalBytesRead,
-        readLength - totalBytesRead,
-        start + totalBytesRead,
-      );
-      if (bytesRead === 0) {
-        break;
-      }
-      totalBytesRead += bytesRead;
+  while (totalBytesRead < readLength) {
+    const bytesRead = fs.readSync(
+      descriptor,
+      buffer,
+      totalBytesRead,
+      readLength - totalBytesRead,
+      start + totalBytesRead,
+    );
+    if (bytesRead === 0) {
+      break;
     }
-  } finally {
-    fs.closeSync(descriptor);
+    totalBytesRead += bytesRead;
   }
 
   return boundUtf8Tail(buffer.subarray(0, totalBytesRead), maxBytes);
+}
+
+function readStableBoundedUtf8Tail(candidate, maxBytes) {
+  const beforeOpen = fs.lstatSync(candidate.file);
+  if (
+    !sameFileVersion(candidate.stats, beforeOpen)
+    || beforeOpen.size <= maxBytes
+  ) {
+    return null;
+  }
+
+  const descriptor = fs.openSync(candidate.file, 'r');
+  try {
+    const opened = fs.fstatSync(descriptor);
+    if (!sameFileVersion(beforeOpen, opened) || opened.size <= maxBytes) {
+      return null;
+    }
+
+    const tail = readBoundedUtf8Tail(descriptor, opened.size, maxBytes);
+    const afterRead = fs.fstatSync(descriptor);
+    if (!sameFileVersion(opened, afterRead)) {
+      return null;
+    }
+
+    return {
+      stats: afterRead,
+      tail,
+    };
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 function nextTemporaryPath(file) {
@@ -133,11 +222,12 @@ function nextTemporaryPath(file) {
 }
 
 function replaceWithBoundedTail(candidate, maxBytes) {
-  const tail = readBoundedUtf8Tail(
-    candidate.file,
-    candidate.stats.size,
-    maxBytes,
-  );
+  const stableTail = readStableBoundedUtf8Tail(candidate, maxBytes);
+  if (!stableTail) {
+    return false;
+  }
+
+  const { stats, tail } = stableTail;
   let temporaryPath;
 
   try {
@@ -159,18 +249,23 @@ function replaceWithBoundedTail(candidate, maxBytes) {
     }
 
     try {
-      fs.chmodSync(temporaryPath, candidate.stats.mode);
+      fs.chmodSync(temporaryPath, stats.mode);
     } catch {
       // Preserving permissions is best-effort on Windows and network volumes.
     }
     try {
       fs.utimesSync(
         temporaryPath,
-        candidate.stats.atime,
-        candidate.stats.mtime,
+        stats.atime,
+        stats.mtime,
       );
     } catch {
       // Retaining the old mtime keeps global pruning deterministic when possible.
+    }
+
+    const beforeReplace = fs.lstatSync(candidate.file);
+    if (!sameFileVersion(stats, beforeReplace)) {
+      return false;
     }
 
     // A same-directory rename provides an atomic replacement to other readers.
@@ -180,8 +275,8 @@ function replaceWithBoundedTail(candidate, maxBytes) {
     try {
       fs.utimesSync(
         candidate.file,
-        candidate.stats.atime,
-        candidate.stats.mtime,
+        stats.atime,
+        stats.mtime,
       );
     } catch {
       // The replacement is already safe even if timestamp restoration fails.
@@ -195,23 +290,29 @@ function replaceWithBoundedTail(candidate, maxBytes) {
       }
     }
   }
+
+  return true;
 }
 
 function cleanupElectronLogs(logFile, maxBytes, maxFiles) {
   const candidates = collectElectronLogs(logFile);
+  const protectedFiles = new Set();
 
   for (const candidate of candidates) {
     if (candidate.stats.size <= maxBytes) {
       continue;
     }
     try {
-      replaceWithBoundedTail(candidate, maxBytes);
+      if (!replaceWithBoundedTail(candidate, maxBytes)) {
+        protectedFiles.add(path.resolve(candidate.file));
+      }
     } catch {
       // A disappearing or inaccessible legacy log must not block application startup.
+      protectedFiles.add(path.resolve(candidate.file));
     }
   }
 
-  pruneElectronLogs(logFile, maxFiles);
+  pruneElectronLogs(logFile, maxFiles, protectedFiles);
 }
 
 function appendBoundedEntry(logFile, entryBuffer, maxBytes, maxFiles) {

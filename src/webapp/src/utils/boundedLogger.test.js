@@ -362,6 +362,262 @@ test('cleanup tolerates disappearing and inaccessible logs without temp leaks', 
     }
 });
 
+test('cleanup does not overwrite a log shortened after discovery', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-bounded-logger-'));
+    const logFile = path.join(tempDir, 'electron_shrinking.log');
+    const replacement = Buffer.from('shorter-current-content\n', 'utf8');
+    const originalOpenSync = fs.openSync;
+    const originalWriteSync = fs.writeSync;
+    let mutationTriggered = false;
+    let logger;
+
+    try {
+        fs.writeFileSync(logFile, 'old-content-'.repeat(80));
+        logger = createBoundedLogger({
+            logFile,
+            consoleObject: silentConsole,
+            maxBytes: 128,
+            maxFiles: 2,
+        });
+
+        fs.openSync = (file, flags, ...args) => {
+            if (
+                !mutationTriggered
+                && path.resolve(file) === path.resolve(logFile)
+                && flags === 'r'
+            ) {
+                mutationTriggered = true;
+                const descriptor = originalOpenSync(logFile, 'w');
+                try {
+                    originalWriteSync(
+                        descriptor,
+                        replacement,
+                        0,
+                        replacement.length,
+                        0,
+                    );
+                } finally {
+                    fs.closeSync(descriptor);
+                }
+            }
+            return originalOpenSync(file, flags, ...args);
+        };
+
+        logger.cleanup();
+    } finally {
+        fs.openSync = originalOpenSync;
+    }
+
+    try {
+        assert.equal(mutationTriggered, true);
+        assert.deepEqual(fs.readFileSync(logFile), replacement);
+    } finally {
+        logger?.dispose?.();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('cleanup does not lose a tail appended after discovery', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-bounded-logger-'));
+    const logFile = path.join(tempDir, 'electron_growing.log');
+    const initial = Buffer.from('old-content-'.repeat(60), 'utf8');
+    const appendedTail = Buffer.from('-new-concurrent-tail\n', 'utf8');
+    const originalOpenSync = fs.openSync;
+    const originalWriteSync = fs.writeSync;
+    let mutationTriggered = false;
+    let logger;
+
+    try {
+        fs.writeFileSync(logFile, initial);
+        logger = createBoundedLogger({
+            logFile,
+            consoleObject: silentConsole,
+            maxBytes: 128,
+            maxFiles: 2,
+        });
+
+        fs.openSync = (file, flags, ...args) => {
+            if (
+                !mutationTriggered
+                && path.resolve(file) === path.resolve(logFile)
+                && flags === 'r'
+            ) {
+                mutationTriggered = true;
+                const descriptor = originalOpenSync(logFile, 'a');
+                try {
+                    originalWriteSync(
+                        descriptor,
+                        appendedTail,
+                        0,
+                        appendedTail.length,
+                    );
+                } finally {
+                    fs.closeSync(descriptor);
+                }
+            }
+            return originalOpenSync(file, flags, ...args);
+        };
+
+        logger.cleanup();
+    } finally {
+        fs.openSync = originalOpenSync;
+    }
+
+    try {
+        assert.equal(mutationTriggered, true);
+        assert.deepEqual(
+            fs.readFileSync(logFile),
+            Buffer.concat([initial, appendedTail]),
+        );
+    } finally {
+        logger?.dispose?.();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('cleanup skips replacement when an opened log grows during the tail read', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-bounded-logger-'));
+    const logFile = path.join(tempDir, 'electron_read_race.log');
+    const initial = Buffer.from('read-race-content-'.repeat(50), 'utf8');
+    const appendedTail = Buffer.from('-appended-during-read\n', 'utf8');
+    const originalOpenSync = fs.openSync;
+    const originalReadSync = fs.readSync;
+    const originalWriteSync = fs.writeSync;
+    let mutationTriggered = false;
+    let logger;
+
+    try {
+        fs.writeFileSync(logFile, initial);
+        logger = createBoundedLogger({
+            logFile,
+            consoleObject: silentConsole,
+            maxBytes: 128,
+            maxFiles: 2,
+        });
+
+        fs.readSync = (...args) => {
+            const bytesRead = originalReadSync(...args);
+            if (!mutationTriggered) {
+                mutationTriggered = true;
+                const descriptor = originalOpenSync(logFile, 'a');
+                try {
+                    originalWriteSync(
+                        descriptor,
+                        appendedTail,
+                        0,
+                        appendedTail.length,
+                    );
+                } finally {
+                    fs.closeSync(descriptor);
+                }
+            }
+            return bytesRead;
+        };
+
+        logger.cleanup();
+    } finally {
+        fs.readSync = originalReadSync;
+    }
+
+    try {
+        assert.equal(mutationTriggered, true);
+        assert.deepEqual(
+            fs.readFileSync(logFile),
+            Buffer.concat([initial, appendedTail]),
+        );
+    } finally {
+        logger?.dispose?.();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('cleanup verifies file identity again before replacing a legacy log', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-bounded-logger-'));
+    const logFile = path.join(tempDir, 'electron_identity_race.log');
+    const movedOriginal = path.join(tempDir, 'original-before-race.bin');
+    const replacement = Buffer.from('new-file-at-original-path\n', 'utf8');
+    const originalWriteFileSync = fs.writeFileSync;
+    const originalRenameSync = fs.renameSync;
+    let mutationTriggered = false;
+    let logger;
+
+    try {
+        fs.writeFileSync(logFile, 'legacy-content-'.repeat(80));
+        logger = createBoundedLogger({
+            logFile,
+            consoleObject: silentConsole,
+            maxBytes: 128,
+            maxFiles: 2,
+        });
+
+        fs.writeFileSync = (file, data, options) => {
+            const result = originalWriteFileSync(file, data, options);
+            const name = path.basename(file);
+            if (
+                !mutationTriggered
+                && name.startsWith(`.${path.basename(logFile)}.`)
+                && name.endsWith('.tmp')
+            ) {
+                mutationTriggered = true;
+                originalRenameSync(logFile, movedOriginal);
+                originalWriteFileSync(logFile, replacement);
+            }
+            return result;
+        };
+
+        logger.cleanup();
+    } finally {
+        fs.writeFileSync = originalWriteFileSync;
+    }
+
+    try {
+        assert.equal(mutationTriggered, true);
+        assert.deepEqual(fs.readFileSync(logFile), replacement);
+        assert.deepEqual(
+            fs.readdirSync(tempDir).filter((name) => name.endsWith('.tmp')),
+            [],
+        );
+    } finally {
+        logger?.dispose?.();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('cleanup removes an incomplete UTF-8 code point from the legacy tail', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-bounded-logger-'));
+    const logFile = path.join(tempDir, 'electron_incomplete_utf8.log');
+    const lastCompleteContent = '-最后完整内容\n';
+    const incompleteCodePoint = Buffer.from([0xe6, 0xb1]);
+    let logger;
+
+    try {
+        fs.writeFileSync(
+            logFile,
+            Buffer.concat([
+                Buffer.from('old-prefix-'.repeat(50), 'utf8'),
+                Buffer.from(lastCompleteContent, 'utf8'),
+                incompleteCodePoint,
+            ]),
+        );
+        logger = createBoundedLogger({
+            logFile,
+            consoleObject: silentConsole,
+            maxBytes: 96,
+            maxFiles: 2,
+        });
+
+        logger.cleanup();
+
+        const contents = fs.readFileSync(logFile, 'utf8');
+        assert.doesNotMatch(contents, /\uFFFD/);
+        assert.match(contents, /-最后完整内容\n$/);
+        assert.ok(fs.statSync(logFile).size <= 96);
+    } finally {
+        logger?.dispose?.();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test('async output stream errors disable mirroring and dispose removes guards', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-bounded-logger-'));
     const logFile = path.join(tempDir, 'electron.log');
