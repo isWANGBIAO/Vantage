@@ -16,6 +16,16 @@ from src.services.person_detection import (
 _PRE_CAPTURED_FRAME_UNSET = object()
 
 
+class _PresencePhotoReservation:
+    __slots__ = ("cache_key", "normalized_root", "minute_key", "token")
+
+    def __init__(self, normalized_root, minute_key):
+        self.cache_key = (normalized_root, minute_key)
+        self.normalized_root = normalized_root
+        self.minute_key = minute_key
+        self.token = object()
+
+
 class PresencePhotoMinuteGate:
     # Keep a full day of recent minute keys so normal continuous operation and
     # small clock rollbacks remain deduplicated. Older keys, or all keys after a
@@ -26,6 +36,110 @@ class PresencePhotoMinuteGate:
         self._lock = threading.Lock()
         self._saved_photo_by_minute = {}
         self._minute_order_by_root = {}
+        self._reservation_by_minute = {}
+
+    @staticmethod
+    def _minute_identity(photos_path, captured_at):
+        absolute_root = os.path.abspath(os.fspath(photos_path))
+        normalized_root = os.path.normcase(absolute_root)
+        minute_key = captured_at.strftime("%Y%m%d%H%M")
+        return absolute_root, normalized_root, minute_key
+
+    def cached_path(self, photos_path, *, captured_at):
+        _, normalized_root, minute_key = self._minute_identity(
+            photos_path,
+            captured_at,
+        )
+        cache_key = (normalized_root, minute_key)
+        with self._lock:
+            photo_path = self._saved_photo_by_minute.get(cache_key)
+            if photo_path is not None:
+                self._minute_order_by_root[normalized_root].move_to_end(
+                    minute_key
+                )
+            return photo_path
+
+    def reserve(self, photos_path, *, captured_at):
+        _, normalized_root, minute_key = self._minute_identity(
+            photos_path,
+            captured_at,
+        )
+        cache_key = (normalized_root, minute_key)
+        with self._lock:
+            if (
+                cache_key in self._saved_photo_by_minute
+                or cache_key in self._reservation_by_minute
+            ):
+                return None
+            reservation = _PresencePhotoReservation(
+                normalized_root,
+                minute_key,
+            )
+            self._reservation_by_minute[cache_key] = reservation
+            return reservation
+
+    def is_reserved(self, photos_path, *, captured_at):
+        _, normalized_root, minute_key = self._minute_identity(
+            photos_path,
+            captured_at,
+        )
+        with self._lock:
+            return (
+                normalized_root,
+                minute_key,
+            ) in self._reservation_by_minute
+
+    def _is_active_reservation(self, reservation):
+        if not isinstance(reservation, _PresencePhotoReservation):
+            return False
+        with self._lock:
+            return (
+                self._reservation_by_minute.get(reservation.cache_key)
+                is reservation
+            )
+
+    def release(self, reservation):
+        if not isinstance(reservation, _PresencePhotoReservation):
+            return False
+        with self._lock:
+            if (
+                self._reservation_by_minute.get(reservation.cache_key)
+                is not reservation
+            ):
+                return False
+            self._reservation_by_minute.pop(reservation.cache_key, None)
+            return True
+
+    def commit(self, reservation, photo_path):
+        if (
+            not isinstance(reservation, _PresencePhotoReservation)
+            or not photo_path
+        ):
+            return False
+        with self._lock:
+            current_reservation = self._reservation_by_minute.get(
+                reservation.cache_key
+            )
+            if current_reservation is not reservation:
+                return (
+                    self._saved_photo_by_minute.get(reservation.cache_key)
+                    == photo_path
+                )
+            self._reservation_by_minute.pop(reservation.cache_key, None)
+            self._saved_photo_by_minute[reservation.cache_key] = photo_path
+            minute_order = self._minute_order_by_root.setdefault(
+                reservation.normalized_root,
+                OrderedDict(),
+            )
+            minute_order[reservation.minute_key] = None
+            minute_order.move_to_end(reservation.minute_key)
+            while len(minute_order) > self._MAX_CACHED_MINUTES_PER_ROOT:
+                expired_minute_key, _ = minute_order.popitem(last=False)
+                self._saved_photo_by_minute.pop(
+                    (reservation.normalized_root, expired_minute_key),
+                    None,
+                )
+            return True
 
     def save(
         self,
@@ -36,20 +150,39 @@ class PresencePhotoMinuteGate:
         *,
         captured_at=None,
         location_provider=None,
+        reservation=None,
     ):
         capture_time = captured_at if captured_at is not None else datetime.now()
-        absolute_root = os.path.abspath(os.fspath(photos_path))
-        normalized_root = os.path.normcase(absolute_root)
-        minute_key = capture_time.strftime("%Y%m%d%H%M")
+        absolute_root, normalized_root, minute_key = self._minute_identity(
+            photos_path,
+            capture_time,
+        )
         cache_key = (normalized_root, minute_key)
-
-        with self._lock:
-            cached_photo_path = self._saved_photo_by_minute.get(cache_key)
+        active_reservation = reservation
+        if active_reservation is None:
+            cached_photo_path = self.cached_path(
+                photos_path,
+                captured_at=capture_time,
+            )
             if cached_photo_path is not None:
-                minute_order = self._minute_order_by_root[normalized_root]
-                minute_order.move_to_end(minute_key)
                 return cached_photo_path
+            active_reservation = self.reserve(
+                photos_path,
+                captured_at=capture_time,
+            )
+            if active_reservation is None:
+                return self.cached_path(
+                    photos_path,
+                    captured_at=capture_time,
+                )
+        if (
+            not isinstance(active_reservation, _PresencePhotoReservation)
+            or active_reservation.cache_key != cache_key
+            or not self._is_active_reservation(active_reservation)
+        ):
+            return None
 
+        try:
             resolved_latitude = latitude
             resolved_longitude = longitude
             if location_provider is not None:
@@ -71,19 +204,12 @@ class PresencePhotoMinuteGate:
                 resolved_latitude,
                 resolved_longitude,
             )
-            self._saved_photo_by_minute[cache_key] = photo_path
-            minute_order = self._minute_order_by_root.setdefault(
-                normalized_root,
-                OrderedDict(),
-            )
-            minute_order[minute_key] = None
-            while len(minute_order) > self._MAX_CACHED_MINUTES_PER_ROOT:
-                expired_minute_key, _ = minute_order.popitem(last=False)
-                self._saved_photo_by_minute.pop(
-                    (normalized_root, expired_minute_key),
-                    None,
-                )
+        except Exception:
+            self.release(active_reservation)
+            raise
+        if self.commit(active_reservation, photo_path):
             return photo_path
+        return self.cached_path(photos_path, captured_at=capture_time)
 
 
 _SHARED_PRESENCE_PHOTO_GATE = PresencePhotoMinuteGate()
@@ -98,6 +224,7 @@ def save_presence_photo_once_per_minute(
     captured_at=None,
     location_provider=None,
     gate=None,
+    reservation=None,
 ):
     active_gate = gate if gate is not None else _SHARED_PRESENCE_PHOTO_GATE
     return active_gate.save(
@@ -107,14 +234,14 @@ def save_presence_photo_once_per_minute(
         longitude,
         captured_at=captured_at,
         location_provider=location_provider,
+        reservation=reservation,
     )
 
 
 class PresencePhotoSaveCoordinator:
-    _MAX_SUCCESSFUL_MINUTES_PER_ROOT = 24 * 60
     _STOP = object()
 
-    def __init__(self, *, save_fn=None, max_queue_size=2):
+    def __init__(self, *, save_fn=None, max_queue_size=2, gate=None):
         if (
             not isinstance(max_queue_size, int)
             or isinstance(max_queue_size, bool)
@@ -122,10 +249,10 @@ class PresencePhotoSaveCoordinator:
         ):
             raise ValueError("max_queue_size must be a positive integer")
         self._save_fn = save_fn
+        self._gate = gate if gate is not None else _SHARED_PRESENCE_PHOTO_GATE
         self._queue = queue.Queue(maxsize=max_queue_size)
         self._lock = threading.Lock()
         self._pending_minutes = set()
-        self._successful_minutes_by_root = {}
         self._closed = False
         self._shutdown_enqueued = False
         self._worker = threading.Thread(
@@ -153,47 +280,46 @@ class PresencePhotoSaveCoordinator:
         on_failure=None,
     ):
         capture_time = captured_at if captured_at is not None else datetime.now()
-        normalized_root, minute_key = self._minute_identity(
-            photos_path,
-            capture_time,
-        )
-        cache_key = (normalized_root, minute_key)
-
         with self._lock:
             if self._closed:
                 return False
-            successful_minutes = self._successful_minutes_by_root.get(
-                normalized_root,
-            )
-            if (
-                cache_key in self._pending_minutes
-                or (
-                    successful_minutes is not None
-                    and minute_key in successful_minutes
-                )
-            ):
-                return False
-            self._pending_minutes.add(cache_key)
-            try:
-                self._queue.put_nowait(
-                    {
-                        "cache_key": cache_key,
-                        "normalized_root": normalized_root,
-                        "minute_key": minute_key,
-                        "frame": frame,
-                        "photos_path": photos_path,
-                        "captured_at": capture_time,
-                        "location_provider": location_provider,
-                        "on_success": on_success,
-                        "on_failure": on_failure,
-                    }
-                )
-            except queue.Full:
-                self._pending_minutes.discard(cache_key)
-                return False
+
+        reservation = self._gate.reserve(
+            photos_path,
+            captured_at=capture_time,
+        )
+        if reservation is None:
+            return False
+
+        accepted = False
+        with self._lock:
+            if not self._closed:
+                self._pending_minutes.add(reservation.cache_key)
+                task = {
+                    "cache_key": reservation.cache_key,
+                    "frame": frame,
+                    "photos_path": photos_path,
+                    "captured_at": capture_time,
+                    "location_provider": location_provider,
+                    "on_success": on_success,
+                    "on_failure": on_failure,
+                    "reservation": reservation,
+                }
+                try:
+                    self._queue.put_nowait(task)
+                except queue.Full:
+                    self._pending_minutes.discard(reservation.cache_key)
+                except Exception:
+                    self._pending_minutes.discard(reservation.cache_key)
+                else:
+                    accepted = True
+        if not accepted:
+            self._gate.release(reservation)
+            return False
         return True
 
     def close(self, *, timeout=None):
+        reservations_to_release = []
         with self._lock:
             if not self._closed:
                 self._closed = True
@@ -206,29 +332,22 @@ class PresencePhotoSaveCoordinator:
                         self._pending_minutes.discard(
                             queued_task["cache_key"],
                         )
+                        reservations_to_release.append(
+                            queued_task["reservation"]
+                        )
                     self._queue.task_done()
                 queued_task = None
             if not self._shutdown_enqueued and self._worker.is_alive():
                 self._queue.put_nowait(self._STOP)
                 self._shutdown_enqueued = True
 
+        for reservation in reservations_to_release:
+            self._gate.release(reservation)
+
         if threading.current_thread() is self._worker:
             return False
         self._worker.join(timeout=timeout)
         return not self._worker.is_alive()
-
-    def _record_success(self, normalized_root, minute_key):
-        successful_minutes = self._successful_minutes_by_root.setdefault(
-            normalized_root,
-            OrderedDict(),
-        )
-        successful_minutes[minute_key] = None
-        successful_minutes.move_to_end(minute_key)
-        while (
-            len(successful_minutes)
-            > self._MAX_SUCCESSFUL_MINUTES_PER_ROOT
-        ):
-            successful_minutes.popitem(last=False)
 
     def _run(self):
         while True:
@@ -247,8 +366,11 @@ class PresencePhotoSaveCoordinator:
                     task["photos_path"],
                     captured_at=task["captured_at"],
                     location_provider=task["location_provider"],
+                    gate=self._gate,
+                    reservation=task["reservation"],
                 )
             except Exception as exc:
+                self._gate.release(task["reservation"])
                 with self._lock:
                     self._pending_minutes.discard(task["cache_key"])
                 callback = task["on_failure"]
@@ -258,21 +380,25 @@ class PresencePhotoSaveCoordinator:
                     except Exception:
                         pass
             else:
+                if photo_path:
+                    committed = self._gate.commit(
+                        task["reservation"],
+                        photo_path,
+                    )
+                else:
+                    self._gate.release(task["reservation"])
+                    committed = False
                 with self._lock:
                     self._pending_minutes.discard(task["cache_key"])
-                    if photo_path:
-                        self._record_success(
-                            task["normalized_root"],
-                            task["minute_key"],
-                        )
                 callback = task["on_success"]
-                if photo_path and callback is not None:
+                if committed and callback is not None:
                     try:
                         callback(photo_path)
                     except Exception:
                         pass
             finally:
                 self._queue.task_done()
+                task = None
 
 
 def detect_presence_face_count(image):

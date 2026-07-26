@@ -1037,9 +1037,37 @@ def should_run_face_detection():
     return True
 
 
+def _photo_capture_time_from_path(photo_path):
+    try:
+        photo_name = os.path.basename(os.fspath(photo_path))
+    except (TypeError, ValueError):
+        return None
+    match = re.fullmatch(
+        r"photo_(\d{8}_\d{6})\.jpg",
+        photo_name,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y%m%d_%H%M%S")
+    except ValueError:
+        return None
+
+
 def _publish_presence_photo_path(photo_path):
+    candidate_time = _photo_capture_time_from_path(photo_path)
     with state.lock:
+        current_path = state.paths.get("photo")
+        if photo_path == current_path:
+            return True
+        if candidate_time is None:
+            return False
+        current_time = _photo_capture_time_from_path(current_path)
+        if current_time is not None and candidate_time < current_time:
+            return False
         state.paths["photo"] = photo_path
+        return True
 
 
 def _log_presence_photo_save_failure(exc):
@@ -2219,6 +2247,7 @@ async def startup_event():
             state.photos_path,
             state.screenshots_path,
             state_path=Path(Config.get_runtime_dir()) / FOCUS_PRESENCE_STATE_FILENAME,
+            photo_path_publisher=_publish_presence_photo_path,
         )
         prewarm_runtime_models()
 

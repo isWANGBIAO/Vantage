@@ -24,12 +24,21 @@ class Monitor:
     ABSENT = "ABSENT"
     UNKNOWN = "UNKNOWN"
 
-    def __init__(self, camera, paths, photos_path, screenshots_path, state_path=None):
+    def __init__(
+        self,
+        camera,
+        paths,
+        photos_path,
+        screenshots_path,
+        state_path=None,
+        photo_path_publisher=None,
+    ):
         self.camera = camera
         self.paths = paths
         self.photos_path = photos_path
         self.screenshots_path = screenshots_path
         self.state_path = Path(state_path) if state_path is not None else None
+        self.photo_path_publisher = photo_path_publisher
 
         base_dir = self.photos_path
         print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} BASE_DIR: {base_dir}")
@@ -823,7 +832,16 @@ class Monitor:
                 screenshot_path = take_and_save_screenshots(latitude, longitude, self.screenshots_path)
 
                 if photo_path:
-                    self.paths["photo"] = photo_path
+                    if self.photo_path_publisher is None:
+                        self.paths["photo"] = photo_path
+                    else:
+                        try:
+                            self.photo_path_publisher(photo_path)
+                        except Exception as publish_error:
+                            print(
+                                f"Photo path publish error: {publish_error}",
+                                file=sys.stderr,
+                            )
                 if screenshot_path:
                     self.paths["screenshot"] = screenshot_path
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Done. (Sedentary: {int(sit_duration / 60)} mins)")

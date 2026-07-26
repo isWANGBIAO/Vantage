@@ -41,8 +41,10 @@ class TakePhotoTests(unittest.TestCase):
             self.assertTrue(release_save.wait(timeout=2))
             return "presence-photo.jpg"
 
+        gate = take_a_photo.PresencePhotoMinuteGate()
         coordinator = take_a_photo.PresencePhotoSaveCoordinator(
             save_fn=blocking_save,
+            gate=gate,
         )
         self.assertTrue(coordinator._worker.daemon)
 
@@ -91,8 +93,10 @@ class TakePhotoTests(unittest.TestCase):
                 raise OSError("storage unavailable")
             return "retry-photo.jpg"
 
+        gate = take_a_photo.PresencePhotoMinuteGate()
         coordinator = take_a_photo.PresencePhotoSaveCoordinator(
             save_fn=flaky_save,
+            gate=gate,
         )
         try:
             self.assertTrue(
@@ -141,9 +145,11 @@ class TakePhotoTests(unittest.TestCase):
                 retry_completed.set()
             return f"photo-{kwargs['captured_at'].minute}.jpg"
 
+        gate = take_a_photo.PresencePhotoMinuteGate()
         coordinator = take_a_photo.PresencePhotoSaveCoordinator(
             save_fn=blocking_save,
             max_queue_size=2,
+            gate=gate,
         )
         try:
             self.assertTrue(
@@ -182,6 +188,9 @@ class TakePhotoTests(unittest.TestCase):
             )
             self.assertEqual(len(coordinator._pending_minutes), 3)
             self.assertNotIn(rejected_key, coordinator._pending_minutes)
+            self.assertFalse(
+                gate.is_reserved("photos", captured_at=rejected_time)
+            )
 
             release_save.set()
             self.assertTrue(three_completed.wait(timeout=2))
@@ -213,9 +222,11 @@ class TakePhotoTests(unittest.TestCase):
             release_save.wait(timeout=2)
             return "active-photo.jpg"
 
+        gate = take_a_photo.PresencePhotoMinuteGate()
         coordinator = take_a_photo.PresencePhotoSaveCoordinator(
             save_fn=blocking_save,
             max_queue_size=2,
+            gate=gate,
         )
         active_frame = FrameToken()
         queued_frame_one = FrameToken()
@@ -261,13 +272,35 @@ class TakePhotoTests(unittest.TestCase):
 
             self.assertTrue(coordinator._closed)
             self.assertEqual(len(coordinator._pending_minutes), 1)
+            self.assertTrue(
+                gate.is_reserved("photos", captured_at=first_minute)
+            )
+            self.assertFalse(
+                gate.is_reserved(
+                    "photos",
+                    captured_at=first_minute + timedelta(minutes=1),
+                )
+            )
+            self.assertFalse(
+                gate.is_reserved(
+                    "photos",
+                    captured_at=first_minute + timedelta(minutes=2),
+                )
+            )
             self.assertIsNone(queued_ref_one())
             self.assertIsNone(queued_ref_two())
+            rejected_after_close = first_minute + timedelta(minutes=3)
             self.assertFalse(
                 coordinator.submit(
                     FrameToken(),
                     "photos",
-                    captured_at=first_minute + timedelta(minutes=3),
+                    captured_at=rejected_after_close,
+                )
+            )
+            self.assertFalse(
+                gate.is_reserved(
+                    "photos",
+                    captured_at=rejected_after_close,
                 )
             )
 
@@ -276,10 +309,125 @@ class TakePhotoTests(unittest.TestCase):
             close_thread.join(timeout=2)
             self.assertEqual(close_results, [True])
             self.assertFalse(coordinator._worker.is_alive())
+            self.assertFalse(
+                gate.is_reserved("photos", captured_at=first_minute)
+            )
             self.assertTrue(coordinator.close(timeout=2))
         finally:
             release_save.set()
             coordinator.close(timeout=2)
+
+    def test_coordinator_reservation_prevents_later_direct_save_from_winning(self):
+        first_frame = np.full((4, 4, 3), 1, dtype=np.uint8)
+        later_frame = np.full((4, 4, 3), 2, dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 7)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+        save_started = threading.Event()
+        release_save = threading.Event()
+        save_completed = threading.Event()
+        saved_frames = []
+        first_path = "photo_20260726_142507.jpg"
+
+        def blocking_save(frame, *_args, **_kwargs):
+            saved_frames.append(frame)
+            save_started.set()
+            self.assertTrue(release_save.wait(timeout=2))
+            return first_path
+
+        coordinator = take_a_photo.PresencePhotoSaveCoordinator(
+            save_fn=blocking_save,
+            gate=gate,
+        )
+        try:
+            self.assertTrue(
+                coordinator.submit(
+                    first_frame,
+                    "photos",
+                    captured_at=captured_at,
+                    on_success=lambda _path: save_completed.set(),
+                )
+            )
+            self.assertTrue(save_started.wait(timeout=2))
+
+            with patch.object(
+                take_a_photo,
+                "detect_presence_face_count",
+                return_value=1,
+            ), patch.object(
+                take_a_photo,
+                "save_image_with_gps",
+            ) as direct_write:
+                later_result = take_a_photo.take_photo(
+                    object(),
+                    1.0,
+                    2.0,
+                    "photos",
+                    pre_captured_frame=later_frame,
+                    captured_at=captured_at + timedelta(seconds=10),
+                    photo_gate=gate,
+                )
+
+            self.assertEqual(later_result, (True, None))
+            direct_write.assert_not_called()
+            release_save.set()
+            self.assertTrue(save_completed.wait(timeout=2))
+
+            cached_path = take_a_photo.save_presence_photo_once_per_minute(
+                later_frame,
+                "photos",
+                captured_at=captured_at + timedelta(seconds=20),
+                gate=gate,
+            )
+            self.assertEqual(cached_path, first_path)
+            self.assertEqual(len(saved_frames), 1)
+            self.assertIs(saved_frames[0], first_frame)
+        finally:
+            release_save.set()
+            self.assertTrue(coordinator.close(timeout=2))
+
+    def test_failed_worker_reservation_allows_later_direct_frame_to_save(self):
+        first_frame = np.full((4, 4, 3), 1, dtype=np.uint8)
+        later_frame = np.full((4, 4, 3), 2, dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 7)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+        failure_seen = threading.Event()
+
+        def fail_save(*_args, **_kwargs):
+            raise OSError("storage unavailable")
+
+        coordinator = take_a_photo.PresencePhotoSaveCoordinator(
+            save_fn=fail_save,
+            gate=gate,
+        )
+        try:
+            self.assertTrue(
+                coordinator.submit(
+                    first_frame,
+                    "photos",
+                    captured_at=captured_at,
+                    on_failure=lambda _exc: failure_seen.set(),
+                )
+            )
+            self.assertTrue(failure_seen.wait(timeout=2))
+            self.assertFalse(
+                gate.is_reserved("photos", captured_at=captured_at)
+            )
+
+            with patch.object(
+                take_a_photo,
+                "save_image_with_gps",
+            ) as direct_write:
+                later_path = take_a_photo.save_presence_photo_once_per_minute(
+                    later_frame,
+                    "photos",
+                    captured_at=captured_at + timedelta(seconds=1),
+                    gate=gate,
+                )
+
+            self.assertIsNotNone(later_path)
+            self.assertIs(direct_write.call_args.args[1], later_frame)
+        finally:
+            self.assertTrue(coordinator.close(timeout=2))
 
     def test_presence_photo_gate_saves_only_once_in_the_same_natural_minute(self):
         frame = np.zeros((2160, 3840, 3), dtype=np.uint8)
@@ -581,7 +729,9 @@ class TakePhotoTests(unittest.TestCase):
                 paths = list(executor.map(attempt_save, range(8)))
 
         self.assertEqual(mock_save.call_count, 1)
-        self.assertTrue(all(path == paths[0] for path in paths))
+        saved_paths = [path for path in paths if path is not None]
+        self.assertEqual(len(saved_paths), 1)
+        self.assertEqual(paths.count(None), 7)
 
     def test_take_photo_keeps_presence_contract_when_minute_gate_suppresses_duplicate(self):
         frame = np.zeros((4, 4, 3), dtype=np.uint8)

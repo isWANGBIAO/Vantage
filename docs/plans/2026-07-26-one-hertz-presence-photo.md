@@ -225,7 +225,7 @@ Require the Python matrices, frontend build/tests, and CodeQL to pass. Fix failu
 
 **Step 3: Merge and synchronize local `main`**
 
-Use a normal merge. Fetch and fast-forward `D:\WANGBIAO\code\Vantage` `main` to the exact GitHub merge commit, then verify local and remote SHAs match.
+Use a normal merge. Fetch and fast-forward the local repository's `main` to the exact GitHub merge commit, then verify local and remote SHAs match.
 
 **Step 4: Tag and verify the GitHub release**
 

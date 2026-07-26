@@ -104,6 +104,34 @@ class FaceLiveEndpointTests(unittest.TestCase):
         self.assertIs(server.state.paths, monitor_paths_alias)
         self.assertEqual(server.state.paths, self.original_paths)
 
+    def test_older_async_photo_callback_cannot_replace_newer_monitor_photo(self):
+        newer_path = "photo_20260726_142600.jpg"
+        older_path = "photo_20260726_142559.jpg"
+
+        self.assertTrue(server._publish_presence_photo_path(newer_path))
+        self.assertFalse(server._publish_presence_photo_path(older_path))
+
+        self.assertEqual(server.state.paths["photo"], newer_path)
+
+    def test_newer_photo_path_replaces_current_photo(self):
+        older_path = "photo_20260726_142559.jpg"
+        newer_path = "photo_20260726_142600.jpg"
+        server.state.paths["photo"] = older_path
+
+        self.assertTrue(server._publish_presence_photo_path(newer_path))
+
+        self.assertEqual(server.state.paths["photo"], newer_path)
+
+    def test_nonstandard_photo_path_does_not_replace_timestamped_photo(self):
+        current_path = "photo_20260726_142600.jpg"
+        server.state.paths["photo"] = current_path
+
+        self.assertFalse(
+            server._publish_presence_photo_path("unexpected-photo-name.jpg")
+        )
+
+        self.assertEqual(server.state.paths["photo"], current_path)
+
     def test_store_live_face_result_keeps_only_passing_points_within_window(self):
         server.state.live_face_points = []
 
@@ -347,6 +375,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
 
     def test_blocking_photo_save_does_not_delay_later_inference_starts(self):
         from src.manager.take_photo.take_a_photo import (
+            PresencePhotoMinuteGate,
             PresencePhotoSaveCoordinator,
         )
 
@@ -365,9 +394,12 @@ class FaceLiveEndpointTests(unittest.TestCase):
         def blocking_save(*_args, **_kwargs):
             save_started.set()
             release_save.wait(timeout=2)
-            return "async-presence-photo.jpg"
+            return "photo_20260726_142500.jpg"
 
-        coordinator = PresencePhotoSaveCoordinator(save_fn=blocking_save)
+        coordinator = PresencePhotoSaveCoordinator(
+            save_fn=blocking_save,
+            gate=PresencePhotoMinuteGate(),
+        )
 
         def wait_for_slot(*_args, **_kwargs):
             with server.state.lock:
@@ -415,7 +447,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
 
         deadline = time.monotonic() + 1
         while (
-            server.state.paths["photo"] != "async-presence-photo.jpg"
+            server.state.paths["photo"] != "photo_20260726_142500.jpg"
             and time.monotonic() < deadline
         ):
             time.sleep(0.01)
@@ -424,7 +456,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
         self.assertEqual(detector_calls, 3)
         self.assertEqual(
             server.state.paths["photo"],
-            "async-presence-photo.jpg",
+            "photo_20260726_142500.jpg",
         )
 
     def test_face_detection_model_load_delay_keeps_actual_start_gap(self):
@@ -581,7 +613,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
 
     def test_hidden_overlay_still_saves_detected_original_frame(self):
         frame = _DummyFrame()
-        saved_path = "presence-photo.jpg"
+        saved_path = "photo_20260726_142500.jpg"
         server.state.is_running = True
         server.state.show_person_box = False
         server.state.latest_frame = frame
@@ -692,7 +724,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
                 server._presence_photo_save_coordinator,
                 "submit",
                 side_effect=lambda *_args, **kwargs: (
-                    kwargs["on_success"]("presence-photo.jpg"),
+                    kwargs["on_success"]("photo_20260726_142500.jpg"),
                     True,
                 )[1],
             ) as submit_photo,
@@ -703,7 +735,10 @@ class FaceLiveEndpointTests(unittest.TestCase):
 
         self.assertEqual(sample_count, 60)
         submit_photo.assert_called_once()
-        self.assertEqual(server.state.paths["photo"], "presence-photo.jpg")
+        self.assertEqual(
+            server.state.paths["photo"],
+            "photo_20260726_142500.jpg",
+        )
 
     def test_stale_retained_frame_is_not_detected_or_saved(self):
         server.state.is_running = True
@@ -876,7 +911,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
         server.state.latest_frame_published_at = 10.0
         server.state.photos_path = "photos"
         server.state.person_boxes = [(1, 2, 3, 4)]
-        server.state.paths["photo"] = "old-photo.jpg"
+        server.state.paths["photo"] = "photo_20260726_142500.jpg"
 
         def detect(*_args, **_kwargs):
             server.state.is_running = False
@@ -905,7 +940,10 @@ class FaceLiveEndpointTests(unittest.TestCase):
             server.face_detection_loop()
 
         self.assertEqual(server.state.person_boxes, [(5, 6, 7, 8)])
-        self.assertEqual(server.state.paths["photo"], "old-photo.jpg")
+        self.assertEqual(
+            server.state.paths["photo"],
+            "photo_20260726_142500.jpg",
+        )
 
     def test_presence_photo_storage_failure_retries_on_next_fresh_sample(self):
         detector_calls = 0
@@ -915,7 +953,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
         server.state.latest_frame = _DummyFrame()
         server.state.latest_frame_published_at = 10.0
         server.state.photos_path = "photos"
-        server.state.paths["photo"] = "old-photo.jpg"
+        server.state.paths["photo"] = "photo_20260726_142500.jpg"
 
         def wait_for_slot(*_args, **_kwargs):
             next_sample = 10.0 + detector_calls
@@ -939,7 +977,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
             if submit_attempts == 1:
                 kwargs["on_failure"](OSError("disk unavailable"))
             else:
-                kwargs["on_success"]("new-photo.jpg")
+                kwargs["on_success"]("photo_20260726_142501.jpg")
             return True
 
         with (
@@ -966,7 +1004,10 @@ class FaceLiveEndpointTests(unittest.TestCase):
 
         self.assertEqual(boxes_seen_before_retry, [(5, 6, 7, 8)])
         self.assertEqual(submit_photo_mock.call_count, 2)
-        self.assertEqual(server.state.paths["photo"], "new-photo.jpg")
+        self.assertEqual(
+            server.state.paths["photo"],
+            "photo_20260726_142501.jpg",
+        )
 
     def test_presence_photo_location_failure_keeps_detected_box_and_old_path(self):
         server.state.is_running = True
