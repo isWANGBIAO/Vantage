@@ -1,7 +1,11 @@
+import os
 import tempfile
 import sys
+import threading
 import types
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import numpy as np
@@ -20,6 +24,345 @@ except ModuleNotFoundError as exc:
 
 
 class TakePhotoTests(unittest.TestCase):
+    def test_presence_photo_gate_saves_only_once_in_the_same_natural_minute(self):
+        frame = np.zeros((2160, 3840, 3), dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 7)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save:
+            first_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                tmpdir,
+                1.0,
+                2.0,
+                captured_at=captured_at,
+                gate=gate,
+            )
+            duplicate_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                tmpdir,
+                1.0,
+                2.0,
+                captured_at=captured_at + timedelta(seconds=40),
+                gate=gate,
+            )
+
+        self.assertIsNotNone(first_path)
+        self.assertEqual(duplicate_path, first_path)
+        mock_save.assert_called_once()
+        self.assertIs(mock_save.call_args.args[1], frame)
+        self.assertIn("photo_20260726_142507.jpg", first_path)
+
+    def test_presence_photo_gate_does_not_duplicate_after_out_of_order_minute(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        minute_1425 = datetime(2026, 7, 26, 14, 25, 30)
+        minute_1426 = datetime(2026, 7, 26, 14, 26, 10)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save:
+            first_1426_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                tmpdir,
+                1.0,
+                2.0,
+                captured_at=minute_1426,
+                gate=gate,
+            )
+            path_1425 = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                tmpdir,
+                1.0,
+                2.0,
+                captured_at=minute_1425,
+                gate=gate,
+            )
+            repeated_1426_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                tmpdir,
+                1.0,
+                2.0,
+                captured_at=minute_1426 + timedelta(seconds=20),
+                gate=gate,
+            )
+
+        self.assertIsNotNone(path_1425)
+        self.assertEqual(repeated_1426_path, first_1426_path)
+        self.assertEqual(mock_save.call_count, 2)
+
+    def test_presence_photo_gate_allows_each_root_to_save_in_the_same_minute(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 7)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+
+        with tempfile.TemporaryDirectory() as first_root, tempfile.TemporaryDirectory() as second_root, patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save:
+            first_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                first_root,
+                1.0,
+                2.0,
+                captured_at=captured_at,
+                gate=gate,
+            )
+            second_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                second_root,
+                1.0,
+                2.0,
+                captured_at=captured_at,
+                gate=gate,
+            )
+
+        self.assertIsNotNone(first_path)
+        self.assertIsNotNone(second_path)
+        self.assertNotEqual(first_path, second_path)
+        self.assertEqual(mock_save.call_count, 2)
+
+    def test_presence_photo_gate_preserves_absolute_root_spelling_for_disk_path(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 7)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+        absolute_root = r"C:\Photos\MixedCase"
+        normalized_root = r"c:\photos\mixedcase"
+
+        with patch.object(
+            take_a_photo.os.path,
+            "abspath",
+            return_value=absolute_root,
+        ), patch.object(
+            take_a_photo.os.path,
+            "normcase",
+            return_value=normalized_root,
+        ), patch.object(
+            take_a_photo.os,
+            "makedirs",
+        ) as mock_makedirs, patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save:
+            photo_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                r"C:\ignored-input",
+                1.0,
+                2.0,
+                captured_at=captured_at,
+                gate=gate,
+            )
+
+        expected_folder = os.path.join(
+            absolute_root,
+            "2026",
+            "07",
+            "26",
+            "14",
+        )
+        self.assertTrue(photo_path.startswith(absolute_root))
+        mock_makedirs.assert_called_once_with(expected_folder, exist_ok=True)
+        self.assertEqual(mock_save.call_args.args[0], photo_path)
+
+    def test_presence_photo_gate_keeps_a_full_day_of_minute_deduplication(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        first_minute = datetime(2026, 7, 26, 14, 25, 7)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save:
+            first_path = None
+            for minute_offset in range(10):
+                photo_path = take_a_photo.save_presence_photo_once_per_minute(
+                    frame,
+                    tmpdir,
+                    1.0,
+                    2.0,
+                    captured_at=first_minute + timedelta(minutes=minute_offset),
+                    gate=gate,
+                )
+                if minute_offset == 0:
+                    first_path = photo_path
+
+            revisited_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                tmpdir,
+                1.0,
+                2.0,
+                captured_at=first_minute + timedelta(seconds=20),
+                gate=gate,
+            )
+
+        self.assertEqual(revisited_path, first_path)
+        self.assertEqual(mock_save.call_count, 10)
+
+    def test_presence_photo_gate_accepts_first_save_in_next_natural_minute(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 59)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save:
+            first_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                tmpdir,
+                1.0,
+                2.0,
+                captured_at=captured_at,
+                gate=gate,
+            )
+            next_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                tmpdir,
+                1.0,
+                2.0,
+                captured_at=captured_at + timedelta(seconds=1),
+                gate=gate,
+            )
+
+        self.assertIsNotNone(first_path)
+        self.assertIsNotNone(next_path)
+        self.assertNotEqual(first_path, next_path)
+        self.assertEqual(mock_save.call_count, 2)
+
+    def test_presence_photo_gate_retries_same_minute_after_storage_failure(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 7)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+            side_effect=[OSError("storage unavailable"), None],
+        ) as mock_save:
+            with self.assertRaisesRegex(OSError, "storage unavailable"):
+                take_a_photo.save_presence_photo_once_per_minute(
+                    frame,
+                    tmpdir,
+                    1.0,
+                    2.0,
+                    captured_at=captured_at,
+                    gate=gate,
+                )
+            retry_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                tmpdir,
+                1.0,
+                2.0,
+                captured_at=captured_at + timedelta(seconds=1),
+                gate=gate,
+            )
+
+        self.assertIsNotNone(retry_path)
+        self.assertEqual(mock_save.call_count, 2)
+
+    def test_presence_photo_gate_resolves_location_only_for_an_accepted_save(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 7)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save:
+            location_calls = []
+
+            def location_provider():
+                location_calls.append(None)
+                return 1.25, 2.5
+
+            first_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                tmpdir,
+                captured_at=captured_at,
+                location_provider=location_provider,
+                gate=gate,
+            )
+            duplicate_path = take_a_photo.save_presence_photo_once_per_minute(
+                frame,
+                tmpdir,
+                captured_at=captured_at + timedelta(seconds=10),
+                location_provider=location_provider,
+                gate=gate,
+            )
+
+        self.assertIsNotNone(first_path)
+        self.assertEqual(duplicate_path, first_path)
+        self.assertEqual(len(location_calls), 1)
+        mock_save.assert_called_once_with(first_path, frame, 1.25, 2.5)
+
+    def test_presence_photo_gate_allows_only_one_concurrent_same_minute_save(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 7)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+        ready = threading.Barrier(8)
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save:
+            def attempt_save(_index):
+                ready.wait()
+                return take_a_photo.save_presence_photo_once_per_minute(
+                    frame,
+                    tmpdir,
+                    1.0,
+                    2.0,
+                    captured_at=captured_at,
+                    gate=gate,
+                )
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                paths = list(executor.map(attempt_save, range(8)))
+
+        self.assertEqual(mock_save.call_count, 1)
+        self.assertTrue(all(path == paths[0] for path in paths))
+
+    def test_take_photo_keeps_presence_contract_when_minute_gate_suppresses_duplicate(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 7)
+        gate = take_a_photo.PresencePhotoMinuteGate()
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            take_a_photo,
+            "detect_presence_face_count",
+            return_value=1,
+        ), patch.object(
+            take_a_photo,
+            "save_image_with_gps",
+        ) as mock_save:
+            first_result = take_a_photo.take_photo(
+                object(),
+                1.0,
+                2.0,
+                tmpdir,
+                pre_captured_frame=frame,
+                captured_at=captured_at,
+                photo_gate=gate,
+            )
+            duplicate_result = take_a_photo.take_photo(
+                object(),
+                1.0,
+                2.0,
+                tmpdir,
+                pre_captured_frame=frame,
+                captured_at=captured_at + timedelta(seconds=20),
+                photo_gate=gate,
+            )
+
+        self.assertTrue(first_result[0])
+        self.assertIsNotNone(first_result[1])
+        self.assertEqual(duplicate_result, (True, first_result[1]))
+        mock_save.assert_called_once()
+
     def test_presence_face_count_delegates_to_yunet_presence_at_half_confidence(self):
         frame = np.zeros((4, 4, 3), dtype=np.uint8)
 
