@@ -1,5 +1,6 @@
 import cv2
 import os
+import queue
 import threading
 from collections import OrderedDict
 from datetime import datetime
@@ -107,6 +108,171 @@ def save_presence_photo_once_per_minute(
         captured_at=captured_at,
         location_provider=location_provider,
     )
+
+
+class PresencePhotoSaveCoordinator:
+    _MAX_SUCCESSFUL_MINUTES_PER_ROOT = 24 * 60
+    _STOP = object()
+
+    def __init__(self, *, save_fn=None, max_queue_size=2):
+        if (
+            not isinstance(max_queue_size, int)
+            or isinstance(max_queue_size, bool)
+            or max_queue_size < 1
+        ):
+            raise ValueError("max_queue_size must be a positive integer")
+        self._save_fn = save_fn
+        self._queue = queue.Queue(maxsize=max_queue_size)
+        self._lock = threading.Lock()
+        self._pending_minutes = set()
+        self._successful_minutes_by_root = {}
+        self._closed = False
+        self._shutdown_enqueued = False
+        self._worker = threading.Thread(
+            target=self._run,
+            name="presence-photo-save",
+            daemon=True,
+        )
+        self._worker.start()
+
+    @staticmethod
+    def _minute_identity(photos_path, captured_at):
+        absolute_root = os.path.abspath(os.fspath(photos_path))
+        normalized_root = os.path.normcase(absolute_root)
+        minute_key = captured_at.strftime("%Y%m%d%H%M")
+        return normalized_root, minute_key
+
+    def submit(
+        self,
+        frame,
+        photos_path,
+        *,
+        captured_at=None,
+        location_provider=None,
+        on_success=None,
+        on_failure=None,
+    ):
+        capture_time = captured_at if captured_at is not None else datetime.now()
+        normalized_root, minute_key = self._minute_identity(
+            photos_path,
+            capture_time,
+        )
+        cache_key = (normalized_root, minute_key)
+
+        with self._lock:
+            if self._closed:
+                return False
+            successful_minutes = self._successful_minutes_by_root.get(
+                normalized_root,
+            )
+            if (
+                cache_key in self._pending_minutes
+                or (
+                    successful_minutes is not None
+                    and minute_key in successful_minutes
+                )
+            ):
+                return False
+            self._pending_minutes.add(cache_key)
+            try:
+                self._queue.put_nowait(
+                    {
+                        "cache_key": cache_key,
+                        "normalized_root": normalized_root,
+                        "minute_key": minute_key,
+                        "frame": frame,
+                        "photos_path": photos_path,
+                        "captured_at": capture_time,
+                        "location_provider": location_provider,
+                        "on_success": on_success,
+                        "on_failure": on_failure,
+                    }
+                )
+            except queue.Full:
+                self._pending_minutes.discard(cache_key)
+                return False
+        return True
+
+    def close(self, *, timeout=None):
+        with self._lock:
+            if not self._closed:
+                self._closed = True
+                while True:
+                    try:
+                        queued_task = self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if queued_task is not self._STOP:
+                        self._pending_minutes.discard(
+                            queued_task["cache_key"],
+                        )
+                    self._queue.task_done()
+                queued_task = None
+            if not self._shutdown_enqueued and self._worker.is_alive():
+                self._queue.put_nowait(self._STOP)
+                self._shutdown_enqueued = True
+
+        if threading.current_thread() is self._worker:
+            return False
+        self._worker.join(timeout=timeout)
+        return not self._worker.is_alive()
+
+    def _record_success(self, normalized_root, minute_key):
+        successful_minutes = self._successful_minutes_by_root.setdefault(
+            normalized_root,
+            OrderedDict(),
+        )
+        successful_minutes[minute_key] = None
+        successful_minutes.move_to_end(minute_key)
+        while (
+            len(successful_minutes)
+            > self._MAX_SUCCESSFUL_MINUTES_PER_ROOT
+        ):
+            successful_minutes.popitem(last=False)
+
+    def _run(self):
+        while True:
+            task = self._queue.get()
+            if task is self._STOP:
+                self._queue.task_done()
+                return
+            try:
+                save_fn = (
+                    self._save_fn
+                    if self._save_fn is not None
+                    else save_presence_photo_once_per_minute
+                )
+                photo_path = save_fn(
+                    task["frame"],
+                    task["photos_path"],
+                    captured_at=task["captured_at"],
+                    location_provider=task["location_provider"],
+                )
+            except Exception as exc:
+                with self._lock:
+                    self._pending_minutes.discard(task["cache_key"])
+                callback = task["on_failure"]
+                if callback is not None:
+                    try:
+                        callback(exc)
+                    except Exception:
+                        pass
+            else:
+                with self._lock:
+                    self._pending_minutes.discard(task["cache_key"])
+                    if photo_path:
+                        self._record_success(
+                            task["normalized_root"],
+                            task["minute_key"],
+                        )
+                callback = task["on_success"]
+                if photo_path and callback is not None:
+                    try:
+                        callback(photo_path)
+                    except Exception:
+                        pass
+            finally:
+                self._queue.task_done()
 
 
 def detect_presence_face_count(image):

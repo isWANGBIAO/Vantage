@@ -4,7 +4,7 @@
 
 **Goal:** Detect foreground presence with YuNet once per second and save the first qualifying full-resolution frame in each natural minute, while keeping source, GitHub `main`, the release, and the installed application on the same final commit.
 
-**Architecture:** Reuse the existing realtime YuNet loop as the only 1Hz inference path. Move image persistence behind one shared, thread-safe natural-minute gate so the realtime loop and the existing 60-second monitor cannot save duplicate presence photos. Treat the person-box setting as presentation-only: inference and minute capture continue when the overlay is hidden.
+**Architecture:** Reuse the existing realtime YuNet loop as the only 1Hz inference path. Submit qualifying original frames to a daemon single-consumer save queue so location and JPEG/disk latency cannot block inference. Keep persistence behind one shared, thread-safe natural-minute gate so the queue and the existing 60-second monitor cannot save duplicate presence photos. Treat the person-box setting as presentation-only: inference and minute capture continue when the overlay is hidden.
 
 **Tech Stack:** Python 3, FastAPI, OpenCV/YuNet, pytest, Electron/Vite, GitHub Actions, electron-builder.
 
@@ -86,6 +86,8 @@ Add loop-level regressions proving:
 - a qualifying foreground face saves the original frame immediately and updates `state.paths["photo"]`;
 - no qualifying face does not save;
 - a stale retained camera frame does not save again in a later minute;
+- a blocked location or disk save does not delay later 1Hz inference starts;
+- a permanently blocked save holds at most one active plus two queued original frames, and a rejected minute leaves no pending claim;
 - detector/model failure neither saves nor publishes a box;
 - turning the overlay off clears the visible boxes immediately without disabling inference;
 - inference start times remain at least one second apart.
@@ -110,10 +112,13 @@ In `server.py`:
 - copy the current original camera frame once per 1Hz cycle;
 - accept the frame for persistence only while its published timestamp remains fresh under the existing monitor-frame TTL contract;
 - call `detect_foreground_presence_face_boxes(...)` once;
-- when a qualifying foreground box exists, call the shared minute saver with lazy `get_location`;
-- update `state.paths["photo"]` only after a successful save;
+- when a qualifying foreground box exists, submit the original frame without blocking to a daemon single-consumer save queue;
+- let the worker call the shared minute saver with lazy `get_location`, deduplicate pending/successful minutes, and release failed minutes for retry;
+- bound the queue to two waiting frames, use non-blocking submission with pending rollback on backpressure, and provide deterministic worker cleanup for tests;
+- update `state.paths["photo"]` from the success callback only after a successful save;
 - publish boxes only when `show_person_box` is true, otherwise retain an empty display list;
-- on frame/model/storage errors, do not claim a minute and keep visible boxes empty;
+- on frame/model errors, do not claim a minute and keep visible boxes empty;
+- on location/storage errors, do not claim a minute or replace the photo path, but preserve the successfully detected visible box and retry on the next fresh sample;
 - leave the video-stream cadence, monitor cadence, two-minute grace, stale-frame handling, and strict historical face analysis unchanged.
 
 **Step 4: Run focused regression tests**

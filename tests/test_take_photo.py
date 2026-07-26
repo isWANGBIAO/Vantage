@@ -1,9 +1,12 @@
+import gc
 import os
 import tempfile
 import sys
 import threading
+import time
 import types
 import unittest
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -24,6 +27,260 @@ except ModuleNotFoundError as exc:
 
 
 class TakePhotoTests(unittest.TestCase):
+    def test_presence_photo_coordinator_deduplicates_pending_and_successful_minute(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 7)
+        save_started = threading.Event()
+        release_save = threading.Event()
+        save_completed = threading.Event()
+        save_calls = []
+
+        def blocking_save(*args, **kwargs):
+            save_calls.append((args, kwargs))
+            save_started.set()
+            self.assertTrue(release_save.wait(timeout=2))
+            return "presence-photo.jpg"
+
+        coordinator = take_a_photo.PresencePhotoSaveCoordinator(
+            save_fn=blocking_save,
+        )
+        self.assertTrue(coordinator._worker.daemon)
+
+        try:
+            accepted = coordinator.submit(
+                frame,
+                "photos",
+                captured_at=captured_at,
+                location_provider=lambda: (1.0, 2.0),
+                on_success=lambda _path: save_completed.set(),
+            )
+            self.assertTrue(save_started.wait(timeout=2))
+            duplicate_pending = coordinator.submit(
+                frame,
+                "photos",
+                captured_at=captured_at + timedelta(seconds=10),
+            )
+            release_save.set()
+            self.assertTrue(save_completed.wait(timeout=2))
+            duplicate_success = coordinator.submit(
+                frame,
+                "photos",
+                captured_at=captured_at + timedelta(seconds=20),
+            )
+
+            self.assertTrue(accepted)
+            self.assertFalse(duplicate_pending)
+            self.assertFalse(duplicate_success)
+            self.assertEqual(len(save_calls), 1)
+            self.assertIs(save_calls[0][0][0], frame)
+        finally:
+            release_save.set()
+            self.assertTrue(coordinator.close(timeout=2))
+
+    def test_presence_photo_coordinator_releases_failed_minute_for_retry(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        captured_at = datetime(2026, 7, 26, 14, 25, 7)
+        first_failure = threading.Event()
+        retry_completed = threading.Event()
+        attempts = []
+        saved_paths = []
+
+        def flaky_save(*_args, **_kwargs):
+            attempts.append(None)
+            if len(attempts) == 1:
+                raise OSError("storage unavailable")
+            return "retry-photo.jpg"
+
+        coordinator = take_a_photo.PresencePhotoSaveCoordinator(
+            save_fn=flaky_save,
+        )
+        try:
+            self.assertTrue(
+                coordinator.submit(
+                    frame,
+                    "photos",
+                    captured_at=captured_at,
+                    on_failure=lambda _exc: first_failure.set(),
+                )
+            )
+            self.assertTrue(first_failure.wait(timeout=2))
+            self.assertTrue(
+                coordinator.submit(
+                    frame,
+                    "photos",
+                    captured_at=captured_at + timedelta(seconds=1),
+                    on_success=lambda path: (
+                        saved_paths.append(path),
+                        retry_completed.set(),
+                    ),
+                )
+            )
+            self.assertTrue(retry_completed.wait(timeout=2))
+
+            self.assertEqual(len(attempts), 2)
+            self.assertEqual(saved_paths, ["retry-photo.jpg"])
+        finally:
+            self.assertTrue(coordinator.close(timeout=2))
+
+    def test_presence_photo_coordinator_bounds_blocked_worker_queue(self):
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        first_minute = datetime(2026, 7, 26, 14, 25, 7)
+        save_started = threading.Event()
+        release_save = threading.Event()
+        three_completed = threading.Event()
+        retry_completed = threading.Event()
+        completed_minutes = []
+
+        def blocking_save(*_args, **kwargs):
+            save_started.set()
+            self.assertTrue(release_save.wait(timeout=2))
+            completed_minutes.append(kwargs["captured_at"].minute)
+            if len(completed_minutes) == 3:
+                three_completed.set()
+            if len(completed_minutes) == 4:
+                retry_completed.set()
+            return f"photo-{kwargs['captured_at'].minute}.jpg"
+
+        coordinator = take_a_photo.PresencePhotoSaveCoordinator(
+            save_fn=blocking_save,
+            max_queue_size=2,
+        )
+        try:
+            self.assertTrue(
+                coordinator.submit(
+                    frame,
+                    "photos",
+                    captured_at=first_minute,
+                )
+            )
+            self.assertTrue(save_started.wait(timeout=2))
+            self.assertTrue(
+                coordinator.submit(
+                    frame,
+                    "photos",
+                    captured_at=first_minute + timedelta(minutes=1),
+                )
+            )
+            self.assertTrue(
+                coordinator.submit(
+                    frame,
+                    "photos",
+                    captured_at=first_minute + timedelta(minutes=2),
+                )
+            )
+            rejected_time = first_minute + timedelta(minutes=3)
+            self.assertFalse(
+                coordinator.submit(
+                    frame,
+                    "photos",
+                    captured_at=rejected_time,
+                )
+            )
+            rejected_key = coordinator._minute_identity(
+                "photos",
+                rejected_time,
+            )
+            self.assertEqual(len(coordinator._pending_minutes), 3)
+            self.assertNotIn(rejected_key, coordinator._pending_minutes)
+
+            release_save.set()
+            self.assertTrue(three_completed.wait(timeout=2))
+            self.assertTrue(
+                coordinator.submit(
+                    frame,
+                    "photos",
+                    captured_at=rejected_time + timedelta(seconds=1),
+                )
+            )
+            self.assertTrue(retry_completed.wait(timeout=2))
+            self.assertEqual(len(completed_minutes), 4)
+        finally:
+            release_save.set()
+            self.assertTrue(coordinator.close(timeout=2))
+
+    def test_presence_photo_coordinator_close_discards_queue_and_joins_worker(self):
+        class FrameToken:
+            pass
+
+        first_minute = datetime(2026, 7, 26, 14, 25, 7)
+        save_started = threading.Event()
+        release_save = threading.Event()
+        close_finished = threading.Event()
+        close_results = []
+
+        def blocking_save(*_args, **_kwargs):
+            save_started.set()
+            release_save.wait(timeout=2)
+            return "active-photo.jpg"
+
+        coordinator = take_a_photo.PresencePhotoSaveCoordinator(
+            save_fn=blocking_save,
+            max_queue_size=2,
+        )
+        active_frame = FrameToken()
+        queued_frame_one = FrameToken()
+        queued_frame_two = FrameToken()
+        queued_ref_one = weakref.ref(queued_frame_one)
+        queued_ref_two = weakref.ref(queued_frame_two)
+        try:
+            self.assertTrue(
+                coordinator.submit(
+                    active_frame,
+                    "photos",
+                    captured_at=first_minute,
+                )
+            )
+            self.assertTrue(save_started.wait(timeout=2))
+            self.assertTrue(
+                coordinator.submit(
+                    queued_frame_one,
+                    "photos",
+                    captured_at=first_minute + timedelta(minutes=1),
+                )
+            )
+            self.assertTrue(
+                coordinator.submit(
+                    queued_frame_two,
+                    "photos",
+                    captured_at=first_minute + timedelta(minutes=2),
+                )
+            )
+            del queued_frame_one
+            del queued_frame_two
+
+            def close_coordinator():
+                close_results.append(coordinator.close(timeout=2))
+                close_finished.set()
+
+            close_thread = threading.Thread(target=close_coordinator)
+            close_thread.start()
+            deadline = time.monotonic() + 1
+            while not coordinator._closed and time.monotonic() < deadline:
+                time.sleep(0.01)
+            gc.collect()
+
+            self.assertTrue(coordinator._closed)
+            self.assertEqual(len(coordinator._pending_minutes), 1)
+            self.assertIsNone(queued_ref_one())
+            self.assertIsNone(queued_ref_two())
+            self.assertFalse(
+                coordinator.submit(
+                    FrameToken(),
+                    "photos",
+                    captured_at=first_minute + timedelta(minutes=3),
+                )
+            )
+
+            release_save.set()
+            self.assertTrue(close_finished.wait(timeout=2))
+            close_thread.join(timeout=2)
+            self.assertEqual(close_results, [True])
+            self.assertFalse(coordinator._worker.is_alive())
+            self.assertTrue(coordinator.close(timeout=2))
+        finally:
+            release_save.set()
+            coordinator.close(timeout=2)
+
     def test_presence_photo_gate_saves_only_once_in_the_same_natural_minute(self):
         frame = np.zeros((2160, 3840, 3), dtype=np.uint8)
         captured_at = datetime(2026, 7, 26, 14, 25, 7)
@@ -571,9 +828,13 @@ class TakePhotoTests(unittest.TestCase):
         with server.state.lock:
             original_is_running = server.state.is_running
             original_latest_frame = server.state.latest_frame
+            original_latest_frame_published_at = (
+                server.state.latest_frame_published_at
+            )
             original_person_boxes = list(server.state.person_boxes)
             server.state.is_running = True
             server.state.latest_frame = frame
+            server.state.latest_frame_published_at = 0.0
             server.state.person_boxes = []
 
         try:
@@ -620,6 +881,9 @@ class TakePhotoTests(unittest.TestCase):
             with server.state.lock:
                 server.state.is_running = original_is_running
                 server.state.latest_frame = original_latest_frame
+                server.state.latest_frame_published_at = (
+                    original_latest_frame_published_at
+                )
                 server.state.person_boxes = original_person_boxes
 
     def test_take_photo_returns_absent_after_successful_detection_finds_no_presence(self):
