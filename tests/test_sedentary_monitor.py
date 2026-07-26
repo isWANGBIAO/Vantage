@@ -1,7 +1,7 @@
 import json
 import tempfile
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
@@ -1777,6 +1777,38 @@ def test_run_task_preserves_latest_media_when_present_capture_paths_are_empty(
     assert monitor.continuous_sit_start == 200.0
     assert monitor.last_presence_time == 200.0
     assert monitor.last_observation_status == "PRESENT"
+
+
+def test_run_task_uses_photo_publisher_without_direct_path_write(tmp_path):
+    paths = {
+        "photo": "previous-photo.jpg",
+        "screenshot": "previous-screenshot.jpg",
+    }
+    photo_publisher = Mock(return_value=True)
+    monitor = Monitor(
+        camera=None,
+        paths=paths,
+        photos_path=str(tmp_path),
+        screenshots_path=str(tmp_path),
+        photo_path_publisher=photo_publisher,
+    )
+
+    with (
+        patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
+        patch(
+            "src.manager.manager_main.take_photo",
+            return_value=(True, "photo_20260726_142600.jpg"),
+        ),
+        patch(
+            "src.manager.manager_main.take_and_save_screenshots",
+            return_value=None,
+        ),
+        patch("src.manager.manager_main.time.time", return_value=200.0),
+    ):
+        monitor.run_task()
+
+    photo_publisher.assert_called_once_with("photo_20260726_142600.jpg")
+    assert paths["photo"] == "previous-photo.jpg"
 
 
 def test_run_task_pauses_and_resumes_sedentary_timer_after_stale_monitor_gap():

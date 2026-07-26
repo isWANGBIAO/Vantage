@@ -68,3 +68,32 @@ def test_frontend_workflows_pin_electron_node_runtime():
         "\n## ", maxsplit=1
     )[0]
     assert f"Node.js {expected_node_version}" in requirements
+
+
+def test_release_metadata_matches_package_version():
+    package = json.loads(Path("src/webapp/package.json").read_text(encoding="utf-8"))
+    package_lock = json.loads(
+        Path("src/webapp/package-lock.json").read_text(encoding="utf-8")
+    )
+    readme = Path("README.md").read_text(encoding="utf-8")
+    release_workflow = Path(".github/workflows/release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    version = package.get("version")
+    assert isinstance(version, str)
+    assert re.fullmatch(
+        r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)",
+        version,
+    )
+    tag = f"v{version}"
+
+    assert package_lock["version"] == version
+    assert package_lock["packages"][""]["version"] == version
+    assert f'git tag -a {tag} -m "Vantage {version}"' in readme
+    assert f"git push origin {tag}" in readme
+    assert (
+        f"for example `{tag}` for package version `{version}`"
+        in readme
+    )
+    assert f"for example {tag}" in release_workflow

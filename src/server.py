@@ -70,7 +70,8 @@ from src.core.user_config import (
 )
 from src.core.media_storage import DEFAULT_LEGACY_MEDIA_ROOT, get_media_paths_settings_file, resolve_media_storage_paths
 from src.manager.manager_main import Monitor
-from src.manager.get_location import get_trusted_location_sample_async
+from src.manager.get_location import get_location, get_trusted_location_sample_async
+from src.manager.take_photo.take_a_photo import PresencePhotoSaveCoordinator
 from src.services.llm_client import LLMClient
 from src.services.model_call_recorder import (
     get_session_usage_summary,
@@ -629,6 +630,7 @@ class SystemState:
         self.last_processed_face_photo_path = None
 
 state = SystemState()
+_presence_photo_save_coordinator = PresencePhotoSaveCoordinator()
 _status_log_records = {}
 _status_log_lock = threading.Lock()
 
@@ -1032,8 +1034,44 @@ def has_active_video_stream_client():
 
 
 def should_run_face_detection():
+    return True
+
+
+def _photo_capture_time_from_path(photo_path):
+    try:
+        photo_name = os.path.basename(os.fspath(photo_path))
+    except (TypeError, ValueError):
+        return None
+    match = re.fullmatch(
+        r"photo_(\d{8}_\d{6})\.jpg",
+        photo_name,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y%m%d_%H%M%S")
+    except ValueError:
+        return None
+
+
+def _publish_presence_photo_path(photo_path):
+    candidate_time = _photo_capture_time_from_path(photo_path)
     with state.lock:
-        return bool(state.show_person_box)
+        current_path = state.paths.get("photo")
+        if photo_path == current_path:
+            return True
+        if candidate_time is None:
+            return False
+        current_time = _photo_capture_time_from_path(current_path)
+        if current_time is not None and candidate_time < current_time:
+            return False
+        state.paths["photo"] = photo_path
+        return True
+
+
+def _log_presence_photo_save_failure(exc):
+    print(f"Camera presence photo save error: {exc}")
 
 
 def refresh_face_report_cache(db_file=None, output_dir=None):
@@ -2209,6 +2247,7 @@ async def startup_event():
             state.photos_path,
             state.screenshots_path,
             state_path=Path(Config.get_runtime_dir()) / FOCUS_PRESENCE_STATE_FILENAME,
+            photo_path_publisher=_publish_presence_photo_path,
         )
         prewarm_runtime_models()
 
@@ -2536,64 +2575,93 @@ def face_live_loop():
 
 def face_detection_loop():
     print("Starting camera-facing face detection background thread...")
-    try:
-        detector = get_face_detector()
-        print("Camera face detector loaded successfully.")
-    except Exception as e:
-        print(f"Camera face detector unavailable in thread: {e}")
-        return
-
+    detector = None
     last_inference_started_at = None
+    last_submitted_frame_published_at = None
     while state.is_running:
-        if not should_run_face_detection():
-            with state.lock:
-                state.person_boxes = []
-            time.sleep(1)
-            continue
-            
+        if detector is None:
+            try:
+                detector = get_face_detector()
+                print("Camera face detector loaded successfully.")
+            except Exception as e:
+                with state.lock:
+                    state.person_boxes = []
+                print(f"Camera face detector unavailable in thread: {e}")
+                time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
+                continue
+
         with state.lock:
             frame_available = state.latest_frame is not None
 
         if frame_available:
-            wait_for_next_inference_start(
+            inference_started_at = wait_for_next_inference_start(
                 last_inference_started_at,
                 FACE_DETECTION_SAMPLE_INTERVAL_SECONDS,
             )
             if not state.is_running:
                 break
+            frame_copy_error = None
             with state.lock:
-                detection_enabled = state.show_person_box
-                if not detection_enabled:
+                published_at = state.latest_frame_published_at
+                frame_is_fresh = _monitor_frame_timestamp_is_fresh(
+                    published_at,
+                    inference_started_at,
+                )
+                if state.latest_frame is None or not frame_is_fresh:
                     state.person_boxes = []
                     frame_copy = None
                 else:
-                    frame_copy = (
-                        state.latest_frame.copy()
-                        if state.latest_frame is not None
-                        else None
-                    )
-            if not detection_enabled:
-                continue
+                    try:
+                        frame_copy = state.latest_frame.copy()
+                    except Exception as exc:
+                        state.person_boxes = []
+                        frame_copy = None
+                        frame_copy_error = exc
+                photos_path = state.photos_path
             if frame_copy is None:
+                if frame_copy_error is not None:
+                    print(f"Camera frame copy error: {frame_copy_error}")
+                time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
                 continue
 
-            last_inference_started_at = time.monotonic()
+            last_inference_started_at = inference_started_at
             try:
                 boxes = detect_foreground_presence_face_boxes(
                     frame_copy,
                     model=detector,
                     conf=PRESENCE_DETECTION_CONFIDENCE,
                 )
-
-                with state.lock:
-                    state.person_boxes = boxes if state.show_person_box else []
-
             except Exception as e:
                 with state.lock:
                     state.person_boxes = []
                 print(f"Camera face detection error: {e}")
+                continue
+
+            with state.lock:
+                state.person_boxes = boxes if state.show_person_box else []
+
+            if (
+                boxes
+                and photos_path
+                and published_at != last_submitted_frame_published_at
+            ):
+                try:
+                    _presence_photo_save_coordinator.submit(
+                        frame_copy,
+                        photos_path,
+                        captured_at=datetime.now(),
+                        location_provider=get_location,
+                        on_success=_publish_presence_photo_path,
+                        on_failure=_log_presence_photo_save_failure,
+                    )
+                except Exception as e:
+                    _log_presence_photo_save_failure(e)
+                else:
+                    last_submitted_frame_published_at = published_at
 
         else:
+            with state.lock:
+                state.person_boxes = []
             time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
 
 
