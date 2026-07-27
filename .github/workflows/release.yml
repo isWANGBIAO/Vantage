@@ -83,11 +83,17 @@ jobs:
 
           $installer = Get-Item -LiteralPath (Join-Path $dist "Vantage Setup $version.exe")
           $blockmap = Get-Item -LiteralPath (Join-Path $dist "Vantage Setup $version.exe.blockmap")
-          foreach ($asset in @($installer, $blockmap)) {
-            if ($asset.Length -ge 2147483648) {
-              throw "$($asset.Name) is $($asset.Length) bytes, which is at or above GitHub's 2 GiB release asset limit."
+          $installerName = "Vantage.Setup.$version.exe"
+          $blockmapName = "$installerName.blockmap"
+          $releaseAssets = @(
+            @{ Source = $installer; Name = $installerName }
+            @{ Source = $blockmap; Name = $blockmapName }
+          )
+          foreach ($asset in $releaseAssets) {
+            if ($asset.Source.Length -ge 2147483648) {
+              throw "$($asset.Source.Name) is $($asset.Source.Length) bytes, which is at or above GitHub's 2 GiB release asset limit."
             }
-            Copy-Item -LiteralPath $asset.FullName -Destination $assetRoot -Force
+            Copy-Item -LiteralPath $asset.Source.FullName -Destination (Join-Path $assetRoot $asset.Name) -Force
           }
 
           $hashLines = Get-ChildItem -LiteralPath $assetRoot -File |
@@ -104,8 +110,8 @@ jobs:
           Windows installer built from commit $env:GITHUB_SHA.
 
           Assets:
-          - Vantage Setup $version.exe
-          - Vantage Setup $version.exe.blockmap
+          - Vantage.Setup.$version.exe
+          - Vantage.Setup.$version.exe.blockmap
           - SHA256SUMS.txt
           "@ | Set-Content -LiteralPath RELEASE_NOTES.md -Encoding utf8
 

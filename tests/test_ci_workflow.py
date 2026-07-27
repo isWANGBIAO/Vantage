@@ -97,3 +97,19 @@ def test_release_metadata_matches_package_version():
         in readme
     )
     assert f"for example {tag}" in release_workflow
+
+
+def test_release_checksums_use_final_github_asset_names():
+    release_workflow = Path(".github/workflows/release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert '$installerName = "Vantage.Setup.$version.exe"' in release_workflow
+    assert '$blockmapName = "$installerName.blockmap"' in release_workflow
+    assert (
+        "Copy-Item -LiteralPath $asset.Source.FullName "
+        "-Destination (Join-Path $assetRoot $asset.Name) -Force"
+        in release_workflow
+    )
+    assert "- Vantage.Setup.$version.exe" in release_workflow
+    assert "- Vantage.Setup.$version.exe.blockmap" in release_workflow
