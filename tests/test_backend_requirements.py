@@ -19,8 +19,7 @@ EXPECTED_SHARED_CORE_LINES = {
     'numpy==2.2.6; python_version < "3.12"',
     'numpy==2.5.1; python_version >= "3.12"',
     "openai==1.109.1",
-    'opencv-python==4.14.0.94; sys_platform == "win32"',
-    'opencv-python-headless==4.14.0.94; sys_platform != "win32"',
+    "opencv-contrib-python==4.14.0.94",
     "openpyxl==3.1.5",
     "pandas==2.3.3",
     "piexif==1.1.3",
@@ -64,8 +63,7 @@ REQUIRED_GPU_RUNTIME_PACKAGES = {
     "mss",
     "numpy",
     "openai",
-    "opencv-python",
-    "opencv-python-headless",
+    "opencv-contrib-python",
     "openpyxl",
     "pandas",
     "piexif",
@@ -88,8 +86,7 @@ REQUIRED_CI_PACKAGES = {
     "mss",
     "numpy",
     "openai",
-    "opencv-python-headless",
-    "opencv-python",
+    "opencv-contrib-python",
     "openpyxl",
     "pandas",
     "piexif",
@@ -137,6 +134,13 @@ FORBIDDEN_GPU_RUNTIME_PACKAGES = {
     "torchaudio",
     "torchvision",
     "ultralytics",
+}
+
+OPENCV_DISTRIBUTION_NAMES = {
+    "opencv-contrib-python",
+    "opencv-contrib-python-headless",
+    "opencv-python",
+    "opencv-python-headless",
 }
 
 
@@ -252,6 +256,16 @@ def test_shared_core_owns_one_exact_compatible_dependency_contract():
     assert len(actual) == len(_direct_requirement_lines("requirements-core.txt"))
 
 
+def test_all_effective_environments_use_one_opencv_distribution():
+    for path in ENVIRONMENT_REQUIREMENT_FILES:
+        opencv_distributions = (
+            _requirement_package_names(path) & OPENCV_DISTRIBUTION_NAMES
+        )
+        assert opencv_distributions == {"opencv-contrib-python"}, (
+            f"{path} must use only the MediaPipe-compatible OpenCV distribution"
+        )
+
+
 def test_requirements_cover_backend_runtime_dependencies():
     package_names = _requirement_package_names("requirements.txt")
 
@@ -330,6 +344,24 @@ def test_development_requirements_split_scipy_by_python_version():
     assert len(actual) == len(expected)
 
 
+def test_development_requirements_keep_resolvable_cuda_and_compatibility_pins():
+    content = Path("requirements.txt").read_text(encoding="utf-8").splitlines()
+
+    assert "--extra-index-url https://download.pytorch.org/whl/cu130" in content
+    expected = {
+        "ipykernel": {"ipykernel==6.29.5"},
+        "mpmath": {"mpmath==1.3.0"},
+        "webcolors": {"webcolors==25.10.0"},
+    }
+    for package_name, expected_lines in expected.items():
+        actual = {
+            line.strip()
+            for line in content
+            if _normalize_requirement_name(line) == package_name
+        }
+        assert actual == expected_lines
+
+
 def test_readme_recommends_environment_python_version():
     environment = Path("environment.yml").read_text(encoding="utf-8")
     readme = Path("README.md").read_text(encoding="utf-8")
@@ -342,23 +374,14 @@ def test_readme_recommends_environment_python_version():
     assert "Python 3.12 recommended." not in readme
 
 
-def test_backend_runtime_requirements_keep_macos_opencv_headless():
-    opencv_lines = _find_requirement_lines("requirements-core.txt", "opencv-python")
-    assert any("opencv-python==" in line and 'sys_platform == "win32"' in line for line in opencv_lines)
-    assert any(
-        "opencv-python-headless==" in line and 'sys_platform != "win32"' in line
-        for line in opencv_lines
-    )
-    assert any(
-        "opencv-python==4.14.0.94" in line
-        and 'sys_platform == "win32"' in line
-        for line in opencv_lines
-    )
-    assert any(
-        "opencv-python-headless==4.14.0.94" in line
-        and 'sys_platform != "win32"' in line
-        for line in opencv_lines
-    )
+def test_shared_core_pins_single_cross_platform_opencv_distribution():
+    opencv_lines = [
+        line
+        for line in _read_requirement_lines("requirements-core.txt")
+        if _normalize_requirement_name(line) in OPENCV_DISTRIBUTION_NAMES
+    ]
+
+    assert opencv_lines == ["opencv-contrib-python==4.14.0.94"]
 
     for package_name in ("onnxruntime", "onnxruntime-gpu", "torch", "torchvision", "ultralytics"):
         assert not _find_requirement_lines("requirements-backend-runtime-gpu.txt", package_name)

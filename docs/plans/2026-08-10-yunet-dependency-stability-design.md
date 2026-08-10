@@ -58,9 +58,12 @@ pins in the development, CI, and packaged-runtime files. A new
 including OpenCV `4.14.0.94`, the Python-version-qualified NumPy 2.x pins, and
 the compatible Pydantic/Pydantic Core pair. `requirements.txt`,
 `requirements-ci.txt`, and `requirements-backend-runtime-gpu.txt` each include
-that file with `-r` and contain only environment-specific additions. The
-Windows OpenCV package remains `opencv-python`; non-Windows environments use
-the headless build at the same version.
+that file with `-r` and contain only environment-specific additions. Every
+environment uses the single `opencv-contrib-python==4.14.0.94` distribution.
+MediaPipe already requires the contrib distribution, and OpenCV's four Python
+wheel families share the same `cv2` namespace and must not coexist. The official
+PyPI release supplies Windows, macOS arm64/x64, and manylinux wheels, so one
+cross-platform distribution is both resolvable and packaging-compatible.
 
 This is a single source of truth for shared packages, not an unpinned install.
 Exact versions retain reproducible CI and releases, while the small overlay
@@ -76,6 +79,13 @@ a core-only update can replace native Python binaries. The standalone
 semantics to pip instead of treating include directives as package names. Its
 result is file-scoped: success returns no failures, while a nonzero pip result
 reports the requirements file path and makes the CLI exit with status 1.
+
+The development overlay declares PyTorch's CUDA 13.0 wheel index so its exact
+`torch==2.13.0+cu130` pin is discoverable. It also uses the jointly resolvable
+`ipykernel==6.29.5`, `mpmath==1.3.0`, and `webcolors==25.10.0` pins. These are
+verified as a complete Python 3.11 Windows requirements graph with pip's real
+resolver in dry-run and ignore-installed mode; no large wheel is installed by
+that check.
 
 The packaged `runtime-manifest.json` verifies that the YuNet resources are
 present and YOLOX is absent; it does not record package versions. OpenCV and
@@ -115,6 +125,9 @@ Verification covers:
 - the standalone requirements installer success/file-failure contract,
   including one composed `pip install -r` invocation, a successful zero-error
   CLI path, and an explicit failed-requirements-file `SystemExit(1)` path;
+- a real Python 3.11 Windows root resolver dry-run proving the composed
+  development graph resolves and its plan contains only
+  `opencv-contrib-python`, with no second OpenCV distribution;
 - the full Windows `RUN.bat` flow, installed version, commit metadata, health
   endpoints, the runtime manifest's YuNet/no-YOLOX resource contract, and
   independently queried installed OpenCV and NumPy versions.

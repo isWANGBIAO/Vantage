@@ -344,6 +344,62 @@ git add requirements-core.txt requirements.txt requirements-ci.txt requirements-
 git commit -m "build: unify shared Python dependency contract" -m "Centralize exact shared pins for development, CI, and the packaged runtime, upgrade every YuNet path to the same OpenCV and NumPy contract, and include the shared core in dependency caches and runtime build fingerprints."
 ```
 
+### Task 4C: Make the composed development graph resolvable with one OpenCV distribution
+
+**Files:**
+- Modify: `requirements-core.txt`
+- Modify: `requirements.txt`
+- Modify: `tests/test_backend_requirements.py`
+- Modify: `docs/plans/2026-08-10-yunet-dependency-stability-design.md`
+- Modify: `docs/plans/2026-08-10-yunet-dependency-stability.md`
+
+**Step 1: Add failing resolver and OpenCV distribution contracts**
+
+Require the effective development, CI, and packaged-runtime graphs to contain
+exactly one OpenCV wheel distribution: `opencv-contrib-python==4.14.0.94`.
+Require the development overlay to declare the CUDA 13.0 PyTorch index and the
+resolver-compatible `ipykernel==6.29.5`, `mpmath==1.3.0`, and
+`webcolors==25.10.0` pins.
+
+Run:
+
+```powershell
+python -m pytest tests/test_backend_requirements.py -q
+```
+
+Expected: fail because the shared core still declares two mutually exclusive
+OpenCV wheel families and the development graph lacks the compatible resolver
+contract.
+
+**Step 2: Use the one MediaPipe-compatible OpenCV distribution**
+
+Replace the platform-split `opencv-python` and `opencv-python-headless` pins
+with the single cross-platform `opencv-contrib-python==4.14.0.94` pin. MediaPipe
+requires contrib, all four OpenCV wheel families install the same `cv2`
+namespace, and the official PyPI release provides Windows, macOS arm64/x64, and
+manylinux wheels.
+
+Add `--extra-index-url https://download.pytorch.org/whl/cu130` near the top of
+`requirements.txt`, then apply the three exact compatibility pins from Step 1.
+
+**Step 3: Run the real root resolver without installing packages**
+
+Run on Python 3.11 Windows:
+
+```powershell
+python -m pip install --dry-run --ignore-installed -r requirements.txt
+```
+
+Expected: exit code 0. Inspect pip's final installation plan and require
+`opencv-contrib-python==4.14.0.94` to be the only OpenCV distribution. Do not
+replace this with an actual install or download the large Torch wheel.
+
+**Step 4: Verify and commit**
+
+Run the complete Task 4B target suite, then `git diff --check`. Commit the
+requirements, tests, and both updated plan documents together with a detailed
+message.
+
 ### Task 5: Prepare release 1.0.67
 
 **Files:**
