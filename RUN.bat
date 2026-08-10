@@ -14,6 +14,7 @@ set "INSTALLED_EXE=%INSTALL_ROOT%\Vantage.exe"
 set "STARTUP_FOLDER=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "BACKEND_RUNTIME_VENV=%PROJECT_ROOT%.venv-backend-runtime-gpu"
 set "BACKEND_RUNTIME_PYTHON=%BACKEND_RUNTIME_VENV%\Scripts\python.exe"
+set "BACKEND_RUNTIME_CORE_REQUIREMENTS=%PROJECT_ROOT%requirements-core.txt"
 set "BACKEND_RUNTIME_REQUIREMENTS=%PROJECT_ROOT%requirements-backend-runtime-gpu.txt"
 set "BACKEND_RUNTIME_REQUIREMENTS_STAMP=%BACKEND_RUNTIME_VENV%\.requirements-backend-runtime-gpu.sha256"
 set "WEBAPP_BUILD_INFO=%PROJECT_ROOT%src\webapp\build-info.json"
@@ -68,7 +69,9 @@ if not exist "%BACKEND_RUNTIME_PYTHON%" (
     echo       Backend runtime venv already exists
 )
 
-for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath '%BACKEND_RUNTIME_REQUIREMENTS%').Hash"`) do set "BACKEND_RUNTIME_REQUIREMENTS_HASH=%%H"
+for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath '%BACKEND_RUNTIME_CORE_REQUIREMENTS%').Hash"`) do set "BACKEND_RUNTIME_CORE_REQUIREMENTS_HASH=%%H"
+for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath '%BACKEND_RUNTIME_REQUIREMENTS%').Hash"`) do set "BACKEND_RUNTIME_OVERLAY_REQUIREMENTS_HASH=%%H"
+set "BACKEND_RUNTIME_REQUIREMENTS_HASH=!BACKEND_RUNTIME_CORE_REQUIREMENTS_HASH!:!BACKEND_RUNTIME_OVERLAY_REQUIREMENTS_HASH!"
 set "BACKEND_RUNTIME_REQUIREMENTS_STORED_HASH="
 if exist "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" (
     for /f "usebackq delims=" %%H in ("%BACKEND_RUNTIME_REQUIREMENTS_STAMP%") do set "BACKEND_RUNTIME_REQUIREMENTS_STORED_HASH=%%H"

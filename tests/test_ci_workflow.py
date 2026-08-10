@@ -96,9 +96,7 @@ def test_readme_react_badge_matches_frontend_dependency_contract():
 
 
 def test_readme_fastapi_badge_matches_backend_runtime_contract():
-    runtime_requirements = Path("requirements-backend-runtime-gpu.txt").read_text(
-        encoding="utf-8"
-    )
+    runtime_requirements = Path("requirements-core.txt").read_text(encoding="utf-8")
     fastapi_versions = re.findall(
         r"^fastapi==([^;\s]+)(?:\s*;.*)?$",
         runtime_requirements,
@@ -111,6 +109,25 @@ def test_readme_fastapi_badge_matches_backend_runtime_contract():
     readme = Path("README.md").read_text(encoding="utf-8")
     assert f'alt="FastAPI {expected_version}"' in readme
     assert f"FastAPI-{expected_version}-" in readme
+
+
+def test_python_workflow_caches_include_shared_core_and_environment_overlay():
+    expected_cache_contracts = {
+        Path(".github/workflows/ci.yml"): "requirements-ci.txt",
+        Path(".github/workflows/release.yml"): "requirements-backend-runtime-gpu.txt",
+    }
+
+    for workflow_path, overlay in expected_cache_contracts.items():
+        workflow = workflow_path.read_text(encoding="utf-8")
+        expected = (
+            "cache-dependency-path: |\n"
+            "            requirements-core.txt\n"
+            f"            {overlay}"
+        )
+        assert expected in workflow, (
+            f"{workflow_path} must invalidate the pip cache for both the "
+            "shared core and its environment overlay"
+        )
 
 
 def test_release_metadata_matches_package_version():

@@ -1,3 +1,5 @@
+-r requirements-core.txt
+
 annotated-types==0.8.0
 anyio==4.14.2
 argon2-cffi==21.3.0
@@ -5,8 +7,6 @@ argon2-cffi-bindings==21.2.0
 arrow==1.4.0
 asttokens==2.4.1
 attrs==23.2.0
-APScheduler==3.11.3
-chinese-calendar==1.11.0
 backcall==0.2.0
 beautifulsoup4==4.15.0
 bleach==6.4.0
@@ -16,7 +16,6 @@ charset-normalizer==2.1.1
 colorama==0.4.6
 comm==0.2.3
 contourpy==1.3.3
-cv2-enumerate-cameras==1.3.3
 cycler==0.12.1
 debugpy==1.8.21
 decorator==5.3.1
@@ -27,7 +26,6 @@ et-xmlfile==1.1.0
 exceptiongroup==1.3.1
 executing==1.2.0
 fastjsonschema==2.22.1
-fastapi==0.141.1
 filelock==3.32.2
 fonttools==4.63.0
 fqdn==1.5.1
@@ -59,14 +57,12 @@ jupyterlab-pygments==0.3.0
 kiwisolver==1.5.0
 markdown-it-py==3.0.0
 MarkupSafe==2.1.5
-matplotlib==3.11.1
 matplotlib-inline==0.2.2
 mdurl==0.1.2
 mediapipe==0.10.35
 meshio==5.3.5
 mistune==2.1.0
 mpmath==1.4.1
-mss==10.2.0
 nbclassic==1.3.3
 nbclient==0.11.0
 nbconvert==7.17.1
@@ -75,36 +71,22 @@ nest-asyncio==1.6.0
 networkx==3.6.1
 notebook==6.5.7
 notebook_shim==0.2.4
-numpy==2.2.6; python_version < "3.12"
-numpy==2.5.1; python_version >= "3.12"
 numpy-stl==3.2.0
-openai==1.109.1
-opencv-python==4.14.0.94; sys_platform == "win32"
-opencv-python-headless==4.14.0.94; sys_platform != "win32"
-openpyxl==3.1.5
 overrides==7.7.0
 packaging==24.2
-pandas==2.3.3
 pandocfilters==1.5.1
 parso==0.8.7
 pickleshare==0.7.5
-pillow==10.4.0
-piexif==1.1.3
 platformdirs==3.11.0
 prometheus-client==0.26.0
 prompt-toolkit==3.0.53
-psutil==6.1.1
 pure-eval==0.2.3
 pycparser==2.23
-pydantic==2.13.4
-pydantic_core==2.46.4
 Pygments==2.20.0
 pyparsing==3.3.2
 pystray==0.19.5
 python-dateutil==2.9.0.post0
-python-dotenv==1.2.2
 python-json-logger==2.0.7
-python-multipart==0.0.32
 python-utils==3.9.1
 pytz==2023.4
 pywin32==308; sys_platform == "win32"
@@ -112,7 +94,6 @@ pywinpty==2.0.15; sys_platform == "win32"
 PyYAML==6.0.3
 pyzmq==24.0.1
 referencing==0.37.0
-requests==2.34.2
 rfc3339-validator==0.1.4
 rfc3986-validator==0.1.1
 rich==13.9.4
@@ -134,19 +115,15 @@ threadpoolctl==3.6.0
 tinycss2==1.5.1
 torch==2.13.0+cu130; sys_platform == "win32"
 tornado==6.5.7
-tqdm==4.70.0
 traitlets==5.16.1
 typing_extensions==4.16.0
 tzdata==2023.4
 uri-template==1.3.0
 urllib3==1.26.20
-uvicorn==0.52.1
 vtk==9.6.2
 wcwidth==0.8.2
 webcolors==1.13
 webencodings==0.5.1
 websocket-client==1.9.0
 WMI==1.5.1; sys_platform == "win32"
-winsdk==1.0.0b10; sys_platform == "win32"
 zipp==3.23.1
-zhdate==0.1

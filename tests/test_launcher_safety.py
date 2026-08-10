@@ -91,6 +91,26 @@ def test_run_bat_skips_reinstalling_backend_dependencies_when_requirements_hash_
     assert "Backend runtime dependency import check failed" in run_bat
 
 
+def test_backend_dependency_stamps_hash_shared_core_and_runtime_overlay():
+    run_bat = Path("run.bat").read_text(encoding="utf-8")
+    release_script = Path("scripts/build-release-installer.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "BACKEND_RUNTIME_CORE_REQUIREMENTS" in run_bat
+    assert "%PROJECT_ROOT%requirements-core.txt" in run_bat
+    assert "BACKEND_RUNTIME_CORE_REQUIREMENTS_HASH" in run_bat
+    assert (
+        "!BACKEND_RUNTIME_CORE_REQUIREMENTS_HASH!:"
+        "!BACKEND_RUNTIME_OVERLAY_REQUIREMENTS_HASH!"
+    ) in run_bat
+
+    assert "$BackendRuntimeCoreRequirements" in release_script
+    assert 'Join-Path $ProjectRoot "requirements-core.txt"' in release_script
+    assert "$coreRequirementsHash" in release_script
+    assert '$requirementsHash = "${coreRequirementsHash}:$overlayRequirementsHash"' in release_script
+
+
 def test_run_bat_restores_source_build_info_after_packaging():
     run_bat = Path("run.bat").read_text(encoding="utf-8")
 
