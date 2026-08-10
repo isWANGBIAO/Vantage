@@ -52,13 +52,26 @@ lockfile, README/runtime documentation, and `tests/test_ci_workflow.py` must
 agree. This fixes the deterministic Python CI failure in the existing frontend
 Dependabot PR.
 
-The Python dependency group is incorporated only after YuNet tests and the
-numeric empty-scene probe pass under OpenCV `4.14.0.94`. The Python 3.13 job was
-not deadlocked: its log shows that `winsdk==1.0.0b10` built successfully from
-source for about 18 minutes. CI already enables pip caching keyed by the CI
-requirements file; this dependency update caused a legitimate first-run cache
-miss, while unchanged follow-up runs can reuse the built wheel. No redundant
-workflow change and no reduction in dependency or platform coverage is needed.
+The development and CI dependency sets move to OpenCV `4.14.0.94` with NumPy
+2.x. The packaged Python 3.11 runtime deliberately remains on OpenCV
+`4.11.0.86` with NumPy `1.24.4`: OpenCV 4.14 requires NumPy 2.x, so forcing the
+same pair into the packaged runtime would break its pinned compatibility set.
+The installed runtime manifest must therefore report OpenCV 4.11 and NumPy
+1.24.4, even though source and CI YuNet validation runs under OpenCV 4.14.
+
+Dependabot declared 16 Python dependency updates. Fifteen compatible updates
+are accepted; the standalone `pydantic_core` update is rejected and the
+development requirements instead pin the pair required by `pydantic==2.13.4`:
+`pydantic_core==2.46.4`. Separately, the pre-existing unmarked SciPy 1.18 pin is
+corrected to SciPy `1.17.1` for Python 3.11 and `1.18.0` for Python 3.12 and
+newer. That compatibility repair is not counted as a Dependabot update.
+
+The Python 3.13 job was not deadlocked: its log shows that
+`winsdk==1.0.0b10` built successfully from source for about 18 minutes. CI
+already enables pip caching keyed by the CI requirements file; this dependency
+update caused a legitimate first-run cache miss, while unchanged follow-up runs
+can reuse the built wheel. No redundant workflow change and no reduction in
+dependency or platform coverage is needed.
 
 ## Tests and release
 
@@ -70,8 +83,9 @@ Verification covers:
 - the known empty-scene images through a local numeric-only probe, without
   copying or committing those images;
 - Electron/Node/package/lockfile/workflow consistency;
-- Python 3.11 and 3.13 CI, frontend tests/build, CodeQL, backend runtime
-  packaging, and YuNet model loading under the updated OpenCV package;
+- Python 3.11 and 3.13 CI, frontend tests/build, CodeQL, YuNet model loading in
+  the OpenCV 4.14 development environment, and packaged-runtime validation
+  under OpenCV 4.11 with NumPy 1.24.4;
 - the full Windows `RUN.bat` flow, installed version, commit metadata, health
   endpoints, and runtime manifest.
 

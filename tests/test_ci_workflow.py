@@ -95,6 +95,24 @@ def test_readme_react_badge_matches_frontend_dependency_contract():
     assert "React-19.2.8-" in readme
 
 
+def test_readme_fastapi_badge_matches_backend_runtime_contract():
+    runtime_requirements = Path("requirements-backend-runtime-gpu.txt").read_text(
+        encoding="utf-8"
+    )
+    fastapi_versions = re.findall(
+        r"^fastapi==([^;\s]+)(?:\s*;.*)?$",
+        runtime_requirements,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    assert len(fastapi_versions) == 1
+    expected_version = fastapi_versions[0]
+
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert f'alt="FastAPI {expected_version}"' in readme
+    assert f"FastAPI-{expected_version}-" in readme
+
+
 def test_release_metadata_matches_package_version():
     package = json.loads(Path("src/webapp/package.json").read_text(encoding="utf-8"))
     package_lock = json.loads(

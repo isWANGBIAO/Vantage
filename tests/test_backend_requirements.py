@@ -184,6 +184,36 @@ def test_ci_covers_packaging_python_and_current_python_without_incompatible_nump
     assert 'numpy==2.5.1; python_version >= "3.12"' in requirements
 
 
+def test_development_requirements_pin_compatible_pydantic_pair():
+    expected = {
+        "pydantic==2.13.4",
+        "pydantic_core==2.46.4",
+    }
+    actual = [
+        line.strip()
+        for line in Path("requirements.txt").read_text(encoding="utf-8").splitlines()
+        if _normalize_requirement_name(line) in {"pydantic", "pydantic_core"}
+    ]
+
+    assert set(actual) == expected
+    assert len(actual) == len(expected)
+
+
+def test_development_requirements_split_scipy_by_python_version():
+    expected = {
+        'scipy==1.17.1; python_version < "3.12"',
+        'scipy==1.18.0; python_version >= "3.12"',
+    }
+    actual = [
+        line.strip()
+        for line in Path("requirements.txt").read_text(encoding="utf-8").splitlines()
+        if _normalize_requirement_name(line) == "scipy"
+    ]
+
+    assert set(actual) == expected
+    assert len(actual) == len(expected)
+
+
 def test_readme_recommends_environment_python_version():
     environment = Path("environment.yml").read_text(encoding="utf-8")
     readme = Path("README.md").read_text(encoding="utf-8")

@@ -4,7 +4,7 @@
 
 **Goal:** Reject observed empty-workstation YuNet hallucinations, integrate the current frontend and Python dependency groups, and ship a synchronized Vantage 1.0.67 release.
 
-**Architecture:** Keep the existing YuNet-only, one-hertz presence pipeline and change only its normalized foreground boundary from 0.5% to 1.0%. Bring the two Dependabot groups into the same feature branch, repair the Electron/Node contract test and README together, validate OpenCV 4.14 against presence behavior, then merge, tag, release, build, install, and probe the packaged runtime from the same commit.
+**Architecture:** Keep the existing YuNet-only, one-hertz presence pipeline and change only its normalized foreground boundary from 0.5% to 1.0%. Bring the two Dependabot groups into the same feature branch, repair the Electron/Node contract test and README together, validate development and CI with OpenCV 4.14 plus NumPy 2, preserve the packaged Python 3.11 runtime on OpenCV 4.11 plus NumPy 1.24.4, then merge, tag, release, build, install, and probe the packaged runtime from the same commit.
 
 **Tech Stack:** Python 3.11/3.13, OpenCV YuNet ONNX, pytest, Electron 42.8, React 19.2.8, Node 24.18, npm, GitHub Actions, PowerShell, electron-builder.
 
@@ -192,16 +192,27 @@ Run:
 git cherry-pick --no-commit df230300949cba8b1966cbb56168a7af03816bf8
 ```
 
-Confirm the diff contains only the 16 declared dependency updates and specifically pins OpenCV 4.14.0.94 consistently in source, CI, and packaged-runtime requirements.
+Audit the 16 declared dependency updates. Retain the 15 compatible updates,
+including OpenCV 4.14.0.94 in development and CI, but reject the standalone
+`pydantic_core` update. Pin `pydantic==2.13.4` with its compatible
+`pydantic_core==2.46.4`. Separately repair the pre-existing SciPy pin with
+`scipy==1.17.1; python_version < "3.12"` and
+`scipy==1.18.0; python_version >= "3.12"`; do not count that repair as a
+Dependabot update.
+
+Do not force OpenCV 4.14 into `requirements-backend-runtime-gpu.txt`. OpenCV
+4.14 requires NumPy 2.x, while the packaged Python 3.11 runtime intentionally
+keeps its compatible OpenCV 4.11.0.86 and NumPy 1.24.4 pair.
 
 **Step 2: Install the updated CI dependencies in an isolated verification venv**
 
 Create a temporary local verification environment rather than mutating the machine-wide Python environment:
 
 ```powershell
-py -3.11 -m venv .venv-ci-verify
-.\.venv-ci-verify\Scripts\python.exe -m pip install --upgrade pip
-.\.venv-ci-verify\Scripts\python.exe -m pip install -r requirements-ci.txt
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements-ci.txt
+.\.venv\Scripts\python.exe -m pip check
 ```
 
 **Step 3: Verify OpenCV and the presence suite**
@@ -209,23 +220,36 @@ py -3.11 -m venv .venv-ci-verify
 Run:
 
 ```powershell
-.\.venv-ci-verify\Scripts\python.exe -c "import cv2; assert cv2.__version__ == '4.14.0'"
-.\.venv-ci-verify\Scripts\python.exe -m pytest tests/test_person_detection.py tests/test_person_detection_model_config.py tests/test_take_photo.py tests/test_face_live_endpoint.py tests/test_runtime_model_prewarm.py tests/test_backend_runtime_packaging.py tests/test_verify_backend_runtime.py -q
+.\.venv\Scripts\python.exe -c "import cv2, numpy; assert cv2.__version__ == '4.14.0'; assert numpy.__version__.startswith('2.')"
+.\.venv\Scripts\python.exe -m pytest tests/test_person_detection.py tests/test_person_detection_model_config.py tests/test_take_photo.py tests/test_face_live_endpoint.py tests/test_runtime_model_prewarm.py tests/test_backend_runtime_packaging.py tests/test_verify_backend_runtime.py -q
 ```
 
-Expected: all pass under OpenCV 4.14.
+Expected: all pass under OpenCV 4.14 with NumPy 2.x.
 
-**Step 4: Run the local private numeric probe**
+**Step 4: Verify the packaged Python 3.11 runtime compatibility set**
+
+Use the dedicated packaged-runtime environment required by the repository:
+
+```powershell
+.\.venv-backend-runtime-gpu\Scripts\python.exe -m pip check
+.\.venv-backend-runtime-gpu\Scripts\python.exe -c "import cv2, numpy; assert cv2.__version__ == '4.11.0'; assert numpy.__version__ == '1.24.4'"
+python -m pytest tests/test_backend_runtime_packaging.py tests/test_verify_backend_runtime.py -q
+```
+
+Expected: the environment is consistent, packaging contracts pass, and the
+shipping Python 3.11 pair remains OpenCV 4.11 with NumPy 1.24.4.
+
+**Step 5: Run the local private numeric probe**
 
 Without copying, modifying, or committing any image, run the two known empty-scene files through `detect_foreground_presence_face_boxes` using Unicode-safe `numpy.fromfile` plus `cv2.imdecode`.
 
 Expected: both return `[]` with the 1.0% boundary.
 
-**Step 5: Commit**
+**Step 6: Commit**
 
 ```powershell
 git add requirements.txt requirements-ci.txt requirements-backend-runtime-gpu.txt
-git commit -m "build: update Python dependency group" -m "Integrate 16 reviewed Python dependency updates, including OpenCV 4.14.0.94 across development, CI, and packaged-runtime manifests."
+git commit -m "build: update Python dependency group" -m "Integrate 15 compatible Python dependency updates, validate OpenCV 4.14.0.94 in development and CI, preserve the packaged Python 3.11 OpenCV 4.11 runtime, align the Pydantic pair, and repair the existing SciPy marker."
 ```
 
 ### Task 5: Prepare release 1.0.67
@@ -361,7 +385,8 @@ After two minutes of stable startup, verify:
 
 - installed UI and `/api/status` report version 1.0.67 and the merged commit;
 - `/api/health/sedentary` and `/api/aqi` retain their response contracts;
-- the packaged runtime manifest contains YuNet and OpenCV 4.14 but no YOLOX;
+- the packaged runtime manifest contains YuNet, OpenCV 4.11, and NumPy 1.24.4
+  but no YOLOX;
 - no coordinates, private image paths, or new exceptions appear in logs;
 - the two private empty-scene frames return no foreground box under the packaged Python runtime.
 
