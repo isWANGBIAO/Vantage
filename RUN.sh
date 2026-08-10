@@ -294,6 +294,7 @@ if [[ "$requirements_hash" == "$stored_hash" && "${VANTAGE_FORCE_BACKEND_DEPS:-0
     echo "      Backend runtime dependencies already synced"
 else
     echo "      Syncing backend runtime dependencies..."
+    rm -f "$BACKEND_RUNTIME_REQUIREMENTS_STAMP" "$BACKEND_RUNTIME_CODESIGN_STAMP"
     "$BACKEND_RUNTIME_PYTHON" -m pip install --upgrade "pip==25.3"
     "$BACKEND_RUNTIME_PYTHON" -m pip install -r "$BACKEND_RUNTIME_REQUIREMENTS"
     if ! "$BACKEND_RUNTIME_PYTHON" "$OPENCV_NORMALIZER" --requirements-core "$BACKEND_RUNTIME_CORE_REQUIREMENTS"; then

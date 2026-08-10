@@ -160,6 +160,9 @@ try {
     if ($requirementsHash -eq $storedHash -and $env:VANTAGE_FORCE_BACKEND_DEPS -ne "1") {
         Write-Host "Backend runtime dependencies already synced"
     } else {
+        if (Test-Path -LiteralPath $BackendRuntimeRequirementsStamp) {
+            Remove-Item -LiteralPath $BackendRuntimeRequirementsStamp -Force
+        }
         Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @("-m", "pip", "install", "--upgrade", "pip")
         Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @("-m", "pip", "install", "-r", $BackendRuntimeRequirements)
         Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @($OpenCvNormalizer, "--requirements-core", $BackendRuntimeCoreRequirements)

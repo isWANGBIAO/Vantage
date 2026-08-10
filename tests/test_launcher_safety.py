@@ -2,6 +2,8 @@ from pathlib import Path
 
 
 def _assert_fragments_in_order(content, fragments):
+    missing = [fragment for fragment in fragments if fragment not in content]
+    assert not missing, f"Missing ordered fragments: {missing}"
     positions = [content.index(fragment) for fragment in fragments]
     assert positions == sorted(positions)
 
@@ -216,6 +218,103 @@ def test_dependency_sync_normalizes_opencv_after_install_and_before_stamping():
         release_script,
         (release_install, release_normalize, release_stamp),
     )
+
+
+def test_sync_failure_cannot_leave_a_matching_dependency_stamp():
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
+    run_bat_sync = run_bat[
+        run_bat.index('if "!BACKEND_RUNTIME_DEPS_NEED_SYNC!"=="0"') :
+    ]
+    _assert_fragments_in_order(
+        run_bat_sync,
+        (
+            'del /F /Q "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%"',
+            "Backend runtime dependency stamp invalidation failed",
+            "exit /b 1",
+            '"%BACKEND_RUNTIME_PYTHON%" -m pip install --upgrade pip',
+            '"%BACKEND_RUNTIME_PYTHON%" -m pip install -r '
+            '"%BACKEND_RUNTIME_REQUIREMENTS%"',
+            '> "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" echo',
+        ),
+    )
+
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+        sync = launcher[
+            launcher.index(
+                'if [[ "$requirements_hash" == "$stored_hash"'
+            ) :
+        ]
+        assert "set -euo pipefail" in launcher
+        _assert_fragments_in_order(
+            sync,
+            (
+                'rm -f "$BACKEND_RUNTIME_REQUIREMENTS_STAMP" '
+                '"$BACKEND_RUNTIME_CODESIGN_STAMP"',
+                '"$BACKEND_RUNTIME_PYTHON" -m pip install --upgrade',
+                '"$BACKEND_RUNTIME_PYTHON" -m pip install -r '
+                '"$BACKEND_RUNTIME_REQUIREMENTS"',
+                "printf '%s\\n' \"$requirements_hash\" > "
+                '"$BACKEND_RUNTIME_REQUIREMENTS_STAMP"',
+            ),
+        )
+
+    release_script = Path("scripts/build-release-installer.ps1").read_text(
+        encoding="utf-8"
+    )
+    release_sync = release_script[
+        release_script.index(
+            "if ($requirementsHash -eq $storedHash -and "
+            '$env:VANTAGE_FORCE_BACKEND_DEPS -ne "1")'
+        ) :
+    ]
+    assert '$ErrorActionPreference = "Stop"' in release_script
+    _assert_fragments_in_order(
+        release_sync,
+        (
+            "Remove-Item -LiteralPath $BackendRuntimeRequirementsStamp -Force",
+            "Invoke-Native -FilePath $BackendRuntimePython "
+            '-ArgumentList @("-m", "pip", "install", "--upgrade", "pip")',
+            "Invoke-Native -FilePath $BackendRuntimePython "
+            '-ArgumentList @("-m", "pip", "install", "-r", '
+            "$BackendRuntimeRequirements)",
+            "Set-Content -LiteralPath $BackendRuntimeRequirementsStamp",
+        ),
+    )
+
+
+def test_forced_macos_dependency_sync_invalidates_codesign_stamp_before_resigning():
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+        sync_start = launcher.index(
+            'if [[ "$requirements_hash" == "$stored_hash"'
+        )
+        codesign_call = launcher.index(
+            "codesign_macos_native_libraries", sync_start
+        )
+        sync_and_codesign = launcher[
+            sync_start : codesign_call + len("codesign_macos_native_libraries")
+        ]
+        _assert_fragments_in_order(
+            sync_and_codesign,
+            (
+                'rm -f "$BACKEND_RUNTIME_REQUIREMENTS_STAMP" '
+                '"$BACKEND_RUNTIME_CODESIGN_STAMP"',
+                '"$BACKEND_RUNTIME_PYTHON" -m pip install -r '
+                '"$BACKEND_RUNTIME_REQUIREMENTS"',
+                "printf '%s\\n' \"$requirements_hash\" > "
+                '"$BACKEND_RUNTIME_REQUIREMENTS_STAMP"',
+                "codesign_macos_native_libraries",
+            ),
+        )
+
+        codesign_function = launcher[
+            launcher.index("codesign_macos_native_libraries() {") : sync_start
+        ]
+        assert (
+            "printf '%s\\n' \"$requirements_hash\" > "
+            '"$BACKEND_RUNTIME_CODESIGN_STAMP"'
+        ) in codesign_function
 
 
 def test_run_bat_restores_source_build_info_after_packaging():

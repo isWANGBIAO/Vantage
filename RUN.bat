@@ -85,6 +85,11 @@ if "!BACKEND_RUNTIME_DEPS_NEED_SYNC!"=="0" (
     echo       Backend runtime dependencies already synced
 ) else (
     echo       Syncing backend runtime dependencies...
+    if exist "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" del /F /Q "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" >nul 2>&1
+    if exist "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" (
+        echo       Backend runtime dependency stamp invalidation failed
+        exit /b 1
+    )
     "%BACKEND_RUNTIME_PYTHON%" -m pip install --upgrade pip
     if errorlevel 1 (
         echo       Backend runtime pip upgrade failed
