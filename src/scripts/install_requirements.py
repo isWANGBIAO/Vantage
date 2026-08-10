@@ -22,6 +22,21 @@ def install_requirements(requirements_path=None):
     if result.returncode != 0:
         print(f"Failed to install requirements from {req_path}.\n")
         return [str(req_path)]
+
+    normalizer_path = Path(__file__).with_name("normalize_opencv_installation.py")
+    requirements_core_path = get_project_root() / "requirements-core.txt"
+    normalization_result = subprocess.run(
+        [
+            sys.executable,
+            str(normalizer_path),
+            "--requirements-core",
+            str(requirements_core_path),
+        ],
+        check=False,
+    )
+    if normalization_result.returncode != 0:
+        print(f"Failed to normalize OpenCV after installing {req_path}.\n")
+        return [str(req_path)]
     return []
 
 

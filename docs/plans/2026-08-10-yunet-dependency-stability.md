@@ -400,6 +400,73 @@ Run the complete Task 4B target suite, then `git diff --check`. Commit the
 requirements, tests, and both updated plan documents together with a detailed
 message.
 
+### Task 4D: Reconcile persistent OpenCV distribution upgrades safely
+
+**Files:**
+- Create: `src/scripts/normalize_opencv_installation.py`
+- Modify: `src/scripts/install_requirements.py`
+- Modify: `RUN.bat`
+- Modify: `RUN.sh`
+- Modify: `RUN_DEV.sh`
+- Modify: `scripts/build-release-installer.ps1`
+- Modify: `src/core/backend_runtime_packaging.py`
+- Create: `tests/test_normalize_opencv_installation.py`
+- Modify: `tests/test_install_requirements.py`
+- Modify: `tests/test_launcher_safety.py`
+- Modify: `tests/test_backend_runtime_packaging.py`
+- Modify: `docs/plans/2026-08-10-yunet-dependency-stability-design.md`
+- Modify: `docs/plans/2026-08-10-yunet-dependency-stability.md`
+
+**Step 1: Add failing migration and launcher-ordering tests**
+
+Require a clean environment with only the core target metadata and matching
+subprocess `cv2.__version__` to skip reconciliation. Require a legacy or mixed
+environment to uninstall all four mutually exclusive OpenCV wheel families,
+force-reinstall the exact core target without dependencies, and revalidate both
+metadata and imported `cv2`. Cover command failure and CLI nonzero propagation.
+
+Require every persistent launcher and the standalone installer to invoke the
+same normalizer only after its main `pip install -r` succeeds. Requirements
+stamps must be written only after normalization succeeds.
+
+**Step 2: Implement one stdlib-only normalizer**
+
+Read the sole OpenCV target from `requirements-core.txt`; do not duplicate its
+wheel version in launcher code. Inspect metadata for
+`opencv-contrib-python`, `opencv-contrib-python-headless`, `opencv-python`, and
+`opencv-python-headless`, and probe `cv2.__version__` in a fresh interpreter.
+When the state is not exactly the target contract, run:
+
+```powershell
+python -m pip uninstall -y opencv-contrib-python opencv-contrib-python-headless opencv-python opencv-python-headless
+python -m pip install --no-deps --force-reinstall opencv-contrib-python==4.14.0.94
+```
+
+Recheck both metadata and `cv2`; return nonzero on any command or validation
+failure. Exclude this build-time helper from the packaged backend runtime.
+
+**Step 3: Integrate without destroying a working environment early**
+
+Keep the normal requirements install first. Invoke the normalizer afterward in
+`RUN.bat`, `RUN.sh`, `RUN_DEV.sh`, `scripts/build-release-installer.ps1`, and
+`src/scripts/install_requirements.py`. Only then write dependency or macOS
+codesign stamps. This ordering ensures a failed main resolver/install does not
+remove an otherwise working OpenCV installation.
+
+**Step 4: Verify syntax, behavior, and regression scope**
+
+Run:
+
+```powershell
+python -m pytest tests/test_normalize_opencv_installation.py tests/test_install_requirements.py tests/test_launcher_safety.py tests/test_backend_runtime_packaging.py -q
+python -m pytest tests/test_backend_requirements.py tests/test_backend_runtime_packaging.py tests/test_install_requirements.py tests/test_normalize_opencv_installation.py tests/test_launcher_safety.py tests/test_ci_workflow.py -q
+bash -n RUN.sh RUN_DEV.sh
+```
+
+Parse `scripts/build-release-installer.ps1` with the PowerShell AST parser and
+run `git diff --check` before committing. Do not mutate an environment while
+testing the helper; unit tests provide injected metadata and subprocess fakes.
+
 ### Task 5: Prepare release 1.0.67
 
 **Files:**

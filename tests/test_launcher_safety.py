@@ -1,6 +1,11 @@
 from pathlib import Path
 
 
+def _assert_fragments_in_order(content, fragments):
+    positions = [content.index(fragment) for fragment in fragments]
+    assert positions == sorted(positions)
+
+
 def test_run_bat_release_flow_keeps_source_cleanup_scoped():
     content = Path("run.bat").read_text(encoding="utf-8")
 
@@ -139,6 +144,77 @@ def test_macos_launcher_dependency_stamps_hash_shared_core_and_runtime_overlay()
     assert (
         "printf '%s\\n' \"$requirements_hash\" > \"$BACKEND_RUNTIME_CODESIGN_STAMP\""
         in run_dev
+    )
+
+
+def test_dependency_sync_normalizes_opencv_after_install_and_before_stamping():
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
+    assert (
+        'set "OPENCV_NORMALIZER=%PROJECT_ROOT%src\\scripts\\'
+        'normalize_opencv_installation.py"'
+    ) in run_bat
+    run_bat_install = (
+        '"%BACKEND_RUNTIME_PYTHON%" -m pip install -r '
+        '"%BACKEND_RUNTIME_REQUIREMENTS%"'
+    )
+    run_bat_normalize = (
+        '"%BACKEND_RUNTIME_PYTHON%" "%OPENCV_NORMALIZER%" '
+        '--requirements-core "%BACKEND_RUNTIME_CORE_REQUIREMENTS%"'
+    )
+    run_bat_stamp = '> "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" echo'
+    _assert_fragments_in_order(
+        run_bat,
+        (run_bat_install, run_bat_normalize, run_bat_stamp),
+    )
+    run_bat_normalize_block = run_bat[
+        run_bat.index(run_bat_normalize) : run_bat.index(run_bat_stamp)
+    ]
+    assert "if errorlevel 1" in run_bat_normalize_block
+    assert "exit /b 1" in run_bat_normalize_block
+
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+        assert (
+            'OPENCV_NORMALIZER="${PROJECT_ROOT}/src/scripts/'
+            'normalize_opencv_installation.py"'
+        ) in launcher
+        install = (
+            '"$BACKEND_RUNTIME_PYTHON" -m pip install -r '
+            '"$BACKEND_RUNTIME_REQUIREMENTS"'
+        )
+        normalize = (
+            'if ! "$BACKEND_RUNTIME_PYTHON" "$OPENCV_NORMALIZER" '
+            '--requirements-core "$BACKEND_RUNTIME_CORE_REQUIREMENTS"; then'
+        )
+        stamp = (
+            "printf '%s\\n' \"$requirements_hash\" > "
+            '"$BACKEND_RUNTIME_REQUIREMENTS_STAMP"'
+        )
+        _assert_fragments_in_order(launcher, (install, normalize, stamp))
+        normalize_block = launcher[launcher.index(normalize) : launcher.index(stamp)]
+        assert "exit 1" in normalize_block
+
+    release_script = Path("scripts/build-release-installer.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        '$OpenCvNormalizer = Join-Path $ProjectRoot '
+        '"src\\scripts\\normalize_opencv_installation.py"'
+    ) in release_script
+    release_install = (
+        "Invoke-Native -FilePath $BackendRuntimePython "
+        '-ArgumentList @("-m", "pip", "install", "-r", '
+        "$BackendRuntimeRequirements)"
+    )
+    release_normalize = (
+        "Invoke-Native -FilePath $BackendRuntimePython "
+        '-ArgumentList @($OpenCvNormalizer, "--requirements-core", '
+        "$BackendRuntimeCoreRequirements)"
+    )
+    release_stamp = "Set-Content -LiteralPath $BackendRuntimeRequirementsStamp"
+    _assert_fragments_in_order(
+        release_script,
+        (release_install, release_normalize, release_stamp),
     )
 
 

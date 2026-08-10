@@ -13,6 +13,7 @@ BACKEND_RUNTIME_VENV="${PROJECT_ROOT}/.venv-backend-runtime-gpu"
 BACKEND_RUNTIME_PYTHON="${BACKEND_RUNTIME_VENV}/bin/python"
 BACKEND_RUNTIME_CORE_REQUIREMENTS="${PROJECT_ROOT}/requirements-core.txt"
 BACKEND_RUNTIME_REQUIREMENTS="${PROJECT_ROOT}/requirements-backend-runtime-gpu.txt"
+OPENCV_NORMALIZER="${PROJECT_ROOT}/src/scripts/normalize_opencv_installation.py"
 BACKEND_RUNTIME_REQUIREMENTS_STAMP="${BACKEND_RUNTIME_VENV}/.requirements-backend-runtime-gpu.sha256"
 BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.sha256"
 LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.13.5/bin/python3.13"
@@ -155,6 +156,10 @@ else
     echo "      Syncing backend dependencies..."
     "$BACKEND_RUNTIME_PYTHON" -m pip install --upgrade "pip==25.3"
     "$BACKEND_RUNTIME_PYTHON" -m pip install -r "$BACKEND_RUNTIME_REQUIREMENTS"
+    if ! "$BACKEND_RUNTIME_PYTHON" "$OPENCV_NORMALIZER" --requirements-core "$BACKEND_RUNTIME_CORE_REQUIREMENTS"; then
+        echo "      Backend runtime OpenCV normalization failed" >&2
+        exit 1
+    fi
     printf '%s\n' "$requirements_hash" > "$BACKEND_RUNTIME_REQUIREMENTS_STAMP"
 fi
 codesign_macos_native_libraries

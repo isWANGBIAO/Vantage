@@ -13,6 +13,7 @@ $BackendRuntimeVenv = Join-Path $ProjectRoot ".venv-backend-runtime-gpu"
 $BackendRuntimePython = Join-Path $BackendRuntimeVenv "Scripts\python.exe"
 $BackendRuntimeCoreRequirements = Join-Path $ProjectRoot "requirements-core.txt"
 $BackendRuntimeRequirements = Join-Path $ProjectRoot "requirements-backend-runtime-gpu.txt"
+$OpenCvNormalizer = Join-Path $ProjectRoot "src\scripts\normalize_opencv_installation.py"
 $BackendRuntimeRequirementsStamp = Join-Path $BackendRuntimeVenv ".requirements-backend-runtime-gpu.sha256"
 $WebappBuildInfo = Join-Path $WebappRoot "build-info.json"
 $BuildInfoBackup = Join-Path $env:TEMP ("vantage-release-build-info-{0}-{1}.json" -f $PID, [Guid]::NewGuid().ToString("N"))
@@ -161,6 +162,7 @@ try {
     } else {
         Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @("-m", "pip", "install", "--upgrade", "pip")
         Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @("-m", "pip", "install", "-r", $BackendRuntimeRequirements)
+        Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @($OpenCvNormalizer, "--requirements-core", $BackendRuntimeCoreRequirements)
         Set-Content -LiteralPath $BackendRuntimeRequirementsStamp -Value $requirementsHash -Encoding ascii
     }
     Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @("-c", "import chinese_calendar, lap, zhdate; print('backend runtime dependency imports ok')")

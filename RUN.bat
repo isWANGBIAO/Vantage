@@ -16,6 +16,7 @@ set "BACKEND_RUNTIME_VENV=%PROJECT_ROOT%.venv-backend-runtime-gpu"
 set "BACKEND_RUNTIME_PYTHON=%BACKEND_RUNTIME_VENV%\Scripts\python.exe"
 set "BACKEND_RUNTIME_CORE_REQUIREMENTS=%PROJECT_ROOT%requirements-core.txt"
 set "BACKEND_RUNTIME_REQUIREMENTS=%PROJECT_ROOT%requirements-backend-runtime-gpu.txt"
+set "OPENCV_NORMALIZER=%PROJECT_ROOT%src\scripts\normalize_opencv_installation.py"
 set "BACKEND_RUNTIME_REQUIREMENTS_STAMP=%BACKEND_RUNTIME_VENV%\.requirements-backend-runtime-gpu.sha256"
 set "WEBAPP_BUILD_INFO=%PROJECT_ROOT%src\webapp\build-info.json"
 set "RUN_BUILD_INFO_BACKUP=%TEMP%\vantage-build-info-%RANDOM%-%RANDOM%.json"
@@ -92,6 +93,11 @@ if "!BACKEND_RUNTIME_DEPS_NEED_SYNC!"=="0" (
     "%BACKEND_RUNTIME_PYTHON%" -m pip install -r "%BACKEND_RUNTIME_REQUIREMENTS%"
     if errorlevel 1 (
         echo       Backend runtime dependency install failed
+        exit /b 1
+    )
+    "%BACKEND_RUNTIME_PYTHON%" "%OPENCV_NORMALIZER%" --requirements-core "%BACKEND_RUNTIME_CORE_REQUIREMENTS%"
+    if errorlevel 1 (
+        echo       Backend runtime OpenCV normalization failed
         exit /b 1
     )
     > "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" echo !BACKEND_RUNTIME_REQUIREMENTS_HASH!

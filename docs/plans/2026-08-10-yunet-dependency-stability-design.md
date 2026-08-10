@@ -87,6 +87,20 @@ verified as a complete Python 3.11 Windows requirements graph with pip's real
 resolver in dry-run and ignore-installed mode; no large wheel is installed by
 that check.
 
+Persistent environments need an explicit migration because pip does not remove
+an old OpenCV distribution when the package name changes, and uninstalling one
+of multiple OpenCV wheels can delete their shared `cv2` files. Each dependency
+entrypoint therefore completes its normal `pip install -r` first, then invokes
+one stdlib-only OpenCV normalizer before writing its requirements stamp. The
+normalizer reads the target package and version from `requirements-core.txt`,
+checks all four OpenCV distribution metadata names plus `cv2.__version__` in a
+fresh subprocess, and skips destructive work when the environment is already
+clean. Otherwise it uninstalls all four wheel families, force-reinstalls the
+single target with `--no-deps`, and repeats both checks. A failed install or
+normalization leaves the stamp unwritten; the standalone installer reports the
+requirements file as failed. The build-only normalizer is excluded from the
+packaged application.
+
 The packaged `runtime-manifest.json` verifies that the YuNet resources are
 present and YOLOX is absent; it does not record package versions. OpenCV and
 NumPy versions are verified independently by importing them from each target
@@ -128,6 +142,9 @@ Verification covers:
 - a real Python 3.11 Windows root resolver dry-run proving the composed
   development graph resolves and its plan contains only
   `opencv-contrib-python`, with no second OpenCV distribution;
+- clean-skip, legacy-reset, post-reset validation, and failure propagation for
+  persistent OpenCV upgrades, plus launcher ordering that permits normalization
+  only after pip succeeds and never stamps an unverified environment;
 - the full Windows `RUN.bat` flow, installed version, commit metadata, health
   endpoints, the runtime manifest's YuNet/no-YOLOX resource contract, and
   independently queried installed OpenCV and NumPy versions.
