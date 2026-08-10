@@ -109,6 +109,30 @@ def test_readme_fastapi_badge_matches_backend_runtime_contract():
     readme = Path("README.md").read_text(encoding="utf-8")
     assert f'alt="FastAPI {expected_version}"' in readme
     assert f"FastAPI-{expected_version}-" in readme
+    assert (
+        "https://github.com/isWANGBIAO/Vantage/blob/main/requirements-core.txt"
+        in readme
+    )
+
+
+def test_readme_separates_relaxed_live_presence_from_strict_history_analysis():
+    readme = Path("README.md").read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
+
+    assert "camera-facing faces" not in normalized_readme
+    assert "coarse head-pose filter" not in normalized_readme
+    assert (
+        "largest YuNet face occupying at least 1.0% of the frame"
+        in normalized_readme
+    )
+    assert (
+        "does not require a frontal pose, identity match, or gaze estimate"
+        in normalized_readme
+    )
+    assert (
+        "Strict frontal geometry is reserved for historical face-direction analysis"
+        in normalized_readme
+    )
 
 
 def test_python_workflow_caches_include_shared_core_and_environment_overlay():

@@ -12,7 +12,7 @@
   <a href="https://github.com/isWANGBIAO/Vantage#features"><img alt="macOS supported" src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&amp;logo=apple&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Python 3.11" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Node.js 24.18.0" src="https://img.shields.io/badge/Node.js-24.18.0-5FA04E?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/requirements.txt"><img alt="FastAPI 0.141.1" src="https://img.shields.io/badge/FastAPI-0.141.1-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/requirements-core.txt"><img alt="FastAPI 0.141.1" src="https://img.shields.io/badge/FastAPI-0.141.1-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="React 19.2.8" src="https://img.shields.io/badge/React-19.2.8-61DAFB?style=flat-square&amp;logo=react&amp;logoColor=black"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="Electron 42.8.0" src="https://img.shields.io/badge/Electron-42.8.0-47848F?style=flat-square&amp;logo=electron&amp;logoColor=white"></a>
 </p>
@@ -53,8 +53,9 @@ the platform user-data directory, not in this repository.
   face-analysis reports, and local media endpoints.
 - React UI for dashboard, action plan, chat, plots, usage, settings, expenses,
   project progress, and face-history views.
-- OpenCV YuNet ONNX face-presence detection for camera-facing faces. This is a
-  coarse head-pose filter, not eye tracking or gaze estimation.
+- Live presence selects the largest YuNet face occupying at least 1.0% of the
+  frame and does not require a frontal pose, identity match, or gaze estimate.
+  Strict frontal geometry is reserved for historical face-direction analysis.
 - Local prompt templates that users can replace privately.
 - Optional face parsing model support. Model weights are not distributed in this
   repository; fallback analysis remains available when no model is configured.
@@ -110,13 +111,13 @@ GitHub Releases are automated for version tags. Keep
 tag:
 
 ```powershell
-git tag -a v1.0.66 -m "Vantage 1.0.66"
-git push origin v1.0.66
+git tag -a v1.0.67 -m "Vantage 1.0.67"
+git push origin v1.0.67
 ```
 
 The `Release` workflow builds the Windows installer, generates `SHA256SUMS.txt`,
 and publishes the assets to the matching GitHub Release. The tag must match the
-frontend package version, for example `v1.0.66` for package version `1.0.66`.
+frontend package version, for example `v1.0.67` for package version `1.0.67`.
 
 macOS full build, install, and launch:
 
