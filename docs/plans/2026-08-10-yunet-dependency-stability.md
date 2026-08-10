@@ -4,7 +4,7 @@
 
 **Goal:** Reject observed empty-workstation YuNet hallucinations, integrate the current frontend and Python dependency groups, and ship a synchronized Vantage 1.0.67 release.
 
-**Architecture:** Keep the existing YuNet-only, one-hertz presence pipeline and change only its normalized foreground boundary from 0.5% to 1.0%. Bring the two Dependabot groups into the same feature branch, repair the Electron/Node contract test and README together, validate development and CI with OpenCV 4.14 plus NumPy 2, preserve the packaged Python 3.11 runtime on OpenCV 4.11 plus NumPy 1.24.4, then merge, tag, release, build, install, and probe the packaged runtime from the same commit.
+**Architecture:** Keep the existing YuNet-only, one-hertz presence pipeline and change only its normalized foreground boundary from 0.5% to 1.0%. Bring the two Dependabot groups into the same feature branch, repair the Electron/Node contract test and README together, centralize every shared Python package in one exact `requirements-core.txt` consumed by development, CI, and the packaged runtime, then merge, tag, release, build, install, and probe the packaged runtime from the same commit.
 
 **Tech Stack:** Python 3.11/3.13, OpenCV YuNet ONNX, pytest, Electron 42.8, React 19.2.8, Node 24.18, npm, GitHub Actions, PowerShell, electron-builder.
 
@@ -177,7 +177,7 @@ git add README.md tests/test_ci_workflow.py src/webapp/package.json src/webapp/p
 git commit -m "build: update frontend dependency contract" -m "Integrate the current React and Electron dependency group, align the Electron 42.8.0 package, lockfile, badge, and CI contract, and retain Node 24.18.0."
 ```
 
-### Task 4: Integrate and validate the Python dependency group
+### Task 4: Integrate the Python dependency group and establish compatibility
 
 **Files:**
 - Modify via Dependabot commit: `requirements.txt`
@@ -200,9 +200,8 @@ including OpenCV 4.14.0.94 in development and CI, but reject the standalone
 `scipy==1.18.0; python_version >= "3.12"`; do not count that repair as a
 Dependabot update.
 
-Do not force OpenCV 4.14 into `requirements-backend-runtime-gpu.txt`. OpenCV
-4.14 requires NumPy 2.x, while the packaged Python 3.11 runtime intentionally
-keeps its compatible OpenCV 4.11.0.86 and NumPy 1.24.4 pair.
+This intermediate integration keeps the previous packaged-runtime pair only
+until Task 4B replaces duplicate shared pins with one tested core contract.
 
 **Step 2: Install the updated CI dependencies in an isolated verification venv**
 
@@ -226,7 +225,7 @@ Run:
 
 Expected: all pass under OpenCV 4.14 with NumPy 2.x.
 
-**Step 4: Verify the packaged Python 3.11 runtime compatibility set**
+**Step 4: Verify the existing packaged Python 3.11 runtime before unification**
 
 Use the dedicated packaged-runtime environment required by the repository:
 
@@ -236,8 +235,9 @@ Use the dedicated packaged-runtime environment required by the repository:
 python -m pytest tests/test_backend_runtime_packaging.py tests/test_verify_backend_runtime.py -q
 ```
 
-Expected: the environment is consistent, packaging contracts pass, and the
-shipping Python 3.11 pair remains OpenCV 4.11 with NumPy 1.24.4.
+Expected: the pre-unification environment is internally consistent and the
+packaging contracts pass. Task 4B then upgrades and revalidates it from a clean
+dependency synchronization.
 
 **Step 5: Run the local private numeric probe**
 
@@ -250,6 +250,76 @@ Expected: both return `[]` with the 1.0% boundary.
 ```powershell
 git add requirements.txt requirements-ci.txt requirements-backend-runtime-gpu.txt
 git commit -m "build: update Python dependency group" -m "Integrate 15 compatible Python dependency updates, validate OpenCV 4.14.0.94 in development and CI, preserve the packaged Python 3.11 OpenCV 4.11 runtime, align the Pydantic pair, and repair the existing SciPy marker."
+```
+
+### Task 4B: Centralize one exact shared Python dependency core
+
+**Files:**
+- Create: `requirements-core.txt`
+- Modify: `requirements.txt`
+- Modify: `requirements-ci.txt`
+- Modify: `requirements-backend-runtime-gpu.txt`
+- Modify: `.github/workflows/ci.yml`
+- Modify: `.github/workflows/release.yml`
+- Modify: `RUN.bat`
+- Modify: `scripts/build-release-installer.ps1`
+- Modify: `src/core/backend_runtime_packaging.py`
+- Modify: `tests/test_backend_requirements.py`
+- Modify: `tests/test_backend_runtime_packaging.py`
+- Modify: `tests/test_launcher_safety.py`
+- Modify: `tests/test_ci_workflow.py`
+
+**Step 1: Add failing dependency-architecture tests**
+
+Require all three environment files to include `requirements-core.txt` exactly
+once, forbid duplicated shared pins in their overlays, recursively evaluate
+their effective package sets, and require the shared core to own the compatible
+NumPy, OpenCV, Pydantic, and Pydantic Core pins. Require runtime stamps,
+packaging fingerprints, and workflow cache keys to change when the shared core
+changes.
+
+Run:
+
+```powershell
+python -m pytest tests/test_backend_requirements.py tests/test_backend_runtime_packaging.py tests/test_launcher_safety.py tests/test_ci_workflow.py -q
+```
+
+Expected: fail because the shared core and its cache/fingerprint coverage do
+not exist yet.
+
+**Step 2: Create the shared core and minimal overlays**
+
+Move every exact pin shared by development, CI, and packaged runtime into
+`requirements-core.txt`. Use OpenCV `4.14.0.94` in both graphical Windows and
+headless non-Windows forms, NumPy `2.2.6` for Python below 3.12 and `2.5.1` for
+Python 3.12 or newer, and the compatible `pydantic==2.13.4` /
+`pydantic_core==2.46.4` pair. Keep only research/development packages in
+`requirements.txt`, test-only packages in `requirements-ci.txt`, and
+PyInstaller/runtime-only packages in `requirements-backend-runtime-gpu.txt`.
+All versions remain exact; do not replace them with unbounded ranges.
+
+**Step 3: Make cache and packaging invalidation include the shared core**
+
+Hash the shared core together with the packaged-runtime overlay in `RUN.bat`
+and `scripts/build-release-installer.ps1`. Add the shared core to
+`BACKEND_RUNTIME_SOURCE_INPUTS`. Include both relevant files in the CI and
+release workflow pip cache dependency paths.
+
+**Step 4: Rebuild and validate both target environments**
+
+Install `requirements-ci.txt` into `.venv` and
+`requirements-backend-runtime-gpu.txt` into the dedicated packaged-runtime
+environment, then run `pip check` and assert both interpreters report OpenCV
+4.14 with the marker-selected NumPy 2.x version. Run the dependency,
+presence/YuNet, packaging, and runtime verification suites, followed by the
+numeric-only empty-scene probe in both environments without copying or
+committing image data.
+
+**Step 5: Commit**
+
+```powershell
+git add requirements-core.txt requirements.txt requirements-ci.txt requirements-backend-runtime-gpu.txt .github/workflows/ci.yml .github/workflows/release.yml RUN.bat scripts/build-release-installer.ps1 src/core/backend_runtime_packaging.py tests/test_backend_requirements.py tests/test_backend_runtime_packaging.py tests/test_launcher_safety.py tests/test_ci_workflow.py
+git commit -m "build: unify shared Python dependency contract" -m "Centralize exact shared pins for development, CI, and the packaged runtime, upgrade every YuNet path to the same OpenCV and NumPy contract, and include the shared core in dependency caches and runtime build fingerprints."
 ```
 
 ### Task 5: Prepare release 1.0.67
@@ -362,11 +432,13 @@ Do not close #23 or #25 until the integrated PR is merged.
 
 **Step 1: Synchronize local main and tag the merge**
 
+From the repository root of the local checkout with `main` checked out, run:
+
 ```powershell
-git -C D:\WANGBIAO\code\Vantage fetch --prune origin
-git -C D:\WANGBIAO\code\Vantage pull --ff-only origin main
-git -C D:\WANGBIAO\code\Vantage tag -a v1.0.67 -m "Vantage 1.0.67"
-git -C D:\WANGBIAO\code\Vantage push origin v1.0.67
+git fetch --prune origin
+git pull --ff-only origin main
+git tag -a v1.0.67 -m "Vantage 1.0.67"
+git push origin v1.0.67
 ```
 
 Verify the tag targets the merged `main` commit.
@@ -385,8 +457,11 @@ After two minutes of stable startup, verify:
 
 - installed UI and `/api/status` report version 1.0.67 and the merged commit;
 - `/api/health/sedentary` and `/api/aqi` retain their response contracts;
-- the packaged runtime manifest contains YuNet, OpenCV 4.11, and NumPy 1.24.4
-  but no YOLOX;
+- `runtime-manifest.json` contains the required YuNet model and license
+  resources but no YOLOX resources;
+- the `.venv-backend-runtime-gpu` interpreter or installed runtime independently
+  reports the same shared OpenCV 4.14 and marker-selected NumPy 2.x versions as
+  CI;
 - no coordinates, private image paths, or new exceptions appear in logs;
 - the two private empty-scene frames return no foreground box under the packaged Python runtime.
 

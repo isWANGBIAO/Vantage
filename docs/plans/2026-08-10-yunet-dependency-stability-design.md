@@ -52,26 +52,41 @@ lockfile, README/runtime documentation, and `tests/test_ci_workflow.py` must
 agree. This fixes the deterministic Python CI failure in the existing frontend
 Dependabot PR.
 
-The development and CI dependency sets move to OpenCV `4.14.0.94` with NumPy
-2.x. The packaged Python 3.11 runtime deliberately remains on OpenCV
-`4.11.0.86` with NumPy `1.24.4`: OpenCV 4.14 requires NumPy 2.x, so forcing the
-same pair into the packaged runtime would break its pinned compatibility set.
-The installed runtime manifest must therefore report OpenCV 4.11 and NumPy
-1.24.4, even though source and CI YuNet validation runs under OpenCV 4.14.
+Python dependencies use one exact shared core rather than repeating divergent
+pins in the development, CI, and packaged-runtime files. A new
+`requirements-core.txt` owns every package used by all three environments,
+including OpenCV `4.14.0.94`, the Python-version-qualified NumPy 2.x pins, and
+the compatible Pydantic/Pydantic Core pair. `requirements.txt`,
+`requirements-ci.txt`, and `requirements-backend-runtime-gpu.txt` each include
+that file with `-r` and contain only environment-specific additions. The
+Windows OpenCV package remains `opencv-python`; non-Windows environments use
+the headless build at the same version.
+
+This is a single source of truth for shared packages, not an unpinned install.
+Exact versions retain reproducible CI and releases, while the small overlay
+files keep research-only, test-only, and packager-only dependencies out of the
+installed application. Runtime dependency stamps, packaged-runtime source
+fingerprints, and GitHub Actions cache keys include both the overlay and its
+shared core so a core-only change cannot reuse stale artifacts.
+
+The packaged `runtime-manifest.json` verifies that the YuNet resources are
+present and YOLOX is absent; it does not record package versions. OpenCV and
+NumPy versions are verified independently by importing them from each target
+interpreter or from the installed runtime.
 
 Dependabot declared 16 Python dependency updates. Fifteen compatible updates
-are accepted; the standalone `pydantic_core` update is rejected and the
-development requirements instead pin the pair required by `pydantic==2.13.4`:
+are accepted; the standalone `pydantic_core` update is rejected and the shared
+core instead pins the pair required by `pydantic==2.13.4`:
 `pydantic_core==2.46.4`. Separately, the pre-existing unmarked SciPy 1.18 pin is
 corrected to SciPy `1.17.1` for Python 3.11 and `1.18.0` for Python 3.12 and
 newer. That compatibility repair is not counted as a Dependabot update.
 
 The Python 3.13 job was not deadlocked: its log shows that
 `winsdk==1.0.0b10` built successfully from source for about 18 minutes. CI
-already enables pip caching keyed by the CI requirements file; this dependency
-update caused a legitimate first-run cache miss, while unchanged follow-up runs
-can reuse the built wheel. No redundant workflow change and no reduction in
-dependency or platform coverage is needed.
+continues to cache pip downloads and built wheels, now keyed by both the shared
+core and CI overlay. A dependency update can cause a legitimate first-run cache
+miss, while unchanged follow-up runs reuse the built wheel. Dependency and
+platform coverage are not reduced.
 
 ## Tests and release
 
@@ -83,11 +98,12 @@ Verification covers:
 - the known empty-scene images through a local numeric-only probe, without
   copying or committing those images;
 - Electron/Node/package/lockfile/workflow consistency;
-- Python 3.11 and 3.13 CI, frontend tests/build, CodeQL, YuNet model loading in
-  the OpenCV 4.14 development environment, and packaged-runtime validation
-  under OpenCV 4.11 with NumPy 1.24.4;
+- Python 3.11 and 3.13 CI, frontend tests/build, CodeQL, and YuNet model loading
+  in development, CI, and packaged-runtime environments under the same shared
+  OpenCV 4.14 and NumPy contract;
 - the full Windows `RUN.bat` flow, installed version, commit metadata, health
-  endpoints, and runtime manifest.
+  endpoints, the runtime manifest's YuNet/no-YOLOX resource contract, and
+  independently queried installed OpenCV and NumPy versions.
 
 The release version is `1.0.67`. The dependency branches are superseded or
 closed after the integrated PR passes all required checks. The final merge,
