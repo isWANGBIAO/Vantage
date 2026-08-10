@@ -262,6 +262,8 @@ git commit -m "build: update Python dependency group" -m "Integrate 15 compatibl
 - Modify: `.github/workflows/ci.yml`
 - Modify: `.github/workflows/release.yml`
 - Modify: `RUN.bat`
+- Modify: `RUN.sh`
+- Modify: `RUN_DEV.sh`
 - Modify: `scripts/build-release-installer.ps1`
 - Modify: `src/core/backend_runtime_packaging.py`
 - Modify: `tests/test_backend_requirements.py`
@@ -274,9 +276,9 @@ git commit -m "build: update Python dependency group" -m "Integrate 15 compatibl
 Require all three environment files to include `requirements-core.txt` exactly
 once, forbid duplicated shared pins in their overlays, recursively evaluate
 their effective package sets, and require the shared core to own the compatible
-NumPy, OpenCV, Pydantic, and Pydantic Core pins. Require runtime stamps,
-packaging fingerprints, and workflow cache keys to change when the shared core
-changes.
+NumPy, OpenCV, Pydantic, and Pydantic Core pins. Require Windows and macOS
+runtime stamps, the macOS native-library codesign stamp, packaging fingerprints,
+and workflow cache keys to change when the shared core changes.
 
 Run:
 
@@ -300,8 +302,10 @@ All versions remain exact; do not replace them with unbounded ranges.
 
 **Step 3: Make cache and packaging invalidation include the shared core**
 
-Hash the shared core together with the packaged-runtime overlay in `RUN.bat`
-and `scripts/build-release-installer.ps1`. Add the shared core to
+Hash the shared core together with the packaged-runtime overlay in `RUN.bat`,
+`RUN.sh`, `RUN_DEV.sh`, and `scripts/build-release-installer.ps1`. Reuse the
+combined hash for the macOS native-library codesign stamp so a core-only native
+dependency update is signed again. Add the shared core to
 `BACKEND_RUNTIME_SOURCE_INPUTS`. Include both relevant files in the CI and
 release workflow pip cache dependency paths.
 
@@ -315,10 +319,16 @@ presence/YuNet, packaging, and runtime verification suites, followed by the
 numeric-only empty-scene probe in both environments without copying or
 committing image data.
 
+Validate the macOS launcher syntax when Bash is available:
+
+```bash
+bash -n RUN.sh RUN_DEV.sh
+```
+
 **Step 5: Commit**
 
 ```powershell
-git add requirements-core.txt requirements.txt requirements-ci.txt requirements-backend-runtime-gpu.txt .github/workflows/ci.yml .github/workflows/release.yml RUN.bat scripts/build-release-installer.ps1 src/core/backend_runtime_packaging.py tests/test_backend_requirements.py tests/test_backend_runtime_packaging.py tests/test_launcher_safety.py tests/test_ci_workflow.py
+git add requirements-core.txt requirements.txt requirements-ci.txt requirements-backend-runtime-gpu.txt .github/workflows/ci.yml .github/workflows/release.yml RUN.bat RUN.sh RUN_DEV.sh scripts/build-release-installer.ps1 src/core/backend_runtime_packaging.py tests/test_backend_requirements.py tests/test_backend_runtime_packaging.py tests/test_launcher_safety.py tests/test_ci_workflow.py
 git commit -m "build: unify shared Python dependency contract" -m "Centralize exact shared pins for development, CI, and the packaged runtime, upgrade every YuNet path to the same OpenCV and NumPy contract, and include the shared core in dependency caches and runtime build fingerprints."
 ```
 

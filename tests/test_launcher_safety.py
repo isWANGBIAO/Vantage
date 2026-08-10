@@ -111,6 +111,37 @@ def test_backend_dependency_stamps_hash_shared_core_and_runtime_overlay():
     assert '$requirementsHash = "${coreRequirementsHash}:$overlayRequirementsHash"' in release_script
 
 
+def test_macos_launcher_dependency_stamps_hash_shared_core_and_runtime_overlay():
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+
+        assert (
+            'BACKEND_RUNTIME_CORE_REQUIREMENTS="${PROJECT_ROOT}/requirements-core.txt"'
+            in launcher
+        )
+        assert (
+            'core_requirements_hash="$(shasum -a 256 '
+            '"$BACKEND_RUNTIME_CORE_REQUIREMENTS" | awk \'{print $1}\')"'
+            in launcher
+        )
+        assert (
+            'overlay_requirements_hash="$(shasum -a 256 '
+            '"$BACKEND_RUNTIME_REQUIREMENTS" | awk \'{print $1}\')"'
+            in launcher
+        )
+        assert (
+            'requirements_hash="${core_requirements_hash}:${overlay_requirements_hash}"'
+            in launcher
+        )
+
+    run_dev = Path("RUN_DEV.sh").read_text(encoding="utf-8")
+    assert '"$requirements_hash" == "$stored_codesign_hash"' in run_dev
+    assert (
+        "printf '%s\\n' \"$requirements_hash\" > \"$BACKEND_RUNTIME_CODESIGN_STAMP\""
+        in run_dev
+    )
+
+
 def test_run_bat_restores_source_build_info_after_packaging():
     run_bat = Path("run.bat").read_text(encoding="utf-8")
 

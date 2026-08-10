@@ -19,6 +19,7 @@ INSTALLED_APP="${INSTALL_ROOT}/Vantage.app"
 VANTAGE_BUNDLE_ID="com.vantage.app"
 BACKEND_RUNTIME_VENV="${PROJECT_ROOT}/.venv-backend-runtime-gpu"
 BACKEND_RUNTIME_PYTHON="${BACKEND_RUNTIME_VENV}/bin/python"
+BACKEND_RUNTIME_CORE_REQUIREMENTS="${PROJECT_ROOT}/requirements-core.txt"
 BACKEND_RUNTIME_REQUIREMENTS="${PROJECT_ROOT}/requirements-backend-runtime-gpu.txt"
 BACKEND_RUNTIME_REQUIREMENTS_STAMP="${BACKEND_RUNTIME_VENV}/.requirements-backend-runtime-gpu.sha256"
 BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.sha256"
@@ -280,7 +281,9 @@ else
     echo "      Backend runtime venv already exists"
 fi
 
-requirements_hash="$(shasum -a 256 "$BACKEND_RUNTIME_REQUIREMENTS" | awk '{print $1}')"
+core_requirements_hash="$(shasum -a 256 "$BACKEND_RUNTIME_CORE_REQUIREMENTS" | awk '{print $1}')"
+overlay_requirements_hash="$(shasum -a 256 "$BACKEND_RUNTIME_REQUIREMENTS" | awk '{print $1}')"
+requirements_hash="${core_requirements_hash}:${overlay_requirements_hash}"
 stored_hash=""
 if [[ -f "$BACKEND_RUNTIME_REQUIREMENTS_STAMP" ]]; then
     stored_hash="$(cat "$BACKEND_RUNTIME_REQUIREMENTS_STAMP")"

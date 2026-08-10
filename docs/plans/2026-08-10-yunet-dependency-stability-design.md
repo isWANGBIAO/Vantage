@@ -65,9 +65,12 @@ the headless build at the same version.
 This is a single source of truth for shared packages, not an unpinned install.
 Exact versions retain reproducible CI and releases, while the small overlay
 files keep research-only, test-only, and packager-only dependencies out of the
-installed application. Runtime dependency stamps, packaged-runtime source
+installed application. Runtime dependency stamps in `RUN.bat`, `RUN.sh`,
+`RUN_DEV.sh`, and `scripts/build-release-installer.ps1`, packaged-runtime source
 fingerprints, and GitHub Actions cache keys include both the overlay and its
-shared core so a core-only change cannot reuse stale artifacts.
+shared core so a core-only change cannot reuse stale artifacts. The same
+combined hash also invalidates the macOS native-library codesign stamp, because
+a core-only update can replace native Python binaries.
 
 The packaged `runtime-manifest.json` verifies that the YuNet resources are
 present and YOLOX is absent; it does not record package versions. OpenCV and
@@ -101,6 +104,9 @@ Verification covers:
 - Python 3.11 and 3.13 CI, frontend tests/build, CodeQL, and YuNet model loading
   in development, CI, and packaged-runtime environments under the same shared
   OpenCV 4.14 and NumPy contract;
+- launcher contract tests plus `bash -n RUN.sh RUN_DEV.sh`, proving every
+  dependency and macOS codesign stamp follows the combined core-and-overlay
+  hash;
 - the full Windows `RUN.bat` flow, installed version, commit metadata, health
   endpoints, the runtime manifest's YuNet/no-YOLOX resource contract, and
   independently queried installed OpenCV and NumPy versions.
