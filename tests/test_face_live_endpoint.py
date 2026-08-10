@@ -122,6 +122,16 @@ class FaceLiveEndpointTests(unittest.TestCase):
 
         self.assertEqual(server.state.paths["photo"], newer_path)
 
+    def test_presence_loop_log_describes_foreground_face_detection(self):
+        server.state.is_running = False
+
+        with patch("builtins.print") as print_mock:
+            server.face_detection_loop()
+
+        print_mock.assert_called_once_with(
+            "Starting foreground face detection background thread..."
+        )
+
     def test_nonstandard_photo_path_does_not_replace_timestamped_photo(self):
         current_path = "photo_20260726_142600.jpg"
         server.state.paths["photo"] = current_path
