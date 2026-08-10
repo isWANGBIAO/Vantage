@@ -2574,7 +2574,7 @@ def face_live_loop():
             time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
 
 def face_detection_loop():
-    print("Starting camera-facing face detection background thread...")
+    print("Starting foreground face detection background thread...")
     detector = None
     last_inference_started_at = None
     last_submitted_frame_published_at = None

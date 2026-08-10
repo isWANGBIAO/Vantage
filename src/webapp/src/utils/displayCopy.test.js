@@ -87,11 +87,11 @@ test('displayCopy removes obsolete background performance mode labels', () => {
   }
 });
 
-test('camera detection copy describes camera-facing face detection', () => {
-  assert.equal(DISPLAY_COPY['en-US']['camera_feed.enable_detection'], 'Enable camera-facing face detection');
-  assert.equal(DISPLAY_COPY['zh-CN']['camera_feed.enable_detection'], '开启面向摄像头的人脸检测');
-  assert.equal(DISPLAY_COPY['en-US']['camera_feed.disable_detection'], 'Disable camera-facing face detection');
-  assert.equal(DISPLAY_COPY['zh-CN']['camera_feed.disable_detection'], '关闭面向摄像头的人脸检测');
+test('camera detection copy describes relaxed foreground face detection', () => {
+  assert.equal(DISPLAY_COPY['en-US']['camera_feed.enable_detection'], 'Enable foreground face detection');
+  assert.equal(DISPLAY_COPY['zh-CN']['camera_feed.enable_detection'], '开启前景人脸检测');
+  assert.equal(DISPLAY_COPY['en-US']['camera_feed.disable_detection'], 'Disable foreground face detection');
+  assert.equal(DISPLAY_COPY['zh-CN']['camera_feed.disable_detection'], '关闭前景人脸检测');
 });
 
 test('displayCopy includes Expense Sheet JSON copy labels in both languages', () => {

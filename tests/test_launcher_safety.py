@@ -1,6 +1,13 @@
 from pathlib import Path
 
 
+def _assert_fragments_in_order(content, fragments):
+    missing = [fragment for fragment in fragments if fragment not in content]
+    assert not missing, f"Missing ordered fragments: {missing}"
+    positions = [content.index(fragment) for fragment in fragments]
+    assert positions == sorted(positions)
+
+
 def test_run_bat_release_flow_keeps_source_cleanup_scoped():
     content = Path("run.bat").read_text(encoding="utf-8")
 
@@ -89,6 +96,225 @@ def test_run_bat_skips_reinstalling_backend_dependencies_when_requirements_hash_
     assert "Backend runtime dependencies already synced" in run_bat
     assert "backend runtime dependency imports ok" in run_bat
     assert "Backend runtime dependency import check failed" in run_bat
+
+
+def test_backend_dependency_stamps_hash_shared_core_and_runtime_overlay():
+    run_bat = Path("run.bat").read_text(encoding="utf-8")
+    release_script = Path("scripts/build-release-installer.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "BACKEND_RUNTIME_CORE_REQUIREMENTS" in run_bat
+    assert "%PROJECT_ROOT%requirements-core.txt" in run_bat
+    assert "BACKEND_RUNTIME_CORE_REQUIREMENTS_HASH" in run_bat
+    assert (
+        "!BACKEND_RUNTIME_CORE_REQUIREMENTS_HASH!:"
+        "!BACKEND_RUNTIME_OVERLAY_REQUIREMENTS_HASH!"
+    ) in run_bat
+
+    assert "$BackendRuntimeCoreRequirements" in release_script
+    assert 'Join-Path $ProjectRoot "requirements-core.txt"' in release_script
+    assert "$coreRequirementsHash" in release_script
+    assert '$requirementsHash = "${coreRequirementsHash}:$overlayRequirementsHash"' in release_script
+
+
+def test_macos_launcher_dependency_stamps_hash_shared_core_and_runtime_overlay():
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+
+        assert (
+            'BACKEND_RUNTIME_CORE_REQUIREMENTS="${PROJECT_ROOT}/requirements-core.txt"'
+            in launcher
+        )
+        assert (
+            'core_requirements_hash="$(shasum -a 256 '
+            '"$BACKEND_RUNTIME_CORE_REQUIREMENTS" | awk \'{print $1}\')"'
+            in launcher
+        )
+        assert (
+            'overlay_requirements_hash="$(shasum -a 256 '
+            '"$BACKEND_RUNTIME_REQUIREMENTS" | awk \'{print $1}\')"'
+            in launcher
+        )
+        assert (
+            'requirements_hash="${core_requirements_hash}:${overlay_requirements_hash}"'
+            in launcher
+        )
+
+    run_dev = Path("RUN_DEV.sh").read_text(encoding="utf-8")
+    assert '"$requirements_hash" == "$stored_codesign_hash"' in run_dev
+    assert (
+        "printf '%s\\n' \"$requirements_hash\" > \"$BACKEND_RUNTIME_CODESIGN_STAMP\""
+        in run_dev
+    )
+
+
+def test_dependency_sync_normalizes_opencv_after_install_and_before_stamping():
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
+    assert (
+        'set "OPENCV_NORMALIZER=%PROJECT_ROOT%src\\scripts\\'
+        'normalize_opencv_installation.py"'
+    ) in run_bat
+    run_bat_install = (
+        '"%BACKEND_RUNTIME_PYTHON%" -m pip install -r '
+        '"%BACKEND_RUNTIME_REQUIREMENTS%"'
+    )
+    run_bat_normalize = (
+        '"%BACKEND_RUNTIME_PYTHON%" "%OPENCV_NORMALIZER%" '
+        '--requirements-core "%BACKEND_RUNTIME_CORE_REQUIREMENTS%"'
+    )
+    run_bat_stamp = '> "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" echo'
+    _assert_fragments_in_order(
+        run_bat,
+        (run_bat_install, run_bat_normalize, run_bat_stamp),
+    )
+    run_bat_normalize_block = run_bat[
+        run_bat.index(run_bat_normalize) : run_bat.index(run_bat_stamp)
+    ]
+    assert "if errorlevel 1" in run_bat_normalize_block
+    assert "exit /b 1" in run_bat_normalize_block
+
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+        assert (
+            'OPENCV_NORMALIZER="${PROJECT_ROOT}/src/scripts/'
+            'normalize_opencv_installation.py"'
+        ) in launcher
+        install = (
+            '"$BACKEND_RUNTIME_PYTHON" -m pip install -r '
+            '"$BACKEND_RUNTIME_REQUIREMENTS"'
+        )
+        normalize = (
+            'if ! "$BACKEND_RUNTIME_PYTHON" "$OPENCV_NORMALIZER" '
+            '--requirements-core "$BACKEND_RUNTIME_CORE_REQUIREMENTS"; then'
+        )
+        stamp = (
+            "printf '%s\\n' \"$requirements_hash\" > "
+            '"$BACKEND_RUNTIME_REQUIREMENTS_STAMP"'
+        )
+        _assert_fragments_in_order(launcher, (install, normalize, stamp))
+        normalize_block = launcher[launcher.index(normalize) : launcher.index(stamp)]
+        assert "exit 1" in normalize_block
+
+    release_script = Path("scripts/build-release-installer.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        '$OpenCvNormalizer = Join-Path $ProjectRoot '
+        '"src\\scripts\\normalize_opencv_installation.py"'
+    ) in release_script
+    release_install = (
+        "Invoke-Native -FilePath $BackendRuntimePython "
+        '-ArgumentList @("-m", "pip", "install", "-r", '
+        "$BackendRuntimeRequirements)"
+    )
+    release_normalize = (
+        "Invoke-Native -FilePath $BackendRuntimePython "
+        '-ArgumentList @($OpenCvNormalizer, "--requirements-core", '
+        "$BackendRuntimeCoreRequirements)"
+    )
+    release_stamp = "Set-Content -LiteralPath $BackendRuntimeRequirementsStamp"
+    _assert_fragments_in_order(
+        release_script,
+        (release_install, release_normalize, release_stamp),
+    )
+
+
+def test_sync_failure_cannot_leave_a_matching_dependency_stamp():
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
+    run_bat_sync = run_bat[
+        run_bat.index('if "!BACKEND_RUNTIME_DEPS_NEED_SYNC!"=="0"') :
+    ]
+    _assert_fragments_in_order(
+        run_bat_sync,
+        (
+            'del /F /Q "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%"',
+            "Backend runtime dependency stamp invalidation failed",
+            "exit /b 1",
+            '"%BACKEND_RUNTIME_PYTHON%" -m pip install --upgrade pip',
+            '"%BACKEND_RUNTIME_PYTHON%" -m pip install -r '
+            '"%BACKEND_RUNTIME_REQUIREMENTS%"',
+            '> "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" echo',
+        ),
+    )
+
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+        sync = launcher[
+            launcher.index(
+                'if [[ "$requirements_hash" == "$stored_hash"'
+            ) :
+        ]
+        assert "set -euo pipefail" in launcher
+        _assert_fragments_in_order(
+            sync,
+            (
+                'rm -f "$BACKEND_RUNTIME_REQUIREMENTS_STAMP" '
+                '"$BACKEND_RUNTIME_CODESIGN_STAMP"',
+                '"$BACKEND_RUNTIME_PYTHON" -m pip install --upgrade',
+                '"$BACKEND_RUNTIME_PYTHON" -m pip install -r '
+                '"$BACKEND_RUNTIME_REQUIREMENTS"',
+                "printf '%s\\n' \"$requirements_hash\" > "
+                '"$BACKEND_RUNTIME_REQUIREMENTS_STAMP"',
+            ),
+        )
+
+    release_script = Path("scripts/build-release-installer.ps1").read_text(
+        encoding="utf-8"
+    )
+    release_sync = release_script[
+        release_script.index(
+            "if ($requirementsHash -eq $storedHash -and "
+            '$env:VANTAGE_FORCE_BACKEND_DEPS -ne "1")'
+        ) :
+    ]
+    assert '$ErrorActionPreference = "Stop"' in release_script
+    _assert_fragments_in_order(
+        release_sync,
+        (
+            "Remove-Item -LiteralPath $BackendRuntimeRequirementsStamp -Force",
+            "Invoke-Native -FilePath $BackendRuntimePython "
+            '-ArgumentList @("-m", "pip", "install", "--upgrade", "pip")',
+            "Invoke-Native -FilePath $BackendRuntimePython "
+            '-ArgumentList @("-m", "pip", "install", "-r", '
+            "$BackendRuntimeRequirements)",
+            "Set-Content -LiteralPath $BackendRuntimeRequirementsStamp",
+        ),
+    )
+
+
+def test_forced_macos_dependency_sync_invalidates_codesign_stamp_before_resigning():
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+        sync_start = launcher.index(
+            'if [[ "$requirements_hash" == "$stored_hash"'
+        )
+        codesign_call = launcher.index(
+            "codesign_macos_native_libraries", sync_start
+        )
+        sync_and_codesign = launcher[
+            sync_start : codesign_call + len("codesign_macos_native_libraries")
+        ]
+        _assert_fragments_in_order(
+            sync_and_codesign,
+            (
+                'rm -f "$BACKEND_RUNTIME_REQUIREMENTS_STAMP" '
+                '"$BACKEND_RUNTIME_CODESIGN_STAMP"',
+                '"$BACKEND_RUNTIME_PYTHON" -m pip install -r '
+                '"$BACKEND_RUNTIME_REQUIREMENTS"',
+                "printf '%s\\n' \"$requirements_hash\" > "
+                '"$BACKEND_RUNTIME_REQUIREMENTS_STAMP"',
+                "codesign_macos_native_libraries",
+            ),
+        )
+
+        codesign_function = launcher[
+            launcher.index("codesign_macos_native_libraries() {") : sync_start
+        ]
+        assert (
+            "printf '%s\\n' \"$requirements_hash\" > "
+            '"$BACKEND_RUNTIME_CODESIGN_STAMP"'
+        ) in codesign_function
 
 
 def test_run_bat_restores_source_build_info_after_packaging():

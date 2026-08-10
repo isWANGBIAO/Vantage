@@ -12,31 +12,38 @@ def get_project_root():
     return Path.cwd()
 
 
-def iter_requirements(path):
-    for line in path.read_text(encoding="utf-8").splitlines():
-        package = line.strip()
-        if package and not package.startswith("#"):
-            yield package
-
-
 def install_requirements(requirements_path=None):
     req_path = Path(requirements_path) if requirements_path else get_project_root() / "requirements.txt"
-    failures = []
+    print(f"Installing requirements from {req_path}...")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-r", str(req_path)],
+        check=False,
+    )
+    if result.returncode != 0:
+        print(f"Failed to install requirements from {req_path}.\n")
+        return [str(req_path)]
 
-    for package in iter_requirements(req_path):
-        print(f"Installing {package}...")
-        result = subprocess.run([sys.executable, "-m", "pip", "install", package], check=False)
-        if result.returncode != 0:
-            failures.append(package)
-            print(f"Failed to install {package}; continuing.\n")
-
-    return failures
+    normalizer_path = Path(__file__).with_name("normalize_opencv_installation.py")
+    requirements_core_path = get_project_root() / "requirements-core.txt"
+    normalization_result = subprocess.run(
+        [
+            sys.executable,
+            str(normalizer_path),
+            "--requirements-core",
+            str(requirements_core_path),
+        ],
+        check=False,
+    )
+    if normalization_result.returncode != 0:
+        print(f"Failed to normalize OpenCV after installing {req_path}.\n")
+        return [str(req_path)]
+    return []
 
 
 if __name__ == "__main__":
-    failed_packages = install_requirements()
-    if failed_packages:
-        print("Packages that failed to install:")
-        for package in failed_packages:
-            print(f"- {package}")
+    failed_requirements_files = install_requirements()
+    if failed_requirements_files:
+        print("Requirements file failed to install:")
+        for requirements_file in failed_requirements_files:
+            print(f"- {requirements_file}")
         raise SystemExit(1)

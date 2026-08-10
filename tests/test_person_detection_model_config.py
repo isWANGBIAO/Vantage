@@ -20,9 +20,9 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
             "face_detection_yunet_2023mar.onnx",
         )
 
-    def test_presence_uses_half_confidence_and_half_percent_area(self):
+    def test_presence_uses_half_confidence_and_one_percent_area(self):
         self.assertEqual(person_detection.PRESENCE_DETECTION_CONFIDENCE, 0.50)
-        self.assertEqual(person_detection.PRESENCE_MIN_FACE_AREA_RATIO, 0.005)
+        self.assertEqual(person_detection.PRESENCE_MIN_FACE_AREA_RATIO, 0.01)
 
     def test_yolox_presence_api_is_removed(self):
         removed_names = (

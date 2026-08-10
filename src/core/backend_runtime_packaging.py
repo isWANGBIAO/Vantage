@@ -17,6 +17,7 @@ PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
 BACKEND_RUNTIME_FINGERPRINT_NAME = "runtime-fingerprint.json"
 BACKEND_RUNTIME_FINGERPRINT_VERSION = 1
 BACKEND_RUNTIME_SOURCE_INPUTS = (
+    "requirements-core.txt",
     "requirements-backend-runtime-gpu.txt",
     "src/core",
     "src/manager",
@@ -88,6 +89,7 @@ PYINSTALLER_EXCLUDES = (
     "src.scripts.convert_icon",
     "src.scripts.debug_single_face",
     "src.scripts.install_requirements",
+    "src.scripts.normalize_opencv_installation",
     "src.scripts.render_face_pipeline_markdown",
     "src.scripts.run_packaging_builds",
     "src.scripts.test_gpu_inference",

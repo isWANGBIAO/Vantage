@@ -18,7 +18,7 @@ from typing import Any, Iterable
 
 PERSON_DETECTION_CONFIDENCE = 0.75
 PRESENCE_DETECTION_CONFIDENCE = 0.50
-PRESENCE_MIN_FACE_AREA_RATIO = 0.005
+PRESENCE_MIN_FACE_AREA_RATIO = 0.01
 REALTIME_PRESENCE_MAX_INPUT_DIMENSION = 640
 PERSON_DETECTION_MODEL = "face_detection_yunet_2023mar.onnx"
 FACE_DETECTION_MODEL_PATH_ENV = "VANTAGE_FACE_DETECTION_MODEL_PATH"
@@ -266,7 +266,7 @@ def detect_presence_faces(
     model=None,
     conf: float = PRESENCE_DETECTION_CONFIDENCE,
 ) -> list[Any]:
-    """Return the largest YuNet face occupying at least 0.5% of the frame."""
+    """Return the largest YuNet face occupying at least 1.0% of the frame."""
 
     image_size = _valid_image_size(source)
     if image_size is None:

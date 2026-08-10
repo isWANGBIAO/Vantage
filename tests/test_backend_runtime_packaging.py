@@ -39,6 +39,13 @@ def _create_required_runtime_resources(project_root: Path):
     (models_dir / "LICENSE.face_detection_yunet.txt").write_text("MIT\n", encoding="utf-8")
     for resource_name in REQUIRED_ROOT_RESOURCE_NAMES:
         (project_root / resource_name).write_text(f"# {resource_name}\n", encoding="utf-8")
+    for requirement_name in (
+        "requirements-core.txt",
+        "requirements-backend-runtime-gpu.txt",
+    ):
+        requirement_path = project_root / requirement_name
+        if not requirement_path.exists():
+            requirement_path.write_text("fastapi==0.1\n", encoding="utf-8")
 
 
 def test_resolve_backend_runtime_layout_uses_fixed_output_tree(tmp_path):
@@ -134,6 +141,7 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         "src.face_analyzer_mediapipe",
         "src.scripts.debug_single_face",
         "src.scripts.install_requirements",
+        "src.scripts.normalize_opencv_installation",
         "src.scripts.run_packaging_builds",
         "src.scripts.test_gpu_inference",
         "tensorrt",
@@ -398,10 +406,16 @@ def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(t
     after_packaging_change = build_backend_runtime_fingerprint(tmp_path, resources=resources)
     backend_file.write_text("print('backend v2')\n", encoding="utf-8")
     after_backend_change = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+    (tmp_path / "requirements-core.txt").write_text("fastapi==0.2\n", encoding="utf-8")
+    after_core_requirements_change = build_backend_runtime_fingerprint(
+        tmp_path, resources=resources
+    )
 
     assert original["digest"] == after_frontend_change["digest"]
     assert original["digest"] == after_packaging_change["digest"]
     assert original["digest"] != after_backend_change["digest"]
+    assert after_backend_change["digest"] != after_core_requirements_change["digest"]
+    assert any(entry["path"] == "requirements-core.txt" for entry in original["inputs"])
     assert any(entry["path"] == "requirements-backend-runtime-gpu.txt" for entry in original["inputs"])
     assert not any(entry["path"].startswith("src/webapp/") for entry in original["inputs"])
     assert not any(entry["path"] == "src/scripts/run_packaging_builds.py" for entry in original["inputs"])
