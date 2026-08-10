@@ -282,7 +282,9 @@ NumPy, OpenCV, Pydantic, and Pydantic Core pins. Require Windows and macOS
 runtime stamps, the macOS native-library codesign stamp, packaging fingerprints,
 and workflow cache keys to change when the shared core changes. Require the
 standalone requirements installer to give the composed file to pip once with
-`-r`, and to preserve its failure-list and CLI exit contracts.
+`-r`. Require success to return no failed files without an error exit, and a
+nonzero pip result to return the requirements file path, label it as a failed
+requirements file, and exit the CLI with status 1.
 
 Run:
 
@@ -316,6 +318,8 @@ release workflow pip cache dependency paths.
 Replace the standalone installer's per-line package loop with one standard
 `python -m pip install -r requirements.txt` subprocess call. Do not duplicate
 pip's recursive include or environment-marker parser in application code.
+Report failures at the requirements-file level rather than retaining the old
+per-package wording.
 
 **Step 4: Rebuild and validate both target environments**
 

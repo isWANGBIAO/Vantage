@@ -26,9 +26,9 @@ def install_requirements(requirements_path=None):
 
 
 if __name__ == "__main__":
-    failed_packages = install_requirements()
-    if failed_packages:
-        print("Packages that failed to install:")
-        for package in failed_packages:
-            print(f"- {package}")
+    failed_requirements_files = install_requirements()
+    if failed_requirements_files:
+        print("Requirements file failed to install:")
+        for requirements_file in failed_requirements_files:
+            print(f"- {requirements_file}")
         raise SystemExit(1)
