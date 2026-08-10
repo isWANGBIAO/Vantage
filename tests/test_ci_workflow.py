@@ -25,7 +25,7 @@ def test_python_ci_step_isolates_vantage_runtime_dirs():
 
 
 def test_frontend_workflows_pin_electron_node_runtime():
-    expected_electron_version = "42.6.1"
+    expected_electron_version = "42.8.0"
     expected_electron_range = f"^{expected_electron_version}"
     expected_node_version = "24.18.0"
 
@@ -55,19 +55,44 @@ def test_frontend_workflows_pin_electron_node_runtime():
             flags=re.MULTILINE,
         )
         assert configured_node_versions == [expected_node_version], (
-            f"{workflow_path} should use the Node.js version embedded in Electron 42.6.1"
+            f"{workflow_path} should use the Node.js version embedded in "
+            f"Electron {expected_electron_version}"
         )
 
     readme = Path("README.md").read_text(encoding="utf-8")
     assert 'alt="Node.js 24.18.0"' in readme
     assert "Node.js-24.18.0-" in readme
-    assert 'alt="Electron 42.6.1"' in readme
-    assert "Electron-42.6.1-" in readme
+    assert 'alt="Electron 42.8.0"' in readme
+    assert "Electron-42.8.0-" in readme
 
     requirements = readme.split("## Requirements", maxsplit=1)[1].split(
         "\n## ", maxsplit=1
     )[0]
     assert f"Node.js {expected_node_version}" in requirements
+
+
+def test_readme_react_badge_matches_frontend_dependency_contract():
+    expected_react_version = "19.2.8"
+    expected_react_range = f"^{expected_react_version}"
+
+    package = json.loads(Path("src/webapp/package.json").read_text(encoding="utf-8"))
+    package_lock = json.loads(
+        Path("src/webapp/package-lock.json").read_text(encoding="utf-8")
+    )
+
+    assert package["dependencies"]["react"] == expected_react_range
+    assert (
+        package_lock["packages"][""]["dependencies"]["react"]
+        == expected_react_range
+    )
+    assert (
+        package_lock["packages"]["node_modules/react"]["version"]
+        == expected_react_version
+    )
+
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert 'alt="React 19.2.8"' in readme
+    assert "React-19.2.8-" in readme
 
 
 def test_release_metadata_matches_package_version():
