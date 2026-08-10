@@ -9,7 +9,7 @@
 
 Vantage loads this ONNX model with OpenCV `FaceDetectorYN`. Live presence uses
 a `0.50` confidence threshold and accepts only the largest face whose clipped
-box occupies at least `0.5%` of the frame. It does not require frontal landmark
+box occupies at least `1.0%` of the frame. It does not require frontal landmark
 geometry, so a sufficiently visible turned face can still maintain presence.
 
 Historical camera-facing analysis keeps the stricter `0.75` confidence

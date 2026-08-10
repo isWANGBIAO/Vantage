@@ -2,8 +2,14 @@
 
 ## Status
 
-Approved on 2026-07-15. This design supersedes the dual YuNet/YOLOX presence
-design in:
+Approved on 2026-07-15. The `0.5%` foreground-area boundary documented below
+is retained as a historical record, but was refined and superseded by the
+`1.0%` boundary in
+[`2026-08-10-yunet-dependency-stability-design.md`](2026-08-10-yunet-dependency-stability-design.md).
+The remaining rationale and evidence below are likewise preserved as the
+record of the original design.
+
+This design superseded the dual YuNet/YOLOX presence design in:
 
 - `2026-07-14-focus-presence-regression-design.md`
 - `2026-07-14-focus-presence-regression.md`
