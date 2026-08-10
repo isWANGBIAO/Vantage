@@ -266,8 +266,10 @@ git commit -m "build: update Python dependency group" -m "Integrate 15 compatibl
 - Modify: `RUN_DEV.sh`
 - Modify: `scripts/build-release-installer.ps1`
 - Modify: `src/core/backend_runtime_packaging.py`
+- Modify: `src/scripts/install_requirements.py`
 - Modify: `tests/test_backend_requirements.py`
 - Modify: `tests/test_backend_runtime_packaging.py`
+- Create: `tests/test_install_requirements.py`
 - Modify: `tests/test_launcher_safety.py`
 - Modify: `tests/test_ci_workflow.py`
 
@@ -278,12 +280,14 @@ once, forbid duplicated shared pins in their overlays, recursively evaluate
 their effective package sets, and require the shared core to own the compatible
 NumPy, OpenCV, Pydantic, and Pydantic Core pins. Require Windows and macOS
 runtime stamps, the macOS native-library codesign stamp, packaging fingerprints,
-and workflow cache keys to change when the shared core changes.
+and workflow cache keys to change when the shared core changes. Require the
+standalone requirements installer to give the composed file to pip once with
+`-r`, and to preserve its failure-list and CLI exit contracts.
 
 Run:
 
 ```powershell
-python -m pytest tests/test_backend_requirements.py tests/test_backend_runtime_packaging.py tests/test_launcher_safety.py tests/test_ci_workflow.py -q
+python -m pytest tests/test_backend_requirements.py tests/test_backend_runtime_packaging.py tests/test_install_requirements.py tests/test_launcher_safety.py tests/test_ci_workflow.py -q
 ```
 
 Expected: fail because the shared core and its cache/fingerprint coverage do
@@ -309,6 +313,10 @@ dependency update is signed again. Add the shared core to
 `BACKEND_RUNTIME_SOURCE_INPUTS`. Include both relevant files in the CI and
 release workflow pip cache dependency paths.
 
+Replace the standalone installer's per-line package loop with one standard
+`python -m pip install -r requirements.txt` subprocess call. Do not duplicate
+pip's recursive include or environment-marker parser in application code.
+
 **Step 4: Rebuild and validate both target environments**
 
 Install `requirements-ci.txt` into `.venv` and
@@ -328,7 +336,7 @@ bash -n RUN.sh RUN_DEV.sh
 **Step 5: Commit**
 
 ```powershell
-git add requirements-core.txt requirements.txt requirements-ci.txt requirements-backend-runtime-gpu.txt .github/workflows/ci.yml .github/workflows/release.yml RUN.bat RUN.sh RUN_DEV.sh scripts/build-release-installer.ps1 src/core/backend_runtime_packaging.py tests/test_backend_requirements.py tests/test_backend_runtime_packaging.py tests/test_launcher_safety.py tests/test_ci_workflow.py
+git add requirements-core.txt requirements.txt requirements-ci.txt requirements-backend-runtime-gpu.txt .github/workflows/ci.yml .github/workflows/release.yml RUN.bat RUN.sh RUN_DEV.sh scripts/build-release-installer.ps1 src/core/backend_runtime_packaging.py src/scripts/install_requirements.py tests/test_backend_requirements.py tests/test_backend_runtime_packaging.py tests/test_install_requirements.py tests/test_launcher_safety.py tests/test_ci_workflow.py
 git commit -m "build: unify shared Python dependency contract" -m "Centralize exact shared pins for development, CI, and the packaged runtime, upgrade every YuNet path to the same OpenCV and NumPy contract, and include the shared core in dependency caches and runtime build fingerprints."
 ```
 

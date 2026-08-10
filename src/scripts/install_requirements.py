@@ -12,25 +12,17 @@ def get_project_root():
     return Path.cwd()
 
 
-def iter_requirements(path):
-    for line in path.read_text(encoding="utf-8").splitlines():
-        package = line.strip()
-        if package and not package.startswith("#"):
-            yield package
-
-
 def install_requirements(requirements_path=None):
     req_path = Path(requirements_path) if requirements_path else get_project_root() / "requirements.txt"
-    failures = []
-
-    for package in iter_requirements(req_path):
-        print(f"Installing {package}...")
-        result = subprocess.run([sys.executable, "-m", "pip", "install", package], check=False)
-        if result.returncode != 0:
-            failures.append(package)
-            print(f"Failed to install {package}; continuing.\n")
-
-    return failures
+    print(f"Installing requirements from {req_path}...")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-r", str(req_path)],
+        check=False,
+    )
+    if result.returncode != 0:
+        print(f"Failed to install requirements from {req_path}.\n")
+        return [str(req_path)]
+    return []
 
 
 if __name__ == "__main__":

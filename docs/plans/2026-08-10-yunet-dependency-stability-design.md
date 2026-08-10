@@ -70,7 +70,10 @@ installed application. Runtime dependency stamps in `RUN.bat`, `RUN.sh`,
 fingerprints, and GitHub Actions cache keys include both the overlay and its
 shared core so a core-only change cannot reuse stale artifacts. The same
 combined hash also invalidates the macOS native-library codesign stamp, because
-a core-only update can replace native Python binaries.
+a core-only update can replace native Python binaries. The standalone
+`src/scripts/install_requirements.py` entrypoint passes the composed
+`requirements.txt` to pip with `-r` in one operation, leaving include and marker
+semantics to pip instead of treating include directives as package names.
 
 The packaged `runtime-manifest.json` verifies that the YuNet resources are
 present and YOLOX is absent; it does not record package versions. OpenCV and
@@ -107,6 +110,8 @@ Verification covers:
 - launcher contract tests plus `bash -n RUN.sh RUN_DEV.sh`, proving every
   dependency and macOS codesign stamp follows the combined core-and-overlay
   hash;
+- the standalone requirements installer success/failure contract, including
+  one composed `pip install -r` invocation and nonzero CLI propagation;
 - the full Windows `RUN.bat` flow, installed version, commit metadata, health
   endpoints, the runtime manifest's YuNet/no-YOLOX resource contract, and
   independently queried installed OpenCV and NumPy versions.
