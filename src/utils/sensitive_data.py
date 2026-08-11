@@ -74,7 +74,7 @@ def redact_sensitive_text(value, *, path_prefixes=None):
         redacted,
     )
     redacted = re.sub(
-        r"\b(gh(?:p|o|u|s|r)_)[A-Za-z0-9]{8,}",
+        r"\b(gh(?:p|o|u|s|r)_)[A-Za-z0-9]{4,}",
         r"\1[REDACTED]",
         redacted,
     )

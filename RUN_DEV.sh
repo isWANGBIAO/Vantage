@@ -107,6 +107,7 @@ resolve_bootstrap_python() {
 }
 
 BOOTSTRAP_PYTHON="$(resolve_bootstrap_python)"
+export VANTAGE_BOOTSTRAP_PYTHON="$BOOTSTRAP_PYTHON"
 
 select_backend_cleanup_python() {
     if [[ -x "$BACKEND_RUNTIME_PYTHON" ]]; then

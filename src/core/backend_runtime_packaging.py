@@ -103,6 +103,7 @@ PYINSTALLER_EXCLUDES = (
     "src.scripts.launch_locked_backend_background",
     "src.scripts.normalize_opencv_installation",
     "src.scripts.render_face_pipeline_markdown",
+    "src.scripts.run_bounded_command",
     "src.scripts.run_packaging_builds",
     "src.scripts.run_with_backend_runtime_lock",
     "src.scripts.sign_macos_artifacts",

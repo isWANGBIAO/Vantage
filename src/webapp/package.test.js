@@ -1,7 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -11,6 +21,7 @@ const preloadSource = readFileSync(new URL('./preload.cjs', import.meta.url), 'u
 const signMacAdHocSource = readFileSync(new URL('./scripts/sign-mac-ad-hoc.cjs', import.meta.url), 'utf8');
 const viteBuildScriptSource = readFileSync(new URL('./scripts/vite-build.mjs', import.meta.url), 'utf8');
 const runBatSource = readFileSync(new URL('../../RUN.bat', import.meta.url), 'utf8');
+const require = createRequire(import.meta.url);
 
 test('tracked build info stays a neutral placeholder between packages', () => {
   const buildInfo = JSON.parse(readFileSync(new URL('./build-info.json', import.meta.url), 'utf8'));
@@ -120,8 +131,6 @@ test('macOS packaging hook ad-hoc signs the finished app bundle from a temp copy
   assert.ok(signMacAdHocSource.includes("'--identifier'"));
   assert.ok(signMacAdHocSource.includes('walkAsync'));
   assert.ok(signMacAdHocSource.includes('isMachOFile'));
-  assert.ok(signMacAdHocSource.includes('function commandPath'));
-  assert.ok(signMacAdHocSource.includes('path.relative(process.cwd(), filePath)'));
   assert.ok(signMacAdHocSource.includes("fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-mac-sign-'))"));
   assert.ok(signMacAdHocSource.includes("run('ditto', [outputAppPath, appPath])"));
   assert.ok(signMacAdHocSource.includes("run('ditto', [appPath, outputAppPath])"));
@@ -129,15 +138,80 @@ test('macOS packaging hook ad-hoc signs the finished app bundle from a temp copy
   assert.ok(signMacAdHocSource.includes('codesignPathWithShell'));
   assert.ok(signMacAdHocSource.includes('codesignTopLevelApp'));
   assert.ok(signMacAdHocSource.includes('AD_HOC_MAIN_ENTITLEMENTS'));
-  assert.ok(signMacAdHocSource.includes('clearSignBlockingAttributesRecursive'));
+  assert.ok(signMacAdHocSource.includes('collectSignBlockingAttributeTargets'));
   assert.ok(signMacAdHocSource.includes("baseName.startsWith(`${signingOptions.productName || 'Vantage'} Helper`)"));
   assert.ok(signMacAdHocSource.includes("productName: path.basename(appPath, '.app')"));
   assert.ok(signMacAdHocSource.includes("baseName === 'VantageBackend'"));
   assert.ok(signMacAdHocSource.includes('com.apple.security.cs.disable-library-validation'));
-  assert.ok(signMacAdHocSource.includes("run('xattr', ['-cr', bundlePath]"));
-  assert.ok(signMacAdHocSource.includes('com.apple.FinderInfo'));
-  assert.ok(signMacAdHocSource.includes('com.apple.fileprovider.fpfs#P'));
+  assert.ok(signMacAdHocSource.includes("run('xattr', ['-c', ...batch])"));
+  assert.ok(!signMacAdHocSource.includes("['-cr'"));
   assert.ok(signMacAdHocSource.includes("'--strict'"));
+  assert.ok(signMacAdHocSource.includes('BOUNDED_COMMAND_RUNNER'));
+  assert.ok(signMacAdHocSource.includes('timeout: COMMAND_BRIDGE_TIMEOUT_MS'));
+  assert.ok(signMacAdHocSource.includes('maxBuffer: COMMAND_BRIDGE_MAX_BUFFER_BYTES'));
+  assert.ok(signMacAdHocSource.includes('redactSensitiveText'));
+  assert.ok(signMacAdHocSource.includes("['--verify', '--deep', '--strict', '--verbose=2', outputAppPath]"));
+  const finalCopyIndex = signMacAdHocSource.indexOf("run('ditto', [appPath, outputAppPath])");
+  const finalVerifyIndex = signMacAdHocSource.indexOf(
+    "run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', outputAppPath])",
+  );
+  assert.ok(finalCopyIndex >= 0 && finalVerifyIndex > finalCopyIndex);
+  assert.ok(signMacAdHocSource.includes('fs.rmSync(outputAppPath, { recursive: true, force: true })'));
+});
+
+test('macOS packaging hook excludes symlinks from xattr command targets', (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-xattr-targets-'));
+  const appPath = path.join(root, 'Vantage.app');
+  const contentsPath = path.join(appPath, 'Contents');
+  const externalPath = path.join(root, 'external');
+  const externalLink = path.join(contentsPath, 'external-link');
+  mkdirSync(contentsPath, { recursive: true });
+  mkdirSync(externalPath);
+  writeFileSync(path.join(contentsPath, 'Info.plist'), 'plist', 'utf8');
+  writeFileSync(path.join(externalPath, 'sentinel'), 'do-not-touch', 'utf8');
+  try {
+    symlinkSync(externalPath, externalLink, 'dir');
+  } catch (error) {
+    rmSync(root, { recursive: true, force: true });
+    if (error?.code === 'EPERM') {
+      t.skip('creating a directory symlink is not permitted on this host');
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    const signMacAdHoc = require('./scripts/sign-mac-ad-hoc.cjs');
+    const targets = signMacAdHoc._testing.collectSignBlockingAttributeTargets(appPath);
+    assert.ok(targets.includes(appPath));
+    assert.ok(targets.includes(contentsPath));
+    assert.ok(targets.includes(path.join(contentsPath, 'Info.plist')));
+    assert.ok(!targets.includes(externalLink));
+    assert.ok(!targets.some((target) => target.startsWith(externalPath)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('macOS packaging hook rejects hard links before xattr cleanup', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-xattr-hardlink-'));
+  const appPath = path.join(root, 'Vantage.app');
+  const contentsPath = path.join(appPath, 'Contents');
+  const externalPath = path.join(root, 'external-sentinel');
+  mkdirSync(contentsPath, { recursive: true });
+  writeFileSync(externalPath, 'do-not-touch', 'utf8');
+  linkSync(externalPath, path.join(contentsPath, 'linked-sentinel'));
+
+  try {
+    const signMacAdHoc = require('./scripts/sign-mac-ad-hoc.cjs');
+    assert.throws(
+      () => signMacAdHoc._testing.collectSignBlockingAttributeTargets(appPath),
+      /hard-linked file/,
+    );
+    assert.equal(readFileSync(externalPath, 'utf8'), 'do-not-touch');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('build version script bumps patch and writes build metadata', async () => {

@@ -150,6 +150,7 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         "src.scripts.install_requirements",
         "src.scripts.launch_locked_backend_background",
         "src.scripts.normalize_opencv_installation",
+        "src.scripts.run_bounded_command",
         "src.scripts.run_packaging_builds",
         "src.scripts.run_with_backend_runtime_lock",
         "src.scripts.sign_macos_artifacts",
@@ -577,6 +578,10 @@ def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(t
     assert any(entry["path"] == "requirements-core.txt" for entry in original["inputs"])
     assert any(entry["path"] == "requirements-backend-runtime-gpu.txt" for entry in original["inputs"])
     assert not any(entry["path"].startswith("src/webapp/") for entry in original["inputs"])
+    assert not any(
+        entry["path"] == "src/scripts/run_bounded_command.py"
+        for entry in original["inputs"]
+    )
     assert not any(entry["path"] == "src/scripts/run_packaging_builds.py" for entry in original["inputs"])
     assert not any(
         entry["path"] == "src/scripts/sync_backend_runtime_environment.py"

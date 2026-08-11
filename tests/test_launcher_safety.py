@@ -320,6 +320,7 @@ def test_macos_launchers_do_not_execute_codesign_directly():
         launcher = launcher_path.read_text(encoding="utf-8")
         assert "codesign --force" not in launcher
         assert "codesign --verify" not in launcher
+        assert 'export VANTAGE_BOOTSTRAP_PYTHON="$BOOTSTRAP_PYTHON"' in launcher
 
 
 def test_macos_backend_signing_finishes_before_target_venv_consumers_start():
