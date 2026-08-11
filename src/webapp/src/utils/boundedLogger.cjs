@@ -130,51 +130,106 @@ function compilePathPrefixes(pathPrefixes) {
     ));
 }
 
-function redactPathSegment(value, compiledPathPrefixes) {
-  let redacted = value;
-  for (const mapping of compiledPathPrefixes) {
-    redacted = redacted.replace(mapping.regex, (match, offset, source) => {
-      const scheme = activeUrlSchemeAt(source, offset);
-      return scheme && REMOTE_URL_SCHEMES.has(scheme) ? match : mapping.label;
+function collectUrlContextEvents(value) {
+  const events = [];
+  const schemePattern = /\b([A-Za-z][A-Za-z0-9+.-]*):\/\//g;
+  for (const match of value.matchAll(schemePattern)) {
+    events.push({
+      index: match.index + match[0].length,
+      scheme: match[1].toLowerCase(),
     });
   }
-  return redacted;
+
+  const resetPattern = /[\s<>"]|[;,](?=\s*['"]?[A-Za-z_][A-Za-z0-9_.-]*\s*=)/g;
+  for (const match of value.matchAll(resetPattern)) {
+    events.push({ index: match.index, scheme: null });
+  }
+
+  events.sort((left, right) => left.index - right.index);
+  return events;
 }
 
-function activeUrlSchemeAt(value, index) {
-  const prefix = value.slice(0, index);
-  const schemePattern = /\b([A-Za-z][A-Za-z0-9+.-]*):\/\//g;
-  let activeMatch = null;
-  for (const match of prefix.matchAll(schemePattern)) {
-    activeMatch = match;
-  }
-  if (!activeMatch) {
-    return null;
-  }
+function collectPathCandidates(value, compiledPathPrefixes) {
+  const candidates = [];
 
-  const sinceScheme = prefix.slice(activeMatch.index + activeMatch[0].length);
-  if (/[\s<>"]/.test(sinceScheme)) {
-    return null;
-  }
-  return activeMatch[1].toLowerCase();
-}
-
-function redactEncodedLocalFilePaths(value, compiledPathPrefixes) {
-  let redacted = value;
-  for (const mapping of compiledPathPrefixes) {
-    if (mapping.fileUrlRegex) {
-      redacted = redacted.replace(
-        mapping.fileUrlRegex,
-        (match, offset, source) => {
-          const scheme = activeUrlSchemeAt(source, offset);
-          return scheme && !REMOTE_URL_SCHEMES.has(scheme)
-            ? mapping.label
-            : match;
-        },
-      );
+  compiledPathPrefixes.forEach((mapping, priority) => {
+    for (const match of value.matchAll(mapping.regex)) {
+      candidates.push({
+        end: match.index + match[0].length,
+        encoded: false,
+        label: mapping.label,
+        priority,
+        start: match.index,
+      });
     }
+    for (const match of value.matchAll(mapping.fileUrlRegex)) {
+      candidates.push({
+        end: match.index + match[0].length,
+        encoded: true,
+        label: mapping.label,
+        priority,
+        start: match.index,
+      });
+    }
+  });
+
+  candidates.sort((left, right) => (
+    left.start - right.start
+    || left.priority - right.priority
+    || right.end - left.end
+    || Number(left.encoded) - Number(right.encoded)
+  ));
+  return candidates;
+}
+
+function selectPathReplacements(value, compiledPathPrefixes) {
+  const events = collectUrlContextEvents(value);
+  const candidates = collectPathCandidates(value, compiledPathPrefixes);
+  const replacements = [];
+  let activeScheme = null;
+  let eventIndex = 0;
+  let replacedUntil = 0;
+
+  for (const candidate of candidates) {
+    while (
+      eventIndex < events.length
+      && events[eventIndex].index <= candidate.start
+    ) {
+      activeScheme = events[eventIndex].scheme;
+      eventIndex += 1;
+    }
+
+    if (candidate.start < replacedUntil) {
+      continue;
+    }
+    if (activeScheme && REMOTE_URL_SCHEMES.has(activeScheme)) {
+      continue;
+    }
+    if (candidate.encoded && !activeScheme) {
+      continue;
+    }
+
+    replacements.push(candidate);
+    replacedUntil = candidate.end;
   }
-  return redacted;
+
+  return replacements;
+}
+
+function applyPathReplacements(value, replacements) {
+  if (replacements.length === 0) {
+    return value;
+  }
+
+  const segments = [];
+  let cursor = 0;
+  for (const replacement of replacements) {
+    segments.push(value.slice(cursor, replacement.start));
+    segments.push(replacement.label);
+    cursor = replacement.end;
+  }
+  segments.push(value.slice(cursor));
+  return segments.join('');
 }
 
 function redactPathPrefixes(value, compiledPathPrefixes) {
@@ -182,9 +237,9 @@ function redactPathPrefixes(value, compiledPathPrefixes) {
     return value;
   }
 
-  return redactEncodedLocalFilePaths(
-    redactPathSegment(value, compiledPathPrefixes),
-    compiledPathPrefixes,
+  return applyPathReplacements(
+    value,
+    selectPathReplacements(value, compiledPathPrefixes),
   );
 }
 

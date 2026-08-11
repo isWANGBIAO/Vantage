@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 
 import boundedLogger from './boundedLogger.cjs';
@@ -182,6 +183,65 @@ test('redacts every local file URL when remote and local URLs share one token', 
     assert.match(redacted, /file:\/\/\/<apostrophe-root>\/src\/one\.cjs:1:2/);
     assert.match(redacted, /file:\/\/\/<apostrophe-root>\/src\/two\.cjs:3:4/);
     assert.doesNotMatch(redacted, /C:\/Users\/O'Neil\/repo/);
+});
+
+test('ends remote URL context at structured diagnostic field boundaries', () => {
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice\\repo', label: '<project-root>' },
+    ];
+    const trueRemoteUrl = 'https://example.test/path;matrix,part/C:/Users/Alice/repo/guide';
+    const value = [
+        'remote=https://example.test;cwd=C:/Users/Alice/repo/src/main.cjs',
+        'remote=https://example.test,cwd=C:/Users/Alice/repo/src/worker.cjs',
+        "remote='https://example.test';cwd='C:/Users/Alice/repo/src/quoted.cjs'",
+        `actual=${trueRemoteUrl}`,
+    ].join('\n');
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.match(redacted, /cwd=<project-root>\/src\/main\.cjs/);
+    assert.match(redacted, /cwd=<project-root>\/src\/worker\.cjs/);
+    assert.match(redacted, /cwd='<project-root>\/src\/quoted\.cjs'/);
+    assert.match(
+        redacted,
+        new RegExp(`actual=${trueRemoteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    );
+});
+
+test('collects every path replacement from one immutable source value', () => {
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice\\repo', label: '<alice-root>' },
+        { prefix: 'C:\\Users\\Bob Smith\\repo', label: '<bob-root>' },
+    ];
+    const value = (
+        'file:///C:/Users/Alice/repo/index.html'
+        + '?next=C:/Users/Bob%20Smith/repo/secret.txt'
+    );
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.equal(
+        redacted,
+        'file:///<alice-root>/index.html?next=<bob-root>/secret.txt',
+    );
+});
+
+test('redacts many path matches without quadratic rescanning', () => {
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice\\repo', label: '<project-root>' },
+    ];
+    const value = Array.from(
+        { length: 10_000 },
+        (_, index) => `C:/Users/Alice/repo/${index}`,
+    ).join(' ');
+
+    const startedAt = performance.now();
+    const redacted = redactSensitiveText(value, pathPrefixes);
+    const elapsedMs = performance.now() - startedAt;
+
+    assert.doesNotMatch(redacted, /C:\/Users\/Alice\/repo/);
+    assert.equal(redacted.match(/<project-root>/g)?.length, 10_000);
+    assert.ok(elapsedMs < 1_000, `redaction took ${elapsedMs.toFixed(1)}ms`);
 });
 
 test('redacts messages and error stacks before file and console output', () => {
