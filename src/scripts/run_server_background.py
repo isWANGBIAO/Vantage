@@ -24,7 +24,7 @@ PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
 from src.core.config import Config
 from src.core.runtime_library_bootstrap import apply_runtime_library_dirs
-from src.utils.sensitive_data import RedactingPipeLog
+from src.utils.sensitive_data import RedactingPipeLog, build_log_path_prefixes
 
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
@@ -64,34 +64,12 @@ def _build_log_path_prefixes(
     executable: str | Path | None = None,
     user_home: str | Path | None = None,
 ):
-    prefixes = {}
-
-    def add(label, value):
-        if value is None:
-            return
-        try:
-            value_text = os.fspath(value)
-        except TypeError:
-            return
-        if value_text:
-            prefixes[label] = value_text
-
-    add("<PROJECT_ROOT>", project_root)
-    for runtime_key, label in (
-        ("config_dir", "<CONFIG_DIR>"),
-        ("history_dir", "<HISTORY_DIR>"),
-        ("log_dir", "<LOG_DIR>"),
-        ("plot_dir", "<PLOT_DIR>"),
-        ("cache_dir", "<CACHE_DIR>"),
-        ("runtime_dir", "<RUNTIME_DIR>"),
-        ("migration_dir", "<MIGRATION_DIR>"),
-        ("data_dir", "<DATA_DIR>"),
-    ):
-        add(label, runtime_paths.get(runtime_key))
-    resolved_executable = Path(executable or sys.executable)
-    add("<EXECUTABLE_DIR>", resolved_executable.parent)
-    add("<USER_HOME>", user_home or Path.home())
-    return prefixes
+    return build_log_path_prefixes(
+        project_root=project_root,
+        runtime_paths=runtime_paths,
+        executable=executable,
+        user_home=user_home,
+    )
 
 
 def _resolve_runtime_context():

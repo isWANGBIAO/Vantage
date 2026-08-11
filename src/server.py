@@ -95,7 +95,11 @@ from src.services.location_trust import (
     LocationTrustResolver,
 )
 from src.utils.data_loader import DataLoader
-from src.utils.sensitive_data import redact_sensitive_text
+from src.utils.sensitive_data import (
+    RedactingPipeLog,
+    build_log_path_prefixes,
+    redact_sensitive_text,
+)
 
 
 _cv2_module = None
@@ -204,6 +208,13 @@ _plot_dashboard_cache_payload = None
 
 def _get_runtime_workdir():
     return Path(Config.get_project_root())
+
+
+def _build_runtime_log_path_prefixes():
+    return build_log_path_prefixes(
+        project_root=Config.get_project_root(),
+        runtime_paths=Config.get_runtime_paths(),
+    )
 
 
 def _get_project_progress_root():
@@ -5354,16 +5365,23 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
         print("Starting face analysis...")
         try:
             log_path = _create_runtime_log_path("face-analysis", "face-analysis")
-            with open(log_path, "a", encoding="utf-8", buffering=1) as log_file:
-                log_file.write(f"\n=== Face analysis launch {datetime.now().isoformat()} ===\n")
-                log_file.flush()
-                subprocess.run(
-                    [sys.executable, script_path],
-                    check=True,
-                    cwd=str(_get_runtime_workdir()),
-                    stdout=log_file,
-                    stderr=log_file,
+            with RedactingPipeLog(
+                log_path,
+                path_prefixes=_build_runtime_log_path_prefixes(),
+            ) as log_file:
+                log_file.write_record(
+                    f"\n=== Face analysis launch {datetime.now().isoformat()} ===\n"
                 )
+                with log_file.capture_subprocess_output(
+                    stream_name="face-analysis"
+                ) as child_output:
+                    subprocess.run(
+                        [sys.executable, script_path],
+                        check=True,
+                        cwd=str(_get_runtime_workdir()),
+                        stdout=child_output,
+                        stderr=subprocess.STDOUT,
+                    )
             print("Face analysis complete.")
         except Exception as e:
             print(f"Face analysis failed: {e}")
