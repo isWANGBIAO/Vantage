@@ -760,9 +760,6 @@ class Monitor:
 
         cycle_started_at = time.time()
         with self._state_lock:
-            had_active_session_at_cycle_start = (
-                self.continuous_sit_start is not None
-            )
             if self.last_monitor_heartbeat is not None:
                 monitor_gap = cycle_started_at - self.last_monitor_heartbeat
                 if monitor_gap >= self.monitor_stale_timeout:
@@ -772,6 +769,7 @@ class Monitor:
                         f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
                         f"Monitor gap {int(monitor_gap)}s exceeded timeout. Pausing timers."
                     )
+            had_active_session = self.continuous_sit_start is not None
             if self.active_timer is not None:
                 self._pause_active_timer_locked(cycle_started_at)
             self.last_monitor_heartbeat = cycle_started_at
@@ -811,10 +809,6 @@ class Monitor:
                     real_person = None
 
             current_time = time.time()
-            had_active_session = (
-                had_active_session_at_cycle_start
-                or self.continuous_sit_start is not None
-            )
             observation_status = self.record_presence_observation(
                 real_person,
                 observed_at=current_time,
