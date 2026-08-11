@@ -5,6 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.core.backend_environment_state import (
+    BACKEND_ENVIRONMENT_STATE_SCHEMA_VERSION,
+    build_backend_environment_state,
+    current_platform_identity,
+    current_python_identity,
+    write_backend_environment_state,
+)
 from src.core.backend_runtime_packaging import (
     APP_EXE_NAME,
     BACKEND_RUNTIME_FINGERPRINT_NAME,
@@ -143,6 +150,7 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         "src.scripts.install_requirements",
         "src.scripts.normalize_opencv_installation",
         "src.scripts.run_packaging_builds",
+        "src.scripts.sync_backend_runtime_environment",
         "src.scripts.test_gpu_inference",
         "tensorrt",
         "tensorrt_bindings",
@@ -294,14 +302,66 @@ def test_validate_packaging_environment_requires_clean_runtime_venv(tmp_path):
     dirty_python = tmp_path / "global" / "python.exe"
     clean_python = tmp_path / ".venv-backend-runtime-gpu" / "Scripts" / "python.exe"
     clean_prefix = tmp_path / ".venv-backend-runtime-gpu"
+    closure = ["fastapi==0.1", "pip==25.3"]
 
-    assert validate_packaging_python_environment(tmp_path, executable=clean_python, environ={}) is None
+    (tmp_path / "requirements-core.txt").write_text("fastapi==0.1\n", encoding="utf-8")
+    (tmp_path / "requirements-backend-runtime-gpu.txt").write_text(
+        "-r requirements-core.txt\n",
+        encoding="utf-8",
+    )
+
+    missing_state_error = validate_packaging_python_environment(
+        tmp_path,
+        executable=clean_python,
+        prefix=clean_prefix,
+        environ={},
+        distribution_closure=closure,
+        python_identity=current_python_identity(),
+        platform_identity=current_platform_identity(),
+    )
+    assert "environment state" in missing_state_error
+
+    valid_state = build_backend_environment_state(
+        tmp_path / "requirements-core.txt",
+        tmp_path / "requirements-backend-runtime-gpu.txt",
+        python_identity=current_python_identity(),
+        platform_identity=current_platform_identity(),
+        distributions=closure,
+    )
+    assert valid_state["schema_version"] == BACKEND_ENVIRONMENT_STATE_SCHEMA_VERSION
+    write_backend_environment_state(
+        clean_prefix,
+        valid_state,
+    )
+
+    assert validate_packaging_python_environment(
+        tmp_path,
+        executable=clean_python,
+        prefix=clean_prefix,
+        environ={},
+        distribution_closure=closure,
+        python_identity=current_python_identity(),
+        platform_identity=current_platform_identity(),
+    ) is None
+    inconsistent_state_error = validate_packaging_python_environment(
+        tmp_path,
+        executable=clean_python,
+        prefix=clean_prefix,
+        environ={},
+        distribution_closure=[*closure, "scipy==1.15.3"],
+        python_identity=current_python_identity(),
+        platform_identity=current_platform_identity(),
+    )
+    assert "distribution closure" in inconsistent_state_error
     assert (
         validate_packaging_python_environment(
             tmp_path,
             executable=dirty_python,
             prefix=clean_prefix,
             environ={},
+            distribution_closure=closure,
+            python_identity=current_python_identity(),
+            platform_identity=current_platform_identity(),
         )
         is None
     )
@@ -399,16 +459,35 @@ def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(t
 
     resources = collect_backend_runtime_resources(tmp_path)
 
-    original = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+    closure = ["fastapi==0.1", "pip==25.3"]
+    original = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=closure,
+    )
     frontend_file.write_text("export default function App() { return 'changed' }\n", encoding="utf-8")
-    after_frontend_change = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+    after_frontend_change = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=closure,
+    )
     packaging_file.write_text("print('packaging v2')\n", encoding="utf-8")
-    after_packaging_change = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+    after_packaging_change = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=closure,
+    )
     backend_file.write_text("print('backend v2')\n", encoding="utf-8")
-    after_backend_change = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+    after_backend_change = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=closure,
+    )
     (tmp_path / "requirements-core.txt").write_text("fastapi==0.2\n", encoding="utf-8")
     after_core_requirements_change = build_backend_runtime_fingerprint(
-        tmp_path, resources=resources
+        tmp_path,
+        resources=resources,
+        distribution_closure=closure,
     )
 
     assert original["digest"] == after_frontend_change["digest"]
@@ -419,6 +498,31 @@ def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(t
     assert any(entry["path"] == "requirements-backend-runtime-gpu.txt" for entry in original["inputs"])
     assert not any(entry["path"].startswith("src/webapp/") for entry in original["inputs"])
     assert not any(entry["path"] == "src/scripts/run_packaging_builds.py" for entry in original["inputs"])
+    assert not any(
+        entry["path"] == "src/scripts/sync_backend_runtime_environment.py"
+        for entry in original["inputs"]
+    )
+    assert original["version"] == 2
+    assert original["distributions"] == closure
+
+
+def test_backend_runtime_fingerprint_changes_with_distribution_closure(tmp_path):
+    _create_required_runtime_resources(tmp_path)
+    resources = collect_backend_runtime_resources(tmp_path)
+
+    original = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["fastapi==0.1", "pip==25.3"],
+    )
+    changed = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["fastapi==0.1", "pip==25.3", "scipy==1.15.3"],
+    )
+
+    assert original["digest"] != changed["digest"]
+    assert original["distributions"] != changed["distributions"]
 
 
 def test_backend_runtime_cache_match_requires_existing_runtime_and_matching_fingerprint(tmp_path):
@@ -429,7 +533,11 @@ def test_backend_runtime_cache_match_requires_existing_runtime_and_matching_fing
     backend_file.write_text("print('backend')\n", encoding="utf-8")
     layout = resolve_backend_runtime_layout(tmp_path)
     resources = collect_backend_runtime_resources(tmp_path)
-    fingerprint = build_backend_runtime_fingerprint(tmp_path, resources=resources)
+    fingerprint = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["fastapi==0.1", "pip==25.3"],
+    )
 
     layout["runtime_dir"].mkdir(parents=True)
     layout["resource_dir"].mkdir()
@@ -450,3 +558,14 @@ def test_backend_runtime_cache_match_requires_existing_runtime_and_matching_fing
     changed = dict(fingerprint)
     changed["digest"] = "different"
     assert not backend_runtime_fingerprint_matches(layout, changed, resources)
+
+    changed_closure = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["fastapi==0.1", "pip==25.3", "scipy==1.15.3"],
+    )
+    assert not backend_runtime_fingerprint_matches(
+        layout,
+        changed_closure,
+        resources,
+    )

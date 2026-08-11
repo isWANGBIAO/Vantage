@@ -10,12 +10,22 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from src.core.backend_environment_state import (
+    compute_requirements_sha256,
+    current_platform_identity,
+    current_python_identity,
+    environment_state_validation_error,
+    installed_distribution_closure,
+    load_backend_environment_state,
+    normalize_distribution_closure,
+)
+
 
 RUNTIME_NAME = "VantageBackend"
 APP_EXE_NAME = f"{RUNTIME_NAME}.exe"
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
 BACKEND_RUNTIME_FINGERPRINT_NAME = "runtime-fingerprint.json"
-BACKEND_RUNTIME_FINGERPRINT_VERSION = 1
+BACKEND_RUNTIME_FINGERPRINT_VERSION = 2
 BACKEND_RUNTIME_SOURCE_INPUTS = (
     "requirements-core.txt",
     "requirements-backend-runtime-gpu.txt",
@@ -92,6 +102,7 @@ PYINSTALLER_EXCLUDES = (
     "src.scripts.normalize_opencv_installation",
     "src.scripts.render_face_pipeline_markdown",
     "src.scripts.run_packaging_builds",
+    "src.scripts.sync_backend_runtime_environment",
     "src.scripts.test_gpu_inference",
     "tensorrt",
     "tensorrt_bindings",
@@ -188,6 +199,9 @@ def validate_packaging_python_environment(
     executable: str | Path | None = None,
     prefix: str | Path | None = None,
     environ: dict[str, str] | None = None,
+    distribution_closure: list[str] | None = None,
+    python_identity: dict[str, str] | None = None,
+    platform_identity: dict[str, str] | None = None,
 ) -> str | None:
     resolved_environ = environ if environ is not None else os.environ
     if resolved_environ.get(DIRTY_PACKAGING_ENV_BYPASS) == "1":
@@ -196,15 +210,43 @@ def validate_packaging_python_environment(
     expected_venv = Path(project_root).resolve() / BACKEND_RUNTIME_VENV_NAME
     resolved_executable = Path(executable or sys.executable).resolve()
     resolved_prefix = Path(prefix or sys.prefix).resolve()
-    if _path_is_relative_to(resolved_executable, expected_venv) or _path_is_relative_to(
-        resolved_prefix,
-        expected_venv,
+    if not (
+        _path_is_relative_to(resolved_executable, expected_venv)
+        or _path_is_relative_to(
+            resolved_prefix,
+            expected_venv,
+        )
     ):
-        return None
-    return (
-        "Backend runtime must be built with the clean packaging venv: "
-        f"{expected_venv}. Set {DIRTY_PACKAGING_ENV_BYPASS}=1 only for emergency local debugging."
+        return (
+            "Backend runtime must be built with the clean packaging venv: "
+            f"{expected_venv}. Set {DIRTY_PACKAGING_ENV_BYPASS}=1 only for emergency local debugging."
+        )
+
+    try:
+        requirements_sha256 = compute_requirements_sha256(
+            Path(project_root).resolve() / "requirements-core.txt",
+            Path(project_root).resolve() / "requirements-backend-runtime-gpu.txt",
+        )
+        resolved_closure = normalize_distribution_closure(
+            installed_distribution_closure()
+            if distribution_closure is None
+            else distribution_closure
+        )
+        resolved_python_identity = python_identity or current_python_identity()
+        resolved_platform_identity = platform_identity or current_platform_identity()
+    except (OSError, TypeError, ValueError) as exc:
+        return f"Backend runtime environment state could not be validated: {exc}"
+
+    state_error = environment_state_validation_error(
+        load_backend_environment_state(expected_venv),
+        requirements_sha256=requirements_sha256,
+        python_identity=resolved_python_identity,
+        platform_identity=resolved_platform_identity,
+        distributions=resolved_closure,
     )
+    if state_error:
+        return f"Backend runtime environment state is not reusable: {state_error}."
+    return None
 
 
 def _path_is_relative_to(path: Path, parent: Path) -> bool:
@@ -213,7 +255,6 @@ def _path_is_relative_to(path: Path, parent: Path) -> bool:
     except ValueError:
         return False
     return True
-    return None
 
 
 def _normalize_destination(relative_destination: str | Path) -> Path:
@@ -449,6 +490,7 @@ def build_backend_runtime_fingerprint(
     project_root: str | Path,
     *,
     resources: list[BundledResource],
+    distribution_closure: list[str] | None = None,
 ) -> dict[str, object]:
     resolved_root = Path(project_root).resolve()
     entries_by_path: dict[str, dict[str, object]] = {}
@@ -464,9 +506,15 @@ def build_backend_runtime_fingerprint(
         entries_by_path[logical_path] = _fingerprint_entry(resolved_root, resource.source, logical_path)
 
     inputs = [entries_by_path[key] for key in sorted(entries_by_path)]
+    resolved_distribution_closure = normalize_distribution_closure(
+        installed_distribution_closure()
+        if distribution_closure is None
+        else distribution_closure
+    )
     digest_payload = {
         "version": BACKEND_RUNTIME_FINGERPRINT_VERSION,
         "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "distributions": resolved_distribution_closure,
         "inputs": inputs,
     }
     digest = hashlib.sha256(
@@ -477,6 +525,7 @@ def build_backend_runtime_fingerprint(
         "version": BACKEND_RUNTIME_FINGERPRINT_VERSION,
         "algorithm": "sha256",
         "python": digest_payload["python"],
+        "distributions": resolved_distribution_closure,
         "digest": digest,
         "inputs": inputs,
     }
@@ -763,5 +812,7 @@ def backend_runtime_fingerprint_matches(
     if stored_fingerprint.get("version") != expected_fingerprint.get("version"):
         return False
     if stored_fingerprint.get("python") != expected_fingerprint.get("python"):
+        return False
+    if stored_fingerprint.get("distributions") != expected_fingerprint.get("distributions"):
         return False
     return not validate_backend_runtime_bundle(layout, resources)

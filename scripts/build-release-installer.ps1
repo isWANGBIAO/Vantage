@@ -14,7 +14,7 @@ $BackendRuntimePython = Join-Path $BackendRuntimeVenv "Scripts\python.exe"
 $BackendRuntimeCoreRequirements = Join-Path $ProjectRoot "requirements-core.txt"
 $BackendRuntimeRequirements = Join-Path $ProjectRoot "requirements-backend-runtime-gpu.txt"
 $OpenCvNormalizer = Join-Path $ProjectRoot "src\scripts\normalize_opencv_installation.py"
-$BackendRuntimeRequirementsStamp = Join-Path $BackendRuntimeVenv ".requirements-backend-runtime-gpu.sha256"
+$BackendRuntimeSync = Join-Path $ProjectRoot "src\scripts\sync_backend_runtime_environment.py"
 $WebappBuildInfo = Join-Path $WebappRoot "build-info.json"
 $BuildInfoBackup = Join-Path $env:TEMP ("vantage-release-build-info-{0}-{1}.json" -f $PID, [Guid]::NewGuid().ToString("N"))
 $BuildInfoBackupCreated = $false
@@ -139,30 +139,23 @@ try {
     Invoke-Native -FilePath "npm" -ArgumentList @("exec", "--", "electron", "--version") -WorkingDirectory $WebappRoot
 
     Write-Host "[2/7] Preparing backend runtime environment"
-    if (-not (Test-Path -LiteralPath $BackendRuntimePython)) {
-        Invoke-Native -FilePath "python" -ArgumentList @("-m", "venv", $BackendRuntimeVenv)
+    $backendSyncArgs = @(
+        $BackendRuntimeSync,
+        "--project-root",
+        $ProjectRoot,
+        "--venv",
+        $BackendRuntimeVenv,
+        "--core-requirements",
+        $BackendRuntimeCoreRequirements,
+        "--requirements",
+        $BackendRuntimeRequirements,
+        "--opencv-normalizer",
+        $OpenCvNormalizer
+    )
+    if ($env:VANTAGE_FORCE_BACKEND_DEPS -eq "1") {
+        $backendSyncArgs += "--force"
     }
-
-    $coreRequirementsHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $BackendRuntimeCoreRequirements).Hash
-    $overlayRequirementsHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $BackendRuntimeRequirements).Hash
-    $requirementsHash = "${coreRequirementsHash}:$overlayRequirementsHash"
-    $storedHash = $null
-    if (Test-Path -LiteralPath $BackendRuntimeRequirementsStamp) {
-        $storedHash = (Get-Content -LiteralPath $BackendRuntimeRequirementsStamp -Raw).Trim()
-    }
-
-    if ($requirementsHash -eq $storedHash -and $env:VANTAGE_FORCE_BACKEND_DEPS -ne "1") {
-        Write-Host "Backend runtime dependencies already synced"
-    } else {
-        if (Test-Path -LiteralPath $BackendRuntimeRequirementsStamp) {
-            Remove-Item -LiteralPath $BackendRuntimeRequirementsStamp -Force
-        }
-        Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @("-m", "pip", "install", "--upgrade", "pip")
-        Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @("-m", "pip", "install", "-r", $BackendRuntimeRequirements)
-        Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @($OpenCvNormalizer, "--requirements-core", $BackendRuntimeCoreRequirements)
-        Set-Content -LiteralPath $BackendRuntimeRequirementsStamp -Value $requirementsHash -Encoding ascii
-    }
-    Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @("-c", "import chinese_calendar, lap, zhdate; print('backend runtime dependency imports ok')")
+    Invoke-Native -FilePath "python" -ArgumentList $backendSyncArgs
 
     Write-Host "[3/7] Preparing release build metadata"
     if (Test-Path -LiteralPath $WebappBuildInfo) {

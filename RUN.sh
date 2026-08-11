@@ -22,7 +22,8 @@ BACKEND_RUNTIME_PYTHON="${BACKEND_RUNTIME_VENV}/bin/python"
 BACKEND_RUNTIME_CORE_REQUIREMENTS="${PROJECT_ROOT}/requirements-core.txt"
 BACKEND_RUNTIME_REQUIREMENTS="${PROJECT_ROOT}/requirements-backend-runtime-gpu.txt"
 OPENCV_NORMALIZER="${PROJECT_ROOT}/src/scripts/normalize_opencv_installation.py"
-BACKEND_RUNTIME_REQUIREMENTS_STAMP="${BACKEND_RUNTIME_VENV}/.requirements-backend-runtime-gpu.sha256"
+BACKEND_RUNTIME_SYNC="${PROJECT_ROOT}/src/scripts/sync_backend_runtime_environment.py"
+BACKEND_RUNTIME_STATE="${BACKEND_RUNTIME_VENV}/.vantage-backend-runtime-state.json"
 BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.sha256"
 LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.13.5/bin/python3.13"
 FRONTEND_ROOT="${PROJECT_ROOT}/src/webapp"
@@ -94,11 +95,13 @@ step_done() {
 }
 
 codesign_macos_native_libraries() {
+    local environment_state_hash
+    environment_state_hash="$(shasum -a 256 "$BACKEND_RUNTIME_STATE" | awk '{print $1}')"
     local stored_codesign_hash=""
     if [[ -f "$BACKEND_RUNTIME_CODESIGN_STAMP" ]]; then
         stored_codesign_hash="$(cat "$BACKEND_RUNTIME_CODESIGN_STAMP")"
     fi
-    if [[ "$requirements_hash" == "$stored_codesign_hash" && "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" != "1" ]]; then
+    if [[ "$environment_state_hash" == "$stored_codesign_hash" && "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" != "1" ]]; then
         echo "      macOS native Python libraries already ad-hoc signed"
         return 0
     fi
@@ -109,7 +112,7 @@ codesign_macos_native_libraries() {
         while IFS= read -r -d '' native_library; do
             codesign --force --sign - "$native_library" >/dev/null 2>&1 || true
         done
-    printf '%s\n' "$requirements_hash" > "$BACKEND_RUNTIME_CODESIGN_STAMP"
+    printf '%s\n' "$environment_state_hash" > "$BACKEND_RUNTIME_CODESIGN_STAMP"
 }
 
 codesign_macos_frontend_binaries() {
@@ -272,34 +275,17 @@ codesign_macos_frontend_binaries
 step_done "Frontend dependency check complete"
 
 step_start "[2/8] Preparing backend packaging environment..."
-if [[ ! -x "$BACKEND_RUNTIME_PYTHON" ]]; then
-    echo "      Creating clean backend runtime venv..."
-    "$BOOTSTRAP_PYTHON" -m venv "$BACKEND_RUNTIME_VENV"
-else
-    echo "      Backend runtime venv already exists"
+backend_sync_args=(
+    --project-root "$PROJECT_ROOT"
+    --venv "$BACKEND_RUNTIME_VENV"
+    --core-requirements "$BACKEND_RUNTIME_CORE_REQUIREMENTS"
+    --requirements "$BACKEND_RUNTIME_REQUIREMENTS"
+    --opencv-normalizer "$OPENCV_NORMALIZER"
+)
+if [[ "${VANTAGE_FORCE_BACKEND_DEPS:-0}" == "1" ]]; then
+    backend_sync_args+=(--force)
 fi
-
-core_requirements_hash="$(shasum -a 256 "$BACKEND_RUNTIME_CORE_REQUIREMENTS" | awk '{print $1}')"
-overlay_requirements_hash="$(shasum -a 256 "$BACKEND_RUNTIME_REQUIREMENTS" | awk '{print $1}')"
-requirements_hash="${core_requirements_hash}:${overlay_requirements_hash}"
-stored_hash=""
-if [[ -f "$BACKEND_RUNTIME_REQUIREMENTS_STAMP" ]]; then
-    stored_hash="$(cat "$BACKEND_RUNTIME_REQUIREMENTS_STAMP")"
-fi
-
-if [[ "$requirements_hash" == "$stored_hash" && "${VANTAGE_FORCE_BACKEND_DEPS:-0}" != "1" ]]; then
-    echo "      Backend runtime dependencies already synced"
-else
-    echo "      Syncing backend runtime dependencies..."
-    rm -f "$BACKEND_RUNTIME_REQUIREMENTS_STAMP" "$BACKEND_RUNTIME_CODESIGN_STAMP"
-    "$BACKEND_RUNTIME_PYTHON" -m pip install --upgrade "pip==25.3"
-    "$BACKEND_RUNTIME_PYTHON" -m pip install -r "$BACKEND_RUNTIME_REQUIREMENTS"
-    if ! "$BACKEND_RUNTIME_PYTHON" "$OPENCV_NORMALIZER" --requirements-core "$BACKEND_RUNTIME_CORE_REQUIREMENTS"; then
-        echo "      Backend runtime OpenCV normalization failed" >&2
-        exit 1
-    fi
-    printf '%s\n' "$requirements_hash" > "$BACKEND_RUNTIME_REQUIREMENTS_STAMP"
-fi
+"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_SYNC" "${backend_sync_args[@]}"
 codesign_macos_native_libraries
 step_done "Backend packaging environment ready"
 

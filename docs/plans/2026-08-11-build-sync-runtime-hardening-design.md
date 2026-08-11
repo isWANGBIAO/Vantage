@@ -97,7 +97,7 @@ forces the same clean path without introducing a launcher-specific branch.
 ## Backend environment synchronization
 
 A stdlib-only Python CLI owns the dedicated runtime venv lifecycle. The state
-file records:
+file `.vantage-backend-runtime-state.json` records:
 
 - the joint hash of `requirements-core.txt` and the runtime overlay;
 - the creating Python implementation/version and target platform;
@@ -112,10 +112,24 @@ After install, OpenCV normalization and `pip check` must succeed before the
 state is written atomically. Pip's download cache remains reusable, so the clean
 environment does not imply repeated network downloads.
 
+`RUN.bat`, `RUN.sh`, `RUN_DEV.sh`, and the release-installer builder all invoke
+that one CLI with the project root, fixed venv, core requirements, overlay, and
+OpenCV normalizer. None of those entrypoints writes its own dependency stamp or
+runs an incremental requirements install. Before a rebuild the CLI invalidates
+the JSON state, legacy SHA stamp, and macOS native-signature stamp, then permits
+recursive deletion only when the resolved target is the real
+`.venv-backend-runtime-gpu` directory directly under the supplied project root.
+Failed creation, installation, normalization, validation, or atomic replacement
+therefore cannot leave a reusable state. On macOS, successful synchronization
+is followed by the existing ad-hoc signing pass, keyed to the new environment
+state rather than the retired requirements-only hash.
+
 The packaged-runtime fingerprint includes the verified distribution closure.
 Consequently, manually changing the venv cannot reuse an older PyInstaller
 bundle even if source files and requirements text are unchanged. Packaging
-validation also rejects a venv whose state is absent or inconsistent.
+validation also rejects a venv whose state is absent or inconsistent. The
+fingerprint schema is version 2, and the environment sync CLI is explicitly
+excluded from the shipped backend application as build-only code.
 
 ## macOS CI
 

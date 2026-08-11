@@ -22,6 +22,7 @@ def _ensure_project_root_on_sys_path(
 
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
+from src.core.backend_environment_state import installed_distribution_closure
 from src.core.backend_runtime_packaging import (
     PROJECT_ACTIVITY_SNAPSHOT_NAME,
     backend_runtime_fingerprint_matches,
@@ -103,10 +104,12 @@ def main() -> int:
         print(environment_error)
         return 1
 
+    distribution_closure = installed_distribution_closure()
     static_resources = collect_backend_runtime_resources(PROJECT_ROOT)
     runtime_fingerprint = build_backend_runtime_fingerprint(
         PROJECT_ROOT,
         resources=static_resources,
+        distribution_closure=distribution_closure,
     )
 
     if args.reuse_if_unchanged and backend_runtime_fingerprint_matches(
