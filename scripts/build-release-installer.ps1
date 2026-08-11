@@ -15,6 +15,7 @@ $BackendRuntimeCoreRequirements = Join-Path $ProjectRoot "requirements-core.txt"
 $BackendRuntimeRequirements = Join-Path $ProjectRoot "requirements-backend-runtime-gpu.txt"
 $OpenCvNormalizer = Join-Path $ProjectRoot "src\scripts\normalize_opencv_installation.py"
 $BackendRuntimeSync = Join-Path $ProjectRoot "src\scripts\sync_backend_runtime_environment.py"
+$BackendRuntimeLockRunner = Join-Path $ProjectRoot "src\scripts\run_with_backend_runtime_lock.py"
 $WebappBuildInfo = Join-Path $WebappRoot "build-info.json"
 $BuildInfoBackup = Join-Path $env:TEMP ("vantage-release-build-info-{0}-{1}.json" -f $PID, [Guid]::NewGuid().ToString("N"))
 $BuildInfoBackupCreated = $false
@@ -165,7 +166,12 @@ try {
     Invoke-Native -FilePath "node" -ArgumentList @("scripts\prepare-build-version.mjs", "--mode", "sync") -WorkingDirectory $WebappRoot
 
     Write-Host "[4/7] Building frontend and backend runtime"
-    Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @(
+    Invoke-Native -FilePath "python" -ArgumentList @(
+        $BackendRuntimeLockRunner,
+        "--project-root",
+        $ProjectRoot,
+        "--",
+        $BackendRuntimePython,
         "src\scripts\run_packaging_builds.py",
         "--backend-python",
         $BackendRuntimePython,
@@ -174,11 +180,20 @@ try {
     )
 
     Write-Host "[5/7] Verifying backend runtime"
-    $verifyArgs = @("src\scripts\verify_backend_runtime.py", "--timeout-seconds", "$BackendVerifyTimeoutSeconds")
+    $verifyArgs = @(
+        $BackendRuntimeLockRunner,
+        "--project-root",
+        $ProjectRoot,
+        "--",
+        $BackendRuntimePython,
+        "src\scripts\verify_backend_runtime.py",
+        "--timeout-seconds",
+        "$BackendVerifyTimeoutSeconds"
+    )
     if ($SkipBackendSmoke) {
         $verifyArgs += "--skip-launch"
     }
-    Invoke-Native -FilePath $BackendRuntimePython -ArgumentList $verifyArgs
+    Invoke-Native -FilePath "python" -ArgumentList $verifyArgs
 
     Write-Host "[6/7] Building Windows installer"
     Ensure-CustomNsisArchiveCache

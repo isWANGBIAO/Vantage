@@ -23,6 +23,7 @@ BACKEND_RUNTIME_CORE_REQUIREMENTS="${PROJECT_ROOT}/requirements-core.txt"
 BACKEND_RUNTIME_REQUIREMENTS="${PROJECT_ROOT}/requirements-backend-runtime-gpu.txt"
 OPENCV_NORMALIZER="${PROJECT_ROOT}/src/scripts/normalize_opencv_installation.py"
 BACKEND_RUNTIME_SYNC="${PROJECT_ROOT}/src/scripts/sync_backend_runtime_environment.py"
+BACKEND_RUNTIME_LOCK_RUNNER="${PROJECT_ROOT}/src/scripts/run_with_backend_runtime_lock.py"
 BACKEND_RUNTIME_STATE="${BACKEND_RUNTIME_VENV}/.vantage-backend-runtime-state.json"
 BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.sha256"
 LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.13.5/bin/python3.13"
@@ -298,12 +299,15 @@ step_done "Build version prepared"
 
 step_start "[4/8] Building frontend and backend runtime in parallel..."
 echo "      Build workers requested: ${VANTAGE_BUILD_WORKERS}"
-"$BACKEND_RUNTIME_PYTHON" src/scripts/run_packaging_builds.py --backend-python "$BACKEND_RUNTIME_PYTHON" --workers "$VANTAGE_BUILD_WORKERS"
+"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_LOCK_RUNNER" --project-root "$PROJECT_ROOT" -- \
+    "$BACKEND_RUNTIME_PYTHON" src/scripts/run_packaging_builds.py \
+    --backend-python "$BACKEND_RUNTIME_PYTHON" --workers "$VANTAGE_BUILD_WORKERS"
 codesign_macos_backend_runtime_bundle
 step_done "Frontend and backend build step complete"
 
 step_start "[5/8] Verifying backend runtime..."
-"$BACKEND_RUNTIME_PYTHON" src/scripts/verify_backend_runtime.py --timeout-seconds 300
+"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_LOCK_RUNNER" --project-root "$PROJECT_ROOT" -- \
+    "$BACKEND_RUNTIME_PYTHON" src/scripts/verify_backend_runtime.py --timeout-seconds 300
 step_done "Backend runtime verification complete"
 
 step_start "[6/8] Building macOS app package..."

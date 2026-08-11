@@ -61,6 +61,7 @@ def test_run_bat_builds_and_silently_installs_latest_package():
     assert ".venv-backend-runtime-gpu" in run_bat
     assert "requirements-backend-runtime-gpu.txt" in run_bat
     assert "run_packaging_builds.py" in run_bat
+    assert "run_with_backend_runtime_lock.py" in run_bat
     assert '"%BACKEND_RUNTIME_PYTHON%" src\\scripts\\verify_backend_runtime.py --timeout-seconds 60' in run_bat
     assert "call :RunElectronPackageWithFallback" in run_bat
     assert "npm run electron:package" in run_bat
@@ -157,6 +158,52 @@ def test_persistent_launchers_share_backend_environment_sync_cli():
     assert "Set-Content -LiteralPath $BackendRuntimeRequirementsStamp" not in launchers[
         Path("scripts/build-release-installer.ps1")
     ]
+
+
+def test_target_backend_runtime_consumers_use_the_shared_lock_supervisor():
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
+    run_sh = Path("RUN.sh").read_text(encoding="utf-8")
+    run_dev_sh = Path("RUN_DEV.sh").read_text(encoding="utf-8")
+    release_script = Path("scripts/build-release-installer.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    supervisor = "run_with_backend_runtime_lock.py"
+    for path, content in (
+        (Path("RUN.bat"), run_bat),
+        (Path("RUN.sh"), run_sh),
+        (Path("RUN_DEV.sh"), run_dev_sh),
+        (Path("scripts/build-release-installer.ps1"), release_script),
+    ):
+        assert supervisor in content, path
+
+    for command in ("run_packaging_builds.py", "verify_backend_runtime.py"):
+        bat_command = run_bat[run_bat.index(command) - 240 : run_bat.index(command) + 240]
+        shell_command = run_sh[run_sh.index(command) - 240 : run_sh.index(command) + 240]
+        release_command = release_script[
+            release_script.index(command) - 320 : release_script.index(command) + 320
+        ]
+        assert "BACKEND_RUNTIME_LOCK_RUNNER" in bat_command, command
+        assert "BACKEND_RUNTIME_LOCK_RUNNER" in shell_command, command
+        assert "BackendRuntimeLockRunner" in release_command, command
+
+    server_command_index = run_dev_sh.index("run_server_background.py")
+    assert "BACKEND_RUNTIME_LOCK_RUNNER" in run_dev_sh[
+        server_command_index - 500 : server_command_index
+    ]
+    assert '"$PYTHON_BIN" - <<\'PY\'' not in run_dev_sh
+    assert '"$PYTHON_BIN" src/scripts/run_frontend_background.py' not in run_dev_sh
+
+
+def test_direct_backend_runtime_consumers_acquire_or_inherit_the_shared_lock():
+    for source_path in (
+        Path("src/scripts/build_backend_runtime.py"),
+        Path("src/scripts/verify_backend_runtime.py"),
+        Path("src/scripts/run_server_background.py"),
+    ):
+        source = source_path.read_text(encoding="utf-8")
+        assert "backend_runtime_lock" in source, source_path
+        assert "backend_runtime_lock_is_inherited" in source, source_path
 
 
 def test_macos_backend_environment_sync_precedes_state_based_resigning():

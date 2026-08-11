@@ -18,6 +18,7 @@ set "BACKEND_RUNTIME_CORE_REQUIREMENTS=%PROJECT_ROOT%requirements-core.txt"
 set "BACKEND_RUNTIME_REQUIREMENTS=%PROJECT_ROOT%requirements-backend-runtime-gpu.txt"
 set "OPENCV_NORMALIZER=%PROJECT_ROOT%src\scripts\normalize_opencv_installation.py"
 set "BACKEND_RUNTIME_SYNC=%PROJECT_ROOT%src\scripts\sync_backend_runtime_environment.py"
+set "BACKEND_RUNTIME_LOCK_RUNNER=%PROJECT_ROOT%src\scripts\run_with_backend_runtime_lock.py"
 set "WEBAPP_BUILD_INFO=%PROJECT_ROOT%src\webapp\build-info.json"
 set "RUN_BUILD_INFO_BACKUP=%TEMP%\vantage-build-info-%RANDOM%-%RANDOM%.json"
 set "BUILD_INFO_BACKUP_CREATED=0"
@@ -82,7 +83,7 @@ call :StepDone "Build version prepared"
 
 call :StepStart "[4/8] Building frontend and backend runtime in parallel..."
 echo       Build workers requested: %VANTAGE_BUILD_WORKERS%
-"%BACKEND_RUNTIME_PYTHON%" src\scripts\run_packaging_builds.py --backend-python "%BACKEND_RUNTIME_PYTHON%" --workers "%VANTAGE_BUILD_WORKERS%"
+python "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT%" -- "%BACKEND_RUNTIME_PYTHON%" src\scripts\run_packaging_builds.py --backend-python "%BACKEND_RUNTIME_PYTHON%" --workers "%VANTAGE_BUILD_WORKERS%"
 if errorlevel 1 (
     call :RestoreBuildInfo
     echo       Parallel packaging build failed
@@ -91,7 +92,7 @@ if errorlevel 1 (
 call :StepDone "Frontend and backend build step complete"
 
 call :StepStart "[5/8] Verifying backend runtime..."
-"%BACKEND_RUNTIME_PYTHON%" src\scripts\verify_backend_runtime.py --timeout-seconds 60
+python "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT%" -- "%BACKEND_RUNTIME_PYTHON%" src\scripts\verify_backend_runtime.py --timeout-seconds 60
 if errorlevel 1 (
     call :RestoreBuildInfo
     echo       Backend runtime verification failed

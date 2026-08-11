@@ -15,6 +15,7 @@ BACKEND_RUNTIME_CORE_REQUIREMENTS="${PROJECT_ROOT}/requirements-core.txt"
 BACKEND_RUNTIME_REQUIREMENTS="${PROJECT_ROOT}/requirements-backend-runtime-gpu.txt"
 OPENCV_NORMALIZER="${PROJECT_ROOT}/src/scripts/normalize_opencv_installation.py"
 BACKEND_RUNTIME_SYNC="${PROJECT_ROOT}/src/scripts/sync_backend_runtime_environment.py"
+BACKEND_RUNTIME_LOCK_RUNNER="${PROJECT_ROOT}/src/scripts/run_with_backend_runtime_lock.py"
 BACKEND_RUNTIME_STATE="${BACKEND_RUNTIME_VENV}/.vantage-backend-runtime-state.json"
 BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.sha256"
 LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.13.5/bin/python3.13"
@@ -158,16 +159,26 @@ codesign_macos_native_libraries
 
 echo "[2/4] Starting backend..."
 mkdir -p "${PROJECT_ROOT}/logs"
-"$PYTHON_BIN" - <<'PY'
+"$BOOTSTRAP_PYTHON" - "$BACKEND_RUNTIME_LOCK_RUNNER" "$PROJECT_ROOT" "$PYTHON_BIN" <<'PY'
 import os
 import subprocess
+import sys
 from pathlib import Path
 
-project_root = Path(os.environ["PROJECT_ROOT"])
-python_bin = os.environ["PYTHON_BIN"]
+lock_runner = Path(sys.argv[1])
+project_root = Path(sys.argv[2])
+python_bin = sys.argv[3]
 
 subprocess.Popen(
-    [python_bin, "src/scripts/run_server_background.py"],
+    [
+        sys.executable,
+        str(lock_runner),
+        "--project-root",
+        str(project_root),
+        "--",
+        python_bin,
+        "src/scripts/run_server_background.py",
+    ],
     cwd=project_root,
     env=os.environ.copy(),
     stdin=subprocess.DEVNULL,
@@ -179,7 +190,7 @@ subprocess.Popen(
 PY
 
 echo "      Waiting for backend..."
-"$PYTHON_BIN" - <<'PY'
+"$BOOTSTRAP_PYTHON" - <<'PY'
 import json
 import os
 import time
@@ -233,10 +244,10 @@ fi
 
 if [[ -f "${FRONTEND_ROOT}/dist/index.html" ]]; then
     echo "      Starting production Electron app in background..."
-    "$PYTHON_BIN" src/scripts/run_frontend_background.py production
+    "$BOOTSTRAP_PYTHON" src/scripts/run_frontend_background.py production
 else
     echo "      Starting development Electron app in background..."
-    "$PYTHON_BIN" src/scripts/run_frontend_background.py development
+    "$BOOTSTRAP_PYTHON" src/scripts/run_frontend_background.py development
 fi
 
 echo

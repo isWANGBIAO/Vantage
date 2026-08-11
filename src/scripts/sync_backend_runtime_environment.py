@@ -6,8 +6,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import uuid
+import warnings
 from dataclasses import dataclass
 from typing import Callable, Mapping
 
@@ -26,6 +29,7 @@ _ensure_project_root_on_sys_path()
 from src.core.backend_environment_state import (
     BACKEND_ENVIRONMENT_STATE_NAME,
     LEGACY_REQUIREMENTS_STAMP_NAME,
+    PINNED_BOOTSTRAP_PIP,
     build_backend_environment_state,
     compute_requirements_sha256,
     current_platform_identity,
@@ -35,11 +39,14 @@ from src.core.backend_environment_state import (
     normalize_distribution_closure,
     write_backend_environment_state,
 )
+from src.core.backend_runtime_lock import (
+    DEFAULT_BACKEND_RUNTIME_LOCK_TIMEOUT_SECONDS,
+    backend_runtime_lock,
+    backend_runtime_lock_is_held,
+)
 
 
 BACKEND_RUNTIME_VENV_NAME = ".venv-backend-runtime-gpu"
-MACOS_CODESIGN_STAMP_NAME = ".macos-native-codesign.sha256"
-PINNED_BOOTSTRAP_PIP = "pip==25.3"
 OPENCV_DISTRIBUTIONS = (
     "opencv-contrib-python",
     "opencv-contrib-python-headless",
@@ -118,6 +125,31 @@ class BackendEnvironmentSyncOutcome:
     state: dict[str, object]
 
 
+@dataclass(frozen=True)
+class _PathIdentity:
+    device: int
+    inode: int
+    file_type: int
+    file_attributes: int
+
+
+def _lstat_identity(path: Path) -> _PathIdentity:
+    result = path.lstat()
+    return _PathIdentity(
+        device=int(result.st_dev),
+        inode=int(result.st_ino),
+        file_type=stat.S_IFMT(result.st_mode),
+        file_attributes=int(getattr(result, "st_file_attributes", 0)),
+    )
+
+
+def _identity_is_reparse(identity: _PathIdentity) -> bool:
+    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    return stat.S_ISLNK(identity.file_type) or bool(
+        identity.file_attributes & reparse_flag
+    )
+
+
 def backend_runtime_python_path(venv: str | Path) -> Path:
     resolved_venv = Path(venv)
     if os.name == "nt":
@@ -169,34 +201,131 @@ def validate_backend_runtime_venv_path(
             "refusing to mutate anything except the dedicated backend runtime venv "
             f"at {expected}"
         )
-    if candidate.exists():
-        if candidate.is_symlink():
-            raise ValueError("dedicated backend runtime venv must not be a symbolic link")
-        if _normalized_path_text(candidate.resolve()) != _normalized_path_text(candidate):
-            raise ValueError("dedicated backend runtime venv must be located inside project root")
-        if not candidate.is_dir():
-            raise ValueError("dedicated backend runtime venv path must be a directory")
     return candidate
+
+
+def _tree_contains_reparse(path: Path) -> bool:
+    pending = [path]
+    while pending:
+        current = pending.pop()
+        with os.scandir(current) as entries:
+            for entry in entries:
+                entry_stat = entry.stat(follow_symlinks=False)
+                identity = _PathIdentity(
+                    device=int(entry_stat.st_dev),
+                    inode=int(entry_stat.st_ino),
+                    file_type=stat.S_IFMT(entry_stat.st_mode),
+                    file_attributes=int(
+                        getattr(entry_stat, "st_file_attributes", 0)
+                    ),
+                )
+                if _identity_is_reparse(identity):
+                    return True
+                if stat.S_ISDIR(identity.file_type):
+                    pending.append(Path(entry.path))
+    return False
+
+
+def _new_quarantine_path(venv: Path) -> Path:
+    for _attempt in range(32):
+        candidate = venv.with_name(f"{venv.name}.quarantine-{uuid.uuid4().hex}")
+        if not os.path.lexists(candidate):
+            return candidate
+    raise RuntimeError("could not allocate a unique backend runtime quarantine path")
+
+
+def _warn_retained_quarantine(quarantine: Path, reason: str) -> None:
+    warnings.warn(
+        f"Retained backend runtime quarantine {quarantine.name}: {reason}",
+        RuntimeWarning,
+        stacklevel=2,
+    )
 
 
 def safe_remove_backend_runtime_venv(
     project_root: str | Path,
     venv: str | Path,
     *,
+    rename_path: Callable[[str | Path, str | Path], object] = os.rename,
     remove_tree: Callable[[str | Path], object] = shutil.rmtree,
+    race_hook: Callable[[str, Path], object] | None = None,
 ) -> None:
-    safe_venv = validate_backend_runtime_venv_path(project_root, venv)
-    if safe_venv.exists():
-        remove_tree(safe_venv)
+    resolved_root = Path(project_root).resolve()
+    safe_venv = validate_backend_runtime_venv_path(resolved_root, venv)
+    if not os.path.lexists(safe_venv):
+        return
+    if not backend_runtime_lock_is_held(resolved_root):
+        raise RuntimeError(
+            "backend runtime venv removal requires the backend runtime lifecycle lock"
+        )
 
-
-def _invalidate_environment_markers(venv: Path) -> None:
-    for marker_name in (
-        BACKEND_ENVIRONMENT_STATE_NAME,
-        LEGACY_REQUIREMENTS_STAMP_NAME,
-        MACOS_CODESIGN_STAMP_NAME,
+    initial_identity = _lstat_identity(safe_venv)
+    if not (
+        stat.S_ISDIR(initial_identity.file_type)
+        or _identity_is_reparse(initial_identity)
     ):
-        (venv / marker_name).unlink(missing_ok=True)
+        raise ValueError("dedicated backend runtime venv path must be a directory")
+    if race_hook is not None:
+        race_hook("after_initial_lstat", safe_venv)
+
+    quarantine = _new_quarantine_path(safe_venv)
+    try:
+        rename_path(safe_venv, quarantine)
+    except OSError as exc:
+        raise RuntimeError(
+            "could not atomically quarantine the existing backend runtime venv"
+        ) from exc
+
+    if (
+        _normalized_path_text(quarantine.parent) != _normalized_path_text(resolved_root)
+        or not quarantine.name.startswith(
+            f"{BACKEND_RUNTIME_VENV_NAME}.quarantine-"
+        )
+    ):
+        raise RuntimeError(
+            f"backend runtime quarantine escaped the project root: {quarantine}"
+        )
+
+    renamed_identity = _lstat_identity(quarantine)
+    if renamed_identity != initial_identity:
+        raise RuntimeError(
+            "backend runtime venv identity changed before quarantine rename; "
+            f"retained {quarantine.name}"
+        )
+    if _identity_is_reparse(renamed_identity):
+        _warn_retained_quarantine(quarantine, "root is a reparse point")
+        return
+
+    try:
+        if _tree_contains_reparse(quarantine):
+            _warn_retained_quarantine(quarantine, "tree contains a reparse point")
+            return
+    except OSError as exc:
+        _warn_retained_quarantine(
+            quarantine,
+            f"tree could not be safely inspected ({exc})",
+        )
+        return
+
+    if race_hook is not None:
+        race_hook("before_recursive_remove", quarantine)
+
+    try:
+        if _lstat_identity(quarantine) != renamed_identity:
+            raise RuntimeError(
+                "backend runtime quarantine identity changed before recursive cleanup"
+            )
+        if _tree_contains_reparse(quarantine):
+            _warn_retained_quarantine(
+                quarantine,
+                "tree gained a reparse point before recursive cleanup",
+            )
+            return
+        remove_tree(quarantine)
+    except OSError as exc:
+        raise RuntimeError(
+            f"backend runtime quarantine cleanup failed; retained {quarantine.name}"
+        ) from exc
 
 
 def _run_checked(command: list[str], run_command) -> None:
@@ -330,6 +459,13 @@ def _reuse_validation_error(
 ) -> tuple[str | None, dict[str, object] | None]:
     if force:
         return "forced synchronization requested", None
+    if os.path.lexists(venv):
+        try:
+            venv_identity = _lstat_identity(venv)
+        except OSError as exc:
+            return f"target venv identity could not be inspected: {exc}", None
+        if _identity_is_reparse(venv_identity):
+            return "target venv root is a reparse point", None
     if not target_python.is_file():
         return "target Python is missing", None
     if (venv / LEGACY_REQUIREMENTS_STAMP_NAME).exists():
@@ -363,7 +499,7 @@ def _reuse_validation_error(
     return None, state
 
 
-def synchronize_backend_runtime_environment(
+def _synchronize_backend_runtime_environment_locked(
     *,
     project_root: str | Path,
     venv: str | Path,
@@ -441,67 +577,122 @@ def synchronize_backend_runtime_environment(
             state=reusable_state,
         )
 
-    _invalidate_environment_markers(safe_venv)
     safe_remove_backend_runtime_venv(
         resolved_root,
         safe_venv,
         remove_tree=remove_tree,
     )
-    _run_checked(
-        [resolved_creator_python, "-m", "venv", str(safe_venv)],
-        run_command,
-    )
-    target_python = backend_runtime_python_path(safe_venv)
-    _run_checked(
-        [
-            str(target_python),
-            "-m",
-            "pip",
-            "install",
-            "--upgrade",
-            PINNED_BOOTSTRAP_PIP,
-        ],
-        run_command,
-    )
-    _run_checked(
-        [str(target_python), "-m", "pip", "install", "-r", str(resolved_requirements)],
-        run_command,
-    )
-    _run_checked(
-        [
-            str(target_python),
-            str(resolved_normalizer),
-            "--requirements-core",
-            str(resolved_core),
-        ],
-        run_command,
-    )
+    try:
+        _run_checked(
+            [resolved_creator_python, "-m", "venv", str(safe_venv)],
+            run_command,
+        )
+        target_python = backend_runtime_python_path(safe_venv)
+        _run_checked(
+            [
+                str(target_python),
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                PINNED_BOOTSTRAP_PIP,
+            ],
+            run_command,
+        )
+        _run_checked(
+            [
+                str(target_python),
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                str(resolved_requirements),
+            ],
+            run_command,
+        )
+        _run_checked(
+            [
+                str(target_python),
+                str(resolved_normalizer),
+                "--requirements-core",
+                str(resolved_core),
+            ],
+            run_command,
+        )
 
-    probe = probe_environment(target_python, run_command)
-    if probe.get("python") != expected_python_identity:
-        raise RuntimeError("rebuilt target Python identity does not match creator")
-    if probe.get("platform") != expected_platform_identity:
-        raise RuntimeError("rebuilt target platform identity does not match creator")
-    if not pip_check(target_python, run_command):
-        raise RuntimeError("rebuilt backend environment failed pip check")
-    if not import_check(target_python, run_command):
-        raise RuntimeError("rebuilt backend environment failed required imports")
-    if not opencv_check(target_python, resolved_core, run_command):
-        raise RuntimeError("rebuilt backend environment failed OpenCV validation")
+        probe = probe_environment(target_python, run_command)
+        if probe.get("python") != expected_python_identity:
+            raise RuntimeError("rebuilt target Python identity does not match creator")
+        if probe.get("platform") != expected_platform_identity:
+            raise RuntimeError("rebuilt target platform identity does not match creator")
+        if not pip_check(target_python, run_command):
+            raise RuntimeError("rebuilt backend environment failed pip check")
+        if not import_check(target_python, run_command):
+            raise RuntimeError("rebuilt backend environment failed required imports")
+        if not opencv_check(target_python, resolved_core, run_command):
+            raise RuntimeError("rebuilt backend environment failed OpenCV validation")
 
-    state = build_backend_environment_state(
-        resolved_core,
-        resolved_requirements,
-        python_identity=expected_python_identity,
-        platform_identity=expected_platform_identity,
-        distributions=probe.get("distributions", []),
-    )
-    write_backend_environment_state(safe_venv, state)
+        state = build_backend_environment_state(
+            resolved_core,
+            resolved_requirements,
+            python_identity=expected_python_identity,
+            platform_identity=expected_platform_identity,
+            distributions=probe.get("distributions", []),
+        )
+        write_backend_environment_state(safe_venv, state)
+    except BaseException:
+        (safe_venv / BACKEND_ENVIRONMENT_STATE_NAME).unlink(missing_ok=True)
+        raise
     return BackendEnvironmentSyncOutcome(
         reused=False,
         reason=reuse_error or "environment required a clean rebuild",
         state=state,
     )
+
+
+def synchronize_backend_runtime_environment(
+    *,
+    project_root: str | Path,
+    venv: str | Path,
+    core_requirements: str | Path,
+    requirements: str | Path,
+    opencv_normalizer: str | Path,
+    force: bool = False,
+    creator_python: str | Path | None = None,
+    creator_prefix: str | Path | None = None,
+    creator_python_identity: Mapping[str, object] | None = None,
+    creator_platform_identity: Mapping[str, object] | None = None,
+    lock_timeout_seconds: float = DEFAULT_BACKEND_RUNTIME_LOCK_TIMEOUT_SECONDS,
+    run_command=subprocess.run,
+    remove_tree: Callable[[str | Path], object] = shutil.rmtree,
+    probe_environment=probe_backend_environment,
+    pip_check=pip_check_succeeds,
+    import_check=required_imports_succeed,
+    opencv_check=opencv_installation_matches,
+) -> BackendEnvironmentSyncOutcome:
+    resolved_root = Path(project_root).resolve()
+    with backend_runtime_lock(
+        resolved_root,
+        timeout_seconds=lock_timeout_seconds,
+    ):
+        return _synchronize_backend_runtime_environment_locked(
+            project_root=resolved_root,
+            venv=venv,
+            core_requirements=core_requirements,
+            requirements=requirements,
+            opencv_normalizer=opencv_normalizer,
+            force=force,
+            creator_python=creator_python,
+            creator_prefix=creator_prefix,
+            creator_python_identity=creator_python_identity,
+            creator_platform_identity=creator_platform_identity,
+            run_command=run_command,
+            remove_tree=remove_tree,
+            probe_environment=probe_environment,
+            pip_check=pip_check,
+            import_check=import_check,
+            opencv_check=opencv_check,
+        )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -514,6 +705,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--requirements", required=True, type=Path)
     parser.add_argument("--opencv-normalizer", required=True, type=Path)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--lock-timeout-seconds",
+        type=float,
+        default=DEFAULT_BACKEND_RUNTIME_LOCK_TIMEOUT_SECONDS,
+    )
     return parser
 
 
@@ -527,6 +723,7 @@ def main(argv=None) -> int:
             requirements=args.requirements,
             opencv_normalizer=args.opencv_normalizer,
             force=args.force,
+            lock_timeout_seconds=args.lock_timeout_seconds,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Backend runtime environment synchronization failed: {exc}", file=sys.stderr)

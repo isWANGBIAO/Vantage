@@ -19,7 +19,7 @@ def _ensure_project_root_on_sys_path(
     return project_root
 
 
-_ensure_project_root_on_sys_path()
+PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
 from src.core.config import Config
 from src.core.runtime_library_bootstrap import apply_runtime_library_dirs
@@ -133,7 +133,7 @@ def _run_prompt_entrypoint(
         sys.argv = previous_argv
 
 
-def main():
+def _main_without_backend_runtime_lock():
     if len(sys.argv) > 1 and sys.argv[1] == RUN_PROMPT_BRIDGE_ARG:
         _run_prompt_entrypoint(sys.argv[2:])
         return
@@ -153,6 +153,21 @@ def main():
     os.chdir(project_root)
     _redirect_standard_streams(log_path)
     _run_server_entrypoint(project_root)
+
+
+def main():
+    if getattr(sys, "frozen", False):
+        return _main_without_backend_runtime_lock()
+
+    from src.core.backend_runtime_lock import (
+        backend_runtime_lock,
+        backend_runtime_lock_is_inherited,
+    )
+
+    if backend_runtime_lock_is_inherited(PROJECT_ROOT):
+        return _main_without_backend_runtime_lock()
+    with backend_runtime_lock(PROJECT_ROOT):
+        return _main_without_backend_runtime_lock()
 
 
 if __name__ == "__main__":

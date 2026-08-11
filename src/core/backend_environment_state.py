@@ -13,8 +13,9 @@ from typing import Iterable, Mapping, Sequence
 
 
 BACKEND_ENVIRONMENT_STATE_NAME = ".vantage-backend-runtime-state.json"
-BACKEND_ENVIRONMENT_STATE_SCHEMA_VERSION = 1
+BACKEND_ENVIRONMENT_STATE_SCHEMA_VERSION = 2
 LEGACY_REQUIREMENTS_STAMP_NAME = ".requirements-backend-runtime-gpu.sha256"
+PINNED_BOOTSTRAP_PIP = "pip==25.3"
 
 
 def canonicalize_distribution_name(name: str) -> str:
@@ -116,6 +117,7 @@ def build_backend_environment_state(
     python_identity: Mapping[str, object] | None = None,
     platform_identity: Mapping[str, object] | None = None,
     distributions: Iterable[str | Sequence[str] | Mapping[str, object]] | None = None,
+    bootstrap_pip: str = PINNED_BOOTSTRAP_PIP,
 ) -> dict[str, object]:
     resolved_python_identity = dict(python_identity or current_python_identity())
     resolved_platform_identity = dict(platform_identity or current_platform_identity())
@@ -130,6 +132,7 @@ def build_backend_environment_state(
         ),
         "python": resolved_python_identity,
         "platform": resolved_platform_identity,
+        "bootstrap_pip": str(bootstrap_pip),
         "distributions": resolved_distributions,
     }
 
@@ -185,6 +188,7 @@ def environment_state_validation_error(
     python_identity: Mapping[str, object],
     platform_identity: Mapping[str, object],
     distributions: Iterable[str | Sequence[str] | Mapping[str, object]],
+    bootstrap_pip: str = PINNED_BOOTSTRAP_PIP,
 ) -> str | None:
     if not isinstance(state, Mapping):
         return "backend environment state is missing or invalid"
@@ -196,6 +200,8 @@ def environment_state_validation_error(
         return "backend environment Python identity does not match"
     if state.get("platform") != dict(platform_identity):
         return "backend environment platform identity does not match"
+    if state.get("bootstrap_pip") != str(bootstrap_pip):
+        return "backend environment bootstrap pip identity does not match"
     try:
         expected_closure = normalize_distribution_closure(distributions)
         stored_closure = normalize_distribution_closure(state.get("distributions", []))

@@ -120,19 +120,29 @@ stamp an incrementally polluted venv.
 **Step 3: Implement clean rebuild semantics**
 
 The stdlib-only helper computes the joint requirements hash, captures the
-creating interpreter and platform, executes child-interpreter metadata probes,
-and validates `pip check` plus required imports. When validation fails, remove
-the state first, delete the dedicated venv, recreate it, upgrade pip, install
-the overlay, run the existing OpenCV normalizer, run `pip check`, capture the
-closure, and atomically write `.vantage-backend-runtime-state.json`.
+creating interpreter, platform, and exact `pip==25.3` bootstrap identity,
+executes child-interpreter metadata probes, and validates `pip check` plus
+required imports. When validation fails, atomically quarantine the dedicated
+venv under the same parent, recreate it, install the overlay, run the existing
+OpenCV normalizer, run `pip check`, capture the closure, and atomically write
+`.vantage-backend-runtime-state.json`. Root or nested reparse points and
+identity races retain quarantine rather than entering recursive deletion.
 
 The launchers pass project root, venv, core requirements, overlay, normalizer,
-and force mode to this helper. A helper error aborts before packaging.
+and force mode to this helper. A sibling OS-released lifecycle lock covers the
+entire synchronizer and every target-venv consumer. Official entrypoints use a
+bootstrap supervisor; direct build, verify, and source-server entrypoints
+acquire or safely inherit the same lock. A helper error aborts before packaging.
 
 Add the verified distribution closure to
 `build_backend_runtime_fingerprint()`. Packaging must validate that its current
 interpreter matches the state file and closure before considering reuse.
 Exclude the sync CLI from the packaged application.
+
+This is a shared exact top-level-pin plus clean-resolver contract, not a single
+all-platform transitive hash lock. Simultaneously forging both the dedicated
+venv and its matching state remains inside the trusted local build-host
+boundary.
 
 **Step 4: Verify GREEN and migrate the real dirty environment**
 

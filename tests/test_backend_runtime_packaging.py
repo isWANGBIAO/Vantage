@@ -150,6 +150,8 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         "src.scripts.install_requirements",
         "src.scripts.normalize_opencv_installation",
         "src.scripts.run_packaging_builds",
+        "src.scripts.run_with_backend_runtime_lock",
+        "src.core.backend_runtime_lock",
         "src.scripts.sync_backend_runtime_environment",
         "src.scripts.test_gpu_inference",
         "tensorrt",
@@ -398,6 +400,36 @@ def test_validate_packaging_environment_requires_clean_runtime_venv(tmp_path):
         environ={"VANTAGE_ALLOW_DIRTY_PACKAGING_ENV": "1"},
     )
     assert "must be built with the validated packaging venv" in bypassed_path_error
+
+
+def test_packaging_rejects_state_created_with_a_different_bootstrap_pip_pin(tmp_path):
+    clean_python = tmp_path / ".venv-backend-runtime-gpu" / "Scripts" / "python.exe"
+    clean_prefix = tmp_path / ".venv-backend-runtime-gpu"
+    closure = ["fastapi==0.1", "pip==25.3"]
+    core = tmp_path / "requirements-core.txt"
+    overlay = tmp_path / "requirements-backend-runtime-gpu.txt"
+    core.write_text("fastapi==0.1\n", encoding="utf-8")
+    overlay.write_text("-r requirements-core.txt\n", encoding="utf-8")
+    stale_state = build_backend_environment_state(
+        core,
+        overlay,
+        python_identity=current_python_identity(),
+        platform_identity=current_platform_identity(),
+        distributions=closure,
+        bootstrap_pip="pip==25.2",
+    )
+    write_backend_environment_state(clean_prefix, stale_state)
+
+    error = validate_packaging_python_environment(
+        tmp_path,
+        executable=clean_python,
+        prefix=clean_prefix,
+        distribution_closure=closure,
+        python_identity=current_python_identity(),
+        platform_identity=current_platform_identity(),
+    )
+
+    assert "bootstrap pip" in error.lower()
 
 
 def test_build_project_activity_snapshot_parses_recent_git_log(tmp_path):

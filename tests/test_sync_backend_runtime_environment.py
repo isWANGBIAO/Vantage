@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
+from src.core import backend_environment_state as backend_state
 from src.core.backend_environment_state import (
     BACKEND_ENVIRONMENT_STATE_NAME,
     BACKEND_ENVIRONMENT_STATE_SCHEMA_VERSION,
@@ -229,6 +234,7 @@ def test_clean_environment_is_reused_without_mutation(tmp_path):
         "requirements",
         "python",
         "platform",
+        "bootstrap_pip",
         "missing_distribution",
         "extra_distribution",
         "version_drift",
@@ -248,6 +254,8 @@ def test_unclean_or_forced_environment_is_deleted_and_rebuilt(
         state_overrides["python"] = {**PYTHON_IDENTITY, "version": "3.12.9"}
     elif scenario == "platform":
         state_overrides["platform"] = {**PLATFORM_IDENTITY, "machine": "ARM64"}
+    elif scenario == "bootstrap_pip":
+        state_overrides["bootstrap_pip"] = "pip==25.2"
 
     venv, core, overlay, normalizer = _write_existing_environment(
         tmp_path,
@@ -472,5 +480,291 @@ def test_safe_remove_allows_only_the_fixed_project_runtime_venv(tmp_path):
             tmp_path / "nested" / ".venv-backend-runtime-gpu",
         )
 
-    safe_remove_backend_runtime_venv(tmp_path, expected)
+    lock_module = __import__(
+        "src.core.backend_runtime_lock",
+        fromlist=["backend_runtime_lock"],
+    )
+    with lock_module.backend_runtime_lock(tmp_path, timeout_seconds=1):
+        safe_remove_backend_runtime_venv(tmp_path, expected)
     assert not expected.exists()
+
+
+def _create_directory_reparse(link: Path, target: Path) -> None:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+        return
+    link.symlink_to(target, target_is_directory=True)
+
+
+def _runtime_lock(project_root: Path):
+    lock_module = __import__(
+        "src.core.backend_runtime_lock",
+        fromlist=["backend_runtime_lock"],
+    )
+    return lock_module.backend_runtime_lock(project_root, timeout_seconds=1)
+
+
+def _quarantines(project_root: Path) -> list[Path]:
+    return sorted(project_root.glob(".venv-backend-runtime-gpu.quarantine-*"))
+
+
+def test_root_reparse_is_quarantined_without_recursive_deletion(tmp_path):
+    external = tmp_path / "external-root"
+    external.mkdir()
+    sentinel = external / "outside-sentinel.txt"
+    sentinel.write_text("preserve", encoding="utf-8")
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    _create_directory_reparse(venv, external)
+
+    with _runtime_lock(tmp_path), pytest.warns(RuntimeWarning, match="reparse"):
+        safe_remove_backend_runtime_venv(
+            tmp_path,
+            venv,
+            remove_tree=lambda _path: pytest.fail(
+                "a root reparse point must never be recursively removed"
+            ),
+        )
+
+    assert not venv.exists()
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert len(_quarantines(tmp_path)) == 1
+
+
+def test_nested_reparse_retains_quarantine_and_external_data(tmp_path):
+    external = tmp_path / "external-nested"
+    external.mkdir()
+    sentinel = external / "outside-sentinel.txt"
+    sentinel.write_text("preserve", encoding="utf-8")
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    venv.mkdir()
+    (venv / "ordinary.txt").write_text("old", encoding="utf-8")
+    _create_directory_reparse(venv / "nested-link", external)
+
+    with _runtime_lock(tmp_path), pytest.warns(RuntimeWarning, match="reparse"):
+        safe_remove_backend_runtime_venv(
+            tmp_path,
+            venv,
+            remove_tree=lambda _path: pytest.fail(
+                "a tree containing a reparse point must be retained"
+            ),
+        )
+
+    assert not venv.exists()
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert len(_quarantines(tmp_path)) == 1
+
+
+def test_reparse_swap_after_validation_is_detected_before_recursive_remove(tmp_path):
+    external = tmp_path / "external-race"
+    external.mkdir()
+    sentinel = external / "outside-sentinel.txt"
+    sentinel.write_text("preserve", encoding="utf-8")
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    nested = venv / "nested"
+    nested.mkdir(parents=True)
+    (nested / "old.txt").write_text("old", encoding="utf-8")
+
+    def race_hook(stage: str, quarantine: Path) -> None:
+        if stage != "before_recursive_remove":
+            return
+        shutil.rmtree(quarantine / "nested")
+        _create_directory_reparse(quarantine / "nested", external)
+
+    with _runtime_lock(tmp_path), pytest.warns(RuntimeWarning, match="reparse"):
+        safe_remove_backend_runtime_venv(
+            tmp_path,
+            venv,
+            race_hook=race_hook,
+            remove_tree=lambda _path: pytest.fail(
+                "post-validation reparse replacement must prevent recursion"
+            ),
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert len(_quarantines(tmp_path)) == 1
+
+
+def test_root_identity_swap_is_quarantined_and_aborts_cleanup(tmp_path):
+    external = tmp_path / "external-root-race"
+    external.mkdir()
+    sentinel = external / "outside-sentinel.txt"
+    sentinel.write_text("preserve", encoding="utf-8")
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    venv.mkdir()
+    state_path = venv / BACKEND_ENVIRONMENT_STATE_NAME
+    state_path.write_text("old state", encoding="utf-8")
+
+    def race_hook(stage: str, path: Path) -> None:
+        if stage != "after_initial_lstat":
+            return
+        shutil.rmtree(path)
+        _create_directory_reparse(path, external)
+
+    with _runtime_lock(tmp_path), pytest.raises(RuntimeError, match="identity"):
+        safe_remove_backend_runtime_venv(
+            tmp_path,
+            venv,
+            race_hook=race_hook,
+            remove_tree=lambda _path: pytest.fail(
+                "identity mismatch must abort before recursive deletion"
+            ),
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert len(_quarantines(tmp_path)) == 1
+
+
+def test_rename_failure_preserves_canonical_environment_and_state(tmp_path):
+    venv, _core, _overlay, _normalizer = _write_existing_environment(tmp_path)
+    state_path = venv / BACKEND_ENVIRONMENT_STATE_NAME
+
+    def fail_rename(_source, _target):
+        raise PermissionError("busy")
+
+    with _runtime_lock(tmp_path), pytest.raises(RuntimeError, match="quarantine"):
+        safe_remove_backend_runtime_venv(
+            tmp_path,
+            venv,
+            rename_path=fail_rename,
+            remove_tree=lambda _path: pytest.fail(
+                "rename failure must not start recursive deletion"
+            ),
+        )
+
+    assert venv.is_dir()
+    assert state_path.exists()
+    assert _quarantines(tmp_path) == []
+
+
+def test_canonical_environment_is_renamed_before_recursive_cleanup(tmp_path):
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    venv.mkdir()
+    (venv / "old.txt").write_text("old", encoding="utf-8")
+    events: list[tuple[str, Path]] = []
+
+    def rename_path(source, target):
+        events.append(("rename", Path(target)))
+        os.rename(source, target)
+
+    def remove_tree(path):
+        quarantine = Path(path)
+        assert not venv.exists()
+        assert quarantine.name.startswith(
+            ".venv-backend-runtime-gpu.quarantine-"
+        )
+        events.append(("remove", quarantine))
+        shutil.rmtree(quarantine)
+
+    with _runtime_lock(tmp_path):
+        safe_remove_backend_runtime_venv(
+            tmp_path,
+            venv,
+            rename_path=rename_path,
+            remove_tree=remove_tree,
+        )
+
+    assert [event for event, _path in events] == ["rename", "remove"]
+    assert _quarantines(tmp_path) == []
+
+
+def test_force_sync_cannot_probe_or_remove_during_active_consumer(tmp_path):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+    state_path = venv / BACKEND_ENVIRONMENT_STATE_NAME
+    holder_source = """
+from pathlib import Path
+import sys
+import time
+from src.core.backend_runtime_lock import backend_runtime_lock
+
+with backend_runtime_lock(Path(sys.argv[1]), timeout_seconds=2):
+    print("locked", flush=True)
+    time.sleep(10)
+"""
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path.cwd())
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_source, str(tmp_path)],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert holder.stdout is not None
+    assert holder.stdout.readline().strip() == "locked"
+    probes: list[str] = []
+    removes: list[str] = []
+    try:
+        with pytest.raises(TimeoutError, match="backend runtime lock"):
+            synchronize_backend_runtime_environment(
+                project_root=tmp_path,
+                venv=venv,
+                core_requirements=core,
+                requirements=overlay,
+                opencv_normalizer=normalizer,
+                force=True,
+                creator_python=tmp_path / "system-python.exe",
+                creator_python_identity=PYTHON_IDENTITY,
+                creator_platform_identity=PLATFORM_IDENTITY,
+                lock_timeout_seconds=0.2,
+                probe_environment=lambda *_args: probes.append("probe"),
+                remove_tree=lambda *_args: removes.append("remove"),
+            )
+    finally:
+        holder.terminate()
+        holder.wait(timeout=5)
+
+    assert probes == []
+    assert removes == []
+    assert state_path.exists()
+
+    commands: list[list[str]] = []
+    outcome = synchronize_backend_runtime_environment(
+        project_root=tmp_path,
+        venv=venv,
+        core_requirements=core,
+        requirements=overlay,
+        opencv_normalizer=normalizer,
+        force=True,
+        creator_python=tmp_path / "system-python.exe",
+        creator_python_identity=PYTHON_IDENTITY,
+        creator_platform_identity=PLATFORM_IDENTITY,
+        lock_timeout_seconds=1,
+        run_command=_successful_runner(venv, commands),
+        probe_environment=lambda *_args: _probe_payload(),
+        pip_check=lambda *_args: True,
+        import_check=lambda *_args: True,
+        opencv_check=lambda *_args: True,
+    )
+    assert not outcome.reused
+    assert load_backend_environment_state(venv) is not None
+
+
+def test_bootstrap_pip_pin_is_part_of_environment_state_identity(tmp_path):
+    core, overlay, _normalizer = _write_requirements(tmp_path)
+    stale_state = build_backend_environment_state(
+        core,
+        overlay,
+        python_identity=PYTHON_IDENTITY,
+        platform_identity=PLATFORM_IDENTITY,
+        distributions=CLEAN_CLOSURE,
+        bootstrap_pip="pip==25.2",
+    )
+
+    error = environment_state_validation_error(
+        stale_state,
+        requirements_sha256=compute_requirements_sha256(core, overlay),
+        python_identity=PYTHON_IDENTITY,
+        platform_identity=PLATFORM_IDENTITY,
+        distributions=CLEAN_CLOSURE,
+        bootstrap_pip=backend_state.PINNED_BOOTSTRAP_PIP,
+    )
+
+    assert BACKEND_ENVIRONMENT_STATE_SCHEMA_VERSION >= 2
+    assert stale_state["bootstrap_pip"] == "pip==25.2"
+    assert "bootstrap pip" in error.lower()

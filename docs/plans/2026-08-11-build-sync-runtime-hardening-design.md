@@ -101,6 +101,7 @@ file `.vantage-backend-runtime-state.json` records:
 
 - the joint hash of `requirements-core.txt` and the runtime overlay;
 - the creating Python implementation/version and target platform;
+- the exact bootstrap installer identity (`pip==25.3`);
 - the normalized sorted `distribution==version` closure installed in the venv.
 
 Reuse requires a matching state, an existing target interpreter, an identical
@@ -115,10 +116,10 @@ environment does not imply repeated network downloads.
 `RUN.bat`, `RUN.sh`, `RUN_DEV.sh`, and the release-installer builder all invoke
 that one CLI with the project root, fixed venv, core requirements, overlay, and
 OpenCV normalizer. None of those entrypoints writes its own dependency stamp or
-runs an incremental requirements install. Before a rebuild the CLI invalidates
-the JSON state, legacy SHA stamp, and macOS native-signature stamp, then permits
-recursive deletion only when the resolved target is the real
-`.venv-backend-runtime-gpu` directory directly under the supplied project root.
+runs an incremental requirements install. Before a rebuild the CLI atomically
+renames only the exact `.venv-backend-runtime-gpu` sibling to a random
+same-parent quarantine; it does not delete a validity marker while the old
+canonical environment remains reachable.
 The synchronizer must itself run outside that venv: the unresolved launcher
 path, resolved interpreter target, and creating interpreter prefix are all
 checked before any state invalidation or command execution, so a POSIX venv
@@ -130,6 +131,19 @@ state rather than the retired requirements-only hash. A native-library signing
 failure removes the signature stamp and aborts the launcher; it cannot be
 recorded as successfully signed.
 
+The complete venv lifecycle is serialized by a sibling
+`.vantage-backend-runtime.lock`. POSIX uses `flock`; Windows locks one byte with
+`msvcrt`, so process exit releases ownership and a residual lock file is not an
+occupied lock. A bootstrap supervisor holds this lock for every official build,
+verification, and development-server consumer. Direct build, verify, and
+source-server entrypoints acquire it themselves unless the supervisor marker is
+inherited. The synchronizer captures the old root's `lstat` identity before its
+atomic rename, then revalidates identity, parent, and quarantine prefix. A root
+or nested Windows reparse point, an identity race, or an unsafe inspection
+retains the quarantine with a warning and never enters recursive deletion.
+Rename failure leaves the canonical environment and state untouched; later
+installation failure leaves the new canonical environment without valid state.
+
 The packaged-runtime fingerprint includes the verified distribution closure.
 Consequently, manually changing the venv cannot reuse an older PyInstaller
 bundle even if source files and requirements text are unchanged. Packaging
@@ -138,6 +152,14 @@ fingerprint schema is version 2, and the environment sync CLI is explicitly
 excluded from the shipped backend application as build-only code. There is no
 environment-variable bypass for the fixed venv, state, or installed-closure
 checks.
+
+Reproducibility intentionally uses shared exact top-level requirement pins plus
+a clean resolver run and a verified installed closure; it does not claim a
+single cross-platform fully transitive hash lock. Changing the bootstrap pip pin
+changes environment identity and forces a rebuild. An operator who can
+simultaneously rewrite both the dedicated venv and its matching state file is
+inside the local build-host trust boundary; this design detects ordinary drift,
+not deliberate same-host state forgery.
 
 ## macOS CI
 

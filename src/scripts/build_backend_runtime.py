@@ -23,6 +23,10 @@ def _ensure_project_root_on_sys_path(
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
 from src.core.backend_environment_state import installed_distribution_closure
+from src.core.backend_runtime_lock import (
+    backend_runtime_lock,
+    backend_runtime_lock_is_inherited,
+)
 from src.core.backend_runtime_packaging import (
     PROJECT_ACTIVITY_SNAPSHOT_NAME,
     backend_runtime_fingerprint_matches,
@@ -94,7 +98,7 @@ def _sync_extra_runtime_resources(layout: dict[str, Path], resources):
         shutil.copy2(resource.source, target)
 
 
-def main() -> int:
+def _main_without_backend_runtime_lock() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -191,6 +195,13 @@ def main() -> int:
     else:
         print("Forbidden runtime packages present: none")
     return 0
+
+
+def main() -> int:
+    if backend_runtime_lock_is_inherited(PROJECT_ROOT):
+        return _main_without_backend_runtime_lock()
+    with backend_runtime_lock(PROJECT_ROOT):
+        return _main_without_backend_runtime_lock()
 
 
 if __name__ == "__main__":

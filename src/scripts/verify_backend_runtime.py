@@ -35,6 +35,10 @@ from src.core.backend_runtime_packaging import (
     resolve_backend_runtime_layout,
     validate_backend_runtime_bundle,
 )
+from src.core.backend_runtime_lock import (
+    backend_runtime_lock,
+    backend_runtime_lock_is_inherited,
+)
 from src.core.runtime_library_bootstrap import collect_runtime_library_dirs
 from src.core.media_storage import save_media_paths_settings
 from src.scripts.cleanup_vantage_python_processes import iter_vantage_server_processes, terminate_processes
@@ -235,7 +239,7 @@ def _iter_packaged_backend_processes(executable_name: str | None = None):
             yield process
 
 
-def main() -> int:
+def _main_without_backend_runtime_lock() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -356,6 +360,13 @@ def main() -> int:
         )
     )
     return 0
+
+
+def main() -> int:
+    if backend_runtime_lock_is_inherited(PROJECT_ROOT):
+        return _main_without_backend_runtime_lock()
+    with backend_runtime_lock(PROJECT_ROOT):
+        return _main_without_backend_runtime_lock()
 
 
 if __name__ == "__main__":
