@@ -1,9 +1,11 @@
 from pathlib import Path
+import os
 import sys
 import time
 
 import psutil
 
+from src.scripts import run_packaging_builds as packaging_module
 from src.scripts.run_packaging_builds import _run_command, resolve_build_worker_count
 
 
@@ -41,7 +43,7 @@ def test_packaging_child_output_is_redacted_and_bounded(tmp_path, capsys):
     assert returncode == 0
     assert str(tmp_path) not in output
     assert secret not in output
-    assert "<PROJECT_ROOT>" in output
+    assert "<WORKER_CWD>" in output
     assert "[REDACTED]" in output
     assert "output truncated" in output
     assert len(output.encode("utf-8")) < 4096
@@ -102,3 +104,20 @@ def test_packaging_timeout_terminates_pipe_inheriting_descendant(tmp_path, capsy
     assert "parent-ready" in output
     assert "descendant-ready" in output
     assert len(output.encode("utf-8")) < 2048
+
+
+def test_frontend_worker_redacts_project_paths_outside_its_cwd(capsys):
+    worker_cwd = packaging_module.PROJECT_ROOT / "src" / "webapp"
+    project_path = packaging_module.PROJECT_ROOT / "src" / "server.py"
+
+    returncode = _run_command(
+        "frontend",
+        [sys.executable, "-c", f"print({str(project_path)!r})"],
+        worker_cwd,
+        timeout_seconds=5,
+    )
+
+    output = capsys.readouterr().out
+    assert returncode == 0
+    assert str(packaging_module.PROJECT_ROOT) not in output
+    assert f"<PROJECT_ROOT>{os.sep}src{os.sep}server.py" in output

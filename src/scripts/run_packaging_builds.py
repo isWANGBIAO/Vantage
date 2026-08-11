@@ -107,7 +107,8 @@ def _run_command(
     emitter = BoundedTextEmitter(
         limit_bytes=output_limit_bytes,
         path_prefixes={
-            "<PROJECT_ROOT>": cwd,
+            "<PROJECT_ROOT>": PROJECT_ROOT,
+            "<WORKER_CWD>": cwd,
             "<USER_HOME>": Path.home(),
         },
     )
