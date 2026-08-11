@@ -44,17 +44,18 @@ def test_frontend_workflows_pin_electron_node_runtime():
         == expected_electron_version
     )
 
-    for workflow_path in (
-        Path(".github/workflows/ci.yml"),
-        Path(".github/workflows/release.yml"),
-    ):
+    expected_occurrences = {
+        Path(".github/workflows/ci.yml"): 2,
+        Path(".github/workflows/release.yml"): 1,
+    }
+    for workflow_path, expected_count in expected_occurrences.items():
         workflow = workflow_path.read_text(encoding="utf-8")
         configured_node_versions = re.findall(
             r'^\s+node-version:\s*["\']?([^"\'\s]+)["\']?\s*$',
             workflow,
             flags=re.MULTILINE,
         )
-        assert configured_node_versions == [expected_node_version], (
+        assert configured_node_versions == [expected_node_version] * expected_count, (
             f"{workflow_path} should use the Node.js version embedded in "
             f"Electron {expected_electron_version}"
         )
@@ -160,10 +161,14 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert "  macos-runtime-smoke:" in workflow
     macos_job = workflow[workflow.index("  macos-runtime-smoke:") :]
 
-    for runner, architecture in (("macos-14", "arm64"), ("macos-15-intel", "x64")):
+    for runner, architecture in (("macos-15", "arm64"), ("macos-15-intel", "x64")):
         assert runner in macos_job
         assert architecture in macos_job
 
+    assert "macos-14" not in macos_job
+    assert "actions/setup-node@v4" in macos_job
+    assert 'node-version: "24.18.0"' in macos_job
+    assert "cache-dependency-path: src/webapp/package-lock.json" in macos_job
     assert 'python-version: "3.13"' in macos_job
     assert "actions/setup-python@v5" in macos_job
     assert (
