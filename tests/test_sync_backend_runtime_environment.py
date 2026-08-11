@@ -502,6 +502,10 @@ def _create_directory_reparse(link: Path, target: Path) -> None:
     link.symlink_to(target, target_is_directory=True)
 
 
+def _create_directory_symlink(link: Path, target: Path) -> None:
+    link.symlink_to(target, target_is_directory=True)
+
+
 def _runtime_lock(project_root: Path):
     lock_module = __import__(
         "src.core.backend_runtime_lock",
@@ -558,6 +562,52 @@ def test_nested_reparse_retains_quarantine_and_external_data(tmp_path):
     assert not venv.exists()
     assert sentinel.read_text(encoding="utf-8") == "preserve"
     assert len(_quarantines(tmp_path)) == 1
+
+
+def test_posix_venv_nested_python_symlink_is_unlinked_without_following_target(
+    tmp_path,
+):
+    external = tmp_path / "system-python"
+    external.write_text("external interpreter", encoding="utf-8")
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    bin_dir = venv / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python").symlink_to(external)
+    (venv / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+
+    with _runtime_lock(tmp_path):
+        safe_remove_backend_runtime_venv(
+            tmp_path,
+            venv,
+            platform_name="posix",
+        )
+
+    assert not venv.exists()
+    assert _quarantines(tmp_path) == []
+    assert external.read_text(encoding="utf-8") == "external interpreter"
+
+
+def test_posix_root_symlink_is_quarantined_without_following_target(tmp_path):
+    external = tmp_path / "external-posix-root"
+    external.mkdir()
+    sentinel = external / "outside-sentinel.txt"
+    sentinel.write_text("preserve", encoding="utf-8")
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    _create_directory_symlink(venv, external)
+
+    with _runtime_lock(tmp_path), pytest.warns(RuntimeWarning, match="symbolic link"):
+        safe_remove_backend_runtime_venv(
+            tmp_path,
+            venv,
+            platform_name="posix",
+            remove_tree=lambda _path: pytest.fail(
+                "a root POSIX symlink must never be recursively removed"
+            ),
+        )
+
+    assert not venv.exists()
+    assert len(_quarantines(tmp_path)) == 1
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
 
 
 def test_reparse_swap_after_validation_is_detected_before_recursive_remove(tmp_path):

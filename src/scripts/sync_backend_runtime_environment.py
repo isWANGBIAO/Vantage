@@ -143,10 +143,30 @@ def _lstat_identity(path: Path) -> _PathIdentity:
     )
 
 
-def _identity_is_reparse(identity: _PathIdentity) -> bool:
+def _identity_is_symbolic_link(identity: _PathIdentity) -> bool:
+    return stat.S_ISLNK(identity.file_type)
+
+
+def _identity_is_windows_reparse(
+    identity: _PathIdentity,
+    *,
+    platform_name: str | None = None,
+) -> bool:
+    resolved_platform = os.name if platform_name is None else platform_name
+    if resolved_platform != "nt":
+        return False
     reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
-    return stat.S_ISLNK(identity.file_type) or bool(
-        identity.file_attributes & reparse_flag
+    return bool(identity.file_attributes & reparse_flag)
+
+
+def _identity_is_unsafe_root(
+    identity: _PathIdentity,
+    *,
+    platform_name: str | None = None,
+) -> bool:
+    return _identity_is_symbolic_link(identity) or _identity_is_windows_reparse(
+        identity,
+        platform_name=platform_name,
     )
 
 
@@ -204,7 +224,11 @@ def validate_backend_runtime_venv_path(
     return candidate
 
 
-def _tree_contains_reparse(path: Path) -> bool:
+def _tree_contains_windows_reparse(
+    path: Path,
+    *,
+    platform_name: str | None = None,
+) -> bool:
     pending = [path]
     while pending:
         current = pending.pop()
@@ -219,7 +243,10 @@ def _tree_contains_reparse(path: Path) -> bool:
                         getattr(entry_stat, "st_file_attributes", 0)
                     ),
                 )
-                if _identity_is_reparse(identity):
+                if _identity_is_windows_reparse(
+                    identity,
+                    platform_name=platform_name,
+                ):
                     return True
                 if stat.S_ISDIR(identity.file_type):
                     pending.append(Path(entry.path))
@@ -249,6 +276,7 @@ def safe_remove_backend_runtime_venv(
     rename_path: Callable[[str | Path, str | Path], object] = os.rename,
     remove_tree: Callable[[str | Path], object] = shutil.rmtree,
     race_hook: Callable[[str, Path], object] | None = None,
+    platform_name: str | None = None,
 ) -> None:
     resolved_root = Path(project_root).resolve()
     safe_venv = validate_backend_runtime_venv_path(resolved_root, venv)
@@ -262,7 +290,10 @@ def safe_remove_backend_runtime_venv(
     initial_identity = _lstat_identity(safe_venv)
     if not (
         stat.S_ISDIR(initial_identity.file_type)
-        or _identity_is_reparse(initial_identity)
+        or _identity_is_unsafe_root(
+            initial_identity,
+            platform_name=platform_name,
+        )
     ):
         raise ValueError("dedicated backend runtime venv path must be a directory")
     if race_hook is not None:
@@ -292,13 +323,27 @@ def safe_remove_backend_runtime_venv(
             "backend runtime venv identity changed before quarantine rename; "
             f"retained {quarantine.name}"
         )
-    if _identity_is_reparse(renamed_identity):
-        _warn_retained_quarantine(quarantine, "root is a reparse point")
+    if _identity_is_unsafe_root(
+        renamed_identity,
+        platform_name=platform_name,
+    ):
+        reason = (
+            "root is a symbolic link"
+            if _identity_is_symbolic_link(renamed_identity)
+            else "root is a Windows reparse point"
+        )
+        _warn_retained_quarantine(quarantine, reason)
         return
 
     try:
-        if _tree_contains_reparse(quarantine):
-            _warn_retained_quarantine(quarantine, "tree contains a reparse point")
+        if _tree_contains_windows_reparse(
+            quarantine,
+            platform_name=platform_name,
+        ):
+            _warn_retained_quarantine(
+                quarantine,
+                "tree contains a Windows reparse point",
+            )
             return
     except OSError as exc:
         _warn_retained_quarantine(
@@ -315,10 +360,13 @@ def safe_remove_backend_runtime_venv(
             raise RuntimeError(
                 "backend runtime quarantine identity changed before recursive cleanup"
             )
-        if _tree_contains_reparse(quarantine):
+        if _tree_contains_windows_reparse(
+            quarantine,
+            platform_name=platform_name,
+        ):
             _warn_retained_quarantine(
                 quarantine,
-                "tree gained a reparse point before recursive cleanup",
+                "tree gained a Windows reparse point before recursive cleanup",
             )
             return
         remove_tree(quarantine)
@@ -464,8 +512,8 @@ def _reuse_validation_error(
             venv_identity = _lstat_identity(venv)
         except OSError as exc:
             return f"target venv identity could not be inspected: {exc}", None
-        if _identity_is_reparse(venv_identity):
-            return "target venv root is a reparse point", None
+        if _identity_is_unsafe_root(venv_identity):
+            return "target venv root is a symbolic link or Windows reparse point", None
     if not target_python.is_file():
         return "target Python is missing", None
     if (venv / LEGACY_REQUIREMENTS_STAMP_NAME).exists():

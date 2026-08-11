@@ -81,6 +81,14 @@ resolve_bootstrap_python() {
 
 BOOTSTRAP_PYTHON="$(resolve_bootstrap_python)"
 
+select_backend_cleanup_python() {
+    if [[ -x "$BACKEND_RUNTIME_PYTHON" ]]; then
+        printf '%s\n' "$BACKEND_RUNTIME_PYTHON"
+        return 0
+    fi
+    printf '%s\n' "$BOOTSTRAP_PYTHON"
+}
+
 codesign_macos_native_libraries() {
     if [[ "$(uname -s)" != "Darwin" ]]; then
         return 0
@@ -139,7 +147,8 @@ codesign_macos_frontend_binaries() {
 }
 
 echo "[0/4] Cleaning residual processes..."
-"$BOOTSTRAP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
+BACKEND_CLEANUP_PYTHON="$(select_backend_cleanup_python)"
+"$BACKEND_CLEANUP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
 echo "      Cleanup complete"
 sleep 2
 

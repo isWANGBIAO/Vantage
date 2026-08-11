@@ -84,6 +84,14 @@ resolve_bootstrap_python() {
 
 BOOTSTRAP_PYTHON="$(resolve_bootstrap_python)"
 
+select_backend_cleanup_python() {
+    if [[ -x "$BACKEND_RUNTIME_PYTHON" ]]; then
+        printf '%s\n' "$BACKEND_RUNTIME_PYTHON"
+        return 0
+    fi
+    printf '%s\n' "$BOOTSTRAP_PYTHON"
+}
+
 step_start() {
     STEP_START_SECONDS="$(date +%s)"
     echo "$1"
@@ -266,7 +274,8 @@ clean_macos_package_outputs() {
 RUN_START_SECONDS="$(date +%s)"
 
 step_start "[0/8] Cleaning residual source processes..."
-"$BOOTSTRAP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
+BACKEND_CLEANUP_PYTHON="$(select_backend_cleanup_python)"
+"$BACKEND_CLEANUP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
 pkill -f "${INSTALLED_APP}/Contents" >/dev/null 2>&1 || true
 terminate_installed_vantage_apps
 step_done "Source cleanup complete"
