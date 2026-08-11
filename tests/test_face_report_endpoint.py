@@ -48,8 +48,8 @@ class FaceReportEndpointTests(unittest.TestCase):
                 self.assertTrue(stdout_handle.closed)
                 self.assertEqual(stderr_handle, server.subprocess.STDOUT)
                 self.assertEqual(
-                    Path(latest_pointer_content),
-                    tmp / "logs" / "face-analysis" / "face-analysis-20260420_221530.log",
+                    Path(latest_pointer_content).resolve(),
+                    (tmp / "logs" / "face-analysis" / "face-analysis-20260420_221530.log").resolve(),
                 )
                 self.assertEqual(
                     latest_pointer_content,

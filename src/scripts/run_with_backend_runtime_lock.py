@@ -327,6 +327,26 @@ def _confirm_posix_process_group_stopped(
     *,
     timeout_seconds: float = _LEASE_OWNER_STOP_TIMEOUT_SECONDS,
 ) -> None:
+    def group_has_live_members() -> bool | None:
+        try:
+            import psutil
+        except ImportError:
+            return None
+        zombie_statuses = {
+            psutil.STATUS_ZOMBIE,
+            getattr(psutil, "STATUS_DEAD", "dead"),
+        }
+        for process in psutil.process_iter(["pid", "status"]):
+            try:
+                status = process.info.get("status")
+                if status in zombie_statuses:
+                    continue
+                if os.getpgid(process.info["pid"]) == process_group_id:
+                    return True
+            except (OSError, psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return False
+
     if os.name == "nt":
         return
     deadline = time.monotonic() + timeout_seconds
@@ -334,6 +354,9 @@ def _confirm_posix_process_group_stopped(
         try:
             os.killpg(process_group_id, 0)
         except ProcessLookupError:
+            return
+        live_members = group_has_live_members()
+        if live_members is False:
             return
         if time.monotonic() >= deadline:
             raise TimeoutError("timed out stopping guarded backend target process group")
@@ -354,7 +377,9 @@ def _stop_guarded_target_tree(
             process.kill()
         process.wait(timeout=_LEASE_OWNER_STOP_TIMEOUT_SECONDS)
     if os.name != "nt":
-        confirm_tree(process.pid)
+        process_id = getattr(process, "pid", None)
+        if process_id is not None:
+            confirm_tree(process_id)
 
 
 def _wait_for_guarded_target(

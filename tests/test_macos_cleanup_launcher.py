@@ -39,8 +39,8 @@ set -eu
 temp_dir="$(mktemp -d "${{TMPDIR:-/tmp}}/vantage-cleanup.XXXXXX")"
 trap 'rm -rf "$temp_dir"' EXIT
 cd "$temp_dir"
-BOOTSTRAP_PYTHON="bootstrap-python"
-BACKEND_RUNTIME_PYTHON="runtime-python"
+BOOTSTRAP_PYTHON="$temp_dir/bootstrap-python"
+BACKEND_RUNTIME_PYTHON="$temp_dir/runtime-python"
 : > "$BOOTSTRAP_PYTHON"
 : > "$BACKEND_RUNTIME_PYTHON"
 chmod +x "$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_PYTHON"
@@ -62,7 +62,7 @@ rm -f "$BOOTSTRAP_PYTHON"
         stderr = result.stderr.decode("utf-8", errors="replace")
         stdout = result.stdout.decode("utf-8", errors="replace")
         assert result.returncode == 0, stderr
-        assert stdout.splitlines() == [
+        assert [Path(line).name for line in stdout.splitlines()] == [
             "runtime-python",
             "bootstrap-python",
             "bootstrap-python",
