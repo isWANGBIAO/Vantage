@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,9 @@ from src.utils.sensitive_data import RedactingPipeLog, build_log_path_prefixes
 
 
 SUPERVISE_ARG = "--supervise"
+SUPERVISOR_READY_SIGNAL = b"READY\n"
+SUPERVISOR_ERROR_SIGNAL = b"ERROR\n"
+SUPERVISOR_READY_TIMEOUT_SECONDS = 15.0
 
 
 def _resolve_npm_executable() -> str:
@@ -100,6 +104,7 @@ def _run_frontend_supervisor(
     runtime_logs: dict[str, Path],
     path_prefixes: dict[str, str],
     launched_at: datetime,
+    notify_ready=lambda: None,
 ) -> int:
     """Run the frontend for its full lifetime while redacting persisted output."""
 
@@ -114,6 +119,7 @@ def _run_frontend_supervisor(
         header = f"\n=== Frontend launch {mode} {timestamp} ===\n"
         stdout_log.write_record(header)
         stderr_log.write_record(header)
+        process = None
         try:
             with stdout_log.capture_subprocess_output(
                 stream_name="frontend-stdout"
@@ -131,8 +137,16 @@ def _run_frontend_supervisor(
                     start_new_session=False,
                     close_fds=True,
                 )
+                notify_ready()
                 return process.wait()
         except Exception as exc:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
             stderr_log.write_record(f"Frontend process failed: {exc}\n")
             return 1
 
@@ -147,7 +161,15 @@ def _supervise_frontend(mode: str) -> int:
         mode,
         launched_at,
     )
-    return _run_frontend_supervisor(
+    ready_sent = False
+
+    def notify_ready():
+        nonlocal ready_sent
+        sys.stdout.buffer.write(SUPERVISOR_READY_SIGNAL)
+        sys.stdout.buffer.flush()
+        ready_sent = True
+
+    returncode = _run_frontend_supervisor(
         mode=mode,
         command=_build_frontend_command(mode),
         env=_build_frontend_env(mode),
@@ -158,7 +180,43 @@ def _supervise_frontend(mode: str) -> int:
             runtime_paths=runtime_paths,
         ),
         launched_at=launched_at,
+        notify_ready=notify_ready,
     )
+    if not ready_sent:
+        try:
+            sys.stdout.buffer.write(SUPERVISOR_ERROR_SIGNAL)
+            sys.stdout.buffer.flush()
+        except (BrokenPipeError, OSError):
+            pass
+    return returncode
+
+
+def _wait_for_supervisor_signal(
+    process,
+    *,
+    timeout_seconds=SUPERVISOR_READY_TIMEOUT_SECONDS,
+):
+    result = []
+
+    def read_signal():
+        try:
+            result.append(process.stdout.readline())
+        except (OSError, ValueError):
+            result.append(b"")
+
+    reader = threading.Thread(
+        target=read_signal,
+        name="vantage-frontend-ready",
+        daemon=True,
+    )
+    reader.start()
+    reader.join(timeout=max(0.0, float(timeout_seconds)))
+    if reader.is_alive():
+        process.kill()
+        process.wait(timeout=5)
+        reader.join(timeout=1)
+        return b""
+    return result[0] if result else b""
 
 
 def _launch_frontend_supervisor(mode: str) -> int:
@@ -169,14 +227,30 @@ def _launch_frontend_supervisor(mode: str) -> int:
         cwd=project_root,
         env=_build_frontend_env(mode),
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         creationflags=_get_creationflags(),
         start_new_session=_get_start_new_session(),
         close_fds=True,
     )
-    print(f"Frontend supervisor launched: mode={mode}, pid={process.pid}")
-    return 0
+    signal = _wait_for_supervisor_signal(process)
+    if process.stdout is not None:
+        process.stdout.close()
+    if signal == SUPERVISOR_READY_SIGNAL:
+        print(f"Frontend supervisor launched: mode={mode}, pid={process.pid}")
+        return 0
+
+    try:
+        returncode = process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        returncode = process.wait(timeout=5)
+    print(
+        "Frontend supervisor failed before the application started; "
+        "see the frontend error log.",
+        file=sys.stderr,
+    )
+    return returncode or 1
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1,7 +1,9 @@
 import importlib.util
+import io
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -140,6 +142,7 @@ def test_frontend_supervisor_redacts_split_native_child_output(tmp_path):
         ),
         encoding="utf-8",
     )
+    ready_events = []
 
     returncode = launcher._run_frontend_supervisor(
         mode="production",
@@ -149,9 +152,11 @@ def test_frontend_supervisor_redacts_split_native_child_output(tmp_path):
         runtime_logs=runtime_logs,
         path_prefixes={"<PROJECT_ROOT>": private_root},
         launched_at=datetime(2026, 8, 11, 18, 0, 0),
+        notify_ready=lambda: ready_events.append("ready"),
     )
 
     assert returncode == 0
+    assert ready_events == ["ready"]
     stdout_text = runtime_logs["stdout_log"].read_text(encoding="utf-8")
     stderr_text = runtime_logs["stderr_log"].read_text(encoding="utf-8")
     assert str(private_root) not in stdout_text
@@ -167,7 +172,7 @@ def test_frontend_launcher_detaches_a_long_lived_redacting_supervisor(tmp_path):
     webapp_dir = project_root / "src" / "webapp"
     webapp_dir.mkdir(parents=True)
     logs_dir = tmp_path / "logs"
-    process = SimpleNamespace(pid=4321)
+    process = SimpleNamespace(pid=4321, stdout=io.BytesIO(b"READY\n"))
 
     with (
         patch.object(launcher.Config, "get_project_root", return_value=project_root),
@@ -181,6 +186,49 @@ def test_frontend_launcher_detaches_a_long_lived_redacting_supervisor(tmp_path):
     assert Path(command[1]).resolve() == Path(launcher.__file__).resolve()
     assert command[2:] == ["--supervise", "production"]
     assert popen.call_args.kwargs["stdin"] is subprocess.DEVNULL
-    assert popen.call_args.kwargs["stdout"] is subprocess.DEVNULL
+    assert popen.call_args.kwargs["stdout"] is subprocess.PIPE
     assert popen.call_args.kwargs["stderr"] is subprocess.DEVNULL
     assert popen.call_args.kwargs["close_fds"] is True
+
+
+def test_frontend_launcher_reports_real_supervisor_start_failure_without_private_paths(
+    tmp_path,
+):
+    project_root = tmp_path / "Private Project"
+    webapp_dir = project_root / "src" / "webapp"
+    webapp_dir.mkdir(parents=True)
+    runtime_root = tmp_path / "runtime-data"
+    logs_dir = runtime_root / "logs"
+    environment = {
+        **os.environ,
+        "PATH": "",
+        "VANTAGE_PROJECT_ROOT": str(project_root),
+        "VANTAGE_DATA_DIR": str(runtime_root),
+        "VANTAGE_CONFIG_DIR": str(runtime_root / "config"),
+        "VANTAGE_HISTORY_DIR": str(runtime_root / "history"),
+        "VANTAGE_LOG_DIR": str(logs_dir),
+        "VANTAGE_PLOT_DIR": str(runtime_root / "plots"),
+        "VANTAGE_CACHE_DIR": str(runtime_root / "cache"),
+        "VANTAGE_RUNTIME_DIR": str(runtime_root / "runtime"),
+        "VANTAGE_MIGRATION_DIR": str(runtime_root / "migration"),
+    }
+
+    result = subprocess.run(
+        [sys.executable, "src/scripts/run_frontend_background.py", "production"],
+        cwd=Path.cwd(),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    deadline = time.monotonic() + 5
+    pointer = logs_dir / "frontend_production.err.latest.log"
+    while not pointer.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    assert result.returncode != 0
+    assert pointer.exists()
+    persisted = Path(pointer.read_text(encoding="utf-8")).read_text(encoding="utf-8")
+    assert str(project_root) not in persisted
+    assert "Frontend process failed:" in persisted
