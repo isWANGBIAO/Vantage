@@ -12,6 +12,8 @@ const DEFAULT_DEPENDENCY_SYNC_LOCK_TIMEOUT_MILLISECONDS = 300_000;
 const DEPENDENCY_SYNC_LOCK_POLL_MILLISECONDS = 50;
 const DEPENDENCY_SYNC_LOCK_INITIALIZATION_GRACE_MILLISECONDS = 2_000;
 const DEPENDENCY_SYNC_LOCK_HELPER_START_TIMEOUT_MILLISECONDS = 5_000;
+const DEPENDENCY_SYNC_COMMAND_POLL_MILLISECONDS = 10;
+const DEPENDENCY_SYNC_COMMAND_TERMINATION_GRACE_MILLISECONDS = 2_000;
 const DEPENDENCY_SYNC_LOCK_HELPER_ARGUMENT = '--dependency-sync-lock-helper';
 const LOCK_SLEEP_ARRAY = new Int32Array(new SharedArrayBuffer(4));
 const STATE_FIELDS = Object.freeze([
@@ -126,8 +128,18 @@ function readLockSnapshot(lockPath) {
     let owner = null;
     try {
       const candidate = JSON.parse(contents);
+      const guardianIsValid = candidate.schemaVersion !== 3
+        || (
+          Number.isSafeInteger(candidate.guardianPid)
+          && candidate.guardianPid > 0
+        );
       if (
-        (candidate.schemaVersion === 1 || candidate.schemaVersion === 2)
+        (
+          candidate.schemaVersion === 1
+          || candidate.schemaVersion === 2
+          || candidate.schemaVersion === 3
+        )
+        && guardianIsValid
         && Number.isSafeInteger(candidate.pid)
         && candidate.pid > 0
         && typeof candidate.token === 'string'
@@ -281,7 +293,11 @@ function scanLiveLeaseEntries(lockDirectory, lockDirectoryStats) {
     const ownerMatchesName = snapshot.kind === 'owned'
       && snapshot.owner.pid === parsed.pid
       && snapshot.owner.token === parsed.token;
-    if (ownerMatchesName && processIsAlive(parsed.pid)) {
+    const liveOwnerPid = snapshot.kind === 'owned'
+      && snapshot.owner.schemaVersion === 3
+      ? snapshot.owner.guardianPid
+      : parsed.pid;
+    if (ownerMatchesName && processIsAlive(liveOwnerPid)) {
       liveEntries.push({ ...parsed, path: leasePath, snapshot });
       continue;
     }
@@ -297,7 +313,12 @@ function scanLiveLeaseEntries(lockDirectory, lockDirectoryStats) {
       });
       continue;
     }
-    removeUniqueLeaseFile(leasePath, snapshot);
+    if (removeUniqueLeaseFile(leasePath, snapshot)) {
+      fs.rmSync(
+        path.join(lockDirectory, `command-${parsed.token}`),
+        { recursive: true, force: true },
+      );
+    }
   }
   assertLockDirectoryIdentity(lockDirectory, lockDirectoryStats);
   return liveEntries;
@@ -364,45 +385,316 @@ function ensureLockDirectory(lockDirectory) {
   return null;
 }
 
+function installLockGuardian(lockPath, token, parentPid, guardianPid) {
+  const snapshot = readLockSnapshot(lockPath);
+  if (
+    snapshot.kind !== 'owned'
+    || snapshot.owner.pid !== parentPid
+    || snapshot.owner.token !== token
+  ) {
+    throw new Error('Frontend dependency synchronization lock lease was lost.');
+  }
+
+  let descriptor;
+  try {
+    descriptor = fs.openSync(lockPath, 'r+');
+    const descriptorStats = fs.fstatSync(descriptor);
+    validateLockFileStats(descriptorStats);
+    if (!sameFileIdentity(snapshot.stats, descriptorStats)) {
+      throw new Error('Frontend dependency synchronization lock lease was lost.');
+    }
+    const guardedOwner = {
+      ...snapshot.owner,
+      schemaVersion: 3,
+      guardianPid,
+    };
+    fs.ftruncateSync(descriptor, 0);
+    fs.writeFileSync(descriptor, `${JSON.stringify(guardedOwner)}\n`, 'utf8');
+    fs.fsyncSync(descriptor);
+    const finalStats = fs.lstatSync(lockPath);
+    validateLockFileStats(finalStats);
+    if (!sameFileIdentity(descriptorStats, finalStats)) {
+      throw new Error('Frontend dependency synchronization lock lease was lost.');
+    }
+  } finally {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+  }
+}
+
+function processGroupIsAlive(processGroupId) {
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+function signalProcessGroup(processGroupId, signal) {
+  try {
+    process.kill(-processGroupId, signal);
+  } catch (error) {
+    if (error.code !== 'ESRCH') {
+      throw error;
+    }
+  }
+}
+
+function writeHelperJsonAtomically(targetPath, payload) {
+  const tempPath = `${targetPath}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, `${JSON.stringify(payload)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+    fs.renameSync(tempPath, targetPath);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
+  }
+}
+
 function runDependencySyncLockHelper() {
   const lockPath = process.env.VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_PATH;
   const token = process.env.VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_TOKEN;
   const readyPath = process.env.VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_READY_PATH;
+  const commandDirectory = process.env.VANTAGE_INTERNAL_FRONTEND_SYNC_COMMAND_DIR;
   const parentPid = Number(
     process.env.VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_PARENT_PID,
   );
   if (
     !lockPath
     || !token
+    || !/^[a-f0-9]{32}$/u.test(token)
     || !readyPath
+    || !commandDirectory
     || !Number.isSafeInteger(parentPid)
     || parentPid <= 0
     || !process.connected
   ) {
     process.exit(2);
   }
+  const expectedCommandDirectory = path.join(
+    path.dirname(lockPath),
+    `command-${token}`,
+  );
+  if (
+    path.resolve(commandDirectory) !== path.resolve(expectedCommandDirectory)
+    || path.resolve(readyPath) !== path.resolve(commandDirectory, 'ready')
+  ) {
+    process.exit(2);
+  }
 
   let cleaned = false;
+  let shutdownRequested = false;
+  let activeCommand = null;
+  const requestPath = path.join(commandDirectory, 'request.json');
+  const responsePath = path.join(commandDirectory, 'response.json');
+  process.once('exit', () => {
+    fs.rmSync(commandDirectory, { recursive: true, force: true });
+  });
+
   function cleanup(exitCode = 0) {
     if (cleaned) {
       return;
     }
+    if (activeCommand !== null) {
+      return;
+    }
     cleaned = true;
+    fs.rmSync(commandDirectory, { recursive: true, force: true });
     removeOwnedLock(lockPath, token);
-    fs.rmSync(readyPath, { force: true });
     process.exit(exitCode);
   }
 
-  try {
-    const snapshot = readLockSnapshot(lockPath);
-    if (
-      snapshot.kind !== 'owned'
-      || snapshot.owner.pid !== parentPid
-      || snapshot.owner.token !== token
-    ) {
-      cleanup(2);
+  function finishActiveCommand() {
+    if (activeCommand === null) {
       return;
     }
+    if (process.platform === 'win32') {
+      if (shutdownRequested && !activeCommand.treeTerminationConfirmed) {
+        terminateActiveCommand();
+        return;
+      }
+      if (!activeCommand.exited) {
+        return;
+      }
+    }
+    if (
+      process.platform !== 'win32'
+      &&
+      Number.isSafeInteger(activeCommand.processGroupId)
+      && activeCommand.processGroupId > 0
+      && processGroupIsAlive(activeCommand.processGroupId)
+    ) {
+      if (activeCommand.terminationStartedAt === null) {
+        activeCommand.terminationStartedAt = performance.now();
+        signalProcessGroup(activeCommand.processGroupId, 'SIGTERM');
+      } else if (
+        performance.now() - activeCommand.terminationStartedAt
+          >= DEPENDENCY_SYNC_COMMAND_TERMINATION_GRACE_MILLISECONDS
+      ) {
+        signalProcessGroup(activeCommand.processGroupId, 'SIGKILL');
+      }
+      return;
+    }
+
+    const completedCommand = activeCommand;
+    activeCommand = null;
+    if (shutdownRequested) {
+      cleanup(0);
+      return;
+    }
+    writeHelperJsonAtomically(responsePath, {
+      schemaVersion: 1,
+      token,
+      requestId: completedCommand.requestId,
+      status: completedCommand.status,
+      signal: completedCommand.signal,
+      errorCode: completedCommand.errorCode,
+    });
+  }
+
+  function terminateActiveCommand() {
+    if (activeCommand === null) {
+      cleanup(0);
+      return;
+    }
+    if (process.platform === 'win32') {
+      if (activeCommand.treeTerminationConfirmed) {
+        return;
+      }
+      const result = spawnSync(
+        'taskkill.exe',
+        ['/PID', String(activeCommand.child.pid), '/T', '/F'],
+        { stdio: 'ignore', windowsHide: true },
+      );
+      activeCommand.treeTerminationConfirmed = result.status === 0;
+      return;
+    }
+    if (activeCommand.terminationStartedAt === null) {
+      activeCommand.terminationStartedAt = performance.now();
+      signalProcessGroup(activeCommand.processGroupId, 'SIGTERM');
+    }
+  }
+
+  function requestShutdown() {
+    if (shutdownRequested) {
+      return;
+    }
+    shutdownRequested = true;
+    fs.rmSync(requestPath, { force: true });
+    fs.rmSync(responsePath, { force: true });
+    terminateActiveCommand();
+  }
+
+  function readCommandRequest() {
+    let request;
+    try {
+      request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return null;
+      }
+      throw error;
+    }
+    const argumentsAreSupported = Array.isArray(request.args)
+      && (
+        (request.args.length === 1 && request.args[0] === 'ci')
+        || (
+          request.args.length === 2
+          && request.args[0] === 'ls'
+          && request.args[1] === '--depth=0'
+        )
+      );
+    if (
+      request.schemaVersion !== 1
+      || request.token !== token
+      || typeof request.requestId !== 'string'
+      || !/^[a-f0-9]{32}$/u.test(request.requestId)
+      || request.command !== 'npm'
+      || !argumentsAreSupported
+      || !['inherited', 'electron-mirror-fallback'].includes(
+        request.environmentMode,
+      )
+    ) {
+      throw new Error('Frontend dependency synchronization command request is invalid.');
+    }
+    return request;
+  }
+
+  function startPendingCommand() {
+    if (shutdownRequested || activeCommand !== null) {
+      return;
+    }
+    const request = readCommandRequest();
+    if (request === null) {
+      return;
+    }
+    fs.rmSync(requestPath, { force: true });
+    fs.rmSync(responsePath, { force: true });
+    const commandEnvironment = { ...process.env };
+    for (const environmentName of Object.keys(commandEnvironment)) {
+      if (environmentName.startsWith('VANTAGE_INTERNAL_FRONTEND_SYNC_')) {
+        delete commandEnvironment[environmentName];
+      }
+    }
+    if (request.environmentMode === 'electron-mirror-fallback') {
+      const fallback = commandEnvironment.VANTAGE_ELECTRON_MIRROR_FALLBACK;
+      if (!fallback || commandEnvironment.ELECTRON_MIRROR) {
+        throw new Error(
+          'Frontend dependency synchronization command request is invalid.',
+        );
+      }
+      commandEnvironment.ELECTRON_MIRROR = fallback;
+    }
+    const execution = resolveNpmExecution({
+      args: request.args,
+      env: commandEnvironment,
+    });
+    const child = spawn(execution.command, execution.args, {
+      cwd: path.dirname(path.dirname(lockPath)),
+      env: commandEnvironment,
+      stdio: 'inherit',
+      detached: process.platform !== 'win32',
+      windowsHide: true,
+    });
+    activeCommand = {
+      child,
+      requestId: request.requestId,
+      processGroupId: child.pid,
+      status: null,
+      signal: null,
+      errorCode: null,
+      exited: false,
+      treeTerminationConfirmed: false,
+      terminationStartedAt: null,
+    };
+    child.once('error', (error) => {
+      if (activeCommand?.child !== child) {
+        return;
+      }
+      activeCommand.status = null;
+      activeCommand.errorCode = typeof error.code === 'string' ? error.code : 'UNKNOWN';
+      activeCommand.exited = true;
+      finishActiveCommand();
+    });
+    child.once('close', (status, signal) => {
+      if (activeCommand?.child !== child) {
+        return;
+      }
+      activeCommand.status = status;
+      activeCommand.signal = signal;
+      activeCommand.exited = true;
+      finishActiveCommand();
+    });
+  }
+
+  try {
+    installLockGuardian(lockPath, token, parentPid, process.pid);
     fs.writeFileSync(readyPath, `${token}\n`, {
       encoding: 'utf8',
       flag: 'wx',
@@ -413,15 +705,34 @@ function runDependencySyncLockHelper() {
     return;
   }
 
-  process.once('disconnect', () => cleanup(0));
-  process.once('SIGTERM', () => cleanup(0));
-  process.once('SIGINT', () => cleanup(0));
+  process.once('disconnect', requestShutdown);
+  process.once('SIGTERM', requestShutdown);
+  process.once('SIGINT', requestShutdown);
   const parentWatcher = setInterval(() => {
     if (!processIsAlive(parentPid)) {
-      cleanup(0);
+      requestShutdown();
     }
-  }, 250);
+  }, 50);
   parentWatcher.unref();
+
+  const commandWatcher = setInterval(() => {
+    try {
+      if (activeCommand !== null) {
+        if (shutdownRequested || activeCommand.exited) {
+          finishActiveCommand();
+        }
+        return;
+      }
+      if (shutdownRequested) {
+        cleanup(0);
+        return;
+      }
+      startPendingCommand();
+    } catch {
+      requestShutdown();
+    }
+  }, DEPENDENCY_SYNC_COMMAND_POLL_MILLISECONDS);
+  commandWatcher.unref();
 }
 
 function createOwnedLock(lockPath, token) {
@@ -453,22 +764,33 @@ function createOwnedLock(lockPath, token) {
 }
 
 function startDependencySyncLockHelper({ lockPath, token, deadline }) {
-  const readyPath = `${lockPath}.${token}.ready`;
-  const helper = spawn(
-    process.execPath,
-    [__filename, DEPENDENCY_SYNC_LOCK_HELPER_ARGUMENT],
-    {
-      env: {
-        ...process.env,
-        VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_PATH: lockPath,
-        VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_TOKEN: token,
-        VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_READY_PATH: readyPath,
-        VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_PARENT_PID: String(process.pid),
+  const commandDirectory = path.join(path.dirname(lockPath), `command-${token}`);
+  fs.mkdirSync(commandDirectory, { mode: 0o700 });
+  const readyPath = path.join(commandDirectory, 'ready');
+  let helper;
+  try {
+    helper = spawn(
+      process.execPath,
+      [__filename, DEPENDENCY_SYNC_LOCK_HELPER_ARGUMENT],
+      {
+        env: {
+          ...process.env,
+          VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_PATH: lockPath,
+          VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_TOKEN: token,
+          VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_READY_PATH: readyPath,
+          VANTAGE_INTERNAL_FRONTEND_SYNC_COMMAND_DIR: commandDirectory,
+          VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_PARENT_PID: String(process.pid),
+        },
+        stdio: process.platform === 'win32'
+          ? ['ignore', 'ignore', 'ignore', 'ipc']
+          : ['ignore', 'inherit', 'inherit', 'ipc'],
+        windowsHide: true,
       },
-      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-      windowsHide: true,
-    },
-  );
+    );
+  } catch (error) {
+    fs.rmSync(commandDirectory, { recursive: true, force: true });
+    throw error;
+  }
   helper.on('error', () => {
     // Synchronous acquisition observes helper failure through its readiness lease.
   });
@@ -480,22 +802,25 @@ function startDependencySyncLockHelper({ lockPath, token, deadline }) {
   while (true) {
     try {
       if (fs.readFileSync(readyPath, 'utf8').trim() === token) {
-        return { helper, readyPath };
+        return { helper, readyPath, commandDirectory, token };
       }
       throw new Error('Frontend dependency synchronization lock helper failed.');
     } catch (error) {
       if (error.code !== 'ENOENT') {
         helper.kill();
+        fs.rmSync(commandDirectory, { recursive: true, force: true });
         throw error;
       }
     }
     if (!processIsAlive(helper.pid)) {
       helper.kill();
+      fs.rmSync(commandDirectory, { recursive: true, force: true });
       throw new Error('Frontend dependency synchronization lock helper failed.');
     }
     const remaining = helperStartDeadline - performance.now();
     if (remaining <= 0) {
       helper.kill();
+      fs.rmSync(commandDirectory, { recursive: true, force: true });
       throw new Error(
         'Timed out waiting for frontend dependency synchronization lock.',
       );
@@ -550,19 +875,19 @@ function acquireDependencySyncLockRaw({
       choosingLock.descriptor = null;
     }
     removeOwnedLock(choosingPath, token);
+    if (helperState !== null) {
+      if (helperState.helper.connected) {
+        helperState.helper.disconnect();
+      }
+      fs.rmSync(helperState.commandDirectory, { recursive: true, force: true });
+      helperState.helper.unref();
+    }
     if (ticketLock?.descriptor !== null && ticketLock?.descriptor !== undefined) {
       fs.closeSync(ticketLock.descriptor);
       ticketLock.descriptor = null;
     }
     if (ticketPath !== null) {
       removeOwnedLock(ticketPath, token);
-    }
-    if (helperState !== null) {
-      fs.rmSync(helperState.readyPath, { force: true });
-      if (helperState.helper.connected) {
-        helperState.helper.disconnect();
-      }
-      helperState.helper.unref();
     }
   }
 
@@ -652,6 +977,14 @@ function acquireDependencySyncLockRaw({
         expectedStats: ticketLock.stats,
       });
     },
+    runCommand(command, args, options) {
+      return runCommandThroughLockHelper(
+        helperState,
+        command,
+        args,
+        options,
+      );
+    },
     release() {
       if (released) {
         return;
@@ -679,6 +1012,9 @@ function acquireDependencySyncLock(options) {
         } catch (error) {
           throw sanitizedDependencyLockError(error);
         }
+      },
+      runCommand(command, args, commandOptions) {
+        return lock.runCommand(command, args, commandOptions);
       },
     };
   } catch (error) {
@@ -939,6 +1275,114 @@ function defaultRunCommand(command, args, options) {
   }
 }
 
+function commandEnvironmentMode(targetEnvironment) {
+  const normalizedTarget = Object.fromEntries(
+    Object.entries(targetEnvironment || {})
+      .filter(([, value]) => typeof value === 'string'),
+  );
+  const baseline = Object.fromEntries(
+    Object.entries(process.env)
+      .filter(([, value]) => typeof value === 'string'),
+  );
+  const targetMirror = normalizedTarget.ELECTRON_MIRROR;
+  delete normalizedTarget.ELECTRON_MIRROR;
+  const baselineMirror = baseline.ELECTRON_MIRROR;
+  delete baseline.ELECTRON_MIRROR;
+  if (JSON.stringify(normalizedTarget) !== JSON.stringify(baseline)) {
+    throw new Error(
+      'Frontend dependency synchronization command environment is unsupported.',
+    );
+  }
+  if (targetMirror === baselineMirror) {
+    return 'inherited';
+  }
+  if (
+    !baselineMirror
+    && targetMirror
+    && targetMirror === baseline.VANTAGE_ELECTRON_MIRROR_FALLBACK
+  ) {
+    return 'electron-mirror-fallback';
+  }
+  throw new Error(
+    'Frontend dependency synchronization command environment is unsupported.',
+  );
+}
+
+function runCommandThroughLockHelper(helperState, command, args, options) {
+  if (command !== 'npm') {
+    throw new Error(
+      'Frontend dependency synchronization helper command is unsupported.',
+    );
+  }
+  const expectedWorkingDirectory = path.dirname(
+    path.dirname(helperState.commandDirectory),
+  );
+  if (path.resolve(options.cwd) !== expectedWorkingDirectory) {
+    throw new Error(
+      'Frontend dependency synchronization helper working directory is invalid.',
+    );
+  }
+  const requestId = crypto.randomBytes(16).toString('hex');
+  const requestPath = path.join(helperState.commandDirectory, 'request.json');
+  const responsePath = path.join(helperState.commandDirectory, 'response.json');
+  const environmentMode = commandEnvironmentMode(options.env);
+  fs.rmSync(responsePath, { force: true });
+  writeHelperJsonAtomically(requestPath, {
+    schemaVersion: 1,
+    token: helperState.token,
+    requestId,
+    command,
+    args,
+    environmentMode,
+  });
+
+  try {
+    while (true) {
+      let response;
+      try {
+        response = JSON.parse(fs.readFileSync(responsePath, 'utf8'));
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          throw error;
+        }
+        if (!processIsAlive(helperState.helper.pid)) {
+          throw new Error(
+            'Frontend dependency synchronization lock lease was lost.',
+          );
+        }
+        sleepSynchronously(DEPENDENCY_SYNC_COMMAND_POLL_MILLISECONDS);
+        continue;
+      }
+      if (
+        response.schemaVersion !== 1
+        || response.token !== helperState.token
+        || response.requestId !== requestId
+      ) {
+        throw new Error(
+          'Frontend dependency synchronization lock lease was lost.',
+        );
+      }
+      if (response.errorCode) {
+        const error = new Error(
+          `${command} ${args.join(' ')} failed to start (${response.errorCode})`,
+        );
+        error.code = response.errorCode;
+        throw error;
+      }
+      if (response.status !== 0) {
+        const ending = response.signal
+          ? `signal ${response.signal}`
+          : `exit code ${response.status}`;
+        throw new Error(`${command} ${args.join(' ')} failed with ${ending}`);
+      }
+      return;
+    }
+  } finally {
+    fs.rmSync(requestPath, { force: true });
+    fs.rmSync(responsePath, { force: true });
+  }
+}
+
 function runNpmCiWithFallback({
   npmCommand,
   webappRoot,
@@ -1070,8 +1514,14 @@ function synchronizeDependencies(options) {
   });
   try {
     lock.assertOwned();
+    const runCommand = typeof options.runCommand === 'function'
+      ? options.runCommand
+      : (command, args, commandOptions) => (
+        lock.runCommand(command, args, commandOptions)
+      );
     const result = synchronizeDependenciesUnlocked({
       ...options,
+      runCommand,
       assertLockOwned: () => lock.assertOwned(),
     });
     lock.assertOwned();

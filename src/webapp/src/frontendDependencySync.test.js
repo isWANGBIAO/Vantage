@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   linkSync,
   lstatSync,
@@ -117,6 +118,35 @@ function readEventLines(eventsPath) {
   return readFileSync(eventsPath, 'utf8').trim().split(/\r?\n/u).filter(Boolean);
 }
 
+function listCommandGuardianDirectories(webappRoot) {
+  const lockPath = dependencySyncLockPath(webappRoot);
+  if (!existsSync(lockPath) || !lstatSync(lockPath).isDirectory()) {
+    return [];
+  }
+  return readdirSync(lockPath, { withFileTypes: true })
+    .filter((entry) => (
+      entry.isDirectory()
+      && entry.name.startsWith('command-')
+    ))
+    .map((entry) => path.join(lockPath, entry.name));
+}
+
+function readSurvivingGuardianFiles(directory) {
+  try {
+    return readdirSync(directory)
+      .map((name) => {
+        try {
+          return readFileSync(path.join(directory, name), 'utf8');
+        } catch {
+          return '';
+        }
+      })
+      .join('\n');
+  } catch {
+    return '';
+  }
+}
+
 function findActiveDependencyLease(lockPath) {
   const lockStats = lstatSync(lockPath);
   if (lockStats.isFile()) {
@@ -204,6 +234,7 @@ function spawnSyncWorker({
   signStampPath,
   startPath = '',
   lockTimeoutMilliseconds = 5000,
+  extraEnv = {},
 }) {
   const child = spawn(process.execPath, [workerPath], {
     cwd: webappRoot,
@@ -216,6 +247,7 @@ function spawnSyncWorker({
       SIGN_STAMP_PATH: signStampPath,
       START_PATH: startPath,
       LOCK_TIMEOUT_MS: String(lockTimeoutMilliseconds),
+      ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
@@ -237,6 +269,98 @@ function spawnSyncWorker({
     });
   });
   return { child, completion };
+}
+
+function writeDefaultCommandSyncWorker(webappRoot) {
+  const workerPath = path.join(webappRoot, 'default-command-sync-worker.cjs');
+  writeFileSync(
+    workerPath,
+    `'use strict';
+const { synchronizeDependencies } = require(${JSON.stringify(SYNC_SCRIPT_PATH)});
+
+try {
+  synchronizeDependencies({
+    webappRoot: process.env.WEBAPP_ROOT,
+    env: process.env,
+    force: true,
+    lockTimeoutMilliseconds: Number(process.env.LOCK_TIMEOUT_MS || 5000),
+    logger: { warn() {} },
+  });
+  process.exitCode = 0;
+} catch (error) {
+  process.stderr.write(error.message + '\\n');
+  process.exitCode = 1;
+}
+`,
+    'utf8',
+  );
+  return workerPath;
+}
+
+function writeCrashFixtureNpm(webappRoot) {
+  const binDirectory = path.join(webappRoot, 'fake-bin');
+  const npmPath = path.join(binDirectory, 'npm');
+  mkdirSync(binDirectory, { recursive: true });
+  writeFileSync(
+    npmPath,
+    `#!${process.execPath}
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+
+const command = process.argv[2];
+const workerId = process.env.WORKER_ID;
+const eventsPath = process.env.EVENTS_PATH;
+const mutatorPidPath = process.env.MUTATOR_PID_PATH;
+const releasePath = process.env.RELEASE_PATH;
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+if (command === 'ci') {
+  fs.appendFileSync(eventsPath, workerId + ':ci:start\\n', 'utf8');
+  if (workerId === 'holder') {
+    const mutator = spawn(
+      process.execPath,
+      ['-e', 'setInterval(() => {}, 1000)'],
+      { stdio: 'ignore' },
+    );
+    fs.writeFileSync(mutatorPidPath, String(mutator.pid), 'utf8');
+    while (!fs.existsSync(releasePath)) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+    mutator.kill('SIGTERM');
+  } else if (fs.existsSync(mutatorPidPath)) {
+    const mutatorPid = Number(fs.readFileSync(mutatorPidPath, 'utf8'));
+    if (Number.isSafeInteger(mutatorPid) && processIsAlive(mutatorPid)) {
+      fs.appendFileSync(eventsPath, workerId + ':overlap\\n', 'utf8');
+    }
+  }
+  const packageDirectory = path.join(
+    process.env.WEBAPP_ROOT,
+    'node_modules',
+    'fixture',
+  );
+  fs.mkdirSync(packageDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(packageDirectory, 'package.json'),
+    '{"name":"fixture","version":"1.0.0"}\\n',
+    'utf8',
+  );
+  fs.appendFileSync(eventsPath, workerId + ':ci:end\\n', 'utf8');
+}
+`,
+    'utf8',
+  );
+  chmodSync(npmPath, 0o700);
+  return { binDirectory, npmPath };
 }
 
 test('desired state includes the lock hash and complete Node platform identity', () => {
@@ -1080,6 +1204,96 @@ test('a crashed owner releases the lock and does not strand the next synchronize
       holder.completion,
       ...(recovery ? [recovery.completion] : []),
     ]);
+    rmSync(webappRoot, { recursive: true, force: true });
+  }
+});
+
+test('a crashed owner keeps its lease until the mutating command tree stops', async () => {
+  const webappRoot = createWebappFixture();
+  const workerPath = writeDefaultCommandSyncWorker(webappRoot);
+  const { binDirectory: fakeBinDirectory, npmPath } = writeCrashFixtureNpm(webappRoot);
+  const eventsPath = path.join(webappRoot, 'crash-events.log');
+  const mutatorPidPath = path.join(webappRoot, 'mutator.pid');
+  const releasePath = path.join(webappRoot, 'release-crashed-command');
+  const sharedEnv = {
+    EVENTS_PATH: eventsPath,
+    MUTATOR_PID_PATH: mutatorPidPath,
+    RELEASE_PATH: releasePath,
+    PATH: `${fakeBinDirectory}${path.delimiter}${process.env.PATH || ''}`,
+    npm_execpath: npmPath,
+    NPM_TOKEN: 'frontend-crash-secret-token',
+    VANTAGE_TEST_BEARER: 'Bearer frontend-crash-secret-bearer',
+  };
+  const holder = spawnSyncWorker({
+    workerPath,
+    webappRoot,
+    workerId: 'holder',
+    eventsPath,
+    releasePath,
+    signStampPath: '',
+    extraEnv: sharedEnv,
+  });
+  let recovery;
+
+  try {
+    await waitFor(
+      () => readEventLines(eventsPath).includes('holder:ci:start')
+        && existsSync(mutatorPidPath),
+      'the holder command tree never started its mutator',
+    );
+    const holderGuardianDirectories = listCommandGuardianDirectories(webappRoot);
+    assert.equal(holderGuardianDirectories.length, 1);
+    const guardianContents = holderGuardianDirectories
+      .map(readSurvivingGuardianFiles)
+      .join('\n');
+    assert.equal(guardianContents.includes(sharedEnv.NPM_TOKEN), false);
+    assert.equal(guardianContents.includes(sharedEnv.VANTAGE_TEST_BEARER), false);
+    const holderExit = new Promise((resolve) => {
+      holder.child.once('exit', resolve);
+    });
+    holder.child.kill('SIGKILL');
+    await holderExit;
+
+    recovery = spawnSyncWorker({
+      workerPath,
+      webappRoot,
+      workerId: 'recovery',
+      eventsPath,
+      releasePath,
+      signStampPath: '',
+      lockTimeoutMilliseconds: 5000,
+      extraEnv: sharedEnv,
+    });
+    const recoveryResult = await recovery.completion;
+
+    assert.equal(recoveryResult.code, 0, recoveryResult.stderr);
+    assert.deepEqual(readEventLines(eventsPath), [
+      'holder:ci:start',
+      'recovery:ci:start',
+      'recovery:ci:end',
+    ]);
+    await waitFor(
+      () => listCommandGuardianDirectories(webappRoot).length === 0,
+      'the command guardian left a temporary request directory behind',
+    );
+  } finally {
+    writeFileSync(releasePath, 'release\n', 'utf8');
+    holder.child.kill('SIGKILL');
+    recovery?.child.kill('SIGKILL');
+    await Promise.allSettled([
+      holder.completion,
+      ...(recovery ? [recovery.completion] : []),
+    ]);
+    if (existsSync(mutatorPidPath)) {
+      const mutatorPid = Number(readFileSync(mutatorPidPath, 'utf8'));
+      if (Number.isSafeInteger(mutatorPid)) {
+        try {
+          process.kill(mutatorPid, 'SIGKILL');
+        } catch {
+          // The crash guardian already stopped the mutator.
+        }
+      }
+    }
     rmSync(webappRoot, { recursive: true, force: true });
   }
 });
