@@ -24,11 +24,22 @@ def test_resolve_build_worker_count_handles_invalid_or_empty_inputs():
 
 
 def test_packaging_child_output_is_redacted_and_bounded(tmp_path, capsys):
-    secret = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+    secrets = (
+        "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+        "npm-secret-1234567890",
+        "github-env-secret-1234567890",
+        "npm-auth-secret-1234567890",
+        "password-secret-1234567890",
+        "client-secret-1234567890",
+    )
+    credential_output = (
+        f"token={secrets[0]} NPM_TOKEN={secrets[1]} GITHUB_TOKEN={secrets[2]} "
+        f":_authToken={secrets[3]} password={secrets[4]} client_secret={secrets[5]}"
+    )
     source = (
         "import sys; "
-        f"path={str(tmp_path)!r}; secret={secret!r}; "
-        "sys.stdout.write((f'path={path} token={secret} ') * 100000)"
+        f"path={str(tmp_path)!r}; credentials={credential_output!r}; "
+        "sys.stdout.write((f'path={path} {credentials} ') * 100000)"
     )
 
     returncode = _run_command(
@@ -42,9 +53,9 @@ def test_packaging_child_output_is_redacted_and_bounded(tmp_path, capsys):
 
     assert returncode == 0
     assert str(tmp_path) not in output
-    assert secret not in output
+    assert all(secret not in output for secret in secrets)
     assert "<WORKER_CWD>" in output
-    assert "[REDACTED]" in output
+    assert "[REDACTED_" in output
     assert "output truncated" in output
     assert len(output.encode("utf-8")) < 4096
 
@@ -121,3 +132,55 @@ def test_frontend_worker_redacts_project_paths_outside_its_cwd(capsys):
     assert returncode == 0
     assert str(packaging_module.PROJECT_ROOT) not in output
     assert f"<PROJECT_ROOT>{os.sep}src{os.sep}server.py" in output
+
+
+def test_packaging_pipe_deadline_kills_descendant_after_parent_exits(
+    tmp_path,
+    capsys,
+):
+    descendant_pid_path = tmp_path / "early-parent-descendant.pid"
+    descendant = "import time; print('descendant-ready', flush=True); time.sleep(30)"
+    parent = (
+        "import pathlib, subprocess, sys; "
+        f"child=subprocess.Popen([sys.executable, '-c', {descendant!r}]); "
+        f"pathlib.Path({str(descendant_pid_path)!r}).write_text(str(child.pid), encoding='utf-8'); "
+        "print('parent-ready', flush=True)"
+    )
+    started = time.monotonic()
+    survivor_was_running = False
+
+    try:
+        returncode = _run_command(
+            "probe",
+            [sys.executable, "-c", parent],
+            Path(tmp_path),
+            timeout_seconds=0.5,
+            output_limit_bytes=1024,
+        )
+    finally:
+        if descendant_pid_path.exists():
+            descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
+            try:
+                survivor = psutil.Process(descendant_pid)
+            except psutil.NoSuchProcess:
+                survivor = None
+            if survivor is not None and survivor.is_running():
+                try:
+                    survivor.wait(timeout=1)
+                except psutil.TimeoutExpired:
+                    survivor_was_running = True
+                    survivor.kill()
+                    survivor.wait(timeout=3)
+                except psutil.NoSuchProcess:
+                    pass
+
+    elapsed = time.monotonic() - started
+    assert returncode == 124
+    assert elapsed < 2.5
+    assert descendant_pid_path.exists()
+    assert survivor_was_running is False
+    descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
+    assert not psutil.pid_exists(descendant_pid)
+    output = capsys.readouterr().out
+    assert "parent-ready" in output
+    assert "descendant-ready" in output

@@ -373,12 +373,16 @@ def test_failed_rebuild_output_is_bounded_and_redacted_before_error(tmp_path):
         "url-password-123456",
         "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
         "query-secret-1234567890",
+        "npm-secret-1234567890",
+        "password-secret-1234567890",
+        "client-secret-1234567890",
     )
     credential_output = (
         f"api_key={secrets[0]} Authorization: Bearer {secrets[1]} "
         f"Authorization: Basic {secrets[2]} "
         f"https://alice:{secrets[3]}@example.test/private "
-        f"github={secrets[4]} token={secrets[5]}"
+        f"github={secrets[4]} token={secrets[5]} NPM_TOKEN={secrets[6]} "
+        f"password={secrets[7]} client_secret={secrets[8]}"
     )
     private_path = tmp_path / "private" / "credentials.json"
     observed_kwargs = []

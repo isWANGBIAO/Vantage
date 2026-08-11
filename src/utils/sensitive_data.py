@@ -95,13 +95,23 @@ def redact_sensitive_text(value, *, path_prefixes=None):
         redacted,
     )
     redacted = re.sub(
-        r'(?i)("(?:access[_-]?|refresh[_-]?|auth[_-]?)?token"\s*:\s*")[^"]*(")',
+        r'(?i)("[_-]?(?:[a-z0-9]+[_-])*[a-z0-9]*token"\s*:\s*")[^"]*(")',
         r"\1[REDACTED_TOKEN]\2",
         redacted,
     )
     redacted = re.sub(
-        r"(?i)((?<![\w-])(?:access[_-]?|refresh[_-]?|auth[_-]?)?token\s*[:=]\s*)[^\s&;,\"'<>]+",
+        r"(?i)((?<![a-z0-9_])[_-]?(?:[a-z0-9]+[_-])*[a-z0-9]*token\s*[:=]\s*)[^\s&;,\"'<>]+",
         r"\1[REDACTED_TOKEN]",
+        redacted,
+    )
+    redacted = re.sub(
+        r'(?i)("(?:password|client[_-]?secret)"\s*:\s*")[^"]*(")',
+        r"\1[REDACTED_SECRET]\2",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)((?<![a-z0-9_])(?:password|client[_-]?secret)\s*[:=]\s*)[^\s&;,\"'<>]+",
+        r"\1[REDACTED_SECRET]",
         redacted,
     )
     return _redact_path_prefixes(redacted, path_prefixes)

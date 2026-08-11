@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import os
 import signal
 import subprocess
+import sys
 import threading
+import time
 from typing import Mapping, Sequence
 
 from src.utils.sensitive_data import redact_sensitive_text
@@ -15,6 +18,20 @@ DEFAULT_SUBPROCESS_OUTPUT_LIMIT_BYTES = 16 * 1024
 _TRUNCATION_MARKER = b"\n...[output truncated]...\n"
 _PIPE_DRAIN_JOIN_SECONDS = 2.0
 _PROCESS_TREE_TERMINATION_SECONDS = 5.0
+_WINDOWS_SUPERVISOR_SOURCE = """
+import json
+import subprocess
+import sys
+
+payload = json.loads(sys.stdin.buffer.read())
+child = subprocess.Popen(
+    payload["command"],
+    cwd=payload["cwd"],
+    env=payload["env"],
+    stdin=subprocess.DEVNULL,
+)
+raise SystemExit(child.wait())
+"""
 
 
 class BoundedTextEmitter:
@@ -118,9 +135,111 @@ def _isolated_process_kwargs() -> dict[str, object]:
     return {"start_new_session": True}
 
 
-def terminate_process_tree(process: subprocess.Popen) -> None:
+class _WindowsKillOnCloseJob:
+    def __init__(self, handle, kernel32) -> None:
+        self._handle = handle
+        self._kernel32 = kernel32
+
+    def terminate(self) -> None:
+        if self._handle:
+            self._kernel32.TerminateJobObject(self._handle, 1)
+
+    def close(self) -> None:
+        handle = self._handle
+        self._handle = None
+        if handle:
+            self._kernel32.CloseHandle(handle)
+
+
+def _assign_windows_kill_on_close_job(
+    process: subprocess.Popen,
+) -> _WindowsKillOnCloseJob | None:
+    if os.name != "nt":
+        return None
+
+    import ctypes
+    from ctypes import wintypes
+
+    class _IOCounters(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_ulonglong),
+            ("WriteOperationCount", ctypes.c_ulonglong),
+            ("OtherOperationCount", ctypes.c_ulonglong),
+            ("ReadTransferCount", ctypes.c_ulonglong),
+            ("WriteTransferCount", ctypes.c_ulonglong),
+            ("OtherTransferCount", ctypes.c_ulonglong),
+        ]
+
+    class _BasicLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", wintypes.LARGE_INTEGER),
+            ("PerJobUserTimeLimit", wintypes.LARGE_INTEGER),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _ExtendedLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _BasicLimitInformation),
+            ("IoInfo", _IOCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.CreateJobObjectW(None, None)
+    if not handle:
+        return None
+    job = _WindowsKillOnCloseJob(handle, kernel32)
+    information = _ExtendedLimitInformation()
+    information.BasicLimitInformation.LimitFlags = 0x00002000
+    if not kernel32.SetInformationJobObject(
+        handle,
+        9,
+        ctypes.byref(information),
+        ctypes.sizeof(information),
+    ):
+        job.close()
+        return None
+    process_handle = wintypes.HANDLE(int(process._handle))
+    if not kernel32.AssignProcessToJobObject(handle, process_handle):
+        job.close()
+        return None
+    return job
+
+
+def terminate_process_tree(
+    process: subprocess.Popen,
+    *,
+    windows_job: _WindowsKillOnCloseJob | None = None,
+) -> None:
     """Terminate a subprocess and descendants created in its isolated group."""
-    if os.name == "nt":
+    if windows_job is not None:
+        windows_job.terminate()
+    elif os.name == "nt":
         creation_flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
         try:
             subprocess.run(
@@ -147,6 +266,63 @@ def terminate_process_tree(process: subprocess.Popen) -> None:
             pass
 
 
+def _spawn_isolated_process(
+    command: Sequence[str],
+    *,
+    cwd=None,
+    env=None,
+) -> tuple[subprocess.Popen, _WindowsKillOnCloseJob | None]:
+    popen_kwargs = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        **_isolated_process_kwargs(),
+    }
+    if os.name != "nt":
+        process = subprocess.Popen(
+            list(command),
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            **popen_kwargs,
+        )
+        return process, None
+
+    process = subprocess.Popen(
+        [sys.executable, "-c", _WINDOWS_SUPERVISOR_SOURCE],
+        stdin=subprocess.PIPE,
+        **popen_kwargs,
+    )
+    windows_job = _assign_windows_kill_on_close_job(process)
+    if windows_job is None:
+        process.kill()
+        process.wait(timeout=_PROCESS_TREE_TERMINATION_SECONDS)
+        if process.stdin is not None:
+            process.stdin.close()
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.stderr is not None:
+            process.stderr.close()
+        raise RuntimeError("unable to establish Windows subprocess tree ownership")
+
+    payload = json.dumps(
+        {
+            "command": list(command),
+            "cwd": os.fspath(cwd) if cwd is not None else None,
+            "env": dict(env) if env is not None else None,
+        },
+        ensure_ascii=True,
+    ).encode("utf-8")
+    assert process.stdin is not None
+    try:
+        process.stdin.write(payload)
+        process.stdin.close()
+    except BaseException:
+        terminate_process_tree(process, windows_job=windows_job)
+        windows_job.close()
+        raise
+    return process, windows_job
+
+
 def _run_real_bounded_subprocess(
     command: Sequence[str],
     *,
@@ -155,14 +331,10 @@ def _run_real_bounded_subprocess(
     cwd=None,
     env=None,
 ) -> subprocess.CompletedProcess[str]:
-    process = subprocess.Popen(
-        list(command),
+    process, windows_job = _spawn_isolated_process(
+        command,
         cwd=cwd,
         env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        **_isolated_process_kwargs(),
     )
     assert process.stdout is not None
     assert process.stderr is not None
@@ -180,10 +352,21 @@ def _run_real_bounded_subprocess(
     )
     stdout_thread.start()
     stderr_thread.start()
+    deadline = time.monotonic() + timeout_seconds
+    timed_out = False
     try:
-        returncode = process.wait(timeout=timeout_seconds)
+        returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
-        terminate_process_tree(process)
+        returncode = process.poll()
+        timed_out = True
+
+    if not timed_out:
+        for drain_thread in (stdout_thread, stderr_thread):
+            drain_thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        timed_out = stdout_thread.is_alive() or stderr_thread.is_alive()
+
+    if timed_out:
+        terminate_process_tree(process, windows_job=windows_job)
         try:
             process.wait(timeout=_PROCESS_TREE_TERMINATION_SECONDS)
         except subprocess.TimeoutExpired:
@@ -191,14 +374,16 @@ def _run_real_bounded_subprocess(
             process.wait(timeout=_PROCESS_TREE_TERMINATION_SECONDS)
         stdout_thread.join(timeout=_PIPE_DRAIN_JOIN_SECONDS)
         stderr_thread.join(timeout=_PIPE_DRAIN_JOIN_SECONDS)
+        if windows_job is not None:
+            windows_job.close()
         raise subprocess.TimeoutExpired(
             list(command),
             timeout_seconds,
             output=stdout_capture.value(),
             stderr=stderr_capture.value(),
         ) from None
-    stdout_thread.join(timeout=_PIPE_DRAIN_JOIN_SECONDS)
-    stderr_thread.join(timeout=_PIPE_DRAIN_JOIN_SECONDS)
+    if windows_job is not None:
+        windows_job.close()
     return subprocess.CompletedProcess(
         args=list(command),
         returncode=returncode,

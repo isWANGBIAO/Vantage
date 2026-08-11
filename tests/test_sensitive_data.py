@@ -28,6 +28,11 @@ def test_redact_sensitive_text_removes_common_http_url_and_github_credentials():
         "github": "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
         "token": "query-secret-1234567890",
         "json_token": "json-secret-1234567890",
+        "npm_token": "npm-secret-1234567890",
+        "github_env_token": "github-env-secret-1234567890",
+        "npm_auth": "npm-auth-secret-1234567890",
+        "password_field": "password-secret-1234567890",
+        "client_secret": "client-secret-1234567890",
     }
     message = (
         f"Authorization: Bearer {secrets['bearer']}\n"
@@ -36,6 +41,11 @@ def test_redact_sensitive_text_removes_common_http_url_and_github_credentials():
         f"github={secrets['github']}\n"
         f"request?token={secrets['token']}&safe=1\n"
         f'payload={{"access_token":"{secrets["json_token"]}"}}\n'
+        f"NPM_TOKEN={secrets['npm_token']}\n"
+        f"GITHUB_TOKEN: {secrets['github_env_token']}\n"
+        f"//registry.npmjs.org/:_authToken={secrets['npm_auth']}\n"
+        f"password={secrets['password_field']}\n"
+        f'payload={{"client_secret":"{secrets["client_secret"]}"}}\n'
     )
 
     redacted = redact_sensitive_text(message)
@@ -47,6 +57,11 @@ def test_redact_sensitive_text_removes_common_http_url_and_github_credentials():
     assert "ghp_[REDACTED]" in redacted
     assert "token=[REDACTED_TOKEN]" in redacted
     assert '"access_token":"[REDACTED_TOKEN]"' in redacted
+    assert "NPM_TOKEN=[REDACTED_TOKEN]" in redacted
+    assert "GITHUB_TOKEN: [REDACTED_TOKEN]" in redacted
+    assert ":_authToken=[REDACTED_TOKEN]" in redacted
+    assert "password=[REDACTED_SECRET]" in redacted
+    assert '"client_secret":"[REDACTED_SECRET]"' in redacted
 
 
 def test_redact_sensitive_text_replaces_longest_explicit_path_prefix():
