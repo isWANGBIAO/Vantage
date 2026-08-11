@@ -9,8 +9,8 @@ paths without committing secrets or guessing an unauthorized model.
 
 ## Goals
 
-- Make local `RUN.bat`, macOS launchers, and the release builder consume the
-  same frontend dependency graph as GitHub Actions.
+- Make every Windows/macOS launcher and the release builder consume the same
+  frontend dependency graph as GitHub Actions.
 - Guarantee that the dedicated packaged-backend environment is clean,
   dependency-consistent, and reproducible before it can be stamped or cached.
 - Add real macOS arm64 and Intel dependency smoke coverage.
@@ -66,7 +66,7 @@ serves an exact cached value until its refresh deadline.
 ## Frontend dependency synchronization
 
 A dependency-free Node CLI under `src/webapp/scripts/` owns frontend sync for
-all four persistent entrypoints. Its state includes:
+all persistent entrypoints. Its state includes:
 
 - SHA-256 of `package-lock.json`;
 - operating system and architecture;
@@ -87,8 +87,11 @@ cannot be reused. The Electron binary check remains after dependency sync. On
 macOS, a frontend rebuild invalidates the native codesign stamp so native
 modules are signed again.
 
-Every persistent entrypoint invokes `scripts/sync-dependencies.cjs` with an
-explicit `--webapp-root`. The two macOS launchers additionally pass their
+`RUN.bat`, `RUN.sh`, `RUN_DEV.bat`, `RUN_DEV.sh`, and the release-installer
+builder invoke `scripts/sync-dependencies.cjs` with an explicit
+`--webapp-root`. `START_WEBAPP.bat` is only a compatibility alias that delegates
+to `RUN_DEV.bat`; it has no independent install or launch branch. The two
+macOS launchers additionally pass their
 frontend native-signature stamp through `--invalidate-stamp`; the CLI removes
 that stamp only when it is about to mutate `node_modules`, and the existing
 signing function runs after a successful sync. `VANTAGE_FORCE_FRONTEND_DEPS=1`
@@ -100,7 +103,8 @@ A stdlib-only Python CLI owns the dedicated runtime venv lifecycle. The state
 file `.vantage-backend-runtime-state.json` records:
 
 - the joint hash of `requirements-core.txt` and the runtime overlay;
-- the creating Python implementation/version and target platform;
+- the creating Python implementation, full version, cache tag, `sys.platform`,
+  operating-system name, and machine architecture;
 - the exact bootstrap installer identity (`pip==25.3`);
 - the normalized sorted `distribution==version` closure installed in the venv.
 
@@ -113,10 +117,11 @@ After install, OpenCV normalization and `pip check` must succeed before the
 state is written atomically. Pip's download cache remains reusable, so the clean
 environment does not imply repeated network downloads.
 
-`RUN.bat`, `RUN.sh`, `RUN_DEV.sh`, and the release-installer builder all invoke
-that one CLI with the project root, fixed venv, core requirements, overlay, and
-OpenCV normalizer. None of those entrypoints writes its own dependency stamp or
-runs an incremental requirements install. Before a rebuild the CLI atomically
+`RUN.bat`, `RUN.sh`, `RUN_DEV.bat`, `RUN_DEV.sh`, and the release-installer
+builder all invoke that one CLI with the project root, fixed venv, core
+requirements, overlay, and OpenCV normalizer. `START_WEBAPP.bat` delegates to
+`RUN_DEV.bat`. None of those entrypoints writes its own dependency stamp or runs
+an incremental requirements install. Before a rebuild the CLI atomically
 renames only the exact `.venv-backend-runtime-gpu` sibling to a random
 same-parent quarantine; it does not delete a validity marker while the old
 canonical environment remains reachable.
@@ -136,22 +141,49 @@ signature, recomputes the post-signing closure, and atomically replaces the
 stamp. Signing, verification, or stamp replacement failure leaves no valid
 stamp and aborts the launcher.
 
+The signer accepts only the fixed runtime, state, and stamp paths. It rejects
+links, reparse points, hard links, containment escapes, and identity changes at
+the runtime root, `lib` root, state, stamp, or native library. Extended
+attributes are cleared only on individually validated native files. Cached and
+new signing paths both verify a stable closure twice after signature checks,
+then revalidate the state hash, file identities, stamp payload, and complete
+native closure again after the atomic stamp replacement. A concurrent add,
+delete, replacement, byte mutation, or link swap therefore removes the stamp
+and aborts instead of certifying a mixed snapshot.
+
+All environment probes, pip commands, packaging workers, and codesign calls
+have explicit timeouts and bounded fixed-size output capture. Timed-out process
+groups/trees are terminated rather than leaving pipe-inheriting descendants
+alive. Error summaries redact Bearer/Basic authorization, URL credentials,
+common token forms, and known project, worker, and user paths before they can
+reach persisted logs.
+
 The complete venv lifecycle is serialized by a sibling
-`.vantage-backend-runtime.lock`. POSIX uses `flock`; Windows locks one byte with
-`msvcrt`, so process exit releases ownership and a residual lock file is not an
-occupied lock. A bootstrap supervisor holds this lock for every official build,
-verification, and development-server consumer. Direct build, verify, and
-source-server entrypoints acquire it themselves unless the supervisor marker is
-inherited. The synchronizer captures the old root's `lstat` identity before its
-atomic rename, then revalidates identity, parent, and quarantine prefix. A root
-or nested Windows reparse point, an identity race, or an unsafe inspection
-retains the quarantine with a warning and never enters recursive deletion.
+`.vantage-backend-runtime.lock`. POSIX uses `flock(LOCK_SH/LOCK_EX)` so each
+open file description retains its lease; Windows uses byte-range locks with 64
+reader slots. Sync and signing take an exclusive lease, while build,
+verification, packaging, and source-server consumers own shared leases
+themselves.
+Before opening or extending the sibling lock file, the lock implementation
+uses no-follow open semantics where available and cross-checks `lstat`/`fstat`.
+It rejects links, reparse points, non-regular files, hard links, and identity
+races, so acquiring a lease cannot modify an external file through the lock
+path.
+The bootstrap supervisor protects process creation, but strips the legacy
+`VANTAGE_BACKEND_RUNTIME_LOCK_HELD` marker and never treats environment text as
+proof of ownership. A live child therefore continues to block destructive
+synchronization after its supervisor terminates. Process exit releases the OS
+lease, so a residual lock file is not an occupied lock. The synchronizer
+captures the old root's `lstat` identity before its atomic rename, then
+revalidates identity, parent, and quarantine prefix. A root or nested Windows
+reparse point, an identity race, or an unsafe inspection retains the quarantine
+with a warning and never enters recursive deletion.
 Nested POSIX venv symlinks are unlinked as leaves without following their
 targets; a POSIX symlink at the venv root is retained in quarantine and is
 never recursively traversed. Before synchronization, the macOS launchers prefer
 an executable existing runtime Python for the best-effort psutil cleanup, then
 fall back to bootstrap Python, allowing an old development server to release
-its inherited lock.
+its shared lease.
 Rename failure leaves the canonical environment and state untouched; later
 installation failure leaves the new canonical environment without valid state.
 
@@ -159,9 +191,11 @@ The packaged-runtime fingerprint includes the verified distribution closure.
 Consequently, manually changing the venv cannot reuse an older PyInstaller
 bundle even if source files and requirements text are unchanged. Packaging
 validation also rejects a venv whose state is absent or inconsistent. The
-fingerprint schema is version 2, and the environment sync and macOS signing CLIs
-are explicitly excluded from the shipped backend application as build-only
-code. There is no
+environment-state schema is version 2. The packaged-runtime fingerprint schema
+is version 3 and includes the complete Python, platform, machine, and installed
+distribution identities. Environment sync, lifecycle, signing, and background
+launch helpers are explicitly excluded from the shipped backend application as
+build-only code. There is no
 environment-variable bypass for the fixed venv, state, or installed-closure
 checks.
 
@@ -175,11 +209,14 @@ not deliberate same-host state forgery.
 
 ## macOS CI
 
-CI adds a small matrix using GitHub's current standard labels `macos-14`
-(arm64) and `macos-15-intel` (x64). Each job installs the packaged-runtime
-requirements in a fresh venv, runs `pip check`, imports OpenCV/NumPy, confirms
-`FaceDetectorYN_create`, prewarms YuNet, and syntax-checks `RUN.sh` and
-`RUN_DEV.sh`. It does not attempt notarization or publish a macOS release.
+CI uses GitHub's `macos-14` (arm64) and `macos-15-intel` (x64) runners. Both
+architectures run the shared clean environment synchronizer, `pip check`, YuNet
+prewarm, real native-library signing, cached-signature verification, and a
+state-tamper refresh check. They also exercise the real POSIX shared/exclusive
+lock semantics, with the test dependency pin included in the cache key.
+`RUN.sh` ad-hoc signs and strictly verifies every packaged backend native
+binary; signing or verification failure aborts packaging. CI syntax-checks both
+macOS launchers but does not notarize or publish a macOS release.
 
 ## Runtime hardening
 
@@ -190,21 +227,30 @@ requirements in a fresh venv, runs `pip check`, imports OpenCV/NumPy, confirms
 - Repeated location outcomes are logged on transition and then at most hourly,
   with a suppressed-repeat count. Coordinates remain absent from logs.
 - Backend and Electron log messages replace known user-data/project prefixes
-  with stable labels before persistence. File basenames may remain for
-  diagnostics; raw absolute user paths do not.
-- Directory-size scans retain traversal state across bounded steps. A completed
-  result is cached for fifteen minutes; path changes create a new scan. Partial
-  results keep `storage_scan_truncated=true`.
+  with stable labels before persistence. Electron redaction scans URL-context
+  events and all explicit-prefix candidates from the immutable original text,
+  selects longest non-overlapping ranges, and applies replacements once. It
+  handles encoded local file URLs and structured diagnostic fields while
+  preserving genuine remote URLs and linear-time behavior. File basenames may
+  remain for diagnostics; raw absolute user paths do not.
+- Directory-size scans retain one `os.scandir()` iterator across bounded steps
+  and preserve filesystem enumeration order; they never materialize or sort a
+  whole directory. Processed-entry identities prevent double counting after a
+  retry, and iterators close on completion, failure, path replacement, and
+  shutdown. A completed result is cached for fifteen minutes; partial results
+  keep `storage_scan_truncated=true`.
 
 ## Real YuNet smoke fixture
 
-The repository adds a small, cropped test image derived from Wikimedia Commons
-`File:WS Headshot.jpg`, published under CC0 1.0. The fixture metadata records
-the source page, original author, license, retrieval date, and any crop/resize.
-The test uses the real bundled YuNet ONNX model and OpenCV implementation. It
-asserts at least one legal foreground box above the 1% threshold, while the
-existing synthetic tests continue to own exact boundary, malformed-output,
-largest-face, non-frontal, and UNKNOWN semantics.
+The repository commits Wikimedia's server-generated 120-pixel-wide thumbnail
+of `File:WS Headshot.jpg` unchanged under CC0 1.0. Metadata records the original
+and thumbnail URLs, author, license, retrieval date, dimensions, sizes, both
+SHA-256 values, and EXIF status. No local crop, resize, re-encoding, metadata
+stripping, or generative edit was applied; the downloaded thumbnail already has
+no EXIF entries. The real bundled YuNet/OpenCV test requires exactly one legal
+foreground box at or above the 1.0% threshold. Existing synthetic tests retain
+exact boundary, malformed-output, largest-face, non-frontal, and UNKNOWN
+semantics.
 
 ## Provider recovery boundary
 

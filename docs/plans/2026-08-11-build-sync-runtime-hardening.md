@@ -17,7 +17,9 @@
 - Create: `src/webapp/src/frontendDependencySync.test.js`
 - Modify: `RUN.bat`
 - Modify: `RUN.sh`
+- Modify: `RUN_DEV.bat`
 - Modify: `RUN_DEV.sh`
+- Modify: `START_WEBAPP.bat`
 - Modify: `scripts/build-release-installer.ps1`
 - Modify: `tests/test_launcher_safety.py`
 - Modify: `docs/plans/2026-08-11-build-sync-runtime-hardening-design.md`
@@ -30,8 +32,8 @@ running `npm ci`, `npm ls --depth=0` invalidating an otherwise matching state,
 exact installed-version drift plus missing/extra scoped and nested packages,
 legacy state without a closure, failure leaving no stamp, and atomic stamp
 creation only after validation.
-Static launcher tests must require all four persistent entrypoints to call the
-same CLI and must forbid the old `node_modules`-existence shortcut.
+Static launcher tests must require every persistent entrypoint to call the same
+CLI and must forbid the old `node_modules`-existence shortcut.
 
 **Step 2: Verify RED**
 
@@ -87,16 +89,24 @@ git commit -m "fix: synchronize persistent frontend dependencies" -m "Key fronte
 - Create: `src/scripts/sync_backend_runtime_environment.py`
 - Create: `src/scripts/run_with_backend_runtime_lock.py`
 - Create: `src/scripts/sign_macos_backend_runtime.py`
+- Create: `src/scripts/launch_locked_backend_background.py`
+- Create: `src/utils/subprocess_safety.py`
 - Create: `tests/test_sync_backend_runtime_environment.py`
 - Create: `tests/test_backend_runtime_lock.py`
 - Create: `tests/test_macos_cleanup_launcher.py`
 - Create: `tests/test_sign_macos_backend_runtime.py`
+- Create: `tests/test_launch_locked_backend_background.py`
+- Create: `tests/test_subprocess_safety.py`
 - Modify: `RUN.bat`
 - Modify: `RUN.sh`
+- Modify: `RUN_DEV.bat`
 - Modify: `RUN_DEV.sh`
+- Modify: `START_WEBAPP.bat`
 - Modify: `scripts/build-release-installer.ps1`
 - Modify: `src/core/backend_runtime_packaging.py`
 - Modify: `src/scripts/build_backend_runtime.py`
+- Modify: `src/scripts/run_packaging_builds.py`
+- Modify: `tests/test_packaging_builds_orchestrator.py`
 - Modify: `tests/test_backend_runtime_packaging.py`
 - Modify: `tests/test_launcher_safety.py`
 - Modify: `docs/plans/2026-08-11-build-sync-runtime-hardening-design.md`
@@ -107,8 +117,10 @@ Cover canonical sorted `name==version` snapshots, atomic JSON state writes,
 requirements/Python/platform mismatch, missing/extra distributions, failed
 `pip check`, a legacy SHA-only stamp, forced sync, clean reuse, and failure
 leaving no valid state. Require mismatch to delete and recreate the dedicated
-venv rather than uninstalling a deny-list. Require all four launchers to invoke
-the same helper and forbid direct stamp writes.
+venv rather than uninstalling a deny-list. Require all persistent launchers to
+invoke the same helper and forbid direct stamp writes. Require every target-venv
+consumer to own a real shared OS lease, never trust an inherited environment
+marker, and keep blocking an exclusive synchronizer after its supervisor exits.
 
 Add packaging tests that change only the distribution closure and observe a
 different fingerprint. Bump the fingerprint schema and require packaging
@@ -137,8 +149,11 @@ identity races retain quarantine rather than entering recursive deletion.
 The launchers pass project root, venv, core requirements, overlay, normalizer,
 and force mode to this helper. A sibling OS-released lifecycle lock covers the
 entire synchronizer and every target-venv consumer. Official entrypoints use a
-bootstrap supervisor; direct build, verify, and source-server entrypoints
-acquire or safely inherit the same lock. A helper error aborts before packaging.
+bootstrap supervisor during process creation; direct build, verify, packaging,
+and source-server entrypoints each acquire a shared OS lease themselves.
+Synchronization and signing take the exclusive lease. The legacy inherited
+environment marker is cleared and never accepted as ownership proof. A helper
+error aborts before packaging.
 
 Add the verified distribution closure to
 `build_backend_runtime_fingerprint()`. Packaging must validate that its current
@@ -160,10 +175,24 @@ all-platform transitive hash lock. Simultaneously forging both the dedicated
 venv and its matching state remains inside the trusted local build-host
 boundary.
 
+The runtime fingerprint schema is version 3 and binds full Python identity,
+cache tag, platform, operating system, machine architecture, and the verified
+distribution closure. The signer rejects link/reparse and
+hard-link/containment/identity races for the runtime, `lib`, state, stamp, and
+native files. It clears attributes only on individually validated native files
+and performs stable post-verification and post-stamp closure rescans. The lock
+file itself uses no-follow identity validation and rejects link, reparse,
+non-regular, and multi-link inputs before mutation. Child probes, pip
+operations, packaging workers, and codesign calls use explicit timeouts,
+fixed-size bounded output, process-tree termination, and credential plus
+project/worker/local-path redaction.
+`RUN_DEV.bat` uses the shared frontend/backend synchronizers and a detached
+lifecycle supervisor; `START_WEBAPP.bat` delegates to it entirely.
+
 **Step 4: Verify GREEN and migrate the real dirty environment**
 
 ```powershell
-python -m pytest tests/test_sync_backend_runtime_environment.py tests/test_backend_runtime_packaging.py tests/test_launcher_safety.py tests/test_backend_requirements.py -q
+python -m pytest tests/test_sync_backend_runtime_environment.py tests/test_backend_runtime_packaging.py tests/test_backend_runtime_lock.py tests/test_sign_macos_backend_runtime.py tests/test_packaging_builds_orchestrator.py tests/test_subprocess_safety.py tests/test_launch_locked_backend_background.py tests/test_launcher_safety.py tests/test_backend_requirements.py -q
 python src/scripts/sync_backend_runtime_environment.py --project-root . --venv .venv-backend-runtime-gpu --core-requirements requirements-core.txt --requirements requirements-backend-runtime-gpu.txt --opencv-normalizer src/scripts/normalize_opencv_installation.py
 .\.venv-backend-runtime-gpu\Scripts\python.exe -m pip check
 .\.venv-backend-runtime-gpu\Scripts\python.exe -m pip list --format=json
@@ -191,8 +220,9 @@ git commit -m "fix: rebuild unclean backend packaging environments" -m "Replace 
 **Step 1: Write the failing workflow contract**
 
 Require a `macos-14` arm64 and `macos-15-intel` matrix. Require Python 3.13,
-runtime requirements installation, `pip check`, OpenCV/NumPy/YuNet constructor
-probe, model prewarm test, and `bash -n RUN.sh RUN_DEV.sh`.
+shared clean runtime synchronization, `pip check`, OpenCV/NumPy/YuNet
+constructor probe, model prewarm, real native-library signing plus cached
+verification/state-tamper refresh, and `bash -n RUN.sh RUN_DEV.sh`.
 
 **Step 2: Verify RED**
 
@@ -205,8 +235,14 @@ Expected: no macOS job exists.
 **Step 3: Add the job and verify GREEN**
 
 Use official GitHub-hosted labels and `actions/setup-python@v5` pip caching
-keyed by both runtime requirements files. Do not add signing secrets or publish
-artifacts.
+keyed by both runtime requirements files. Assert each runner's actual machine
+architecture, run the shared environment and signer CLIs, and make `RUN.sh`
+strictly sign and verify each packaged backend native binary. Do not add
+signing secrets, notarize, or publish artifacts.
+
+Run the real POSIX shared/exclusive lock suite on both architectures and include
+the CI requirements file in the cache key so the tested `pytest` pin cannot
+drift behind a restored environment.
 
 ```powershell
 python -m pytest tests/test_ci_workflow.py -q
@@ -292,11 +328,14 @@ python -m pytest tests/test_directory_size_scanner.py tests/test_storage_stats.p
 **Step 3: Implement and wire the scanner**
 
 Use a queue of pending directories plus accumulated totals and a visited set.
-Each `step()` consumes at most the configured entry/time budget. Preserve
-sorted deterministic traversal. `update_storage_stats()` owns one scanner per
-current path, publishes partial totals with `storage_scan_truncated=true`, and
-serves completed cached totals until refresh. Legacy one-shot scanning keeps
-its existing bounded helper.
+Keep one persistent `os.scandir()` iterator for the current directory and
+preserve filesystem enumeration order; never materialize or sort a whole
+directory. Check the time budget around iterator open, advance, and entry
+processing. Retain processed-entry identities so retrying a failed root cannot
+double-count, and close iterators on completion, failure, path replacement, and
+shutdown. `update_storage_stats()` owns one scanner per current path, publishes
+partial totals with `storage_scan_truncated=true`, and serves completed cached
+totals until refresh. Legacy one-shot scanning keeps its bounded helper.
 
 **Step 4: Verify GREEN**
 
@@ -344,7 +383,12 @@ broad regex that could alter URLs or traceback line numbers. Wrap Python
 stdout/stderr after file-descriptor redirection and sanitize Electron entries
 inside the bounded logger before file append or console mirroring. Main passes
 only known local roots. Preserve stream `flush`, `fileno`, `encoding`, error
-isolation, rotation, and recursion guards.
+isolation, rotation, and recursion guards. Electron collects URL-context events
+and every explicit-prefix candidate from the immutable original message,
+selects the longest non-overlapping ranges, and applies replacements once. This
+handles encoded local file URLs and structured diagnostic fields while
+preserving genuine remote URLs and avoiding mutation-dependent or quadratic
+rescanning leaks.
 
 **Step 4: Verify GREEN**
 
@@ -370,18 +414,20 @@ git commit -m "fix: redact local paths from persisted logs" -m "Replace explicit
 
 **Step 1: Download and document the source**
 
-Download the current Wikimedia Commons `File:WS Headshot.jpg` original, verify
-its page declares CC0 1.0, record source/author/license/retrieval date and source
-SHA-256, then crop/resize only if necessary. Remove EXIF metadata. Do not use a
-private or locally captured image.
+Verify the Wikimedia Commons `File:WS Headshot.jpg` page declares CC0 1.0 and
+record the original plus official thumbnail URLs, author, license, retrieval
+date, dimensions, sizes, both SHA-256 values, and EXIF status. Commit the
+server-generated 120-pixel-wide thumbnail unchanged; do not crop, resize,
+re-encode, strip metadata locally, or use a private/generated image. The
+downloaded thumbnail must contain no EXIF entries.
 
 **Step 2: Write and verify the RED smoke test**
 
 Use the real bundled YuNet model and the public fixture. Assert the fixture is
 readable and `detect_foreground_presence_face_boxes()` returns exactly one
-legal clipped box above the 1% threshold. Temporarily point the fixture path at
-an empty image to verify the assertion fails for the intended reason, then
-restore it.
+legal clipped box at or above the 1.0% threshold. Temporarily point the fixture
+path at an empty image to verify the assertion fails for the intended reason,
+then restore it.
 
 **Step 3: Verify GREEN in both available environments**
 
@@ -398,7 +444,7 @@ data.
 
 ```powershell
 git add tests/fixtures/yunet/foreground_face_cc0.jpg tests/fixtures/yunet/LICENSE.md tests/test_person_detection_real_model.py .gitattributes
-git commit -m "test: exercise YuNet with a CC0 face fixture" -m "Add a documented, metadata-stripped public-domain headshot and verify the real bundled YuNet model produces one qualifying foreground box, complementing the exact synthetic boundary tests without committing private imagery."
+git commit -m "test: exercise YuNet with a CC0 face fixture" -m "Add a documented, EXIF-free Wikimedia-generated CC0 thumbnail unchanged and verify the real bundled YuNet model produces exactly one qualifying foreground box, complementing the synthetic boundary tests without committing private imagery."
 ```
 
 ### Task 8: Full verification and local provider recovery
@@ -409,7 +455,7 @@ git commit -m "test: exercise YuNet with a CC0 face fixture" -m "Add a documente
 **Step 1: Run focused integration suites**
 
 ```powershell
-python -m pytest tests/test_launcher_safety.py tests/test_sync_backend_runtime_environment.py tests/test_backend_runtime_packaging.py tests/test_ci_workflow.py tests/test_screenshot_capture.py tests/test_sedentary_monitor.py tests/test_get_location_save_image.py tests/test_directory_size_scanner.py tests/test_storage_stats.py tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_person_detection_real_model.py -q
+python -m pytest tests/test_sync_backend_runtime_environment.py tests/test_backend_runtime_packaging.py tests/test_backend_runtime_lock.py tests/test_sign_macos_backend_runtime.py tests/test_packaging_builds_orchestrator.py tests/test_subprocess_safety.py tests/test_launch_locked_backend_background.py tests/test_launcher_safety.py tests/test_backend_requirements.py tests/test_ci_workflow.py tests/test_screenshot_capture.py tests/test_sedentary_monitor.py tests/test_get_location_save_image.py tests/test_directory_size_scanner.py tests/test_storage_stats.py tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_person_detection_real_model.py -q
 ```
 
 **Step 2: Run full source validation**
