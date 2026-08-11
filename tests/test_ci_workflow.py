@@ -212,7 +212,12 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert "uname -m" in macos_job
     assert "python -m venv .venv-lock-test" in macos_job
     assert "grep -E '^pytest==[^[:space:]]+$' requirements-ci.txt" in macos_job
-    assert '.venv-lock-test/bin/python -m pip install "$pytest_requirement"' in macos_job
+    assert "grep -E '^psutil==[^[:space:]]+$' requirements-core.txt" in macos_job
+    assert (
+        '.venv-lock-test/bin/python -m pip install '
+        '"$pytest_requirement" "$psutil_requirement"'
+        in macos_job
+    )
     assert ".venv-lock-test/bin/python -m pytest" in macos_job
 
     forbidden_steps = (
