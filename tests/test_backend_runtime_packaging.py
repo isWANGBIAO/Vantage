@@ -148,6 +148,7 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         "src.face_analyzer_mediapipe",
         "src.scripts.debug_single_face",
         "src.scripts.install_requirements",
+        "src.scripts.launch_locked_backend_background",
         "src.scripts.normalize_opencv_installation",
         "src.scripts.run_packaging_builds",
         "src.scripts.run_with_backend_runtime_lock",

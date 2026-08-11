@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 
 def _assert_fragments_in_order(content, fragments):
@@ -24,10 +25,63 @@ def test_development_launchers_do_not_wrap_server_in_cmd_windows():
     start_webapp = Path("START_WEBAPP.bat").read_text(encoding="utf-8")
 
     assert 'cmd /c "cd /d %PROJECT_ROOT% && python src/server.py' not in run_dev_bat
-    assert 'run_server_background.py' in run_dev_bat
+    assert 'launch_locked_backend_background.py' in run_dev_bat
 
     assert 'cmd /k "python src/server.py"' not in start_webapp
-    assert 'run_server_background.py' in start_webapp
+    assert 'call "%~dp0RUN_DEV.bat" %*' in start_webapp
+
+
+def test_windows_development_launchers_use_shared_dependency_and_runtime_contracts():
+    run_dev = Path("RUN_DEV.bat").read_text(encoding="utf-8")
+    start_webapp = Path("START_WEBAPP.bat").read_text(encoding="utf-8")
+
+    assert "sync-dependencies.cjs" in run_dev
+    assert "sync_backend_runtime_environment.py" in run_dev
+    assert "requirements-core.txt" in run_dev
+    assert "requirements-backend-runtime-gpu.txt" in run_dev
+    assert "normalize_opencv_installation.py" in run_dev
+    assert ".venv-backend-runtime-gpu" in run_dev
+    assert "run_with_backend_runtime_lock.py" in run_dev
+    assert "launch_locked_backend_background.py" in run_dev
+    assert "%BACKEND_RUNTIME_PYTHON%" in run_dev
+    assert "VANTAGE_FORCE_BACKEND_DEPS" in run_dev
+    assert "npm install" not in run_dev.lower()
+    assert "node_modules" not in run_dev.lower()
+    assert "Start-Process -FilePath python" not in run_dev
+    assert "python src\\scripts\\run_frontend_background.py" not in run_dev
+
+    assert 'call "%~dp0RUN_DEV.bat" %*' in start_webapp
+    assert "run_server_background.py" not in start_webapp
+    assert "npm install" not in start_webapp.lower()
+    assert "node_modules" not in start_webapp.lower()
+    assert "Start-Process" not in start_webapp
+
+
+def test_start_webapp_delegates_arguments_and_exit_status(tmp_path):
+    start_webapp = tmp_path / "START_WEBAPP.bat"
+    start_webapp.write_text(
+        Path("START_WEBAPP.bat").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    delegated = tmp_path / "delegated.txt"
+    (tmp_path / "RUN_DEV.bat").write_text(
+        "@echo off\r\n"
+        f">\"{delegated}\" echo %*\r\n"
+        "exit /b 23\r\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmd", "/d", "/c", str(start_webapp), "alpha", "two words"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert result.returncode == 23
+    assert delegated.read_text(encoding="utf-8").strip() == 'alpha "two words"'
 
 
 def test_run_dev_bat_launches_frontend_via_background_runner():

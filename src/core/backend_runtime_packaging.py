@@ -100,6 +100,7 @@ PYINSTALLER_EXCLUDES = (
     "src.scripts.convert_icon",
     "src.scripts.debug_single_face",
     "src.scripts.install_requirements",
+    "src.scripts.launch_locked_backend_background",
     "src.scripts.normalize_opencv_installation",
     "src.scripts.render_face_pipeline_markdown",
     "src.scripts.run_packaging_builds",
