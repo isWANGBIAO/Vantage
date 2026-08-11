@@ -21,6 +21,10 @@ def _ensure_project_root_on_sys_path(
 _ensure_project_root_on_sys_path()
 
 from src.core.config import Config
+from src.utils.sensitive_data import RedactingPipeLog, build_log_path_prefixes
+
+
+SUPERVISE_ARG = "--supervise"
 
 
 def _resolve_npm_executable() -> str:
@@ -87,45 +91,102 @@ def _prepare_frontend_runtime_logs(logs_dir: Path, mode: str, launched_at: datet
     }
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = list(argv or sys.argv[1:])
-    mode = args[0] if args else "production"
+def _run_frontend_supervisor(
+    *,
+    mode: str,
+    command: list[str],
+    env: dict[str, str],
+    webapp_dir: Path,
+    runtime_logs: dict[str, Path],
+    path_prefixes: dict[str, str],
+    launched_at: datetime,
+) -> int:
+    """Run the frontend for its full lifetime while redacting persisted output."""
 
+    timestamp = launched_at.isoformat()
+    with RedactingPipeLog(
+        runtime_logs["stdout_log"],
+        path_prefixes=path_prefixes,
+    ) as stdout_log, RedactingPipeLog(
+        runtime_logs["stderr_log"],
+        path_prefixes=path_prefixes,
+    ) as stderr_log:
+        header = f"\n=== Frontend launch {mode} {timestamp} ===\n"
+        stdout_log.write_record(header)
+        stderr_log.write_record(header)
+        try:
+            with stdout_log.capture_subprocess_output(
+                stream_name="frontend-stdout"
+            ) as stdout_handle, stderr_log.capture_subprocess_output(
+                stream_name="frontend-stderr"
+            ) as stderr_handle:
+                process = subprocess.Popen(
+                    command,
+                    cwd=webapp_dir,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=stdout_handle,
+                    stderr=stderr_handle,
+                    creationflags=0,
+                    start_new_session=False,
+                    close_fds=True,
+                )
+                return process.wait()
+        except Exception as exc:
+            stderr_log.write_record(f"Frontend process failed: {exc}\n")
+            return 1
+
+
+def _supervise_frontend(mode: str) -> int:
     project_root = Config.get_project_root()
     webapp_dir = project_root / "src" / "webapp"
-    logs_dir = Config.get_logs_dir()
-    logs_dir.mkdir(parents=True, exist_ok=True)
-
+    runtime_paths = Config.get_runtime_paths()
     launched_at = datetime.now()
-    runtime_logs = _prepare_frontend_runtime_logs(logs_dir, mode, launched_at)
-    stdout_log = runtime_logs["stdout_log"]
-    stderr_log = runtime_logs["stderr_log"]
-    timestamp = launched_at.isoformat()
+    runtime_logs = _prepare_frontend_runtime_logs(
+        runtime_paths["log_dir"],
+        mode,
+        launched_at,
+    )
+    return _run_frontend_supervisor(
+        mode=mode,
+        command=_build_frontend_command(mode),
+        env=_build_frontend_env(mode),
+        webapp_dir=webapp_dir,
+        runtime_logs=runtime_logs,
+        path_prefixes=build_log_path_prefixes(
+            project_root=project_root,
+            runtime_paths=runtime_paths,
+        ),
+        launched_at=launched_at,
+    )
 
-    command = _build_frontend_command(mode)
-    env = _build_frontend_env(mode)
-    creationflags = _get_creationflags()
 
-    with open(stdout_log, "a", encoding="utf-8") as stdout_handle, open(
-        stderr_log, "a", encoding="utf-8"
-    ) as stderr_handle:
-        stdout_handle.write(f"\n=== Frontend launch {mode} {timestamp} ===\n")
-        stderr_handle.write(f"\n=== Frontend launch {mode} {timestamp} ===\n")
-
-        process = subprocess.Popen(
-            command,
-            cwd=webapp_dir,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=stdout_handle,
-            stderr=stderr_handle,
-            creationflags=creationflags,
-            start_new_session=_get_start_new_session(),
-            close_fds=True,
-        )
-
-    print(f"Frontend launch requested: mode={mode}, pid={process.pid}")
+def _launch_frontend_supervisor(mode: str) -> int:
+    project_root = Config.get_project_root()
+    command = [sys.executable, str(Path(__file__).resolve()), SUPERVISE_ARG, mode]
+    process = subprocess.Popen(
+        command,
+        cwd=project_root,
+        env=_build_frontend_env(mode),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=_get_creationflags(),
+        start_new_session=_get_start_new_session(),
+        close_fds=True,
+    )
+    print(f"Frontend supervisor launched: mode={mode}, pid={process.pid}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(argv or sys.argv[1:])
+    if args and args[0] == SUPERVISE_ARG:
+        mode = args[1] if len(args) > 1 else "production"
+        return _supervise_frontend(mode)
+    mode = args[0] if args else "production"
+    _build_frontend_command(mode)
+    return _launch_frontend_supervisor(mode)
 
 
 if __name__ == "__main__":

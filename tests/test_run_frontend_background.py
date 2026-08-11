@@ -1,6 +1,10 @@
 import importlib.util
+import os
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -106,3 +110,77 @@ def test_prepare_frontend_runtime_logs_does_not_reuse_legacy_fixed_logs(tmp_path
 
     assert runtime_logs["stdout_log"].name != "frontend_production.out.log"
     assert runtime_logs["stderr_log"].name != "frontend_production.err.log"
+
+
+def test_frontend_supervisor_redacts_split_native_child_output(tmp_path):
+    launcher = _load_launcher_module()
+    logs_dir = tmp_path / "logs"
+    runtime_logs = launcher._prepare_frontend_runtime_logs(
+        logs_dir,
+        "production",
+        datetime(2026, 8, 11, 18, 0, 0),
+    )
+    private_root = tmp_path / "Private Frontend"
+    private_root.mkdir()
+    private_file = private_root / "electron-main.cjs"
+    secret = "frontend-bearer-secret-1234567890"
+    child_script = tmp_path / "child.py"
+    child_script.write_text(
+        "\n".join(
+            (
+                "import os",
+                f"private_path = {str(private_file)!r}.encode('utf-8')",
+                f"secret = {secret!r}.encode('utf-8')",
+                "split = max(1, len(private_path) // 2)",
+                "os.write(1, b'npm path=' + private_path[:split])",
+                "os.write(1, private_path[split:] + b':42:7\\n')",
+                "os.write(2, b'Authorization: Bea')",
+                "os.write(2, b'rer ' + secret + b'\\n')",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    returncode = launcher._run_frontend_supervisor(
+        mode="production",
+        command=[sys.executable, str(child_script)],
+        env=dict(os.environ),
+        webapp_dir=tmp_path,
+        runtime_logs=runtime_logs,
+        path_prefixes={"<PROJECT_ROOT>": private_root},
+        launched_at=datetime(2026, 8, 11, 18, 0, 0),
+    )
+
+    assert returncode == 0
+    stdout_text = runtime_logs["stdout_log"].read_text(encoding="utf-8")
+    stderr_text = runtime_logs["stderr_log"].read_text(encoding="utf-8")
+    assert str(private_root) not in stdout_text
+    assert secret not in stderr_text
+    assert "<PROJECT_ROOT>" in stdout_text
+    assert "electron-main.cjs:42:7" in stdout_text
+    assert "Authorization: Bearer [REDACTED_TOKEN]" in stderr_text
+
+
+def test_frontend_launcher_detaches_a_long_lived_redacting_supervisor(tmp_path):
+    launcher = _load_launcher_module()
+    project_root = tmp_path / "project"
+    webapp_dir = project_root / "src" / "webapp"
+    webapp_dir.mkdir(parents=True)
+    logs_dir = tmp_path / "logs"
+    process = SimpleNamespace(pid=4321)
+
+    with (
+        patch.object(launcher.Config, "get_project_root", return_value=project_root),
+        patch.object(launcher.Config, "get_logs_dir", return_value=logs_dir),
+        patch.object(launcher.subprocess, "Popen", return_value=process) as popen,
+    ):
+        assert launcher.main(["production"]) == 0
+
+    command = popen.call_args.args[0]
+    assert command[0] == sys.executable
+    assert Path(command[1]).resolve() == Path(launcher.__file__).resolve()
+    assert command[2:] == ["--supervise", "production"]
+    assert popen.call_args.kwargs["stdin"] is subprocess.DEVNULL
+    assert popen.call_args.kwargs["stdout"] is subprocess.DEVNULL
+    assert popen.call_args.kwargs["stderr"] is subprocess.DEVNULL
+    assert popen.call_args.kwargs["close_fds"] is True
