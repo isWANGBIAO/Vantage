@@ -6,13 +6,24 @@ from src.services import person_detection
 
 
 FIXTURE_PATH = Path("tests/fixtures/yunet/foreground_face_cc0.jpg")
+REPOSITORY_MODEL_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "models"
+    / "face_detection_yunet_2023mar.onnx"
+)
 
 
-def test_real_yunet_detects_one_qualifying_foreground_face():
+def test_real_yunet_detects_one_qualifying_foreground_face(monkeypatch):
     image = cv2.imread(str(FIXTURE_PATH))
     assert image is not None, "CC0 YuNet fixture must be readable"
 
-    model_path = person_detection.resolve_face_detection_model_path()
+    monkeypatch.delenv(
+        person_detection.FACE_DETECTION_MODEL_PATH_ENV,
+        raising=False,
+    )
+    model_path = REPOSITORY_MODEL_PATH
+    assert person_detection.resolve_face_detection_model_path() == model_path
     assert model_path.is_file(), "the checked-in YuNet model must be available"
 
     detector = cv2.FaceDetectorYN_create(
