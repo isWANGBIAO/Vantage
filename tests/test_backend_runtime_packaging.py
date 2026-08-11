@@ -437,6 +437,8 @@ def test_build_project_activity_snapshot_parses_recent_git_log(tmp_path):
     def fake_run(command, **kwargs):
         assert command[:2] == ["git", "log"]
         assert kwargs["cwd"] == tmp_path
+        assert kwargs["timeout"] > 0
+        assert kwargs["capture_output"] is True
         return SimpleNamespace(
             returncode=0,
             stdout=b"abc1234|2026-04-24|fix packaged progress\n",
@@ -453,6 +455,27 @@ def test_build_project_activity_snapshot_parses_recent_git_log(tmp_path):
     assert snapshot["commits"] == [
         {"hash": "abc1234", "date": "2026-04-24", "message": "fix packaged progress"}
     ]
+
+
+def test_project_activity_snapshot_redacts_secrets_and_project_paths(tmp_path):
+    secret = "sk-1234567890abcdef"
+
+    def fake_run(_command, **_kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                f"abc1234|2026-04-24|avoid {tmp_path} api_key={secret}\n"
+            ),
+            stderr="",
+        )
+
+    snapshot = build_project_activity_snapshot(tmp_path, run_command=fake_run)
+    message = snapshot["commits"][0]["message"]
+
+    assert str(tmp_path) not in message
+    assert secret not in message
+    assert "<PROJECT_ROOT>" in message
+    assert "[REDACTED]" in message
 
 
 def test_write_project_activity_snapshot_returns_packaged_resource(tmp_path):

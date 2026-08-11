@@ -44,6 +44,10 @@ from src.core.backend_runtime_lock import (
     backend_runtime_lock,
     backend_runtime_lock_is_held,
 )
+from src.utils.subprocess_safety import (
+    bounded_process_failure_detail,
+    run_bounded_subprocess,
+)
 
 
 BACKEND_RUNTIME_VENV_NAME = ".venv-backend-runtime-gpu"
@@ -376,14 +380,41 @@ def safe_remove_backend_runtime_venv(
         ) from exc
 
 
-def _run_checked(command: list[str], run_command) -> None:
-    result = run_command(command, check=False)
+def _runtime_subprocess_path_prefixes(
+    project_root: Path,
+    venv: Path,
+) -> dict[str, Path]:
+    return {
+        "<BACKEND_RUNTIME>": venv,
+        "<PROJECT_ROOT>": project_root,
+        "<USER_HOME>": Path.home(),
+    }
+
+
+def _target_python_path_prefixes(python_executable: Path) -> dict[str, Path]:
+    venv = python_executable.parent.parent
+    return _runtime_subprocess_path_prefixes(venv.parent, venv)
+
+
+def _run_checked(
+    command: list[str],
+    run_command,
+    *,
+    path_prefixes: Mapping[str, object],
+) -> None:
+    try:
+        result = run_bounded_subprocess(command, run_command=run_command)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("backend environment command timed out") from exc
     if result.returncode == 0:
         return
-    detail = str(getattr(result, "stderr", "") or getattr(result, "stdout", "")).strip()
+    detail = bounded_process_failure_detail(
+        result,
+        path_prefixes=path_prefixes,
+    )
     suffix = f": {detail}" if detail else ""
     raise RuntimeError(
-        f"command failed with exit code {result.returncode}: {' '.join(command)}{suffix}"
+        f"backend environment command failed with exit code {result.returncode}{suffix}"
     )
 
 
@@ -399,14 +430,18 @@ def _parse_last_json_line(output: str) -> dict[str, object]:
 
 
 def probe_backend_environment(python_executable: Path, run_command=subprocess.run):
-    result = run_command(
-        [str(python_executable), "-c", _ENVIRONMENT_PROBE],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = run_bounded_subprocess(
+            [str(python_executable), "-c", _ENVIRONMENT_PROBE],
+            run_command=run_command,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("backend environment metadata probe timed out") from exc
     if result.returncode != 0:
-        detail = str(result.stderr or result.stdout).strip()
+        detail = bounded_process_failure_detail(
+            result,
+            path_prefixes=_target_python_path_prefixes(python_executable),
+        )
         raise RuntimeError(f"backend environment metadata probe failed: {detail}")
     payload = _parse_last_json_line(result.stdout)
     payload["distributions"] = normalize_distribution_closure(
@@ -416,12 +451,13 @@ def probe_backend_environment(python_executable: Path, run_command=subprocess.ru
 
 
 def pip_check_succeeds(python_executable: Path, run_command=subprocess.run) -> bool:
-    result = run_command(
-        [str(python_executable), "-m", "pip", "check"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = run_bounded_subprocess(
+            [str(python_executable), "-m", "pip", "check"],
+            run_command=run_command,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return result.returncode == 0
 
 
@@ -429,12 +465,13 @@ def required_imports_succeed(
     python_executable: Path,
     run_command=subprocess.run,
 ) -> bool:
-    result = run_command(
-        [str(python_executable), "-c", _REQUIRED_IMPORTS_PROBE],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = run_bounded_subprocess(
+            [str(python_executable), "-c", _REQUIRED_IMPORTS_PROBE],
+            run_command=run_command,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return result.returncode == 0
 
 
@@ -472,12 +509,13 @@ def opencv_installation_matches(
         )
     except (OSError, ValueError):
         return False
-    result = run_command(
-        [str(python_executable), "-c", _OPENCV_PROBE],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = run_bounded_subprocess(
+            [str(python_executable), "-c", _OPENCV_PROBE],
+            run_command=run_command,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     if result.returncode != 0:
         return False
     try:
@@ -604,6 +642,10 @@ def _synchronize_backend_runtime_environment_locked(
         resolved_requirements,
     )
     target_python = backend_runtime_python_path(safe_venv)
+    subprocess_path_prefixes = _runtime_subprocess_path_prefixes(
+        resolved_root,
+        safe_venv,
+    )
     reuse_error, reusable_state = _reuse_validation_error(
         venv=safe_venv,
         target_python=target_python,
@@ -634,6 +676,7 @@ def _synchronize_backend_runtime_environment_locked(
         _run_checked(
             [resolved_creator_python, "-m", "venv", str(safe_venv)],
             run_command,
+            path_prefixes=subprocess_path_prefixes,
         )
         target_python = backend_runtime_python_path(safe_venv)
         _run_checked(
@@ -646,6 +689,7 @@ def _synchronize_backend_runtime_environment_locked(
                 PINNED_BOOTSTRAP_PIP,
             ],
             run_command,
+            path_prefixes=subprocess_path_prefixes,
         )
         _run_checked(
             [
@@ -657,6 +701,7 @@ def _synchronize_backend_runtime_environment_locked(
                 str(resolved_requirements),
             ],
             run_command,
+            path_prefixes=subprocess_path_prefixes,
         )
         _run_checked(
             [
@@ -666,6 +711,7 @@ def _synchronize_backend_runtime_environment_locked(
                 str(resolved_core),
             ],
             run_command,
+            path_prefixes=subprocess_path_prefixes,
         )
 
         probe = probe_environment(target_python, run_command)

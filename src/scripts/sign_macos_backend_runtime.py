@@ -32,6 +32,10 @@ from src.core.backend_runtime_lock import (
     DEFAULT_BACKEND_RUNTIME_LOCK_TIMEOUT_SECONDS,
     backend_runtime_lock,
 )
+from src.utils.subprocess_safety import (
+    bounded_process_failure_detail,
+    run_bounded_subprocess,
+)
 
 
 BACKEND_RUNTIME_VENV_NAME = ".venv-backend-runtime-gpu"
@@ -368,23 +372,25 @@ def _run_codesign_command(
     *,
     action: str,
     run_command,
+    path_prefixes: Mapping[str, object],
 ) -> bool:
-    result = run_command(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = run_bounded_subprocess(command, run_command=run_command)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"macOS backend native library {action} timed out"
+        ) from exc
     if result.returncode == 0:
         return True
-    detail = str(
-        getattr(result, "stderr", "") or getattr(result, "stdout", "")
-    ).strip()
+    detail = bounded_process_failure_detail(
+        result,
+        path_prefixes=path_prefixes,
+    )
     suffix = f": {detail}" if detail else ""
     if action == "verify cached signature":
         return False
     raise RuntimeError(
-        f"macOS backend native library {action} failed for {command[-1]}{suffix}"
+        f"macOS backend native library {action} failed{suffix}"
     )
 
 
@@ -394,6 +400,7 @@ def _verify_native_libraries(
     *,
     action: str,
     run_command,
+    path_prefixes: Mapping[str, object],
 ) -> bool:
     for library in snapshot.libraries:
         _assert_snapshot_roots(venv, snapshot)
@@ -408,6 +415,7 @@ def _verify_native_libraries(
             ],
             action=action,
             run_command=run_command,
+            path_prefixes=path_prefixes,
         ):
             return False
         _assert_snapshot_roots(venv, snapshot)
@@ -449,6 +457,11 @@ def _sign_macos_backend_runtime_locked(
     force: bool,
 ) -> MacOSBackendSigningOutcome:
     try:
+        path_prefixes = {
+            "<BACKEND_RUNTIME>": venv,
+            "<PROJECT_ROOT>": venv.parent,
+            "<USER_HOME>": Path.home(),
+        }
         snapshot = _build_signing_snapshot(venv, state_path)
         expected_state = _codesign_state_from_snapshot(venv, state_path, snapshot)
         libraries = snapshot.libraries
@@ -462,6 +475,7 @@ def _sign_macos_backend_runtime_locked(
                 snapshot,
                 action="verify cached signature",
                 run_command=run_command,
+                path_prefixes=path_prefixes,
             ):
                 return MacOSBackendSigningOutcome(
                     reused=True,
@@ -469,12 +483,22 @@ def _sign_macos_backend_runtime_locked(
                 )
 
         stamp_path.unlink(missing_ok=True)
-        run_command(
-            ["xattr", "-cr", str(venv / "lib")],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            xattr_result = run_bounded_subprocess(
+                ["xattr", "-cr", str(venv / "lib")],
+                run_command=run_command,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("macOS backend extended attribute cleanup timed out") from exc
+        if xattr_result.returncode != 0:
+            detail = bounded_process_failure_detail(
+                xattr_result,
+                path_prefixes=path_prefixes,
+            )
+            suffix = f": {detail}" if detail else ""
+            raise RuntimeError(
+                f"macOS backend extended attribute cleanup failed{suffix}"
+            )
         _assert_snapshot_roots(venv, snapshot)
         for library in libraries:
             _assert_native_library(venv, library)
@@ -494,6 +518,7 @@ def _sign_macos_backend_runtime_locked(
                 ],
                 action="sign",
                 run_command=run_command,
+                path_prefixes=path_prefixes,
             )
             _assert_snapshot_roots(venv, snapshot)
             signed_identity = _assert_plain_file(
@@ -526,6 +551,7 @@ def _sign_macos_backend_runtime_locked(
             signed_snapshot,
             action="verify signed library",
             run_command=run_command,
+            path_prefixes=path_prefixes,
         )
         signed_state = _codesign_state_from_snapshot(
             venv,

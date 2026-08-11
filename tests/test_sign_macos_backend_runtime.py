@@ -473,3 +473,67 @@ def test_native_file_swap_after_sign_is_rejected_before_verification(tmp_path):
     assert verify_commands == []
     assert not stamp_path.exists()
     assert external_native.read_bytes() == b"outside"
+
+
+def test_codesign_failure_output_is_bounded_redacted_and_has_a_timeout(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = _write_matching_stamp(module, venv, state_path)
+    libraries[0].write_bytes(b"changed")
+    secret = "sk-1234567890abcdef"
+    observed_timeouts = []
+
+    def run(command, **kwargs):
+        normalized = [str(part) for part in command]
+        observed_timeouts.append(kwargs.get("timeout"))
+        failed_sign = normalized[0] == "codesign" and "--force" in normalized
+        return SimpleNamespace(
+            returncode=7 if failed_sign else 0,
+            stdout="",
+            stderr=(f"failure at {project_root} api_key={secret}\n" * 10000),
+        )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    message = str(exc_info.value)
+    assert str(project_root) not in message
+    assert secret not in message
+    assert "<PROJECT_ROOT>" in message
+    assert "[REDACTED]" in message
+    assert len(message.encode("utf-8")) < 20_000
+    assert observed_timeouts
+    assert all(timeout and timeout > 0 for timeout in observed_timeouts)
+    assert not stamp_path.exists()
+
+
+def test_codesign_timeout_removes_the_signature_stamp(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = _write_matching_stamp(module, venv, state_path)
+    libraries[0].write_bytes(b"changed")
+
+    def timeout(command, **kwargs):
+        normalized = [str(part) for part in command]
+        if normalized[0] == "codesign":
+            raise subprocess.TimeoutExpired(command, kwargs.get("timeout", 0.01))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=timeout,
+            system_name="Darwin",
+        )
+
+    assert not stamp_path.exists()

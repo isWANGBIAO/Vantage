@@ -18,6 +18,8 @@ from src.core.backend_environment_state import (
     load_backend_environment_state,
     normalize_distribution_closure,
 )
+from src.utils.sensitive_data import redact_sensitive_text
+from src.utils.subprocess_safety import run_bounded_subprocess
 
 
 RUNTIME_NAME = "VantageBackend"
@@ -372,8 +374,15 @@ def build_project_activity_snapshot(
     built_at = built_at or datetime.now()
     time_limit = (built_at - timedelta(days=days)).strftime("%Y-%m-%d")
     git_cmd = ["git", "log", f'--since="{time_limit}"', "--pretty=format:%h|%ad|%s", "--date=short"]
-    run = run_command or subprocess.run
-    proc = run(git_cmd, capture_output=True, cwd=resolved_root)
+    try:
+        proc = run_bounded_subprocess(
+            git_cmd,
+            run_command=run_command,
+            timeout_seconds=30,
+            cwd=resolved_root,
+        )
+    except subprocess.TimeoutExpired:
+        proc = subprocess.CompletedProcess(git_cmd, 124, stdout="", stderr="")
 
     commits: list[dict[str, str]] = []
     if proc.returncode == 0 and getattr(proc, "stdout", None):
@@ -381,7 +390,19 @@ def build_project_activity_snapshot(
         for line in out_text.splitlines():
             parts = line.split("|", 2)
             if len(parts) == 3:
-                commits.append({"hash": parts[0], "date": parts[1], "message": parts[2]})
+                commits.append(
+                    {
+                        "hash": parts[0],
+                        "date": parts[1],
+                        "message": redact_sensitive_text(
+                            parts[2],
+                            path_prefixes={
+                                "<PROJECT_ROOT>": resolved_root,
+                                "<USER_HOME>": Path.home(),
+                            },
+                        ),
+                    }
+                )
 
     return {
         "generated_at": built_at.isoformat(timespec="seconds"),

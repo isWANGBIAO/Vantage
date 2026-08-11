@@ -364,6 +364,77 @@ def test_failed_rebuild_leaves_no_valid_state(tmp_path):
     assert not (venv / BACKEND_ENVIRONMENT_STATE_NAME).exists()
 
 
+def test_failed_rebuild_output_is_bounded_and_redacted_before_error(tmp_path):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+    secret = "sk-1234567890abcdef"
+    private_path = tmp_path / "private" / "credentials.json"
+    observed_kwargs = []
+
+    def fail_install(command, **kwargs):
+        observed_kwargs.append(kwargs)
+        command = [str(part) for part in command]
+        if command[1:3] == ["-m", "venv"]:
+            python_path = backend_runtime_python_path(venv)
+            python_path.parent.mkdir(parents=True, exist_ok=True)
+            python_path.write_text("python", encoding="utf-8")
+        return SimpleNamespace(
+            returncode=1 if "-r" in command else 0,
+            stdout="",
+            stderr=(f"failed at {private_path} api_key={secret}\n" * 10000),
+        )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        synchronize_backend_runtime_environment(
+            project_root=tmp_path,
+            venv=venv,
+            core_requirements=core,
+            requirements=overlay,
+            opencv_normalizer=normalizer,
+            force=True,
+            creator_python="bootstrap-python",
+            creator_python_identity=PYTHON_IDENTITY,
+            creator_platform_identity=PLATFORM_IDENTITY,
+            run_command=fail_install,
+            probe_environment=lambda _python, _run: _probe_payload(),
+            pip_check=lambda _python, _run: True,
+            import_check=lambda _python, _run: True,
+            opencv_check=lambda _python, _core, _run: True,
+        )
+
+    message = str(exc_info.value)
+    assert str(tmp_path) not in message
+    assert secret not in message
+    assert "<PROJECT_ROOT>" in message
+    assert "[REDACTED]" in message
+    assert len(message.encode("utf-8")) < 20_000
+    assert observed_kwargs
+    assert all(kwargs.get("timeout", 0) > 0 for kwargs in observed_kwargs)
+    assert not (venv / BACKEND_ENVIRONMENT_STATE_NAME).exists()
+
+
+def test_rebuild_subprocess_timeout_leaves_no_valid_state(tmp_path):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+
+    def timeout(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs.get("timeout", 0.01))
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        synchronize_backend_runtime_environment(
+            project_root=tmp_path,
+            venv=venv,
+            core_requirements=core,
+            requirements=overlay,
+            opencv_normalizer=normalizer,
+            force=True,
+            creator_python="bootstrap-python",
+            creator_python_identity=PYTHON_IDENTITY,
+            creator_platform_identity=PLATFORM_IDENTITY,
+            run_command=timeout,
+        )
+
+    assert not (venv / BACKEND_ENVIRONMENT_STATE_NAME).exists()
+
+
 def test_sync_refuses_to_run_from_the_target_venv(tmp_path):
     venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
 
