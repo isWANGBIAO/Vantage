@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import stat
 import subprocess
 import sys
 import tempfile
@@ -46,26 +47,260 @@ class MacOSBackendSigningOutcome:
     skipped: bool = False
 
 
-def _sha256_file(path: Path) -> str:
+@dataclass(frozen=True)
+class _PathIdentity:
+    device: int
+    inode: int
+    file_type: int
+    file_attributes: int
+
+
+@dataclass(frozen=True)
+class _NativeLibrary:
+    path: Path
+    identity: _PathIdentity
+
+
+@dataclass(frozen=True)
+class _SigningSnapshot:
+    venv_identity: _PathIdentity
+    library_root_identity: _PathIdentity
+    state_identity: _PathIdentity
+    libraries: tuple[_NativeLibrary, ...]
+
+
+def _path_identity(path: Path, *, follow_symlinks: bool = False) -> _PathIdentity:
+    path_stat = path.stat() if follow_symlinks else path.lstat()
+    return _identity_from_stat(path_stat)
+
+
+def _identity_from_stat(path_stat) -> _PathIdentity:
+    return _PathIdentity(
+        device=int(path_stat.st_dev),
+        inode=int(path_stat.st_ino),
+        file_type=stat.S_IFMT(path_stat.st_mode),
+        file_attributes=int(getattr(path_stat, "st_file_attributes", 0)),
+    )
+
+
+def _identity_is_reparse(identity: _PathIdentity) -> bool:
+    return bool(identity.file_attributes & int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)))
+
+
+def _identity_is_link(identity: _PathIdentity) -> bool:
+    return stat.S_ISLNK(identity.file_type) or _identity_is_reparse(identity)
+
+
+def _path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _assert_plain_directory(
+    path: Path,
+    *,
+    role: str,
+    expected_identity: _PathIdentity | None = None,
+) -> _PathIdentity:
+    try:
+        identity = _path_identity(path)
+    except OSError as exc:
+        raise RuntimeError(f"macOS backend {role} identity is unavailable") from exc
+    if _identity_is_link(identity):
+        raise ValueError(f"macOS backend {role} must not be a link or reparse point")
+    if not stat.S_ISDIR(identity.file_type):
+        raise ValueError(f"macOS backend {role} must be a directory")
+    if expected_identity is not None and identity != expected_identity:
+        raise RuntimeError(f"macOS backend {role} identity changed")
+    return identity
+
+
+def _assert_plain_file(
+    path: Path,
+    *,
+    role: str,
+    expected_identity: _PathIdentity | None = None,
+) -> _PathIdentity:
+    try:
+        identity = _path_identity(path)
+    except OSError as exc:
+        raise RuntimeError(f"macOS backend {role} identity is unavailable") from exc
+    if _identity_is_link(identity):
+        raise ValueError(f"macOS backend {role} must not be a link or reparse point")
+    if not stat.S_ISREG(identity.file_type):
+        raise ValueError(f"macOS backend {role} must be a regular file")
+    if expected_identity is not None and identity != expected_identity:
+        raise RuntimeError(f"macOS backend {role} identity changed")
+    return identity
+
+
+def _assert_resolved_containment(path: Path, parent: Path, *, role: str) -> None:
+    try:
+        resolved_path = path.resolve(strict=True)
+        resolved_parent = parent.resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError(f"macOS backend {role} containment is unavailable") from exc
+    if not _path_is_within(resolved_path, resolved_parent):
+        raise ValueError(f"macOS backend {role} escaped the dedicated runtime")
+
+
+def _assert_snapshot_roots(venv: Path, snapshot: _SigningSnapshot) -> None:
+    _assert_plain_directory(
+        venv,
+        role="runtime root",
+        expected_identity=snapshot.venv_identity,
+    )
+    _assert_plain_directory(
+        venv / "lib",
+        role="library root",
+        expected_identity=snapshot.library_root_identity,
+    )
+    _assert_resolved_containment(venv / "lib", venv, role="library root")
+
+
+def _assert_native_library(
+    venv: Path,
+    library: _NativeLibrary,
+) -> _PathIdentity:
+    _assert_resolved_containment(library.path, venv / "lib", role="native library")
+    return _assert_plain_file(
+        library.path,
+        role="native library",
+        expected_identity=library.identity,
+    )
+
+
+def _sha256_file(
+    path: Path,
+    *,
+    expected_identity: _PathIdentity | None = None,
+    role: str = "file",
+) -> str:
+    identity = _assert_plain_file(
+        path,
+        role=role,
+        expected_identity=expected_identity,
+    )
     digest = hashlib.sha256()
     with path.open("rb") as handle:
+        opened_identity = _identity_from_stat(os.fstat(handle.fileno()))
+        if opened_identity != identity:
+            raise RuntimeError(f"macOS backend {role} identity changed before hashing")
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
+        final_identity = _identity_from_stat(os.fstat(handle.fileno()))
+        if final_identity != identity:
+            raise RuntimeError(f"macOS backend {role} identity changed while hashing")
+    _assert_plain_file(path, role=role, expected_identity=identity)
     return digest.hexdigest()
 
 
-def _native_library_paths(venv: Path) -> list[Path]:
+def _native_library_records(venv: Path) -> tuple[_NativeLibrary, ...]:
     library_root = venv / "lib"
-    if not library_root.is_dir():
-        raise FileNotFoundError(
-            f"backend runtime library directory is missing: {library_root}"
+    _assert_plain_directory(venv, role="runtime root")
+    _assert_plain_directory(library_root, role="library root")
+    _assert_resolved_containment(library_root, venv, role="library root")
+
+    libraries: list[_NativeLibrary] = []
+    pending = [library_root]
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                identity = _path_identity(path)
+                if _identity_is_link(identity):
+                    role = (
+                        "native library"
+                        if path.suffix.lower() in NATIVE_LIBRARY_SUFFIXES
+                        else "library tree entry"
+                    )
+                    raise ValueError(
+                        f"macOS backend {role} must not be a link or reparse point"
+                    )
+                if stat.S_ISDIR(identity.file_type):
+                    _assert_resolved_containment(path, library_root, role="library directory")
+                    pending.append(path)
+                elif (
+                    stat.S_ISREG(identity.file_type)
+                    and path.suffix.lower() in NATIVE_LIBRARY_SUFFIXES
+                ):
+                    _assert_resolved_containment(path, library_root, role="native library")
+                    libraries.append(_NativeLibrary(path=path, identity=identity))
+    return tuple(
+        sorted(
+            libraries,
+            key=lambda library: library.path.relative_to(venv).as_posix(),
         )
-    paths = [
-        path
-        for path in library_root.rglob("*")
-        if path.is_file() and path.suffix.lower() in NATIVE_LIBRARY_SUFFIXES
-    ]
-    return sorted(paths, key=lambda path: path.relative_to(venv).as_posix())
+    )
+
+
+def _native_library_paths(venv: Path) -> list[Path]:
+    return [library.path for library in _native_library_records(venv)]
+
+
+def _build_signing_snapshot(venv: Path, state_path: Path) -> _SigningSnapshot:
+    venv_identity = _assert_plain_directory(venv, role="runtime root")
+    library_root_identity = _assert_plain_directory(
+        venv / "lib",
+        role="library root",
+    )
+    state_identity = _assert_plain_file(state_path, role="environment state")
+    _assert_resolved_containment(state_path, venv, role="environment state")
+    libraries = _native_library_records(venv)
+    snapshot = _SigningSnapshot(
+        venv_identity=venv_identity,
+        library_root_identity=library_root_identity,
+        state_identity=state_identity,
+        libraries=libraries,
+    )
+    _assert_snapshot_roots(venv, snapshot)
+    return snapshot
+
+
+def _codesign_state_from_snapshot(
+    venv: Path,
+    state_path: Path,
+    snapshot: _SigningSnapshot,
+) -> dict[str, object]:
+    _assert_snapshot_roots(venv, snapshot)
+    _assert_plain_file(
+        state_path,
+        role="environment state",
+        expected_identity=snapshot.state_identity,
+    )
+    libraries = []
+    for library in snapshot.libraries:
+        _assert_snapshot_roots(venv, snapshot)
+        _assert_native_library(venv, library)
+        library_stat = library.path.stat()
+        libraries.append(
+            {
+                "path": library.path.relative_to(venv).as_posix(),
+                "size": int(library_stat.st_size),
+                "sha256": _sha256_file(
+                    library.path,
+                    expected_identity=library.identity,
+                    role="native library",
+                ),
+            }
+        )
+        _assert_snapshot_roots(venv, snapshot)
+    _assert_snapshot_roots(venv, snapshot)
+    state_sha256 = _sha256_file(
+        state_path,
+        expected_identity=snapshot.state_identity,
+        role="environment state",
+    )
+    _assert_snapshot_roots(venv, snapshot)
+    return {
+        "schema_version": MACOS_BACKEND_CODESIGN_STATE_SCHEMA_VERSION,
+        "backend_environment_state_sha256": state_sha256,
+        "native_libraries": libraries,
+    }
 
 
 def build_macos_backend_codesign_state(
@@ -74,26 +309,12 @@ def build_macos_backend_codesign_state(
 ) -> dict[str, object]:
     resolved_venv = Path(venv)
     resolved_state_path = Path(state_path)
-    if not resolved_state_path.is_file():
-        raise FileNotFoundError(
-            f"backend runtime environment state is missing: {resolved_state_path}"
-        )
-
-    libraries = []
-    for library in _native_library_paths(resolved_venv):
-        library_stat = library.stat()
-        libraries.append(
-            {
-                "path": library.relative_to(resolved_venv).as_posix(),
-                "size": int(library_stat.st_size),
-                "sha256": _sha256_file(library),
-            }
-        )
-    return {
-        "schema_version": MACOS_BACKEND_CODESIGN_STATE_SCHEMA_VERSION,
-        "backend_environment_state_sha256": _sha256_file(resolved_state_path),
-        "native_libraries": libraries,
-    }
+    snapshot = _build_signing_snapshot(resolved_venv, resolved_state_path)
+    return _codesign_state_from_snapshot(
+        resolved_venv,
+        resolved_state_path,
+        snapshot,
+    )
 
 
 def write_macos_backend_codesign_state(
@@ -168,24 +389,29 @@ def _run_codesign_command(
 
 
 def _verify_native_libraries(
-    libraries: list[Path],
+    venv: Path,
+    snapshot: _SigningSnapshot,
     *,
     action: str,
     run_command,
 ) -> bool:
-    for library in libraries:
+    for library in snapshot.libraries:
+        _assert_snapshot_roots(venv, snapshot)
+        _assert_native_library(venv, library)
         if not _run_codesign_command(
             [
                 "codesign",
                 "--verify",
                 "--strict",
                 "--verbose=2",
-                str(library),
+                str(library.path),
             ],
             action=action,
             run_command=run_command,
         ):
             return False
+        _assert_snapshot_roots(venv, snapshot)
+        _assert_native_library(venv, library)
     return True
 
 
@@ -223,12 +449,17 @@ def _sign_macos_backend_runtime_locked(
     force: bool,
 ) -> MacOSBackendSigningOutcome:
     try:
-        expected_state = build_macos_backend_codesign_state(venv, state_path)
-        libraries = _native_library_paths(venv)
+        snapshot = _build_signing_snapshot(venv, state_path)
+        expected_state = _codesign_state_from_snapshot(venv, state_path, snapshot)
+        libraries = snapshot.libraries
+        if os.path.lexists(stamp_path):
+            _assert_plain_file(stamp_path, role="signature stamp")
+            _assert_resolved_containment(stamp_path, venv, role="signature stamp")
         stored_state = _load_codesign_state(stamp_path)
         if not force and stored_state == expected_state:
             if _verify_native_libraries(
-                libraries,
+                venv,
+                snapshot,
                 action="verify cached signature",
                 run_command=run_command,
             ):
@@ -244,7 +475,14 @@ def _sign_macos_backend_runtime_locked(
             capture_output=True,
             text=True,
         )
+        _assert_snapshot_roots(venv, snapshot)
         for library in libraries:
+            _assert_native_library(venv, library)
+
+        signed_libraries: list[_NativeLibrary] = []
+        for library in libraries:
+            _assert_snapshot_roots(venv, snapshot)
+            _assert_native_library(venv, library)
             _run_codesign_command(
                 [
                     "codesign",
@@ -252,17 +490,48 @@ def _sign_macos_backend_runtime_locked(
                     "--sign",
                     "-",
                     "--timestamp=none",
-                    str(library),
+                    str(library.path),
                 ],
                 action="sign",
                 run_command=run_command,
             )
+            _assert_snapshot_roots(venv, snapshot)
+            signed_identity = _assert_plain_file(
+                library.path,
+                role="native library",
+            )
+            _assert_resolved_containment(
+                library.path,
+                venv / "lib",
+                role="native library",
+            )
+            signed_libraries.append(
+                _NativeLibrary(path=library.path, identity=signed_identity)
+            )
+
+        signed_snapshot = _build_signing_snapshot(venv, state_path)
+        if [library.path for library in signed_snapshot.libraries] != [
+            library.path for library in signed_libraries
+        ]:
+            raise RuntimeError("macOS backend native library closure changed while signing")
+        for actual, expected in zip(
+            signed_snapshot.libraries,
+            signed_libraries,
+            strict=True,
+        ):
+            if actual.identity != expected.identity:
+                raise RuntimeError("macOS backend native library identity changed while signing")
         _verify_native_libraries(
-            libraries,
+            venv,
+            signed_snapshot,
             action="verify signed library",
             run_command=run_command,
         )
-        signed_state = build_macos_backend_codesign_state(venv, state_path)
+        signed_state = _codesign_state_from_snapshot(
+            venv,
+            state_path,
+            signed_snapshot,
+        )
         write_macos_backend_codesign_state(
             stamp_path,
             signed_state,
@@ -270,7 +539,7 @@ def _sign_macos_backend_runtime_locked(
         )
         return MacOSBackendSigningOutcome(
             reused=False,
-            library_count=len(libraries),
+            library_count=len(signed_snapshot.libraries),
         )
     except BaseException:
         stamp_path.unlink(missing_ok=True)

@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -50,6 +52,26 @@ def _write_matching_stamp(module, venv: Path, state_path: Path) -> Path:
 
 def _codesign_commands(commands: list[list[str]]) -> list[list[str]]:
     return [command for command in commands if command and command[0] == "codesign"]
+
+
+def _create_directory_link(link: Path, target: Path) -> None:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
+        return
+    link.symlink_to(target, target_is_directory=True)
+
+
+def _create_file_link(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"file symlink creation is unavailable: {exc}")
 
 
 def test_codesign_state_uses_stable_relative_file_closure_and_state_hash(tmp_path):
@@ -301,3 +323,153 @@ def test_atomic_stamp_replace_failure_removes_temporary_and_valid_stamp(tmp_path
 
     assert not stamp_path.exists()
     assert list(stamp_path.parent.glob(f".{stamp_path.name}.*.tmp")) == []
+
+
+def test_signer_rejects_runtime_root_link_without_reading_external_files(tmp_path):
+    module = _signing_module()
+    external_root = tmp_path / "external-runtime"
+    external_lib = external_root / "lib"
+    external_lib.mkdir(parents=True)
+    external_native = external_lib / "outside.so"
+    external_native.write_bytes(b"outside")
+    (external_root / ".vantage-backend-runtime-state.json").write_text(
+        '{"schema_version": 2}\n',
+        encoding="utf-8",
+    )
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    _create_directory_link(venv, external_root)
+
+    with pytest.raises(ValueError, match="root.*link|root.*reparse"):
+        module.sign_macos_backend_runtime(
+            project_root=tmp_path,
+            venv=venv,
+            state_path=venv / ".vantage-backend-runtime-state.json",
+            stamp_path=venv / ".macos-native-codesign.sha256",
+            run_command=lambda *_args, **_kwargs: pytest.fail(
+                "an unsafe runtime root must be rejected before commands run"
+            ),
+            system_name="Darwin",
+        )
+
+    assert external_native.read_bytes() == b"outside"
+
+
+def test_signer_rejects_linked_library_root_without_following_external_files(tmp_path):
+    module = _signing_module()
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    venv.mkdir()
+    state_path = venv / ".vantage-backend-runtime-state.json"
+    state_path.write_text('{"schema_version": 2}\n', encoding="utf-8")
+    external_lib = tmp_path / "external-lib"
+    external_lib.mkdir()
+    external_native = external_lib / "outside.dylib"
+    external_native.write_bytes(b"outside")
+    _create_directory_link(venv / "lib", external_lib)
+
+    with pytest.raises(ValueError, match="library.*link|library.*reparse"):
+        module.sign_macos_backend_runtime(
+            project_root=tmp_path,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=venv / ".macos-native-codesign.sha256",
+            run_command=lambda *_args, **_kwargs: pytest.fail(
+                "an unsafe library root must be rejected before commands run"
+            ),
+            system_name="Darwin",
+        )
+
+    assert external_native.read_bytes() == b"outside"
+
+
+def test_signer_rejects_native_file_link_without_hashing_external_target(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    external_native = tmp_path / "outside.so"
+    external_native.write_bytes(b"outside")
+    libraries[1].unlink()
+    _create_file_link(libraries[1], external_native)
+
+    with pytest.raises(ValueError, match="native.*link|native.*reparse"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=venv / ".macos-native-codesign.sha256",
+            run_command=lambda *_args, **_kwargs: pytest.fail(
+                "an unsafe native file must be rejected before commands run"
+            ),
+            system_name="Darwin",
+        )
+
+    assert external_native.read_bytes() == b"outside"
+
+
+def test_native_file_swap_after_scan_is_rejected_before_codesign(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+    external_native = tmp_path / "outside.so"
+    external_native.write_bytes(b"outside")
+    commands: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        normalized = [str(part) for part in command]
+        commands.append(normalized)
+        if normalized[0] == "xattr":
+            libraries[1].unlink()
+            _create_file_link(libraries[1], external_native)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises((RuntimeError, ValueError), match="identity|link|reparse|escaped"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    assert not _codesign_commands(commands)
+    assert not stamp_path.exists()
+    assert external_native.read_bytes() == b"outside"
+
+
+def test_native_file_swap_after_sign_is_rejected_before_verification(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+    external_native = tmp_path / "outside.so"
+    external_native.write_bytes(b"outside")
+    commands: list[list[str]] = []
+    swapped = False
+
+    def run(command, **_kwargs):
+        nonlocal swapped
+        normalized = [str(part) for part in command]
+        commands.append(normalized)
+        if normalized[0] == "codesign" and "--force" in normalized and not swapped:
+            target = Path(normalized[-1])
+            target.unlink()
+            _create_file_link(target, external_native)
+            swapped = True
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises((RuntimeError, ValueError), match="identity|link|reparse|escaped"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    verify_commands = [
+        command
+        for command in _codesign_commands(commands)
+        if "--verify" in command
+    ]
+    assert verify_commands == []
+    assert not stamp_path.exists()
+    assert external_native.read_bytes() == b"outside"
