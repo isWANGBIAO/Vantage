@@ -204,6 +204,38 @@ test('failed synchronization leaves no reusable state', () => {
   });
 });
 
+test('failed post-install npm ls validation leaves no reusable state', () => {
+  withFixture((webappRoot) => {
+    writeDesiredState(webappRoot);
+    writeFileSync(
+      path.join(webappRoot, 'package-lock.json'),
+      '{"lockfileVersion":3,"changedAfterInstall":true}\n',
+      'utf8',
+    );
+    const calls = [];
+
+    assert.throws(
+      () => synchronizeDependencies({
+        webappRoot,
+        runtime: TEST_RUNTIME,
+        env: {},
+        runCommand(command, args) {
+          calls.push([command, args]);
+          if (args[0] === 'ls') {
+            throw new Error('post-install validation failed');
+          }
+        },
+      }),
+      /post-install validation failed/,
+    );
+    assert.deepEqual(calls.map(([, args]) => args), [
+      ['ci'],
+      ['ls', '--depth=0'],
+    ]);
+    assert.equal(existsSync(statePathFor(webappRoot)), false);
+  });
+});
+
 test('state is atomically renamed only after dependency validation succeeds', () => {
   withFixture((webappRoot) => {
     const statePath = statePathFor(webappRoot);
@@ -286,6 +318,34 @@ test('npm ci retries once with the configured mirror only when no mirror is expl
       [['ci'], 'https://mirror.example/electron/'],
       [['ls', '--depth=0'], undefined],
     ]);
+  });
+});
+
+test('an explicit Electron mirror failure is never retried with the fallback mirror', () => {
+  withFixture((webappRoot) => {
+    const calls = [];
+
+    assert.throws(
+      () => synchronizeDependencies({
+        webappRoot,
+        runtime: TEST_RUNTIME,
+        env: {
+          ELECTRON_MIRROR: 'https://explicit.example/electron/',
+          VANTAGE_ELECTRON_MIRROR_FALLBACK: 'https://fallback.example/electron/',
+        },
+        force: true,
+        runCommand(command, args, options) {
+          calls.push([command, args, options.env.ELECTRON_MIRROR]);
+          throw new Error('explicit mirror failed');
+        },
+      }),
+      /explicit mirror failed/,
+    );
+
+    assert.deepEqual(calls.map(([, args, mirror]) => [args, mirror]), [
+      [['ci'], 'https://explicit.example/electron/'],
+    ]);
+    assert.equal(existsSync(statePathFor(webappRoot)), false);
   });
 });
 
