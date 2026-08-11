@@ -10,17 +10,20 @@ def _bash_function(launcher_path: Path, function_name: str) -> str:
     return launcher[start:end]
 
 
-def test_macos_cleanup_prefers_existing_runtime_python_before_sync():
+def test_macos_cleanup_prefers_existing_runtime_python_under_lifecycle_lock_before_sync():
     for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
         launcher = launcher_path.read_text(encoding="utf-8")
+        selector_index = launcher.index(
+            'BACKEND_CLEANUP_PYTHON="$(select_backend_cleanup_python)"'
+        )
         cleanup_index = launcher.index("cleanup_vantage_python_processes.py")
         sync_index = launcher.index('"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_SYNC"')
 
         assert "select_backend_cleanup_python" in launcher
         assert '[[ -x "$BACKEND_RUNTIME_PYTHON" ]]' in launcher
         assert '"$BACKEND_CLEANUP_PYTHON"' in launcher
-        assert cleanup_index < sync_index
-        assert "BACKEND_RUNTIME_LOCK_RUNNER" not in launcher[
+        assert selector_index < cleanup_index < sync_index
+        assert '"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_LOCK_RUNNER"' in launcher[
             cleanup_index - 180 : cleanup_index + 180
         ]
 
