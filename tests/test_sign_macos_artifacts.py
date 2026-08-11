@@ -69,7 +69,7 @@ def test_frontend_signs_private_copy_then_strictly_verifies_installed_file(tmp_p
     assert len(verify_commands) == 2
     assert all(Path(command[-1]).name == native.name for command in xattr_commands + sign_commands)
     assert Path(verify_commands[0][-1]).name == native.name
-    assert Path(verify_commands[-1][-1]) == native
+    assert Path(verify_commands[-1][-1]).name == native.name
     assert all("--strict" in command for command in verify_commands)
 
 
@@ -143,9 +143,64 @@ def test_frontend_cache_reuse_still_strictly_verifies_current_closure(tmp_path):
     )
 
     assert outcome.reused is True
-    assert commands == [
-        ["codesign", "--verify", "--strict", "--verbose=2", str(native)]
+    assert len(commands) == 1
+    assert commands[0][:-1] == [
+        "codesign",
+        "--verify",
+        "--strict",
+        "--verbose=2",
     ]
+    assert Path(commands[0][-1]).name == native.name
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX inherited directory fds")
+def test_cached_verify_is_fd_bound_during_artifact_root_swap(tmp_path):
+    module = _module()
+    project_root, root, native, stamp = _write_frontend_tree(tmp_path)
+    module.sign_macos_artifacts(
+        project_root=project_root,
+        root=root,
+        profile="frontend",
+        stamp_path=stamp,
+        run_command=_successful_runner([]),
+        system_name="Darwin",
+    )
+    expected_native = native.read_bytes()
+    moved_root = root.with_name("node_modules-moved-cached")
+    external_root = tmp_path / "external-node-modules-cached"
+    external_native = external_root / native.relative_to(root)
+    external_native.parent.mkdir(parents=True)
+    external_native.write_bytes(b"EXTERNAL-CACHED-SENTINEL")
+    observed: dict[str, object] = {}
+
+    def attack(command, **kwargs):
+        normalized = [str(part) for part in command]
+        if normalized[0] == "codesign" and "--verify" in normalized:
+            root.rename(moved_root)
+            root.symlink_to(external_root, target_is_directory=True)
+            directory_fd = kwargs.get("working_directory_fd")
+            observed["directory_fd"] = directory_fd
+            descriptor = os.open(normalized[-1], os.O_RDONLY, dir_fd=directory_fd)
+            try:
+                observed["verified_bytes"] = os.read(descriptor, 4096)
+            finally:
+                os.close(descriptor)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises((RuntimeError, ValueError), match="changed|identity|root|link"):
+        module.sign_macos_artifacts(
+            project_root=project_root,
+            root=root,
+            profile="frontend",
+            stamp_path=stamp,
+            run_command=attack,
+            system_name="Darwin",
+        )
+
+    assert observed["directory_fd"] is not None
+    assert observed["verified_bytes"] == expected_native
+    assert external_native.read_bytes() == b"EXTERNAL-CACHED-SENTINEL"
+    assert not (moved_root / stamp.name).exists()
 
 
 def test_frontend_native_hardlink_is_rejected_before_external_side_effect(tmp_path):
@@ -265,6 +320,54 @@ def test_staging_command_is_fd_bound_during_artifact_root_swap(tmp_path):
     assert observed["directory_fd"] is not None
     assert observed["external_target"].read_bytes() == b"external-sentinel"
     assert not list(moved_root.glob(".vantage-codesign-staging-*"))
+    assert not (moved_root / stamp.name).exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX inherited directory fds")
+def test_installed_verify_is_fd_bound_during_artifact_root_swap(tmp_path):
+    module = _module()
+    project_root, root, native, stamp = _write_frontend_tree(tmp_path)
+    expected_native = native.read_bytes()
+    moved_root = root.with_name("node_modules-moved-installed")
+    external_root = tmp_path / "external-node-modules-installed"
+    external_native = external_root / native.relative_to(root)
+    external_native.parent.mkdir(parents=True)
+    external_native.write_bytes(b"EXTERNAL-INSTALLED-SENTINEL")
+    observed: dict[str, object] = {}
+    verify_count = 0
+
+    def attack(command, **kwargs):
+        nonlocal verify_count
+        normalized = [str(part) for part in command]
+        if normalized[0] == "codesign" and "--verify" in normalized:
+            verify_count += 1
+            if verify_count == 2:
+                root.rename(moved_root)
+                root.symlink_to(external_root, target_is_directory=True)
+                directory_fd = kwargs.get("working_directory_fd")
+                observed["directory_fd"] = directory_fd
+                descriptor = os.open(normalized[-1], os.O_RDONLY, dir_fd=directory_fd)
+                try:
+                    observed["verified_bytes"] = os.read(descriptor, 4096)
+                finally:
+                    os.close(descriptor)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises((RuntimeError, ValueError), match="changed|identity|root|link"):
+        module.sign_macos_artifacts(
+            project_root=project_root,
+            root=root,
+            profile="frontend",
+            stamp_path=stamp,
+            run_command=attack,
+            system_name="Darwin",
+        )
+
+    assert verify_count == 2
+    assert observed["directory_fd"] is not None
+    assert observed["verified_bytes"] == expected_native
+    assert external_native.read_bytes() == b"EXTERNAL-INSTALLED-SENTINEL"
+    assert not list(moved_root.glob(f"{module.STAGING_PREFIX}*"))
     assert not (moved_root / stamp.name).exists()
 
 
@@ -454,7 +557,10 @@ def test_backend_bundle_profile_is_strict_and_does_not_require_stamp(tmp_path):
 
     assert outcome.artifact_count == 1
     assert any("--force" in command for command in commands)
-    assert any("--verify" in command and Path(command[-1]) == native for command in commands)
+    assert any(
+        "--verify" in command and Path(command[-1]).name == native.name
+        for command in commands
+    )
     assert not list(root.glob("*.sha256"))
 
 
@@ -486,9 +592,14 @@ def test_backend_bundle_preserves_internal_symlink_and_signs_target_once(tmp_pat
     verify_commands = [command for command in commands if "--verify" in command]
     installed_verify = verify_commands[-1:]
     assert len(sign_commands) == 1
-    assert installed_verify == [
-        ["codesign", "--verify", "--strict", "--verbose=2", str(target)]
+    assert len(installed_verify) == 1
+    assert installed_verify[0][:-1] == [
+        "codesign",
+        "--verify",
+        "--strict",
+        "--verbose=2",
     ]
+    assert Path(installed_verify[0][-1]).name == target.name
     assert first_link.is_symlink()
     assert second_link.is_symlink()
     assert first_link.resolve() == target

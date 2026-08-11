@@ -856,21 +856,35 @@ def _verify_snapshot(
 ) -> bool:
     for artifact in snapshot.artifacts:
         _assert_source(root, artifact)
-        if not _run_command(
-            [
-                "codesign",
-                "--verify",
-                "--strict",
-                "--verbose=2",
-                str(artifact.path),
-            ],
-            action="installed verification",
-            run_command=run_command,
-            path_prefixes=path_prefixes,
-            allow_failure=allow_failure,
-        ):
-            return False
-        _assert_source(root, artifact)
+        artifact_parent_fd: int | None = None
+        try:
+            command_path = str(artifact.path)
+            if os.name != "nt":
+                artifact_parent_fd = _open_validated_directory(
+                    artifact.path.parent,
+                    artifact.parent_identity,
+                    role="artifact parent",
+                )
+                command_path = artifact.path.name
+            if not _run_command(
+                [
+                    "codesign",
+                    "--verify",
+                    "--strict",
+                    "--verbose=2",
+                    command_path,
+                ],
+                action="installed verification",
+                run_command=run_command,
+                path_prefixes=path_prefixes,
+                allow_failure=allow_failure,
+                working_directory_fd=artifact_parent_fd,
+            ):
+                return False
+            _assert_source(root, artifact)
+        finally:
+            if artifact_parent_fd is not None:
+                os.close(artifact_parent_fd)
     return True
 
 
