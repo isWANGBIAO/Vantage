@@ -57,6 +57,7 @@ class _PathIdentity:
     inode: int
     file_type: int
     file_attributes: int
+    link_count: int
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,7 @@ def _identity_from_stat(path_stat) -> _PathIdentity:
         inode=int(path_stat.st_ino),
         file_type=stat.S_IFMT(path_stat.st_mode),
         file_attributes=int(getattr(path_stat, "st_file_attributes", 0)),
+        link_count=int(path_stat.st_nlink),
     )
 
 
@@ -136,6 +138,8 @@ def _assert_plain_file(
         raise ValueError(f"macOS backend {role} must not be a link or reparse point")
     if not stat.S_ISREG(identity.file_type):
         raise ValueError(f"macOS backend {role} must be a regular file")
+    if identity.link_count != 1:
+        raise ValueError(f"macOS backend {role} must not be a hard link")
     if expected_identity is not None and identity != expected_identity:
         raise RuntimeError(f"macOS backend {role} identity changed")
     return identity
@@ -233,6 +237,11 @@ def _native_library_records(venv: Path) -> tuple[_NativeLibrary, ...]:
                     and path.suffix.lower() in NATIVE_LIBRARY_SUFFIXES
                 ):
                     _assert_resolved_containment(path, library_root, role="native library")
+                    _assert_plain_file(
+                        path,
+                        role="native library",
+                        expected_identity=identity,
+                    )
                     libraries.append(_NativeLibrary(path=path, identity=identity))
     return tuple(
         sorted(
@@ -307,6 +316,73 @@ def _codesign_state_from_snapshot(
     }
 
 
+def _assert_equivalent_snapshot(
+    expected: _SigningSnapshot,
+    actual: _SigningSnapshot,
+    *,
+    phase: str,
+) -> None:
+    if (
+        actual.venv_identity != expected.venv_identity
+        or actual.library_root_identity != expected.library_root_identity
+        or actual.state_identity != expected.state_identity
+    ):
+        raise RuntimeError(f"macOS backend signing inputs changed {phase}")
+    expected_paths = [library.path for library in expected.libraries]
+    actual_paths = [library.path for library in actual.libraries]
+    if actual_paths != expected_paths:
+        raise RuntimeError(f"macOS backend native library closure changed {phase}")
+    if any(
+        actual_library.identity != expected_library.identity
+        for expected_library, actual_library in zip(
+            expected.libraries,
+            actual.libraries,
+            strict=True,
+        )
+    ):
+        raise RuntimeError(f"macOS backend native library identity changed {phase}")
+
+
+def _stable_rescan(
+    venv: Path,
+    state_path: Path,
+    *,
+    expected_snapshot: _SigningSnapshot,
+    expected_state: Mapping[str, object],
+    phase: str,
+) -> tuple[_SigningSnapshot, dict[str, object]]:
+    rescanned_snapshot = _build_signing_snapshot(venv, state_path)
+    _assert_equivalent_snapshot(
+        expected_snapshot,
+        rescanned_snapshot,
+        phase=phase,
+    )
+    rescanned_state = _codesign_state_from_snapshot(
+        venv,
+        state_path,
+        rescanned_snapshot,
+    )
+    if rescanned_state != dict(expected_state):
+        raise RuntimeError(f"macOS backend signing input content changed {phase}")
+
+    confirmed_snapshot = _build_signing_snapshot(venv, state_path)
+    _assert_equivalent_snapshot(
+        rescanned_snapshot,
+        confirmed_snapshot,
+        phase=f"during stable rescan {phase}",
+    )
+    confirmed_state = _codesign_state_from_snapshot(
+        venv,
+        state_path,
+        confirmed_snapshot,
+    )
+    if confirmed_state != rescanned_state:
+        raise RuntimeError(
+            f"macOS backend signing input content changed during stable rescan {phase}"
+        )
+    return confirmed_snapshot, confirmed_state
+
+
 def build_macos_backend_codesign_state(
     venv: str | Path,
     state_path: str | Path,
@@ -329,6 +405,8 @@ def write_macos_backend_codesign_state(
 ) -> Path:
     resolved_stamp_path = Path(stamp_path)
     resolved_stamp_path.parent.mkdir(parents=True, exist_ok=True)
+    if os.path.lexists(resolved_stamp_path):
+        _assert_plain_file(resolved_stamp_path, role="signature stamp")
     payload = json.dumps(
         dict(state),
         indent=2,
@@ -346,25 +424,88 @@ def write_macos_backend_codesign_state(
             delete=False,
         ) as handle:
             temporary_path = Path(handle.name)
+            temporary_identity = _identity_from_stat(os.fstat(handle.fileno()))
+            if (
+                not stat.S_ISREG(temporary_identity.file_type)
+                or temporary_identity.link_count != 1
+            ):
+                raise RuntimeError(
+                    "macOS backend temporary signature stamp is not a private file"
+                )
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
+            if _identity_from_stat(os.fstat(handle.fileno())) != temporary_identity:
+                raise RuntimeError(
+                    "macOS backend temporary signature stamp identity changed"
+                )
+        _assert_plain_file(
+            temporary_path,
+            role="temporary signature stamp",
+            expected_identity=temporary_identity,
+        )
         replace_file(temporary_path, resolved_stamp_path)
         temporary_path = None
+        _assert_plain_file(resolved_stamp_path, role="signature stamp")
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
     return resolved_stamp_path
 
 
-def _load_codesign_state(stamp_path: Path) -> dict[str, object] | None:
-    if not stamp_path.is_file():
+def _load_codesign_state(
+    stamp_path: Path,
+    *,
+    expected_identity: _PathIdentity | None = None,
+) -> dict[str, object] | None:
+    if not os.path.lexists(stamp_path):
         return None
     try:
-        payload = json.loads(stamp_path.read_text(encoding="utf-8"))
+        identity = _assert_plain_file(
+            stamp_path,
+            role="signature stamp",
+            expected_identity=expected_identity,
+        )
+        with stamp_path.open("r", encoding="utf-8") as handle:
+            if _identity_from_stat(os.fstat(handle.fileno())) != identity:
+                raise RuntimeError(
+                    "macOS backend signature stamp identity changed before reading"
+                )
+            text = handle.read()
+            if _identity_from_stat(os.fstat(handle.fileno())) != identity:
+                raise RuntimeError(
+                    "macOS backend signature stamp identity changed while reading"
+                )
+        _assert_plain_file(
+            stamp_path,
+            role="signature stamp",
+            expected_identity=identity,
+        )
+        payload = json.loads(text)
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _assert_stamp_unchanged(
+    venv: Path,
+    stamp_path: Path,
+    *,
+    expected_identity: _PathIdentity,
+    expected_state: Mapping[str, object],
+) -> None:
+    _assert_plain_file(
+        stamp_path,
+        role="signature stamp",
+        expected_identity=expected_identity,
+    )
+    _assert_resolved_containment(stamp_path, venv, role="signature stamp")
+    current_state = _load_codesign_state(
+        stamp_path,
+        expected_identity=expected_identity,
+    )
+    if current_state != dict(expected_state):
+        raise RuntimeError("macOS backend signature stamp changed during verification")
 
 
 def _run_codesign_command(
@@ -465,11 +606,20 @@ def _sign_macos_backend_runtime_locked(
         snapshot = _build_signing_snapshot(venv, state_path)
         expected_state = _codesign_state_from_snapshot(venv, state_path, snapshot)
         libraries = snapshot.libraries
+        stamp_identity: _PathIdentity | None = None
         if os.path.lexists(stamp_path):
-            _assert_plain_file(stamp_path, role="signature stamp")
+            stamp_identity = _assert_plain_file(
+                stamp_path,
+                role="signature stamp",
+            )
             _assert_resolved_containment(stamp_path, venv, role="signature stamp")
-        stored_state = _load_codesign_state(stamp_path)
+        stored_state = _load_codesign_state(
+            stamp_path,
+            expected_identity=stamp_identity,
+        )
         if not force and stored_state == expected_state:
+            if stamp_identity is None:
+                raise RuntimeError("macOS backend signature stamp identity is unavailable")
             if _verify_native_libraries(
                 venv,
                 snapshot,
@@ -477,31 +627,73 @@ def _sign_macos_backend_runtime_locked(
                 run_command=run_command,
                 path_prefixes=path_prefixes,
             ):
+                _assert_stamp_unchanged(
+                    venv,
+                    stamp_path,
+                    expected_identity=stamp_identity,
+                    expected_state=expected_state,
+                )
+                verified_snapshot, verified_state = _stable_rescan(
+                    venv,
+                    state_path,
+                    expected_snapshot=snapshot,
+                    expected_state=expected_state,
+                    phase="during cached signature verification",
+                )
+                _assert_stamp_unchanged(
+                    venv,
+                    stamp_path,
+                    expected_identity=stamp_identity,
+                    expected_state=verified_state,
+                )
                 return MacOSBackendSigningOutcome(
                     reused=True,
-                    library_count=len(libraries),
+                    library_count=len(verified_snapshot.libraries),
                 )
 
         stamp_path.unlink(missing_ok=True)
-        try:
-            xattr_result = run_bounded_subprocess(
-                ["xattr", "-cr", str(venv / "lib")],
-                run_command=run_command,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("macOS backend extended attribute cleanup timed out") from exc
-        if xattr_result.returncode != 0:
-            detail = bounded_process_failure_detail(
-                xattr_result,
-                path_prefixes=path_prefixes,
-            )
-            suffix = f": {detail}" if detail else ""
-            raise RuntimeError(
-                f"macOS backend extended attribute cleanup failed{suffix}"
-            )
-        _assert_snapshot_roots(venv, snapshot)
+        snapshot = _build_signing_snapshot(venv, state_path)
+        expected_state = _codesign_state_from_snapshot(venv, state_path, snapshot)
+        snapshot, expected_state = _stable_rescan(
+            venv,
+            state_path,
+            expected_snapshot=snapshot,
+            expected_state=expected_state,
+            phase="before extended attribute cleanup",
+        )
+        libraries = snapshot.libraries
+
         for library in libraries:
+            _assert_snapshot_roots(venv, snapshot)
             _assert_native_library(venv, library)
+            try:
+                xattr_result = run_bounded_subprocess(
+                    ["xattr", "-c", str(library.path)],
+                    run_command=run_command,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    "macOS backend extended attribute cleanup timed out"
+                ) from exc
+            if xattr_result.returncode != 0:
+                detail = bounded_process_failure_detail(
+                    xattr_result,
+                    path_prefixes=path_prefixes,
+                )
+                suffix = f": {detail}" if detail else ""
+                raise RuntimeError(
+                    f"macOS backend extended attribute cleanup failed{suffix}"
+                )
+            _assert_snapshot_roots(venv, snapshot)
+            _assert_native_library(venv, library)
+        snapshot, expected_state = _stable_rescan(
+            venv,
+            state_path,
+            expected_snapshot=snapshot,
+            expected_state=expected_state,
+            phase="during extended attribute cleanup",
+        )
+        libraries = snapshot.libraries
 
         signed_libraries: list[_NativeLibrary] = []
         for library in libraries:
@@ -535,17 +727,29 @@ def _sign_macos_backend_runtime_locked(
             )
 
         signed_snapshot = _build_signing_snapshot(venv, state_path)
-        if [library.path for library in signed_snapshot.libraries] != [
-            library.path for library in signed_libraries
-        ]:
-            raise RuntimeError("macOS backend native library closure changed while signing")
-        for actual, expected in zip(
-            signed_snapshot.libraries,
-            signed_libraries,
-            strict=True,
-        ):
-            if actual.identity != expected.identity:
-                raise RuntimeError("macOS backend native library identity changed while signing")
+        expected_signed_snapshot = _SigningSnapshot(
+            venv_identity=snapshot.venv_identity,
+            library_root_identity=snapshot.library_root_identity,
+            state_identity=snapshot.state_identity,
+            libraries=tuple(signed_libraries),
+        )
+        _assert_equivalent_snapshot(
+            expected_signed_snapshot,
+            signed_snapshot,
+            phase="while signing",
+        )
+        signed_state = _codesign_state_from_snapshot(
+            venv,
+            state_path,
+            signed_snapshot,
+        )
+        signed_snapshot, signed_state = _stable_rescan(
+            venv,
+            state_path,
+            expected_snapshot=signed_snapshot,
+            expected_state=signed_state,
+            phase="before signed signature verification",
+        )
         _verify_native_libraries(
             venv,
             signed_snapshot,
@@ -553,19 +757,39 @@ def _sign_macos_backend_runtime_locked(
             run_command=run_command,
             path_prefixes=path_prefixes,
         )
-        signed_state = _codesign_state_from_snapshot(
+        verified_snapshot, verified_state = _stable_rescan(
             venv,
             state_path,
-            signed_snapshot,
+            expected_snapshot=signed_snapshot,
+            expected_state=signed_state,
+            phase="during signed signature verification",
         )
         write_macos_backend_codesign_state(
             stamp_path,
-            signed_state,
+            verified_state,
             replace_file=replace_file,
+        )
+        written_stamp_identity = _assert_plain_file(
+            stamp_path,
+            role="signature stamp",
+        )
+        _assert_resolved_containment(stamp_path, venv, role="signature stamp")
+        final_snapshot, final_state = _stable_rescan(
+            venv,
+            state_path,
+            expected_snapshot=verified_snapshot,
+            expected_state=verified_state,
+            phase="while writing signature stamp",
+        )
+        _assert_stamp_unchanged(
+            venv,
+            stamp_path,
+            expected_identity=written_stamp_identity,
+            expected_state=final_state,
         )
         return MacOSBackendSigningOutcome(
             reused=False,
-            library_count=len(signed_snapshot.libraries),
+            library_count=len(final_snapshot.libraries),
         )
     except BaseException:
         stamp_path.unlink(missing_ok=True)

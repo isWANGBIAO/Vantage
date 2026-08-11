@@ -404,6 +404,274 @@ def test_signer_rejects_native_file_link_without_hashing_external_target(tmp_pat
     assert external_native.read_bytes() == b"outside"
 
 
+def test_signer_rejects_hard_linked_native_before_external_target_can_be_signed(
+    tmp_path,
+):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    external_native = tmp_path / "outside.so"
+    external_native.write_bytes(b"outside")
+    libraries[1].unlink()
+    os.link(external_native, libraries[1])
+
+    with pytest.raises(ValueError, match="native.*hard link|native.*link count"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=venv / ".macos-native-codesign.sha256",
+            run_command=lambda *_args, **_kwargs: pytest.fail(
+                "a hard-linked native file must be rejected before commands run"
+            ),
+            system_name="Darwin",
+        )
+
+    assert external_native.read_bytes() == b"outside"
+
+
+def test_signer_rejects_hard_linked_environment_state_before_reading_it(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, _libraries = _write_runtime(tmp_path)
+    external_state = tmp_path / "outside-state.json"
+    external_state.write_text('{"outside": true}\n', encoding="utf-8")
+    state_path.unlink()
+    os.link(external_state, state_path)
+
+    with pytest.raises(ValueError, match="state.*hard link|state.*link count"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=venv / ".macos-native-codesign.sha256",
+            run_command=lambda *_args, **_kwargs: pytest.fail(
+                "a hard-linked state must be rejected before commands run"
+            ),
+            system_name="Darwin",
+        )
+
+    assert external_state.read_text(encoding="utf-8") == '{"outside": true}\n'
+
+
+def test_signer_rejects_hard_linked_signature_stamp_before_reading_it(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, _libraries = _write_runtime(tmp_path)
+    stamp_path = _write_matching_stamp(module, venv, state_path)
+    external_stamp = tmp_path / "outside-stamp.json"
+    stamp_path.replace(external_stamp)
+    os.link(external_stamp, stamp_path)
+
+    with pytest.raises(ValueError, match="stamp.*hard link|stamp.*link count"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=lambda *_args, **_kwargs: pytest.fail(
+                "a hard-linked stamp must be rejected before commands run"
+            ),
+            system_name="Darwin",
+        )
+
+    assert external_stamp.is_file()
+
+
+def test_xattr_cleanup_is_scoped_to_each_verified_native_file(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    commands: list[list[str]] = []
+
+    module.sign_macos_backend_runtime(
+        project_root=project_root,
+        venv=venv,
+        state_path=state_path,
+        stamp_path=venv / ".macos-native-codesign.sha256",
+        run_command=_successful_runner(commands),
+        system_name="Darwin",
+    )
+
+    xattr_commands = [command for command in commands if command[0] == "xattr"]
+    assert xattr_commands == [
+        ["xattr", "-c", str(path)]
+        for path in sorted(libraries, key=lambda path: path.name)
+    ]
+    assert all("-r" not in command and "-cr" not in command for command in xattr_commands)
+
+
+def test_native_hardlink_swap_during_xattr_is_rejected_before_codesign(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, _libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+    external_native = tmp_path / "outside.so"
+    external_native.write_bytes(b"outside")
+    commands: list[list[str]] = []
+    swapped = False
+
+    def run(command, **_kwargs):
+        nonlocal swapped
+        normalized = [str(part) for part in command]
+        commands.append(normalized)
+        if normalized[0] == "xattr" and not swapped:
+            target = Path(normalized[-1])
+            target.unlink()
+            os.link(external_native, target)
+            swapped = True
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises((RuntimeError, ValueError), match="identity|hard link|link count"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    assert not _codesign_commands(commands)
+    assert not stamp_path.exists()
+    assert external_native.read_bytes() == b"outside"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["add", "delete", "replace", "bytes", "state-bytes"],
+)
+def test_cached_verification_rejects_closure_or_byte_mutation_after_verify(
+    tmp_path,
+    mutation,
+):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = _write_matching_stamp(module, venv, state_path)
+    commands: list[list[str]] = []
+    verify_count = 0
+
+    def mutate_verified_runtime() -> None:
+        if mutation == "state-bytes":
+            state_path.write_text('{"changed": true}\n', encoding="utf-8")
+            return
+        target = libraries[0]
+        if mutation == "add":
+            target.with_name("new.so").write_bytes(b"new")
+        elif mutation == "delete":
+            target.unlink()
+        elif mutation == "replace":
+            replacement = target.with_name("replacement.tmp")
+            replacement.write_bytes(b"replacement")
+            os.replace(replacement, target)
+        else:
+            target.write_bytes(b"changed-in-place")
+
+    def run(command, **_kwargs):
+        nonlocal verify_count
+        normalized = [str(part) for part in command]
+        commands.append(normalized)
+        if normalized[0] == "codesign" and "--verify" in normalized:
+            verify_count += 1
+            if verify_count == len(libraries):
+                mutate_verified_runtime()
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(
+        RuntimeError,
+        match="closure|identity|content|changed|unavailable",
+    ):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    assert not stamp_path.exists()
+    assert not any("--force" in command for command in _codesign_commands(commands))
+
+
+def test_post_sign_verification_rejects_new_native_before_writing_stamp(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+    commands: list[list[str]] = []
+    verify_count = 0
+
+    def run(command, **_kwargs):
+        nonlocal verify_count
+        normalized = [str(part) for part in command]
+        commands.append(normalized)
+        if normalized[0] == "codesign" and "--verify" in normalized:
+            verify_count += 1
+            if verify_count == len(libraries):
+                libraries[0].with_name("new.so").write_bytes(b"new")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(RuntimeError, match="closure|identity|content|changed"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    assert not stamp_path.exists()
+
+
+def test_cached_verification_rejects_stamp_replacement_during_verify(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = _write_matching_stamp(module, venv, state_path)
+    verify_count = 0
+
+    def run(command, **_kwargs):
+        nonlocal verify_count
+        normalized = [str(part) for part in command]
+        if normalized[0] == "codesign" and "--verify" in normalized:
+            verify_count += 1
+            if verify_count == len(libraries):
+                replacement = stamp_path.with_suffix(".replacement")
+                replacement.write_text('{"forged": true}\n', encoding="utf-8")
+                os.replace(replacement, stamp_path)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(RuntimeError, match="stamp.*identity|stamp.*changed"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    assert not stamp_path.exists()
+
+
+def test_runtime_mutation_during_stamp_replace_is_detected_and_stamp_removed(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+
+    def replace_then_mutate(source, target):
+        os.replace(source, target)
+        libraries[0].write_bytes(b"changed-after-verify")
+
+    with pytest.raises(RuntimeError, match="closure|identity|content|changed"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=_successful_runner([]),
+            replace_file=replace_then_mutate,
+            system_name="Darwin",
+        )
+
+    assert not stamp_path.exists()
+
+
 def test_native_file_swap_after_scan_is_rejected_before_codesign(tmp_path):
     module = _signing_module()
     project_root, venv, state_path, libraries = _write_runtime(tmp_path)
