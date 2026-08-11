@@ -117,12 +117,18 @@ test('redacts percent-encoded local file URLs without decoding remote or malform
     const pathPrefixes = [
         { prefix: 'C:\\Users\\Alice Smith\\repo', label: '<spaced-root>' },
         { prefix: 'C:\\Users\\王表\\repo', label: '<unicode-root>' },
+        { prefix: '/Users/王表/repo', label: '<posix-unicode-root>' },
+        { prefix: '/Users/Alice?Dev/repo', label: '<posix-question-root>' },
+        { prefix: 'C:\\Users\\Alice~Dev\\repo', label: '<tilde-root>' },
     ];
     const remoteUrl = 'https://example.test/C:/Users/Alice%20Smith/repo/guide';
     const malformedFileUrl = 'file:///C:/Users/Alice%2/repo/main.cjs';
     const value = [
         'at file:///C:/Users/Alice%20Smith/repo/src/main.cjs:42:7',
         'at file:///C:/Users/%E7%8E%8B%E8%A1%A8/repo/src/main.cjs:8:2',
+        'at file:///Users/%e7%8e%8b%e8%a1%a8/repo/src/main.cjs:9:3',
+        'at file:///Users/Alice%3fDev/repo/src/main.cjs:10:4',
+        'at file:///C:/Users/Alice%7eDev/repo/src/main.cjs:11:5',
         `remote=${remoteUrl}`,
         `malformed=${malformedFileUrl}`,
     ].join('\n');
@@ -131,6 +137,15 @@ test('redacts percent-encoded local file URLs without decoding remote or malform
 
     assert.match(redacted, /file:\/\/\/<spaced-root>\/src\/main\.cjs:42:7/);
     assert.match(redacted, /file:\/\/\/<unicode-root>\/src\/main\.cjs:8:2/);
+    assert.match(
+        redacted,
+        /file:\/\/\/<posix-unicode-root>\/src\/main\.cjs:9:3/,
+    );
+    assert.match(
+        redacted,
+        /file:\/\/\/<posix-question-root>\/src\/main\.cjs:10:4/,
+    );
+    assert.match(redacted, /file:\/\/\/<tilde-root>\/src\/main\.cjs:11:5/);
     assert.match(
         redacted,
         new RegExp(`remote=${remoteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),

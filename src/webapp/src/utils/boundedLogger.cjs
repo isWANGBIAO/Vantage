@@ -43,10 +43,49 @@ function encodeFileUrlPathPrefix(prefix) {
       .replace(/^\/+/, '');
     return encodeURI(normalized)
       .replace(/#/g, '%23')
-      .replace(/\?/g, '%3F');
+      .replace(/\?/g, '%3F')
+      .replace(/~/g, '%7E');
   } catch {
     return null;
   }
+}
+
+function percentHexCharacterPattern(character) {
+  if (/[A-Fa-f]/.test(character)) {
+    return `[${character.toLowerCase()}${character.toUpperCase()}]`;
+  }
+  return character;
+}
+
+function buildFileUrlPrefixPattern(prefix) {
+  let pattern = '';
+  let previousWasSeparator = false;
+
+  for (let index = 0; index < prefix.length; index += 1) {
+    const character = prefix[index];
+    if (character === '/') {
+      if (!previousWasSeparator) {
+        pattern += '[\\/]+';
+      }
+      previousWasSeparator = true;
+      continue;
+    }
+
+    if (
+      character === '%'
+      && index + 2 < prefix.length
+      && /^[0-9A-Fa-f]{2}$/.test(prefix.slice(index + 1, index + 3))
+    ) {
+      pattern += `%${percentHexCharacterPattern(prefix[index + 1])}`;
+      pattern += percentHexCharacterPattern(prefix[index + 2]);
+      index += 2;
+    } else {
+      pattern += escapeRegExpCharacter(character);
+    }
+    previousWasSeparator = false;
+  }
+
+  return pattern;
 }
 
 function compilePathPrefixes(pathPrefixes) {
@@ -83,7 +122,7 @@ function compilePathPrefixes(pathPrefixes) {
         ),
         fileUrlRegex: encodedFileUrlPrefix
           ? new RegExp(
-            `${buildPathPrefixPattern(encodedFileUrlPrefix)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
+            `${buildFileUrlPrefixPattern(encodedFileUrlPrefix)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
             windowsPath ? 'gi' : 'g',
           )
           : null,
