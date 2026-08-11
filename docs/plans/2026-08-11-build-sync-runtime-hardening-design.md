@@ -210,11 +210,26 @@ uses no-follow open semantics where available and cross-checks `lstat`/`fstat`.
 It rejects links, reparse points, non-regular files, hard links, and identity
 races, so acquiring a lease cannot modify an external file through the lock
 path.
-The bootstrap supervisor protects process creation, but strips the legacy
-`VANTAGE_BACKEND_RUNTIME_LOCK_HELD` marker and never treats environment text as
-proof of ownership. A live child therefore continues to block destructive
-synchronization after its supervisor terminates. Process exit releases the OS
-lease, so a residual lock file is not an occupied lock. The synchronizer
+The bootstrap launcher first acquires a shared lease, then starts an independent
+bootstrap lease-owner. The owner acquires its own real shared lease, sends
+READY, and waits for launcher GO (or launcher-death EOF) before it starts the
+target-venv command; it keeps that lease until the command exits. The launcher's
+lease overlaps this two-phase handshake, so terminating the launcher cannot
+expose an already-started target to destructive synchronization. If it
+terminates before the owner acquires its lease, the target has not started and
+the owner waits for any intervening exclusive sync. The launcher readiness wait
+is bounded and may stop an unready owner safely because the owner cannot start
+the target before GO. POSIX passes only the two pipe descriptors with
+`pass_fds`; Windows passes only the two explicitly listed pipe handles and does
+not rely on inherited `LockFileEx` ownership. Both processes strip the legacy
+`VANTAGE_BACKEND_RUNTIME_LOCK_HELD` marker and never treat environment text as
+proof of ownership. The owner starts the target in an isolated process group;
+if its target wait fails or the owner receives a handled interruption, it
+terminates that process tree before releasing the lease. Process exit releases
+the OS lease, so a residual lock file is not an occupied lock. The handoff
+contract covers loss of the outer launcher; forcibly terminating the
+lease-owner itself releases its OS lease, so any such administrative action
+must also terminate the guarded target process tree. The synchronizer
 captures the old root's `lstat` identity before its atomic rename, then
 revalidates identity, parent, and quarantine prefix. A root or nested Windows
 reparse point, an identity race, or an unsafe inspection retains the quarantine

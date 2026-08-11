@@ -143,6 +143,128 @@ raise SystemExit(7)
     assert output_path.read_text(encoding="utf-8") == "absent"
 
 
+@pytest.mark.parametrize(
+    ("ready_option", "continue_option"),
+    [
+        ("--internal-ready-fd", "--internal-continue-fd"),
+        ("--internal-ready-handle", "--internal-continue-handle"),
+    ],
+)
+def test_lease_owner_command_keeps_platform_transport_outside_target_command(
+    tmp_path, ready_option, continue_option
+):
+    from src.scripts.run_with_backend_runtime_lock import (
+        build_backend_runtime_lease_owner_command,
+    )
+
+    target_command = [str(tmp_path / "target-python"), "server.py", "--flag"]
+    lock_runner = tmp_path / "lock-runner.py"
+    bootstrap_python = tmp_path / "bootstrap-python"
+    result = build_backend_runtime_lease_owner_command(
+        project_root=tmp_path,
+        timeout_seconds=12.5,
+        ready_option=ready_option,
+        ready_value=17,
+        continue_option=continue_option,
+        continue_value=19,
+        command=target_command,
+        bootstrap_python=bootstrap_python,
+        lock_runner=lock_runner,
+    )
+
+    delimiter_index = result.index("--")
+    assert result[0] == str(bootstrap_python)
+    assert result[1] == str(lock_runner.resolve())
+    assert "--internal-lease-owner" in result[:delimiter_index]
+    assert result[result.index(ready_option) + 1] == "17"
+    assert result[result.index(continue_option) + 1] == "19"
+    assert result[delimiter_index + 1 :] == target_command
+
+
+def test_lease_owner_ready_wait_times_out_and_stops_an_unready_owner():
+    from src.scripts.run_with_backend_runtime_lock import (
+        _wait_for_lease_owner_ready,
+    )
+
+    read_descriptor, write_descriptor = os.pipe()
+
+    class UnreadyOwner:
+        def __init__(self):
+            self.killed = False
+
+        def poll(self):
+            return -9 if self.killed else None
+
+        def kill(self):
+            self.killed = True
+            os.close(write_descriptor)
+
+        def wait(self, timeout):
+            assert timeout > 0
+            return -9
+
+    owner = UnreadyOwner()
+    try:
+        with pytest.raises(TimeoutError, match="lease owner readiness"):
+            _wait_for_lease_owner_ready(
+                owner,
+                read_descriptor,
+                timeout_seconds=0.01,
+            )
+    finally:
+        os.close(read_descriptor)
+        if not owner.killed:
+            os.close(write_descriptor)
+
+    assert owner.killed
+
+
+def test_lease_owner_wait_error_stops_target_before_releasing_lease():
+    from src.scripts.run_with_backend_runtime_lock import _wait_for_guarded_target
+
+    class TargetWithFailingWait:
+        def __init__(self):
+            self.alive = True
+            self.wait_calls = 0
+
+        def poll(self):
+            return None if self.alive else -9
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise OSError("simulated wait failure")
+            assert timeout is not None and timeout > 0
+            return -9
+
+    target = TargetWithFailingWait()
+    terminated = []
+
+    def terminate_tree(process):
+        terminated.append(process)
+        process.alive = False
+
+    with pytest.raises(OSError, match="simulated wait failure"):
+        _wait_for_guarded_target(target, terminate_tree=terminate_tree)
+
+    assert terminated == [target]
+    assert target.wait_calls == 2
+
+
+def test_guarded_target_uses_an_isolated_process_group_on_each_platform():
+    from src.scripts.run_with_backend_runtime_lock import (
+        _guarded_target_popen_kwargs,
+    )
+
+    windows_kwargs = _guarded_target_popen_kwargs("nt")
+    posix_kwargs = _guarded_target_popen_kwargs("posix")
+
+    assert windows_kwargs["creationflags"] & int(
+        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+    )
+    assert posix_kwargs == {"start_new_session": True}
+
+
 def test_forged_inherited_marker_never_bypasses_an_owned_lock(tmp_path):
     lock_module = _lock_module()
     environment = _subprocess_environment()
@@ -245,6 +367,100 @@ done.write_text("done", encoding="utf-8")
                 os.kill(child_pid, 15)
             pytest.fail("child did not release its runtime lease after stop")
 
+    with lock_module.backend_runtime_lock(tmp_path, timeout_seconds=2):
+        assert lock_module.backend_runtime_lock_is_held(tmp_path)
+
+
+def test_supervisor_death_before_child_self_lock_never_opens_exclusive_gap(tmp_path):
+    lock_module = _lock_module()
+    started_path = tmp_path / "child-started-before-self-lock.txt"
+    allow_self_lock_path = tmp_path / "allow-child-self-lock.txt"
+    child_locked_path = tmp_path / "child-self-locked.txt"
+    stop_path = tmp_path / "child-stop.txt"
+    done_path = tmp_path / "child-done.txt"
+    child_source = """
+import os
+import pathlib
+import sys
+import time
+from src.core.backend_runtime_lock import backend_runtime_lock
+
+root = pathlib.Path(sys.argv[1])
+started = pathlib.Path(sys.argv[2])
+allow_self_lock = pathlib.Path(sys.argv[3])
+child_locked = pathlib.Path(sys.argv[4])
+stop = pathlib.Path(sys.argv[5])
+done = pathlib.Path(sys.argv[6])
+started.write_text(str(os.getpid()), encoding="utf-8")
+while not allow_self_lock.exists():
+    time.sleep(0.02)
+with backend_runtime_lock(root, mode="shared", timeout_seconds=2):
+    child_locked.write_text("locked", encoding="utf-8")
+    while not stop.exists():
+        time.sleep(0.02)
+done.write_text("done", encoding="utf-8")
+"""
+    supervisor = subprocess.Popen(
+        [
+            sys.executable,
+            "src/scripts/run_with_backend_runtime_lock.py",
+            "--project-root",
+            str(tmp_path),
+            "--",
+            sys.executable,
+            "-c",
+            child_source,
+            str(tmp_path),
+            str(started_path),
+            str(allow_self_lock_path),
+            str(child_locked_path),
+            str(stop_path),
+            str(done_path),
+        ],
+        env=_subprocess_environment(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    child_pid: int | None = None
+    try:
+        deadline = time.monotonic() + 5
+        while not started_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert started_path.exists(), "child never reached the pre-self-lock window"
+        child_pid = int(started_path.read_text(encoding="utf-8"))
+        assert not child_locked_path.exists()
+
+        supervisor.kill()
+        supervisor.wait(timeout=5)
+        with pytest.raises(TimeoutError, match="backend runtime lock"):
+            with lock_module.backend_runtime_lock(tmp_path, timeout_seconds=0.2):
+                pytest.fail(
+                    "exclusive synchronization entered while a pre-self-lock child was alive"
+                )
+    finally:
+        allow_self_lock_path.write_text("allow", encoding="utf-8")
+        stop_path.write_text("stop", encoding="utf-8")
+        deadline = time.monotonic() + 5
+        while not done_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if not done_path.exists():
+            if supervisor.poll() is None:
+                supervisor.kill()
+                supervisor.wait(timeout=5)
+            if child_pid is None and started_path.exists():
+                child_pid = int(started_path.read_text(encoding="utf-8"))
+            if child_pid is not None and os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(child_pid), "/F"],
+                    capture_output=True,
+                    check=False,
+                )
+            elif child_pid is not None:
+                os.kill(child_pid, 15)
+
+    assert child_locked_path.read_text(encoding="utf-8") == "locked"
+    assert done_path.read_text(encoding="utf-8") == "done"
     with lock_module.backend_runtime_lock(tmp_path, timeout_seconds=2):
         assert lock_module.backend_runtime_lock_is_held(tmp_path)
 

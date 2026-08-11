@@ -126,8 +126,10 @@ requirements/Python/platform mismatch, missing/extra distributions, failed
 leaving no valid state. Require mismatch to delete and recreate the dedicated
 venv rather than uninstalling a deny-list. Require all persistent launchers to
 invoke the same helper and forbid direct stamp writes. Require every target-venv
-consumer to own a real shared OS lease, never trust an inherited environment
-marker, and keep blocking an exclusive synchronizer after its supervisor exits.
+consumer to be covered by a real shared OS lease before process creation, never
+trust an inherited environment marker, and keep blocking an exclusive
+synchronizer after the outer launcher exits even when the target deliberately
+delays its own lock acquisition.
 
 Add packaging tests that change only the distribution closure and observe a
 different fingerprint. Bump the fingerprint schema and require packaging
@@ -156,8 +158,16 @@ identity races retain quarantine rather than entering recursive deletion.
 The launchers pass project root, venv, core requirements, overlay, normalizer,
 and force mode to this helper. A sibling OS-released lifecycle lock covers the
 entire synchronizer and every target-venv consumer. Official entrypoints use a
-bootstrap supervisor during process creation; direct build, verify, packaging,
-and source-server entrypoints each acquire a shared OS lease themselves.
+bootstrap launcher that starts an independent lease-owner while retaining its
+own shared lease. The owner sends READY after acquisition, waits for launcher
+GO or launcher-death EOF, and only then starts and waits for the target command.
+The readiness wait is bounded while the second phase prevents a timeout from
+killing an already-started target. POSIX passes the two pipe descriptors
+explicitly; Windows uses an explicit handle list and never assumes that an
+inherited handle inherits byte-range lock ownership. Direct build, verify,
+packaging, and source-server entrypoints also acquire shared OS leases themselves.
+The owner isolates the target process group and terminates that tree before
+releasing its lease on any handled wait/interruption failure.
 Synchronization and signing take the exclusive lease. The legacy inherited
 environment marker is cleared and never accepted as ownership proof. A helper
 error aborts before packaging.
