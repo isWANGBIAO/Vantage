@@ -2,6 +2,8 @@ from pathlib import Path
 import sys
 import time
 
+import psutil
+
 from src.scripts.run_packaging_builds import _run_command, resolve_build_worker_count
 
 
@@ -20,11 +22,11 @@ def test_resolve_build_worker_count_handles_invalid_or_empty_inputs():
 
 
 def test_packaging_child_output_is_redacted_and_bounded(tmp_path, capsys):
-    secret = "sk-1234567890abcdef"
+    secret = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
     source = (
         "import sys; "
         f"path={str(tmp_path)!r}; secret={secret!r}; "
-        "sys.stdout.write((f'path={path} api_key={secret}\\n') * 10000)"
+        "sys.stdout.write((f'path={path} token={secret} ') * 100000)"
     )
 
     returncode = _run_command(
@@ -57,3 +59,46 @@ def test_packaging_child_timeout_returns_failure_promptly(tmp_path):
 
     assert returncode != 0
     assert time.monotonic() - started < 3
+
+
+def test_packaging_timeout_terminates_pipe_inheriting_descendant(tmp_path, capsys):
+    descendant_pid_path = tmp_path / "descendant.pid"
+    descendant = "import time; print('descendant-ready', flush=True); time.sleep(5)"
+    parent = (
+        "import pathlib, subprocess, sys, time; "
+        f"child=subprocess.Popen([sys.executable, '-c', {descendant!r}]); "
+        f"pathlib.Path({str(descendant_pid_path)!r}).write_text(str(child.pid), encoding='utf-8'); "
+        "print('parent-ready', flush=True); time.sleep(5)"
+    )
+    started = time.monotonic()
+
+    returncode = _run_command(
+        "probe",
+        [sys.executable, "-c", parent],
+        Path(tmp_path),
+        timeout_seconds=0.5,
+        output_limit_bytes=1024,
+    )
+
+    elapsed = time.monotonic() - started
+    assert returncode == 124
+    assert elapsed < 2.5
+    assert descendant_pid_path.exists()
+    descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
+    try:
+        descendant_process = psutil.Process(descendant_pid)
+    except psutil.NoSuchProcess:
+        descendant_process = None
+    if descendant_process is not None:
+        try:
+            descendant_process.wait(timeout=3)
+        except psutil.NoSuchProcess:
+            pass
+        assert (
+            not descendant_process.is_running()
+            or descendant_process.status() == psutil.STATUS_ZOMBIE
+        )
+    output = capsys.readouterr().out
+    assert "parent-ready" in output
+    assert "descendant-ready" in output
+    assert len(output.encode("utf-8")) < 2048

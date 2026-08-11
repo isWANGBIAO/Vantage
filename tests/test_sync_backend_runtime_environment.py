@@ -366,7 +366,20 @@ def test_failed_rebuild_leaves_no_valid_state(tmp_path):
 
 def test_failed_rebuild_output_is_bounded_and_redacted_before_error(tmp_path):
     venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
-    secret = "sk-1234567890abcdef"
+    secrets = (
+        "sk-1234567890abcdef",
+        "bearer-secret-1234567890",
+        "dXNlcjpwYXNzd29yZA==",
+        "url-password-123456",
+        "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+        "query-secret-1234567890",
+    )
+    credential_output = (
+        f"api_key={secrets[0]} Authorization: Bearer {secrets[1]} "
+        f"Authorization: Basic {secrets[2]} "
+        f"https://alice:{secrets[3]}@example.test/private "
+        f"github={secrets[4]} token={secrets[5]}"
+    )
     private_path = tmp_path / "private" / "credentials.json"
     observed_kwargs = []
 
@@ -380,7 +393,7 @@ def test_failed_rebuild_output_is_bounded_and_redacted_before_error(tmp_path):
         return SimpleNamespace(
             returncode=1 if "-r" in command else 0,
             stdout="",
-            stderr=(f"failed at {private_path} api_key={secret}\n" * 10000),
+            stderr=(f"failed at {private_path} {credential_output}\n" * 10000),
         )
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -403,7 +416,7 @@ def test_failed_rebuild_output_is_bounded_and_redacted_before_error(tmp_path):
 
     message = str(exc_info.value)
     assert str(tmp_path) not in message
-    assert secret not in message
+    assert all(secret not in message for secret in secrets)
     assert "<PROJECT_ROOT>" in message
     assert "[REDACTED]" in message
     assert len(message.encode("utf-8")) < 20_000

@@ -5,7 +5,6 @@ import os
 import shutil
 import subprocess
 import sys
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -26,7 +25,7 @@ def _ensure_project_root_on_sys_path(
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
 from src.core.backend_runtime_lock import backend_runtime_lock
-from src.utils.subprocess_safety import BoundedTextEmitter
+from src.utils.subprocess_safety import BoundedTextEmitter, run_bounded_subprocess
 
 
 PACKAGING_SUBPROCESS_TIMEOUT_SECONDS = 60 * 60
@@ -119,39 +118,26 @@ def _run_command(
             print(filtered, end="", flush=True)
 
     emit(f"[{name}] starting: {' '.join(command)}\n")
-    process = subprocess.Popen(
-        command,
-        cwd=str(cwd),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    timed_out = threading.Event()
-
-    def terminate_on_timeout() -> None:
-        timed_out.set()
-        try:
-            process.kill()
-        except OSError:
-            pass
-
-    timer = threading.Timer(timeout_seconds, terminate_on_timeout)
-    timer.daemon = True
-    timer.start()
-    assert process.stdout is not None
     try:
-        for line in process.stdout:
-            emit(f"[{name}] {line}")
-        return_code = process.wait()
-    finally:
-        timer.cancel()
-    if timed_out.is_set():
+        result = run_bounded_subprocess(
+            command,
+            timeout_seconds=timeout_seconds,
+            output_limit_bytes=output_limit_bytes,
+            cwd=str(cwd),
+        )
+    except subprocess.TimeoutExpired as exc:
+        for captured in (exc.output, exc.stderr):
+            if captured:
+                if isinstance(captured, bytes):
+                    captured = captured.decode("utf-8", errors="replace")
+                emit(f"[{name}] {captured}")
         emit(f"[{name}] timed out after {timeout_seconds:g} seconds\n")
         return 124
-    emit(f"[{name}] exited with {return_code}\n")
-    return return_code
+    for captured in (result.stdout, result.stderr):
+        if captured:
+            emit(f"[{name}] {captured}")
+    emit(f"[{name}] exited with {result.returncode}\n")
+    return result.returncode
 
 
 def resolve_build_worker_count(

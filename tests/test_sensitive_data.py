@@ -20,6 +20,35 @@ def test_redact_sensitive_text_removes_sk_style_keys():
     assert redact_sensitive_text("bad sk-1234567890abcdef") == "bad sk-[REDACTED]"
 
 
+def test_redact_sensitive_text_removes_common_http_url_and_github_credentials():
+    secrets = {
+        "bearer": "bearer-secret-1234567890",
+        "basic": "dXNlcjpwYXNzd29yZA==",
+        "password": "url-password-123456",
+        "github": "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+        "token": "query-secret-1234567890",
+        "json_token": "json-secret-1234567890",
+    }
+    message = (
+        f"Authorization: Bearer {secrets['bearer']}\n"
+        f"authorization: Basic {secrets['basic']}\n"
+        f"url=https://alice:{secrets['password']}@example.test/private\n"
+        f"github={secrets['github']}\n"
+        f"request?token={secrets['token']}&safe=1\n"
+        f'payload={{"access_token":"{secrets["json_token"]}"}}\n'
+    )
+
+    redacted = redact_sensitive_text(message)
+
+    assert all(secret not in redacted for secret in secrets.values())
+    assert "Authorization: Bearer [REDACTED_TOKEN]" in redacted
+    assert "authorization: Basic [REDACTED_TOKEN]" in redacted
+    assert "https://[REDACTED_USERINFO]@example.test" in redacted
+    assert "ghp_[REDACTED]" in redacted
+    assert "token=[REDACTED_TOKEN]" in redacted
+    assert '"access_token":"[REDACTED_TOKEN]"' in redacted
+
+
 def test_redact_sensitive_text_replaces_longest_explicit_path_prefix():
     message = (
         r'Traceback: File "C:\Users\Alice\repo\src\server.py", line 42; '

@@ -63,7 +63,27 @@ def redact_sensitive_text(value, *, path_prefixes=None):
     if not isinstance(value, str):
         return value
 
-    redacted = re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-[REDACTED]", value)
+    redacted = re.sub(
+        r"(?i)(authorization\s*:\s*(?:bearer|basic)\s+)[^\s,;'\"<>]+",
+        r"\1[REDACTED_TOKEN]",
+        value,
+    )
+    redacted = re.sub(
+        r"(?i)\b((?:https?|ftp)://)[^/\s:@]+:[^/@\s]+@",
+        r"\1[REDACTED_USERINFO]@",
+        redacted,
+    )
+    redacted = re.sub(
+        r"\b(gh(?:p|o|u|s|r)_)[A-Za-z0-9]{8,}",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"\b(github_pat_)[A-Za-z0-9_]{8,}",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-[REDACTED]", redacted)
     redacted = re.sub(
         r'(?i)("api[_-]?key"\s*:\s*")[^"]{8,}(")',
         r"\1[REDACTED_API_KEY]\2",
@@ -72,6 +92,16 @@ def redact_sensitive_text(value, *, path_prefixes=None):
     redacted = re.sub(
         r"(?i)(api[_-]?key\s*[:=]\s*)[A-Za-z0-9_\-]{16,}",
         r"\1[REDACTED_API_KEY]",
+        redacted,
+    )
+    redacted = re.sub(
+        r'(?i)("(?:access[_-]?|refresh[_-]?|auth[_-]?)?token"\s*:\s*")[^"]*(")',
+        r"\1[REDACTED_TOKEN]\2",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)((?<![\w-])(?:access[_-]?|refresh[_-]?|auth[_-]?)?token\s*[:=]\s*)[^\s&;,\"'<>]+",
+        r"\1[REDACTED_TOKEN]",
         redacted,
     )
     return _redact_path_prefixes(redacted, path_prefixes)

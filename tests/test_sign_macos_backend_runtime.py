@@ -480,7 +480,20 @@ def test_codesign_failure_output_is_bounded_redacted_and_has_a_timeout(tmp_path)
     project_root, venv, state_path, libraries = _write_runtime(tmp_path)
     stamp_path = _write_matching_stamp(module, venv, state_path)
     libraries[0].write_bytes(b"changed")
-    secret = "sk-1234567890abcdef"
+    secrets = (
+        "sk-1234567890abcdef",
+        "bearer-secret-1234567890",
+        "dXNlcjpwYXNzd29yZA==",
+        "url-password-123456",
+        "ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+        "query-secret-1234567890",
+    )
+    credential_output = (
+        f"api_key={secrets[0]} Authorization: Bearer {secrets[1]} "
+        f"Authorization: Basic {secrets[2]} "
+        f"https://alice:{secrets[3]}@example.test/private "
+        f"github={secrets[4]} token={secrets[5]}"
+    )
     observed_timeouts = []
 
     def run(command, **kwargs):
@@ -490,7 +503,7 @@ def test_codesign_failure_output_is_bounded_redacted_and_has_a_timeout(tmp_path)
         return SimpleNamespace(
             returncode=7 if failed_sign else 0,
             stdout="",
-            stderr=(f"failure at {project_root} api_key={secret}\n" * 10000),
+            stderr=(f"failure at {project_root} {credential_output}\n" * 10000),
         )
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -505,7 +518,7 @@ def test_codesign_failure_output_is_bounded_redacted_and_has_a_timeout(tmp_path)
 
     message = str(exc_info.value)
     assert str(project_root) not in message
-    assert secret not in message
+    assert all(secret not in message for secret in secrets)
     assert "<PROJECT_ROOT>" in message
     assert "[REDACTED]" in message
     assert len(message.encode("utf-8")) < 20_000

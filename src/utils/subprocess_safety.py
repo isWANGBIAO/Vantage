@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
+import signal
 import subprocess
 import threading
 from typing import Mapping, Sequence
@@ -11,6 +13,8 @@ from src.utils.sensitive_data import redact_sensitive_text
 DEFAULT_SUBPROCESS_TIMEOUT_SECONDS = 300.0
 DEFAULT_SUBPROCESS_OUTPUT_LIMIT_BYTES = 16 * 1024
 _TRUNCATION_MARKER = b"\n...[output truncated]...\n"
+_PIPE_DRAIN_JOIN_SECONDS = 2.0
+_PROCESS_TREE_TERMINATION_SECONDS = 5.0
 
 
 class BoundedTextEmitter:
@@ -104,6 +108,45 @@ def _drain_pipe(pipe, capture: _BoundedBytes) -> None:
         pipe.close()
 
 
+def _isolated_process_kwargs() -> dict[str, object]:
+    if os.name == "nt":
+        return {
+            "creationflags": int(
+                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+            )
+        }
+    return {"start_new_session": True}
+
+
+def terminate_process_tree(process: subprocess.Popen) -> None:
+    """Terminate a subprocess and descendants created in its isolated group."""
+    if os.name == "nt":
+        creation_flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=_PROCESS_TREE_TERMINATION_SECONDS,
+                creationflags=creation_flags,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
+
+    if process.poll() is None:
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
 def _run_real_bounded_subprocess(
     command: Sequence[str],
     *,
@@ -119,6 +162,7 @@ def _run_real_bounded_subprocess(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        **_isolated_process_kwargs(),
     )
     assert process.stdout is not None
     assert process.stderr is not None
@@ -139,18 +183,22 @@ def _run_real_bounded_subprocess(
     try:
         returncode = process.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-        stdout_thread.join(timeout=5)
-        stderr_thread.join(timeout=5)
+        terminate_process_tree(process)
+        try:
+            process.wait(timeout=_PROCESS_TREE_TERMINATION_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=_PROCESS_TREE_TERMINATION_SECONDS)
+        stdout_thread.join(timeout=_PIPE_DRAIN_JOIN_SECONDS)
+        stderr_thread.join(timeout=_PIPE_DRAIN_JOIN_SECONDS)
         raise subprocess.TimeoutExpired(
             list(command),
             timeout_seconds,
             output=stdout_capture.value(),
             stderr=stderr_capture.value(),
         ) from None
-    stdout_thread.join(timeout=5)
-    stderr_thread.join(timeout=5)
+    stdout_thread.join(timeout=_PIPE_DRAIN_JOIN_SECONDS)
+    stderr_thread.join(timeout=_PIPE_DRAIN_JOIN_SECONDS)
     return subprocess.CompletedProcess(
         args=list(command),
         returncode=returncode,
