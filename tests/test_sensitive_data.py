@@ -42,6 +42,7 @@ def test_redact_sensitive_text_replaces_longest_explicit_path_prefix():
 
 def test_redact_sensitive_text_does_not_replace_partial_directory_names_or_urls():
     message = (
+        "embedded=XC:/Users/Alice/repo/file.py "
         "project=C:/Users/Alice/repository/file.py "
         "sibling=C:/Users/Alice/repo-other/file.py "
         "archive=C:/Users/Alice/repo.txt "
@@ -59,6 +60,7 @@ def test_redact_sensitive_text_does_not_replace_partial_directory_names_or_urls(
         path_prefixes={"<PROJECT_ROOT>": r"C:\Users\Alice\repo"},
     )
 
+    assert "XC:/Users/Alice/repo/file.py" in redacted
     assert "C:/Users/Alice/repository/file.py" in redacted
     assert "C:/Users/Alice/repo-other/file.py" in redacted
     assert "C:/Users/Alice/repo.txt" in redacted

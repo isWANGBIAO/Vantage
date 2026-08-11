@@ -22,9 +22,11 @@ def _path_prefix_pattern(prefix):
     pieces = re.split(r"[\\/]", normalized)
     separator = r"[\\/]+"
     pattern = separator.join(re.escape(piece) for piece in pieces)
-    flags = re.IGNORECASE if _looks_like_windows_path(normalized) else 0
+    windows_path = _looks_like_windows_path(normalized)
+    flags = re.IGNORECASE if windows_path else 0
+    left_boundary = r"(?<![\w])" if windows_path else ""
     diagnostic_boundary = r"(?=$|[\\/\s'\"\):,\]\};>]|[.!?](?=$|\s))"
-    return re.compile(pattern + diagnostic_boundary, flags)
+    return re.compile(left_boundary + pattern + diagnostic_boundary, flags)
 
 
 def _redact_path_prefixes(value, path_prefixes):

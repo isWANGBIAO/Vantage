@@ -226,6 +226,24 @@ test('collects every path replacement from one immutable source value', () => {
     );
 });
 
+test('requires a real left boundary before Windows and POSIX path prefixes', () => {
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice\\repo', label: '<windows-root>' },
+        { prefix: '/Users/Alice/repo', label: '<posix-root>' },
+    ];
+    const value = [
+        'embedded=XC:/Users/Alice/repo/src/main.cjs',
+        'partial=file:///NotUsers/Alice/repo/src/main.cjs',
+        'valid=file:///Users/Alice/repo/src/main.cjs',
+    ].join('\n');
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.match(redacted, /embedded=XC:\/Users\/Alice\/repo\/src\/main\.cjs/);
+    assert.match(redacted, /partial=file:\/\/\/NotUsers\/Alice\/repo\/src\/main\.cjs/);
+    assert.match(redacted, /valid=file:\/\/\/<posix-root>\/src\/main\.cjs/);
+});
+
 test('redacts many path matches without quadratic rescanning', () => {
     const pathPrefixes = [
         { prefix: 'C:\\Users\\Alice\\repo', label: '<project-root>' },

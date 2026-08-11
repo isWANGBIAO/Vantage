@@ -110,16 +110,23 @@ function compilePathPrefixes(pathPrefixes) {
       const windowsPath = /^[A-Za-z]:[\\/]/.test(prefix)
         || /^\\\\/.test(prefix)
         || prefix.includes('\\');
+      const beginsWithSeparator = /^[\\/]/.test(prefix);
+      const rawLeftBoundary = beginsWithSeparator
+        ? '(?<![:\\\\/])'
+        : (windowsPath ? '(?<![A-Za-z0-9_])' : '');
+      const fileUrlLeftBoundary = beginsWithSeparator
+        ? '(?<=/)'
+        : '(?<![A-Za-z0-9_])';
       return {
         label: mapping.label,
         order,
         prefix,
         regex: new RegExp(
-          `${buildPathPrefixPattern(prefix)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
+          `${rawLeftBoundary}${buildPathPrefixPattern(prefix)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
           windowsPath ? 'gi' : 'g',
         ),
         fileUrlRegex: new RegExp(
-          `${buildFileUrlPrefixPattern(prefix, windowsPath)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
+          `${fileUrlLeftBoundary}${buildFileUrlPrefixPattern(prefix, windowsPath)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
           windowsPath ? 'gi' : 'g',
         ),
       };
@@ -156,7 +163,7 @@ function collectPathCandidates(value, compiledPathPrefixes) {
     for (const match of value.matchAll(mapping.regex)) {
       candidates.push({
         end: match.index + match[0].length,
-        encoded: false,
+        urlPattern: false,
         label: mapping.label,
         priority,
         start: match.index,
@@ -165,7 +172,7 @@ function collectPathCandidates(value, compiledPathPrefixes) {
     for (const match of value.matchAll(mapping.fileUrlRegex)) {
       candidates.push({
         end: match.index + match[0].length,
-        encoded: true,
+        urlPattern: true,
         label: mapping.label,
         priority,
         start: match.index,
@@ -177,7 +184,7 @@ function collectPathCandidates(value, compiledPathPrefixes) {
     left.start - right.start
     || left.priority - right.priority
     || right.end - left.end
-    || Number(left.encoded) - Number(right.encoded)
+    || Number(left.urlPattern) - Number(right.urlPattern)
   ));
   return candidates;
 }
@@ -205,7 +212,7 @@ function selectPathReplacements(value, compiledPathPrefixes) {
     if (activeScheme && REMOTE_URL_SCHEMES.has(activeScheme)) {
       continue;
     }
-    if (candidate.encoded && !activeScheme) {
+    if (candidate.urlPattern !== Boolean(activeScheme)) {
       continue;
     }
 
