@@ -601,7 +601,7 @@ def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(t
         entry["path"] == "src/scripts/sign_macos_artifacts.py"
         for entry in original["inputs"]
     )
-    assert original["version"] == 4
+    assert original["version"] == 5
     assert original["distributions"] == closure
 
 
@@ -637,6 +637,11 @@ def test_backend_runtime_fingerprint_tracks_full_python_and_platform_identity(tm
         "system": "Darwin",
         "machine": "arm64",
     }
+    codesign_state = {
+        "schema_version": 1,
+        "backend_environment_state_sha256": "state",
+        "native_libraries": [],
+    }
 
     original = build_backend_runtime_fingerprint(
         tmp_path,
@@ -644,6 +649,7 @@ def test_backend_runtime_fingerprint_tracks_full_python_and_platform_identity(tm
         distribution_closure=["pip==25.3"],
         python_identity=python_identity,
         platform_identity=platform_identity,
+        macos_codesign_state=codesign_state,
     )
     changed_python = build_backend_runtime_fingerprint(
         tmp_path,
@@ -651,6 +657,7 @@ def test_backend_runtime_fingerprint_tracks_full_python_and_platform_identity(tm
         distribution_closure=["pip==25.3"],
         python_identity={**python_identity, "cache_tag": "cpython-313t"},
         platform_identity=platform_identity,
+        macos_codesign_state=codesign_state,
     )
     changed_machine = build_backend_runtime_fingerprint(
         tmp_path,
@@ -658,12 +665,56 @@ def test_backend_runtime_fingerprint_tracks_full_python_and_platform_identity(tm
         distribution_closure=["pip==25.3"],
         python_identity=python_identity,
         platform_identity={**platform_identity, "machine": "x86_64"},
+        macos_codesign_state=codesign_state,
     )
 
     assert original["python"] == python_identity
     assert original["platform"] == platform_identity
     assert original["digest"] != changed_python["digest"]
     assert original["digest"] != changed_machine["digest"]
+
+
+def test_backend_runtime_fingerprint_tracks_verified_macos_native_closure(tmp_path):
+    _create_required_runtime_resources(tmp_path)
+    resources = collect_backend_runtime_resources(tmp_path)
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    native = venv / "lib" / "site-packages" / "demo" / "native.so"
+    native.parent.mkdir(parents=True)
+    native.write_bytes(b"native-v1")
+    state_path = venv / ".vantage-backend-runtime-state.json"
+    state_path.write_text('{"schema_version": 3}\n', encoding="utf-8")
+    signer = importlib.import_module("src.scripts.sign_macos_backend_runtime")
+    stamp_path = venv / signer.MACOS_BACKEND_CODESIGN_STAMP_NAME
+    signer.write_macos_backend_codesign_state(
+        stamp_path,
+        signer.build_macos_backend_codesign_state(venv, state_path),
+    )
+    platform_identity = {
+        "sys_platform": "darwin",
+        "system": "Darwin",
+        "machine": "arm64",
+    }
+
+    original = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["pip==25.3"],
+        platform_identity=platform_identity,
+    )
+    native.write_bytes(b"native-v2")
+    signer.write_macos_backend_codesign_state(
+        stamp_path,
+        signer.build_macos_backend_codesign_state(venv, state_path),
+    )
+    changed = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["pip==25.3"],
+        platform_identity=platform_identity,
+    )
+
+    assert original["macos_codesign_state"] != changed["macos_codesign_state"]
+    assert original["digest"] != changed["digest"]
 
 
 def test_backend_runtime_cache_match_requires_existing_runtime_and_matching_fingerprint(tmp_path):

@@ -493,6 +493,40 @@ def test_integrity_probe_race_rebuilds_instead_of_aborting(tmp_path, monkeypatch
     assert load_backend_environment_state(venv) is not None
 
 
+def test_reuse_rechecks_integrity_after_target_interpreter_probes(tmp_path):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+    commands: list[list[str]] = []
+    probe_side_effect = venv / "probe-side-effect.txt"
+
+    def mutating_import_check(*_args):
+        probe_side_effect.write_text("created by target interpreter\n", encoding="utf-8")
+        return True
+
+    outcome = synchronize_backend_runtime_environment(
+        project_root=tmp_path,
+        venv=venv,
+        core_requirements=core,
+        requirements=overlay,
+        opencv_normalizer=normalizer,
+        creator_python=tmp_path / "bootstrap" / "python.exe",
+        creator_prefix=tmp_path / "bootstrap",
+        creator_python_identity=PYTHON_IDENTITY,
+        creator_platform_identity=PLATFORM_IDENTITY,
+        run_command=_successful_runner(venv, commands),
+        probe_environment=lambda *_args: _probe_payload(),
+        pip_check=lambda *_args: True,
+        import_check=mutating_import_check,
+        opencv_check=lambda *_args: True,
+    )
+
+    assert outcome.reused is False
+    assert any(command[1:3] == ["-m", "venv"] for command in commands)
+    assert outcome.state["integrity"] == backend_state.compute_backend_environment_integrity(
+        venv,
+        platform_name="win32",
+    )
+
+
 def test_failed_rebuild_leaves_no_valid_state(tmp_path):
     venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
     commands: list[list[str]] = []

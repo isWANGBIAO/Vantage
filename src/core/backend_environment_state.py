@@ -22,7 +22,6 @@ BACKEND_ENVIRONMENT_INTEGRITY_SCHEMA_VERSION = 1
 _MACOS_CODESIGN_STAMP_NAME = ".macos-native-codesign.sha256"
 _CODESIGN_STAGING_PREFIX = ".vantage-codesign-staging-"
 _REGENERABLE_DIRECTORY_NAMES = {"__pycache__"}
-_REGENERABLE_FILE_SUFFIXES = {".pyc", ".pyo"}
 _MACOS_SIGNED_FILE_SUFFIXES = {".dylib", ".so"}
 
 
@@ -120,14 +119,116 @@ def _environment_integrity_file_is_excluded(
         f".{BACKEND_ENVIRONMENT_STATE_NAME}."
     ):
         return True
-    if relative_path.suffix.lower() in _REGENERABLE_FILE_SUFFIXES:
-        return True
     if (
         platform_name == "darwin"
+        and len(relative_path.parts) > 1
+        and relative_path.parts[0] == "lib"
         and relative_path.suffix.lower() in _MACOS_SIGNED_FILE_SUFFIXES
     ):
         return True
     return False
+
+
+def _environment_integrity_root_identity(root: Path) -> tuple[int, int, int, int]:
+    root_stat = root.lstat()
+    if (
+        not stat.S_ISDIR(root_stat.st_mode)
+        or stat.S_ISLNK(root_stat.st_mode)
+        or _is_windows_reparse_point(root_stat)
+    ):
+        raise ValueError("backend environment integrity root must be a plain directory")
+    return (
+        int(root_stat.st_dev),
+        int(root_stat.st_ino),
+        int(stat.S_IFMT(root_stat.st_mode)),
+        int(getattr(root_stat, "st_file_attributes", 0)),
+    )
+
+
+def _environment_integrity_entry_identity(file_stat) -> dict[str, int]:
+    return {
+        "device": int(file_stat.st_dev),
+        "inode": int(file_stat.st_ino),
+        "mode": int(file_stat.st_mode),
+        "bytes": int(file_stat.st_size),
+        "mtime_ns": int(file_stat.st_mtime_ns),
+        "attributes": int(getattr(file_stat, "st_file_attributes", 0)),
+    }
+
+
+def _scan_backend_environment_metadata(
+    root: Path,
+    *,
+    platform_name: str,
+) -> tuple[tuple[int, int, int, int] | None, list[dict[str, object]]]:
+    if not os.path.lexists(root):
+        return None, []
+
+    root_identity = _environment_integrity_root_identity(root)
+    records: list[dict[str, object]] = []
+    pending_directories = [root]
+    while pending_directories:
+        directory = pending_directories.pop()
+        with os.scandir(directory) as iterator:
+            entries = sorted(iterator, key=lambda entry: entry.name)
+        for entry in entries:
+            path = Path(entry.path)
+            relative_path = path.relative_to(root)
+            entry_stat = path.lstat()
+            is_link = stat.S_ISLNK(entry_stat.st_mode) or _is_windows_reparse_point(
+                entry_stat
+            )
+            if is_link:
+                try:
+                    target = os.readlink(path)
+                except OSError:
+                    target = (
+                        "reparse:"
+                        f"{int(getattr(entry_stat, 'st_file_attributes', 0))}"
+                    )
+                records.append(
+                    {
+                        "path": relative_path.as_posix(),
+                        "kind": "link",
+                        "target": target,
+                        **_environment_integrity_entry_identity(entry_stat),
+                    }
+                )
+                continue
+            if stat.S_ISDIR(entry_stat.st_mode):
+                if (
+                    entry.name in _REGENERABLE_DIRECTORY_NAMES
+                    or (
+                        directory == root
+                        and entry.name.startswith(_CODESIGN_STAGING_PREFIX)
+                    )
+                ):
+                    continue
+                pending_directories.append(path)
+                continue
+            if not stat.S_ISREG(entry_stat.st_mode):
+                raise ValueError(
+                    "backend environment integrity contains an unsupported file type: "
+                    f"{relative_path.as_posix()}"
+                )
+            if _environment_integrity_file_is_excluded(
+                relative_path,
+                platform_name=platform_name,
+            ):
+                continue
+            records.append(
+                {
+                    "path": relative_path.as_posix(),
+                    "kind": "file",
+                    **_environment_integrity_entry_identity(entry_stat),
+                }
+            )
+
+    if _environment_integrity_root_identity(root) != root_identity:
+        raise RuntimeError(
+            "backend environment root changed while computing integrity"
+        )
+    return root_identity, sorted(records, key=lambda item: str(item["path"]))
 
 
 def compute_backend_environment_integrity(
@@ -149,94 +250,79 @@ def compute_backend_environment_integrity(
     total_bytes = 0
     file_count = 0
     link_count = 0
+    initial_root_identity, initial_metadata = _scan_backend_environment_metadata(
+        root,
+        platform_name=resolved_platform,
+    )
+    for metadata_record in initial_metadata:
+        relative_path = str(metadata_record["path"])
+        if metadata_record["kind"] == "link":
+            records.append(
+                {
+                    "path": relative_path,
+                    "kind": "link",
+                    "target": metadata_record["target"],
+                }
+            )
+            link_count += 1
+            continue
 
-    if os.path.lexists(root):
-        root_stat = root.lstat()
+        path = root / relative_path
+        expected_identity = {
+            key: metadata_record[key]
+            for key in (
+                "device",
+                "inode",
+                "mode",
+                "bytes",
+                "mtime_ns",
+                "attributes",
+            )
+        }
+        before_stat = path.lstat()
         if (
-            not stat.S_ISDIR(root_stat.st_mode)
-            or stat.S_ISLNK(root_stat.st_mode)
-            or _is_windows_reparse_point(root_stat)
+            not stat.S_ISREG(before_stat.st_mode)
+            or _is_windows_reparse_point(before_stat)
+            or _environment_integrity_entry_identity(before_stat) != expected_identity
         ):
-            raise ValueError("backend environment integrity root must be a plain directory")
+            raise RuntimeError(
+                "backend environment file changed while computing integrity: "
+                f"{relative_path}"
+            )
+        content_hash = _sha256_file(path)
+        after_stat = path.lstat()
+        if (
+            not stat.S_ISREG(after_stat.st_mode)
+            or _is_windows_reparse_point(after_stat)
+            or _environment_integrity_entry_identity(after_stat) != expected_identity
+        ):
+            raise RuntimeError(
+                "backend environment file changed while computing integrity: "
+                f"{relative_path}"
+            )
+        records.append(
+            {
+                "path": relative_path,
+                "kind": "file",
+                "bytes": metadata_record["bytes"],
+                "mode": int(stat.S_IMODE(int(metadata_record["mode"]))),
+                "sha256": content_hash,
+            }
+        )
+        file_count += 1
+        total_bytes += int(metadata_record["bytes"])
 
-        pending_directories = [root]
-        while pending_directories:
-            directory = pending_directories.pop()
-            with os.scandir(directory) as iterator:
-                entries = sorted(iterator, key=lambda entry: entry.name)
-            for entry in entries:
-                path = Path(entry.path)
-                relative_path = path.relative_to(root)
-                entry_stat = path.lstat()
-                is_link = stat.S_ISLNK(entry_stat.st_mode) or _is_windows_reparse_point(
-                    entry_stat
-                )
-                if is_link:
-                    try:
-                        target = os.readlink(path)
-                    except OSError:
-                        target = f"reparse:{int(getattr(entry_stat, 'st_file_attributes', 0))}"
-                    records.append(
-                        {
-                            "path": relative_path.as_posix(),
-                            "kind": "link",
-                            "target": target,
-                        }
-                    )
-                    link_count += 1
-                    continue
-                if stat.S_ISDIR(entry_stat.st_mode):
-                    if (
-                        entry.name in _REGENERABLE_DIRECTORY_NAMES
-                        or (
-                            directory == root
-                            and entry.name.startswith(_CODESIGN_STAGING_PREFIX)
-                        )
-                    ):
-                        continue
-                    pending_directories.append(path)
-                    continue
-                if not stat.S_ISREG(entry_stat.st_mode):
-                    raise ValueError(
-                        "backend environment integrity contains an unsupported file type: "
-                        f"{relative_path.as_posix()}"
-                    )
-                if _environment_integrity_file_is_excluded(
-                    relative_path,
-                    platform_name=resolved_platform,
-                ):
-                    continue
-
-                content_hash = _sha256_file(path)
-                after_stat = path.lstat()
-                before_identity = (
-                    int(entry_stat.st_dev),
-                    int(entry_stat.st_ino),
-                    int(entry_stat.st_size),
-                    int(entry_stat.st_mtime_ns),
-                )
-                after_identity = (
-                    int(after_stat.st_dev),
-                    int(after_stat.st_ino),
-                    int(after_stat.st_size),
-                    int(after_stat.st_mtime_ns),
-                )
-                if before_identity != after_identity or not stat.S_ISREG(after_stat.st_mode):
-                    raise RuntimeError(
-                        "backend environment file changed while computing integrity: "
-                        f"{relative_path.as_posix()}"
-                    )
-                records.append(
-                    {
-                        "path": relative_path.as_posix(),
-                        "kind": "file",
-                        "bytes": int(entry_stat.st_size),
-                        "mode": int(stat.S_IMODE(entry_stat.st_mode)),
-                        "sha256": content_hash,
-                    }
-                )
-                file_count += 1
-                total_bytes += int(entry_stat.st_size)
+    final_root_identity, final_metadata = _scan_backend_environment_metadata(
+        root,
+        platform_name=resolved_platform,
+    )
+    if (
+        final_root_identity != initial_root_identity
+        or final_metadata != initial_metadata
+    ):
+        raise RuntimeError(
+            "backend environment closure changed while computing integrity"
+        )
 
     digest = hashlib.sha256()
     digest.update(

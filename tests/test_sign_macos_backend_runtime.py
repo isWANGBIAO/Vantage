@@ -54,6 +54,28 @@ def _codesign_commands(commands: list[list[str]]) -> list[list[str]]:
     return [command for command in commands if command and command[0] == "codesign"]
 
 
+def test_validated_codesign_state_rejects_native_drift(tmp_path):
+    module = _signing_module()
+    _project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = _write_matching_stamp(module, venv, state_path)
+    expected = module.build_macos_backend_codesign_state(venv, state_path)
+
+    assert module.validated_macos_backend_codesign_state(
+        venv,
+        state_path,
+        stamp_path,
+    ) == expected
+
+    libraries[0].write_bytes(b"native-drift")
+
+    with pytest.raises(RuntimeError, match="stamp does not match"):
+        module.validated_macos_backend_codesign_state(
+            venv,
+            state_path,
+            stamp_path,
+        )
+
+
 def _create_directory_link(link: Path, target: Path) -> None:
     if os.name == "nt":
         result = subprocess.run(

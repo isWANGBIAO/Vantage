@@ -982,6 +982,71 @@ def build_macos_backend_codesign_state(
     )
 
 
+def validated_macos_backend_codesign_state(
+    venv: str | Path,
+    state_path: str | Path,
+    stamp_path: str | Path,
+) -> dict[str, object]:
+    """Return a stable native closure only when it matches the signer stamp.
+
+    The caller must already own the backend runtime lifecycle lease. This is a
+    read-only packaging guard; cryptographic signature verification remains in
+    ``sign_macos_backend_runtime`` immediately before the build.
+    """
+
+    resolved_venv = Path(os.path.abspath(venv))
+    resolved_state_path = Path(os.path.abspath(state_path))
+    resolved_stamp_path = Path(os.path.abspath(stamp_path))
+    snapshot = _build_signing_snapshot(resolved_venv, resolved_state_path)
+    venv_descriptor: int | None = None
+    try:
+        if os.name != "nt":
+            venv_descriptor = _open_validated_directory(
+                resolved_venv,
+                snapshot.venv_identity,
+                role="runtime root",
+            )
+        expected_state = _codesign_state_from_snapshot(
+            resolved_venv,
+            resolved_state_path,
+            snapshot,
+        )
+        stamp_identity = _stamp_entry_identity(
+            resolved_stamp_path,
+            parent_identity=snapshot.venv_identity,
+            parent_descriptor=venv_descriptor,
+        )
+        stored_state = _load_codesign_state(
+            resolved_stamp_path,
+            expected_identity=stamp_identity,
+            parent_identity=snapshot.venv_identity,
+            parent_descriptor=venv_descriptor,
+        )
+        if stamp_identity is None or stored_state != expected_state:
+            raise RuntimeError(
+                "macOS backend codesign stamp does not match the native closure"
+            )
+        verified_snapshot, verified_state = _stable_rescan(
+            resolved_venv,
+            resolved_state_path,
+            expected_snapshot=snapshot,
+            expected_state=expected_state,
+            phase="during packaging codesign-state validation",
+        )
+        _assert_stamp_unchanged(
+            resolved_venv,
+            resolved_stamp_path,
+            expected_identity=stamp_identity,
+            expected_state=verified_state,
+            parent_identity=verified_snapshot.venv_identity,
+            parent_descriptor=venv_descriptor,
+        )
+        return dict(verified_state)
+    finally:
+        if venv_descriptor is not None:
+            os.close(venv_descriptor)
+
+
 def write_macos_backend_codesign_state(
     stamp_path: str | Path,
     state: Mapping[str, object],

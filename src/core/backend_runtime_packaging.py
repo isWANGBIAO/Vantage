@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.core.backend_environment_state import (
+    BACKEND_ENVIRONMENT_STATE_NAME,
     compute_backend_environment_integrity,
     compute_requirements_sha256,
     current_platform_identity,
@@ -27,7 +28,7 @@ RUNTIME_NAME = "VantageBackend"
 APP_EXE_NAME = f"{RUNTIME_NAME}.exe"
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
 BACKEND_RUNTIME_FINGERPRINT_NAME = "runtime-fingerprint.json"
-BACKEND_RUNTIME_FINGERPRINT_VERSION = 4
+BACKEND_RUNTIME_FINGERPRINT_VERSION = 5
 BACKEND_RUNTIME_SOURCE_INPUTS = (
     "requirements-core.txt",
     "requirements-backend-runtime-gpu.txt",
@@ -241,6 +242,17 @@ def validate_packaging_python_environment(
             expected_venv,
             platform_name=str(resolved_platform_identity.get("sys_platform") or sys.platform),
         )
+        if resolved_platform_identity.get("sys_platform") == "darwin":
+            from src.scripts.sign_macos_backend_runtime import (
+                MACOS_BACKEND_CODESIGN_STAMP_NAME,
+                validated_macos_backend_codesign_state,
+            )
+
+            validated_macos_backend_codesign_state(
+                expected_venv,
+                expected_venv / BACKEND_ENVIRONMENT_STATE_NAME,
+                expected_venv / MACOS_BACKEND_CODESIGN_STAMP_NAME,
+            )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         return f"Backend runtime environment state could not be validated: {exc}"
 
@@ -525,6 +537,7 @@ def build_backend_runtime_fingerprint(
     python_identity: dict[str, str] | None = None,
     platform_identity: dict[str, str] | None = None,
     environment_integrity: dict[str, object] | None = None,
+    macos_codesign_state: dict[str, object] | None = None,
 ) -> dict[str, object]:
     resolved_root = Path(project_root).resolve()
     entries_by_path: dict[str, dict[str, object]] = {}
@@ -555,12 +568,32 @@ def build_backend_runtime_fingerprint(
         if environment_integrity is None
         else environment_integrity
     )
+    resolved_macos_codesign_state = macos_codesign_state
+    if (
+        resolved_platform_identity.get("sys_platform") == "darwin"
+        and resolved_macos_codesign_state is None
+    ):
+        from src.scripts.sign_macos_backend_runtime import (
+            MACOS_BACKEND_CODESIGN_STAMP_NAME,
+            validated_macos_backend_codesign_state,
+        )
+
+        resolved_macos_codesign_state = validated_macos_backend_codesign_state(
+            resolved_root / BACKEND_RUNTIME_VENV_NAME,
+            resolved_root
+            / BACKEND_RUNTIME_VENV_NAME
+            / BACKEND_ENVIRONMENT_STATE_NAME,
+            resolved_root
+            / BACKEND_RUNTIME_VENV_NAME
+            / MACOS_BACKEND_CODESIGN_STAMP_NAME,
+        )
     digest_payload = {
         "version": BACKEND_RUNTIME_FINGERPRINT_VERSION,
         "python": resolved_python_identity,
         "platform": resolved_platform_identity,
         "distributions": resolved_distribution_closure,
         "environment_integrity": resolved_environment_integrity,
+        "macos_codesign_state": resolved_macos_codesign_state,
         "inputs": inputs,
     }
     digest = hashlib.sha256(
@@ -574,6 +607,7 @@ def build_backend_runtime_fingerprint(
         "platform": digest_payload["platform"],
         "distributions": resolved_distribution_closure,
         "environment_integrity": resolved_environment_integrity,
+        "macos_codesign_state": resolved_macos_codesign_state,
         "digest": digest,
         "inputs": inputs,
     }
@@ -867,6 +901,10 @@ def backend_runtime_fingerprint_matches(
         return False
     if stored_fingerprint.get("environment_integrity") != expected_fingerprint.get(
         "environment_integrity"
+    ):
+        return False
+    if stored_fingerprint.get("macos_codesign_state") != expected_fingerprint.get(
+        "macos_codesign_state"
     ):
         return False
     return not validate_backend_runtime_bundle(layout, resources)

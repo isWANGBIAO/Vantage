@@ -576,6 +576,25 @@ def _reuse_validation_error(
         return "target Python identity differs from the creating interpreter", None
     if probe.get("platform") != dict(creator_platform_identity):
         return "target platform identity differs from the creating interpreter", None
+    stored_integrity = state.get("integrity")
+    error = environment_state_validation_error(
+        state,
+        requirements_sha256=requirements_sha256,
+        python_identity=creator_python_identity,
+        platform_identity=creator_platform_identity,
+        distributions=probe.get("distributions", []),
+        environment_integrity=(
+            stored_integrity if isinstance(stored_integrity, Mapping) else {}
+        ),
+    )
+    if error:
+        return error, None
+    if not pip_check(target_python, run_command):
+        return "pip check failed", None
+    if not import_check(target_python, run_command):
+        return "required backend imports failed", None
+    if not opencv_check(target_python, core_requirements, run_command):
+        return "OpenCV installation validation failed", None
     try:
         environment_integrity = compute_backend_environment_integrity(
             venv,
@@ -595,12 +614,6 @@ def _reuse_validation_error(
     )
     if error:
         return error, None
-    if not pip_check(target_python, run_command):
-        return "pip check failed", None
-    if not import_check(target_python, run_command):
-        return "required backend imports failed", None
-    if not opencv_check(target_python, core_requirements, run_command):
-        return "OpenCV installation validation failed", None
     return None, state
 
 

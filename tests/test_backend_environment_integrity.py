@@ -1,5 +1,9 @@
+import importlib
 from pathlib import Path
 
+import pytest
+
+from src.core import backend_environment_state as backend_state
 from src.core.backend_environment_state import (
     BACKEND_ENVIRONMENT_STATE_NAME,
     build_backend_environment_state,
@@ -67,6 +71,61 @@ def test_backend_environment_integrity_ignores_regenerable_and_signing_state(
 
     assert after_generated_files == original
     assert after_native_signing == original
+
+
+def test_backend_environment_integrity_tracks_sourceless_bytecode_outside_pycache(
+    tmp_path,
+):
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    package_root = venv / "Lib" / "site-packages"
+    package_root.mkdir(parents=True)
+    original = compute_backend_environment_integrity(venv, platform_name="win32")
+
+    (package_root / "injected.pyc").write_bytes(b"executable-bytecode")
+    changed = compute_backend_environment_integrity(venv, platform_name="win32")
+
+    assert changed["digest"] != original["digest"]
+    assert changed["file_count"] == 1
+
+
+def test_backend_environment_integrity_only_excludes_macos_natives_under_lib(tmp_path):
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    unowned_native = venv / "bin" / "rogue.so"
+    unowned_native.parent.mkdir(parents=True)
+    unowned_native.write_bytes(b"version-one")
+    original = compute_backend_environment_integrity(venv, platform_name="darwin")
+
+    unowned_native.write_bytes(b"version-two")
+    changed = compute_backend_environment_integrity(venv, platform_name="darwin")
+
+    assert changed["digest"] != original["digest"]
+    assert changed["file_count"] == 1
+
+
+def test_backend_environment_integrity_rejects_closure_growth_during_hash(
+    tmp_path,
+    monkeypatch,
+):
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    package = venv / "Lib" / "site-packages" / "demo"
+    package.mkdir(parents=True)
+    (package / "first.py").write_text("VALUE = 1\n", encoding="utf-8")
+    late_file = venv / "late-added.txt"
+    original_sha256_file = backend_state._sha256_file
+    injected = False
+
+    def hash_then_grow_closure(path):
+        nonlocal injected
+        digest = original_sha256_file(path)
+        if not injected:
+            injected = True
+            late_file.write_text("late\n", encoding="utf-8")
+        return digest
+
+    monkeypatch.setattr(backend_state, "_sha256_file", hash_then_grow_closure)
+
+    with pytest.raises(RuntimeError, match="closure changed"):
+        compute_backend_environment_integrity(venv, platform_name="win32")
 
 
 def test_backend_environment_integrity_only_excludes_root_bookkeeping(tmp_path):
@@ -173,6 +232,65 @@ def test_packaging_environment_rejects_same_version_installed_file_tamper(tmp_pa
     assert "integrity" in str(error).lower()
 
 
+def test_packaging_environment_rejects_macos_native_drift_after_signing(tmp_path):
+    core = tmp_path / "requirements-core.txt"
+    overlay = tmp_path / "requirements-backend-runtime-gpu.txt"
+    core.write_text("demo==1.0\n", encoding="utf-8")
+    overlay.write_text("-r requirements-core.txt\n", encoding="utf-8")
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    python_path = venv / "bin" / "python"
+    python_path.parent.mkdir(parents=True)
+    python_path.write_bytes(b"python")
+    native = venv / "lib" / "site-packages" / "demo" / "native.so"
+    native.parent.mkdir(parents=True)
+    native.write_bytes(b"native-v1")
+    closure = ["demo==1.0", "pip==25.3"]
+    platform_identity = {
+        "sys_platform": "darwin",
+        "system": "Darwin",
+        "machine": "arm64",
+    }
+    state = build_backend_environment_state(
+        core,
+        overlay,
+        python_identity=current_python_identity(),
+        platform_identity=platform_identity,
+        distributions=closure,
+        venv=venv,
+    )
+    write_backend_environment_state(venv, state)
+    signer = importlib.import_module("src.scripts.sign_macos_backend_runtime")
+    stamp_path = venv / signer.MACOS_BACKEND_CODESIGN_STAMP_NAME
+    signer.write_macos_backend_codesign_state(
+        stamp_path,
+        signer.build_macos_backend_codesign_state(
+            venv,
+            venv / BACKEND_ENVIRONMENT_STATE_NAME,
+        ),
+    )
+
+    assert validate_packaging_python_environment(
+        tmp_path,
+        executable=python_path,
+        prefix=venv,
+        distribution_closure=closure,
+        python_identity=current_python_identity(),
+        platform_identity=platform_identity,
+    ) is None
+
+    native.write_bytes(b"native-v2")
+    error = validate_packaging_python_environment(
+        tmp_path,
+        executable=python_path,
+        prefix=venv,
+        distribution_closure=closure,
+        python_identity=current_python_identity(),
+        platform_identity=platform_identity,
+    )
+
+    assert "codesign" in str(error).lower()
+
+
 def test_packaging_environment_reports_integrity_probe_races(tmp_path, monkeypatch):
     (tmp_path / "requirements-core.txt").write_text("demo==1.0\n", encoding="utf-8")
     (tmp_path / "requirements-backend-runtime-gpu.txt").write_text(
@@ -223,6 +341,6 @@ def test_backend_runtime_fingerprint_changes_with_environment_file_integrity(tmp
         distribution_closure=["demo==1.0"],
     )
 
-    assert original["version"] >= 4
+    assert original["version"] >= 5
     assert original["environment_integrity"] != changed["environment_integrity"]
     assert original["digest"] != changed["digest"]
