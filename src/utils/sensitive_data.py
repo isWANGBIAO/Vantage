@@ -23,7 +23,8 @@ def _path_prefix_pattern(prefix):
     separator = r"[\\/]+"
     pattern = separator.join(re.escape(piece) for piece in pieces)
     flags = re.IGNORECASE if _looks_like_windows_path(normalized) else 0
-    return re.compile(pattern + r"(?![A-Za-z0-9_.-])", flags)
+    diagnostic_boundary = r"(?=$|[\\/\s'\"\):,\]\};>]|[.!?](?=$|\s))"
+    return re.compile(pattern + diagnostic_boundary, flags)
 
 
 def _redact_path_prefixes(value, path_prefixes):

@@ -6,6 +6,7 @@ const DEFAULT_MAX_FILES = 6;
 const ELECTRON_LOG_PATTERN = /^electron.*\.log.*$/;
 const UTF8_BOUNDARY_BYTES = 3;
 const URL_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>"']+/g;
+const PATH_PREFIX_BOUNDARY_PATTERN = "(?=$|[\\\\/\\s'\":,\\]\\};>)]|[.!?](?=$|\\s))";
 
 let temporaryFileSequence = 0;
 
@@ -63,7 +64,7 @@ function compilePathPrefixes(pathPrefixes) {
         order,
         prefix,
         regex: new RegExp(
-          `${buildPathPrefixPattern(prefix)}(?=$|[\\\\/])`,
+          `${buildPathPrefixPattern(prefix)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
           windowsPath ? 'gi' : 'g',
         ),
       };
@@ -94,7 +95,9 @@ function redactPathPrefixes(value, compiledPathPrefixes) {
       value.slice(lastIndex, match.index),
       compiledPathPrefixes,
     );
-    redacted += match[0];
+    redacted += /^file:/i.test(match[0])
+      ? redactPathSegment(match[0], compiledPathPrefixes)
+      : match[0];
     lastIndex = match.index + match[0].length;
   }
   redacted += redactPathSegment(value.slice(lastIndex), compiledPathPrefixes);

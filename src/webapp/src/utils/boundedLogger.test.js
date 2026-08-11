@@ -71,6 +71,48 @@ test('redacts explicit path prefixes without rewriting URLs or diagnostics', () 
     assert.equal(redactSensitiveText(42, pathPrefixes), 42);
 });
 
+test('redacts local file URLs and exact diagnostic roots without touching siblings', () => {
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice\\repo', label: '<project-root>' },
+    ];
+    const remoteUrl = 'https://example.test/C:/Users/Alice/repo/guide';
+    const value = [
+        'stack=at start (file:///C:/Users/Alice/repo/src/main.cjs:42:7)',
+        'cwd="C:\\Users\\Alice\\repo"',
+        'diagnostic=C:/Users/Alice/repo:',
+        'sibling=C:/Users/Alice/repo-other/main.cjs',
+        'archive=C:/Users/Alice/repo.txt',
+        'longer=C:/Users/Alice/repository/main.cjs',
+        'plus=C:/Users/Alice/repo+other/main.cjs',
+        'paren=C:/Users/Alice/repo(backup)/main.cjs',
+        'at=C:/Users/Alice/repo@old/main.cjs',
+        'tilde=C:/Users/Alice/repo~old/main.cjs',
+        'hash=C:/Users/Alice/repo#old/main.cjs',
+        `remote=${remoteUrl}`,
+    ].join('\n');
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.match(
+        redacted,
+        /stack=at start \(file:\/\/\/<project-root>\/src\/main\.cjs:42:7\)/,
+    );
+    assert.match(redacted, /cwd="<project-root>"/);
+    assert.match(redacted, /diagnostic=<project-root>:/);
+    assert.match(redacted, /sibling=C:\/Users\/Alice\/repo-other\/main\.cjs/);
+    assert.match(redacted, /archive=C:\/Users\/Alice\/repo\.txt/);
+    assert.match(redacted, /longer=C:\/Users\/Alice\/repository\/main\.cjs/);
+    assert.match(redacted, /plus=C:\/Users\/Alice\/repo\+other\/main\.cjs/);
+    assert.match(redacted, /paren=C:\/Users\/Alice\/repo\(backup\)\/main\.cjs/);
+    assert.match(redacted, /at=C:\/Users\/Alice\/repo@old\/main\.cjs/);
+    assert.match(redacted, /tilde=C:\/Users\/Alice\/repo~old\/main\.cjs/);
+    assert.match(redacted, /hash=C:\/Users\/Alice\/repo#old\/main\.cjs/);
+    assert.match(
+        redacted,
+        new RegExp(`remote=${remoteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    );
+});
+
 test('redacts messages and error stacks before file and console output', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-bounded-logger-'));
     const logFile = path.join(tempDir, 'electron.log');

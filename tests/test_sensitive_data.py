@@ -45,6 +45,11 @@ def test_redact_sensitive_text_does_not_replace_partial_directory_names_or_urls(
         "project=C:/Users/Alice/repository/file.py "
         "sibling=C:/Users/Alice/repo-other/file.py "
         "archive=C:/Users/Alice/repo.txt "
+        "plus=C:/Users/Alice/repo+other/file.py "
+        "paren=C:/Users/Alice/repo(backup)/file.py "
+        "at=C:/Users/Alice/repo@old/file.py "
+        "tilde=C:/Users/Alice/repo~old/file.py "
+        "hash=C:/Users/Alice/repo#old/file.py "
         'exact="C:/Users/Alice/repo" '
         "url=https://example.test/C:/Users/Alice/repo/file.py"
     )
@@ -57,6 +62,11 @@ def test_redact_sensitive_text_does_not_replace_partial_directory_names_or_urls(
     assert "C:/Users/Alice/repository/file.py" in redacted
     assert "C:/Users/Alice/repo-other/file.py" in redacted
     assert "C:/Users/Alice/repo.txt" in redacted
+    assert "C:/Users/Alice/repo+other/file.py" in redacted
+    assert "C:/Users/Alice/repo(backup)/file.py" in redacted
+    assert "C:/Users/Alice/repo@old/file.py" in redacted
+    assert "C:/Users/Alice/repo~old/file.py" in redacted
+    assert "C:/Users/Alice/repo#old/file.py" in redacted
     assert 'exact="<PROJECT_ROOT>"' in redacted
     assert "https://example.test/<PROJECT_ROOT>/file.py" in redacted
 
