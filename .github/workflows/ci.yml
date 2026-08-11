@@ -74,8 +74,10 @@ jobs:
         include:
           - runner: macos-14
             architecture: arm64
+            uname: arm64
           - runner: macos-15-intel
             architecture: x64
+            uname: x86_64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -87,15 +89,47 @@ jobs:
           cache-dependency-path: |
             requirements-core.txt
             requirements-backend-runtime-gpu.txt
-      - name: Install packaged runtime dependencies in an isolated environment
+      - name: Check runner architecture
+        run: test "$(uname -m)" = "${{ matrix.uname }}"
+      - name: Synchronize packaged runtime dependencies in the dedicated environment
         run: |
-          python -m venv .venv-runtime-smoke
-          .venv-runtime-smoke/bin/python -m pip install --upgrade pip
-          .venv-runtime-smoke/bin/python -m pip install -r requirements-backend-runtime-gpu.txt
+          python src/scripts/sync_backend_runtime_environment.py \
+            --project-root . \
+            --venv .venv-backend-runtime-gpu \
+            --core-requirements requirements-core.txt \
+            --requirements requirements-backend-runtime-gpu.txt \
+            --opencv-normalizer src/scripts/normalize_opencv_installation.py
       - name: Check packaged runtime dependencies
-        run: .venv-runtime-smoke/bin/python -m pip check
+        run: .venv-backend-runtime-gpu/bin/python -m pip check
       - name: Prewarm OpenCV YuNet detector
         run: |
-          .venv-runtime-smoke/bin/python -c "import cv2, numpy as np; from pathlib import Path; model = Path('src/models/face_detection_yunet_2023mar.onnx'); detector = cv2.FaceDetectorYN_create(str(model), '', (640, 640), 0.5, 0.3, 5000); assert detector is not None; detector.detect(np.zeros((640, 640, 3), dtype=np.uint8))"
+          .venv-backend-runtime-gpu/bin/python -c "import cv2, numpy as np; from pathlib import Path; model = Path('src/models/face_detection_yunet_2023mar.onnx'); detector = cv2.FaceDetectorYN_create(str(model), '', (640, 640), 0.5, 0.3, 5000); assert detector is not None; detector.detect(np.zeros((640, 640, 3), dtype=np.uint8))"
+      - name: Sign backend runtime native libraries
+        run: |
+          python src/scripts/sign_macos_backend_runtime.py \
+            --project-root . \
+            --venv .venv-backend-runtime-gpu \
+            --state .venv-backend-runtime-gpu/.vantage-backend-runtime-state.json \
+            --stamp .venv-backend-runtime-gpu/.macos-native-codesign.sha256
+          test -f .venv-backend-runtime-gpu/.macos-native-codesign.sha256
+      - name: Verify cached signature state
+        run: |
+          cached_output="$(python src/scripts/sign_macos_backend_runtime.py \
+            --project-root . \
+            --venv .venv-backend-runtime-gpu \
+            --state .venv-backend-runtime-gpu/.vantage-backend-runtime-state.json \
+            --stamp .venv-backend-runtime-gpu/.macos-native-codesign.sha256)"
+          echo "$cached_output"
+          grep -q "signatures verified" <<<"$cached_output"
+      - name: Tamper state and require signature refresh
+        run: |
+          printf '\n' >> .venv-backend-runtime-gpu/.vantage-backend-runtime-state.json
+          refresh_output="$(python src/scripts/sign_macos_backend_runtime.py \
+            --project-root . \
+            --venv .venv-backend-runtime-gpu \
+            --state .venv-backend-runtime-gpu/.vantage-backend-runtime-state.json \
+            --stamp .venv-backend-runtime-gpu/.macos-native-codesign.sha256)"
+          echo "$refresh_output"
+          grep -q "signatures refreshed" <<<"$refresh_output"
       - name: Check macOS launcher syntax
         run: bash -n RUN.sh RUN_DEV.sh

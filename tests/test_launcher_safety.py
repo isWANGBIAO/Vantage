@@ -232,6 +232,21 @@ def test_macos_backend_signing_is_owned_only_by_the_shared_python_cli():
         assert 'shasum -a 256 "$BACKEND_RUNTIME_STATE"' not in launcher
 
 
+def test_final_macos_backend_bundle_signing_is_strict_and_verified():
+    launcher = Path("RUN.sh").read_text(encoding="utf-8")
+    start = launcher.index("codesign_macos_backend_runtime_bundle()")
+    end = launcher.index("\n}\n", start)
+    signing_function = launcher[start:end]
+
+    assert "--timestamp=none" in signing_function
+    assert "codesign --verify --strict --verbose=2" in signing_function
+    assert 'codesign --force --sign - "$runtime_binary"' not in signing_function
+    assert "codesign" in signing_function
+    assert "|| true" not in "\n".join(
+        line for line in signing_function.splitlines() if "codesign" in line
+    )
+
+
 def test_macos_backend_signing_finishes_before_target_venv_consumers_start():
     run_sh = Path("RUN.sh").read_text(encoding="utf-8")
     run_dev_sh = Path("RUN_DEV.sh").read_text(encoding="utf-8")

@@ -176,13 +176,12 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
         "            requirements-core.txt\n"
         "            requirements-backend-runtime-gpu.txt"
     ) in macos_job
-    assert "python -m venv .venv-runtime-smoke" in macos_job
+    assert "sync_backend_runtime_environment.py" in macos_job
+    assert "--venv .venv-backend-runtime-gpu" in macos_job
     assert (
-        ".venv-runtime-smoke/bin/python -m pip install "
-        "-r requirements-backend-runtime-gpu.txt"
+        ".venv-backend-runtime-gpu/bin/python -m pip check"
     ) in macos_job
-    assert ".venv-runtime-smoke/bin/python -m pip check" in macos_job
-    assert ".venv-runtime-smoke/bin/python -c" in macos_job
+    assert ".venv-backend-runtime-gpu/bin/python -c" in macos_job
     assert "import cv2, numpy as np" in macos_job
     assert "cv2.FaceDetectorYN_create" in macos_job
     assert "src/models/face_detection_yunet_2023mar.onnx" in macos_job
@@ -194,9 +193,15 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
         flags=re.MULTILINE,
     ), "macOS runtime install, validation, and probe must use the isolated venv"
 
+    assert "sign_macos_backend_runtime.py" in macos_job
+    assert macos_job.count("sign_macos_backend_runtime.py") >= 3
+    assert "macos-native-codesign.sha256" in macos_job
+    assert "cached signature" in macos_job.lower()
+    assert "tamper" in macos_job.lower()
+    assert "signature refresh" in macos_job.lower()
+    assert "uname -m" in macos_job
+
     forbidden_steps = (
-        "codesign",
-        "signing",
         "notarize",
         "upload-artifact",
         "publish",

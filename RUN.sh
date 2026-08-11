@@ -144,7 +144,8 @@ codesign_macos_backend_runtime_bundle() {
     xattr -cr "$backend_runtime_dir" >/dev/null 2>&1 || true
     find "$backend_runtime_dir" -type f \( -name '*.so' -o -name '*.dylib' -o -name 'VantageBackend' -o -name 'Python' \) -print0 |
         while IFS= read -r -d '' runtime_binary; do
-            codesign --force --sign - "$runtime_binary" >/dev/null 2>&1 || true
+            codesign --force --sign - --timestamp=none "$runtime_binary"
+            codesign --verify --strict --verbose=2 "$runtime_binary"
         done
 }
 
