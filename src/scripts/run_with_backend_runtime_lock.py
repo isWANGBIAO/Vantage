@@ -4,6 +4,7 @@ import argparse
 import math
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import threading
@@ -368,8 +369,15 @@ def _stop_guarded_target_tree(
     *,
     terminate_tree=terminate_process_tree,
     confirm_tree=_confirm_posix_process_group_stopped,
+    process_group_id: int | None = None,
 ) -> None:
-    terminate_tree(process)
+    if os.name != "nt" and process_group_id is not None:
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
+    else:
+        terminate_tree(process)
     try:
         process.wait(timeout=_LEASE_OWNER_STOP_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
@@ -388,6 +396,12 @@ def _wait_for_guarded_target(
     terminate_tree=terminate_process_tree,
     confirm_tree=_confirm_posix_process_group_stopped,
 ) -> int:
+    process_group_id = None
+    if os.name != "nt":
+        try:
+            process_group_id = os.getpgid(process.pid)
+        except (AttributeError, OSError):
+            process_group_id = None
     try:
         returncode = process.wait()
     except BaseException:
@@ -396,6 +410,7 @@ def _wait_for_guarded_target(
                 process,
                 terminate_tree=terminate_tree,
                 confirm_tree=confirm_tree,
+                process_group_id=process_group_id,
             )
         except (OSError, subprocess.SubprocessError):
             pass
@@ -404,6 +419,7 @@ def _wait_for_guarded_target(
         process,
         terminate_tree=terminate_tree,
         confirm_tree=confirm_tree,
+        process_group_id=process_group_id,
     )
     return returncode
 
