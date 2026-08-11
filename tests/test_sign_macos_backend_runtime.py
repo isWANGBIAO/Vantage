@@ -180,7 +180,14 @@ def test_library_byte_change_invalidates_stamp_before_resigning(tmp_path):
         command[1:-1] == ["--force", "--sign", "-", "--timestamp=none"]
         for command in sign_commands
     )
-    assert len([command for command in codesign_commands if "--verify" in command]) == 2
+    verify_commands = [
+        command for command in codesign_commands if "--verify" in command
+    ]
+    assert len(verify_commands) == 4
+    assert sum(
+        ".vantage-codesign-staging-" in command[-1]
+        for command in verify_commands
+    ) == 2
     payload = json.loads(stamp_path.read_text(encoding="utf-8"))
     assert payload == module.build_macos_backend_codesign_state(venv, state_path)
 
@@ -490,10 +497,14 @@ def test_xattr_cleanup_is_scoped_to_each_verified_native_file(tmp_path):
     )
 
     xattr_commands = [command for command in commands if command[0] == "xattr"]
-    assert xattr_commands == [
-        ["xattr", "-c", str(path)]
-        for path in sorted(libraries, key=lambda path: path.name)
+    assert [Path(command[-1]).name for command in xattr_commands] == [
+        path.name for path in sorted(libraries, key=lambda path: path.name)
     ]
+    assert all(
+        ".vantage-codesign-staging-" in command[-1]
+        for command in xattr_commands
+    )
+    assert all(Path(command[-1]) not in libraries for command in xattr_commands)
     assert all("-r" not in command and "-cr" not in command for command in xattr_commands)
 
 
@@ -741,6 +752,243 @@ def test_native_file_swap_after_sign_is_rejected_before_verification(tmp_path):
     assert verify_commands == []
     assert not stamp_path.exists()
     assert external_native.read_bytes() == b"outside"
+
+
+def test_codesign_path_swap_cannot_modify_external_hardlink_target(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+    external_native = tmp_path / "outside.so"
+    external_native.write_bytes(b"outside-sentinel")
+    swapped = False
+
+    def run(command, **_kwargs):
+        nonlocal swapped
+        normalized = [str(part) for part in command]
+        if normalized[0] == "codesign" and "--force" in normalized and not swapped:
+            original = next(
+                library
+                for library in libraries
+                if library.name == Path(normalized[-1]).name
+            )
+            original.unlink()
+            os.link(external_native, original)
+            Path(normalized[-1]).write_bytes(b"codesign-mutated-target")
+            swapped = True
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises((RuntimeError, ValueError), match="identity|hard link|link count"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    assert external_native.read_bytes() == b"outside-sentinel"
+    assert not stamp_path.exists()
+
+
+def test_xattr_path_swap_cannot_modify_external_hardlink_target(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+    external_native = tmp_path / "outside-xattr.so"
+    external_native.write_bytes(b"outside-xattr-sentinel")
+    swapped = False
+
+    def run(command, **_kwargs):
+        nonlocal swapped
+        normalized = [str(part) for part in command]
+        if normalized[0] == "xattr" and not swapped:
+            original = next(
+                library
+                for library in libraries
+                if library.name == Path(normalized[-1]).name
+            )
+            original.unlink()
+            os.link(external_native, original)
+            Path(normalized[-1]).write_bytes(b"xattr-mutated-target")
+            swapped = True
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises((RuntimeError, ValueError), match="identity|hard link|link count"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    assert external_native.read_bytes() == b"outside-xattr-sentinel"
+    assert not stamp_path.exists()
+
+
+def test_codesign_may_replace_private_staging_inode_before_atomic_install(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+
+    def run(command, **_kwargs):
+        normalized = [str(part) for part in command]
+        if normalized[0] == "codesign" and "--force" in normalized:
+            target = Path(normalized[-1])
+            replacement = target.with_suffix(target.suffix + ".replacement")
+            replacement.write_bytes(target.read_bytes() + b"-signed")
+            os.replace(replacement, target)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    outcome = module.sign_macos_backend_runtime(
+        project_root=project_root,
+        venv=venv,
+        state_path=state_path,
+        stamp_path=stamp_path,
+        run_command=run,
+        system_name="Darwin",
+    )
+
+    assert outcome.reused is False
+    assert all(library.read_bytes().endswith(b"-signed") for library in libraries)
+    assert stamp_path.is_file()
+
+
+def test_staging_root_replacement_is_preserved_during_safe_cleanup(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, _libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+    replacement_sentinel: Path | None = None
+
+    def run(command, **_kwargs):
+        nonlocal replacement_sentinel
+        normalized = [str(part) for part in command]
+        if normalized[0] == "codesign" and "--force" in normalized:
+            staged_path = Path(normalized[-1])
+            staging_root = staged_path.parents[1]
+            moved_root = staging_root.with_name(staging_root.name + "-moved")
+            staging_root.rename(moved_root)
+            staging_root.mkdir()
+            replacement_sentinel = staging_root / "replacement-sentinel.txt"
+            replacement_sentinel.write_text("preserve", encoding="utf-8")
+            raise RuntimeError("staging root swapped")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(RuntimeError, match="staging root swapped"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    assert replacement_sentinel is not None
+    assert replacement_sentinel.read_text(encoding="utf-8") == "preserve"
+    assert not stamp_path.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX dir_fd semantics")
+def test_staging_parent_swap_before_open_cannot_create_external_file(
+    tmp_path,
+    monkeypatch,
+):
+    module = _signing_module()
+    _project_root, venv, state_path, _libraries = _write_runtime(tmp_path)
+    snapshot = module._build_signing_snapshot(venv, state_path)
+    state = module._codesign_state_from_snapshot(venv, state_path, snapshot)
+    expected_hash = {
+        entry["path"]: entry["sha256"] for entry in state["native_libraries"]
+    }
+    staging_root, staging_identity = module._create_private_staging_root(
+        venv,
+        snapshot,
+    )
+    external = tmp_path / "external-staging-parent"
+    external.mkdir()
+    real_open = module.os.open
+    swapped = False
+
+    def swap_parent_before_target_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if (
+            not swapped
+            and dir_fd is not None
+            and flags & os.O_CREAT
+            and Path(path).name == snapshot.libraries[0].path.name
+        ):
+            staging_parent = staging_root / "0000"
+            staging_parent.rename(staging_root / "0000-moved")
+            staging_parent.symlink_to(external, target_is_directory=True)
+            swapped = True
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(module.os, "open", swap_parent_before_target_open)
+    library = snapshot.libraries[0]
+    try:
+        with pytest.raises((RuntimeError, ValueError), match="staging|containment|link"):
+            module._copy_native_library_to_staging(
+                venv,
+                snapshot,
+                library,
+                staging_root=staging_root,
+                staging_root_identity=staging_identity,
+                index=0,
+                expected_sha256=expected_hash[
+                    library.path.relative_to(venv).as_posix()
+                ],
+            )
+    finally:
+        monkeypatch.setattr(module.os, "open", real_open)
+        module._cleanup_private_staging_root(
+            venv,
+            snapshot.venv_identity,
+            staging_root,
+            staging_identity,
+        )
+
+    assert list(external.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX in-place race")
+def test_transient_source_byte_mutation_cannot_poison_staged_copy(
+    tmp_path,
+    monkeypatch,
+):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+    target = sorted(libraries, key=lambda path: path.name)[0]
+    original = target.read_bytes()
+    real_read = module.os.read
+    injected = False
+
+    def transient_read(descriptor, length):
+        nonlocal injected
+        if not injected:
+            target.write_bytes(b"poisoned")
+            poisoned = real_read(descriptor, length)
+            target.write_bytes(original)
+            injected = True
+            return poisoned
+        return real_read(descriptor, length)
+
+    monkeypatch.setattr(module.os, "read", transient_read)
+    with pytest.raises(RuntimeError, match="content changed while staging"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=_successful_runner([]),
+            system_name="Darwin",
+        )
+
+    assert target.read_bytes() == original
+    assert not stamp_path.exists()
 
 
 def test_codesign_failure_output_is_bounded_redacted_and_has_a_timeout(tmp_path):

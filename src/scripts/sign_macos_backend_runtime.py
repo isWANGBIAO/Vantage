@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import platform
+import secrets
+import shutil
 import stat
 import subprocess
 import sys
@@ -64,6 +66,15 @@ class _PathIdentity:
 class _NativeLibrary:
     path: Path
     identity: _PathIdentity
+    parent_identity: _PathIdentity
+
+
+@dataclass(frozen=True)
+class _StagedNativeLibrary:
+    source: _NativeLibrary
+    path: Path
+    identity: _PathIdentity
+    parent_identity: _PathIdentity
 
 
 @dataclass(frozen=True)
@@ -97,6 +108,18 @@ def _identity_is_link(identity: _PathIdentity) -> bool:
     return stat.S_ISLNK(identity.file_type) or _identity_is_reparse(identity)
 
 
+def _same_directory_identity(
+    left: _PathIdentity,
+    right: _PathIdentity,
+) -> bool:
+    return (
+        left.device == right.device
+        and left.inode == right.inode
+        and left.file_type == right.file_type
+        and left.file_attributes == right.file_attributes
+    )
+
+
 def _path_is_within(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -119,7 +142,10 @@ def _assert_plain_directory(
         raise ValueError(f"macOS backend {role} must not be a link or reparse point")
     if not stat.S_ISDIR(identity.file_type):
         raise ValueError(f"macOS backend {role} must be a directory")
-    if expected_identity is not None and identity != expected_identity:
+    if expected_identity is not None and not _same_directory_identity(
+        identity,
+        expected_identity,
+    ):
         raise RuntimeError(f"macOS backend {role} identity changed")
     return identity
 
@@ -173,6 +199,16 @@ def _assert_native_library(
     venv: Path,
     library: _NativeLibrary,
 ) -> _PathIdentity:
+    _assert_resolved_containment(
+        library.path.parent,
+        venv / "lib",
+        role="native library parent",
+    )
+    _assert_plain_directory(
+        library.path.parent,
+        role="native library parent",
+        expected_identity=library.parent_identity,
+    )
     _assert_resolved_containment(library.path, venv / "lib", role="native library")
     return _assert_plain_file(
         library.path,
@@ -242,7 +278,17 @@ def _native_library_records(venv: Path) -> tuple[_NativeLibrary, ...]:
                         role="native library",
                         expected_identity=identity,
                     )
-                    libraries.append(_NativeLibrary(path=path, identity=identity))
+                    parent_identity = _assert_plain_directory(
+                        path.parent,
+                        role="native library parent",
+                    )
+                    libraries.append(
+                        _NativeLibrary(
+                            path=path,
+                            identity=identity,
+                            parent_identity=parent_identity,
+                        )
+                    )
     return tuple(
         sorted(
             libraries,
@@ -323,8 +369,14 @@ def _assert_equivalent_snapshot(
     phase: str,
 ) -> None:
     if (
-        actual.venv_identity != expected.venv_identity
-        or actual.library_root_identity != expected.library_root_identity
+        not _same_directory_identity(
+            actual.venv_identity,
+            expected.venv_identity,
+        )
+        or not _same_directory_identity(
+            actual.library_root_identity,
+            expected.library_root_identity,
+        )
         or actual.state_identity != expected.state_identity
     ):
         raise RuntimeError(f"macOS backend signing inputs changed {phase}")
@@ -333,7 +385,13 @@ def _assert_equivalent_snapshot(
     if actual_paths != expected_paths:
         raise RuntimeError(f"macOS backend native library closure changed {phase}")
     if any(
-        actual_library.identity != expected_library.identity
+        (
+            actual_library.identity != expected_library.identity
+            or not _same_directory_identity(
+                actual_library.parent_identity,
+                expected_library.parent_identity,
+            )
+        )
         for expected_library, actual_library in zip(
             expected.libraries,
             actual.libraries,
@@ -381,6 +439,514 @@ def _stable_rescan(
             f"macOS backend signing input content changed during stable rescan {phase}"
         )
     return confirmed_snapshot, confirmed_state
+
+
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    flags |= int(getattr(os, "O_CLOEXEC", 0))
+    flags |= int(getattr(os, "O_DIRECTORY", 0))
+    flags |= int(getattr(os, "O_NOFOLLOW", 0))
+    return flags
+
+
+def _open_validated_directory(
+    path: Path,
+    expected_identity: _PathIdentity,
+    *,
+    role: str,
+) -> int:
+    descriptor = os.open(path, _directory_open_flags())
+    try:
+        if not _same_directory_identity(
+            _identity_from_stat(os.fstat(descriptor)),
+            expected_identity,
+        ):
+            raise RuntimeError(f"macOS backend {role} identity changed while opening")
+        _assert_plain_directory(
+            path,
+            role=role,
+            expected_identity=expected_identity,
+        )
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _remove_directory_contents_by_fd(directory_descriptor: int) -> None:
+    with os.scandir(directory_descriptor) as entries:
+        for entry in entries:
+            entry_identity = _identity_from_stat(entry.stat(follow_symlinks=False))
+            if stat.S_ISDIR(entry_identity.file_type) and not _identity_is_link(
+                entry_identity
+            ):
+                child_descriptor = os.open(
+                    entry.name,
+                    _directory_open_flags(),
+                    dir_fd=directory_descriptor,
+                )
+                try:
+                    if not _same_directory_identity(
+                        _identity_from_stat(os.fstat(child_descriptor)),
+                        entry_identity,
+                    ):
+                        raise RuntimeError(
+                            "macOS backend staging cleanup directory identity changed"
+                        )
+                    _remove_directory_contents_by_fd(child_descriptor)
+                finally:
+                    os.close(child_descriptor)
+                os.rmdir(entry.name, dir_fd=directory_descriptor)
+            else:
+                os.unlink(entry.name, dir_fd=directory_descriptor)
+
+
+def _cleanup_private_staging_root(
+    venv: Path,
+    venv_identity: _PathIdentity,
+    staging_root: Path,
+    staging_root_identity: _PathIdentity,
+) -> None:
+    try:
+        if staging_root.parent != venv:
+            return
+        if os.name == "nt":
+            actual_identity = _assert_plain_directory(
+                staging_root,
+                role="codesign staging root",
+            )
+            if not _same_directory_identity(
+                actual_identity,
+                staging_root_identity,
+            ):
+                return
+            _assert_resolved_containment(
+                staging_root,
+                venv,
+                role="codesign staging root",
+            )
+            shutil.rmtree(staging_root)
+            return
+
+        venv_descriptor = _open_validated_directory(
+            venv,
+            venv_identity,
+            role="runtime root",
+        )
+        staging_descriptor: int | None = None
+        try:
+            staging_descriptor = os.open(
+                staging_root.name,
+                _directory_open_flags(),
+                dir_fd=venv_descriptor,
+            )
+            if not _same_directory_identity(
+                _identity_from_stat(os.fstat(staging_descriptor)),
+                staging_root_identity,
+            ):
+                return
+            _remove_directory_contents_by_fd(staging_descriptor)
+            current_identity = _path_identity(staging_root)
+            if _same_directory_identity(current_identity, staging_root_identity):
+                os.rmdir(staging_root.name, dir_fd=venv_descriptor)
+        finally:
+            if staging_descriptor is not None:
+                os.close(staging_descriptor)
+            os.close(venv_descriptor)
+    except (OSError, RuntimeError, ValueError):
+        return
+
+
+def _create_private_staging_root(
+    venv: Path,
+    snapshot: _SigningSnapshot,
+) -> tuple[Path, _PathIdentity]:
+    _assert_snapshot_roots(venv, snapshot)
+    staging_root: Path | None = None
+    identity: _PathIdentity | None = None
+    try:
+        if os.name == "nt":
+            staging_root = Path(
+                tempfile.mkdtemp(prefix=".vantage-codesign-staging-", dir=venv)
+            )
+            identity = _assert_plain_directory(
+                staging_root,
+                role="codesign staging root",
+            )
+        else:
+            venv_descriptor = _open_validated_directory(
+                venv,
+                snapshot.venv_identity,
+                role="runtime root",
+            )
+            staging_descriptor: int | None = None
+            try:
+                for _attempt in range(128):
+                    staging_name = (
+                        ".vantage-codesign-staging-" + secrets.token_hex(12)
+                    )
+                    try:
+                        os.mkdir(staging_name, mode=0o700, dir_fd=venv_descriptor)
+                    except FileExistsError:
+                        continue
+                    staging_root = venv / staging_name
+                    identity = _identity_from_stat(
+                        os.stat(
+                            staging_name,
+                            dir_fd=venv_descriptor,
+                            follow_symlinks=False,
+                        )
+                    )
+                    if _identity_is_link(identity) or not stat.S_ISDIR(
+                        identity.file_type
+                    ):
+                        raise RuntimeError(
+                            "macOS backend codesign staging root is not private"
+                        )
+                    staging_descriptor = os.open(
+                        staging_name,
+                        _directory_open_flags(),
+                        dir_fd=venv_descriptor,
+                    )
+                    if not _same_directory_identity(
+                        _identity_from_stat(os.fstat(staging_descriptor)),
+                        identity,
+                    ):
+                        raise RuntimeError(
+                            "macOS backend codesign staging root identity changed"
+                        )
+                    break
+                else:
+                    raise RuntimeError(
+                        "macOS backend could not allocate a private staging root"
+                    )
+            finally:
+                if staging_descriptor is not None:
+                    os.close(staging_descriptor)
+                os.close(venv_descriptor)
+
+        if staging_root is None or identity is None:
+            raise RuntimeError("macOS backend codesign staging root is unavailable")
+        _assert_plain_directory(
+            staging_root,
+            role="codesign staging root",
+            expected_identity=identity,
+        )
+        _assert_resolved_containment(
+            staging_root,
+            venv,
+            role="codesign staging root",
+        )
+        _assert_snapshot_roots(venv, snapshot)
+        return staging_root, identity
+    except BaseException:
+        if staging_root is not None and identity is not None:
+            _cleanup_private_staging_root(
+                venv,
+                snapshot.venv_identity,
+                staging_root,
+                identity,
+            )
+        raise
+
+
+def _assert_staged_library(
+    venv: Path,
+    staging_root: Path,
+    staging_root_identity: _PathIdentity,
+    staged: _StagedNativeLibrary,
+) -> _PathIdentity:
+    _assert_plain_directory(
+        staging_root,
+        role="codesign staging root",
+        expected_identity=staging_root_identity,
+    )
+    _assert_resolved_containment(
+        staging_root,
+        venv,
+        role="codesign staging root",
+    )
+    _assert_plain_directory(
+        staged.path.parent,
+        role="codesign staging directory",
+        expected_identity=staged.parent_identity,
+    )
+    _assert_resolved_containment(
+        staged.path.parent,
+        staging_root,
+        role="codesign staging directory",
+    )
+    _assert_resolved_containment(
+        staged.path,
+        staging_root,
+        role="staged native library",
+    )
+    return _assert_plain_file(
+        staged.path,
+        role="staged native library",
+        expected_identity=staged.identity,
+    )
+
+
+def _copy_native_library_to_staging(
+    venv: Path,
+    snapshot: _SigningSnapshot,
+    library: _NativeLibrary,
+    *,
+    staging_root: Path,
+    staging_root_identity: _PathIdentity,
+    index: int,
+    expected_sha256: str,
+) -> _StagedNativeLibrary:
+    _assert_snapshot_roots(venv, snapshot)
+    _assert_native_library(venv, library)
+    _assert_plain_directory(
+        staging_root,
+        role="codesign staging root",
+        expected_identity=staging_root_identity,
+    )
+    staging_parent_name = f"{index:04d}"
+    staging_parent = staging_root / staging_parent_name
+    staging_root_descriptor: int | None = None
+    staging_parent_descriptor: int | None = None
+    source_parent_descriptor: int | None = None
+    source_descriptor: int | None = None
+    target_descriptor: int | None = None
+    parent_identity: _PathIdentity | None = None
+    staged_identity: _PathIdentity | None = None
+    staged_path = staging_parent / library.path.name
+    try:
+        if os.name == "nt":
+            staging_parent.mkdir(mode=0o700)
+        else:
+            staging_root_descriptor = _open_validated_directory(
+                staging_root,
+                staging_root_identity,
+                role="codesign staging root",
+            )
+            os.mkdir(
+                staging_parent_name,
+                mode=0o700,
+                dir_fd=staging_root_descriptor,
+            )
+        parent_identity = _assert_plain_directory(
+            staging_parent,
+            role="codesign staging directory",
+        )
+        _assert_resolved_containment(
+            staging_parent,
+            staging_root,
+            role="codesign staging directory",
+        )
+
+        source_flags = os.O_RDONLY
+        source_flags |= int(getattr(os, "O_CLOEXEC", 0))
+        source_flags |= int(getattr(os, "O_BINARY", 0))
+        source_flags |= int(getattr(os, "O_NOFOLLOW", 0))
+        target_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        target_flags |= int(getattr(os, "O_CLOEXEC", 0))
+        target_flags |= int(getattr(os, "O_BINARY", 0))
+        target_flags |= int(getattr(os, "O_NOFOLLOW", 0))
+
+        if os.name == "nt":
+            source_descriptor = os.open(library.path, source_flags)
+        else:
+            staging_parent_descriptor = os.open(
+                staging_parent_name,
+                _directory_open_flags(),
+                dir_fd=staging_root_descriptor,
+            )
+            if not _same_directory_identity(
+                _identity_from_stat(os.fstat(staging_parent_descriptor)),
+                parent_identity,
+            ):
+                raise RuntimeError(
+                    "macOS backend codesign staging directory identity changed"
+                )
+            source_parent_descriptor = _open_validated_directory(
+                library.path.parent,
+                library.parent_identity,
+                role="native library parent",
+            )
+            source_descriptor = os.open(
+                library.path.name,
+                source_flags,
+                dir_fd=source_parent_descriptor,
+            )
+        source_stat = os.fstat(source_descriptor)
+        source_identity = _identity_from_stat(source_stat)
+        if source_identity != library.identity:
+            raise RuntimeError(
+                "macOS backend native library identity changed before staging"
+            )
+        _assert_plain_file(
+            library.path,
+            role="native library",
+            expected_identity=source_identity,
+        )
+
+        if os.name == "nt":
+            target_descriptor = os.open(staged_path, target_flags, 0o600)
+        else:
+            target_descriptor = os.open(
+                staged_path.name,
+                target_flags,
+                0o600,
+                dir_fd=staging_parent_descriptor,
+            )
+        if hasattr(os, "fchmod"):
+            os.fchmod(target_descriptor, stat.S_IMODE(source_stat.st_mode))
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(source_descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            remaining = memoryview(chunk)
+            while remaining:
+                written = os.write(target_descriptor, remaining)
+                if written <= 0:
+                    raise OSError("failed to write staged native library")
+                remaining = remaining[written:]
+        os.fsync(target_descriptor)
+        staged_identity = _identity_from_stat(os.fstat(target_descriptor))
+        if (
+            not stat.S_ISREG(staged_identity.file_type)
+            or staged_identity.link_count != 1
+        ):
+            raise RuntimeError(
+                "macOS backend staged native library is not a private file"
+            )
+        if _identity_from_stat(os.fstat(source_descriptor)) != source_identity:
+            raise RuntimeError(
+                "macOS backend native library identity changed while staging"
+            )
+        if digest.hexdigest() != expected_sha256:
+            raise RuntimeError(
+                "macOS backend native library content changed while staging"
+            )
+    finally:
+        if target_descriptor is not None:
+            os.close(target_descriptor)
+        if source_descriptor is not None:
+            os.close(source_descriptor)
+        if source_parent_descriptor is not None:
+            os.close(source_parent_descriptor)
+        if staging_parent_descriptor is not None:
+            os.close(staging_parent_descriptor)
+        if staging_root_descriptor is not None:
+            os.close(staging_root_descriptor)
+
+    if parent_identity is None or staged_identity is None:
+        raise RuntimeError("macOS backend staged native library is unavailable")
+
+    _assert_native_library(venv, library)
+    staged = _StagedNativeLibrary(
+        source=library,
+        path=staged_path,
+        identity=staged_identity,
+        parent_identity=parent_identity,
+    )
+    _assert_staged_library(
+        venv,
+        staging_root,
+        staging_root_identity,
+        staged,
+    )
+    if (
+        _sha256_file(
+            staged.path,
+            expected_identity=staged.identity,
+            role="staged native library",
+        )
+        != expected_sha256
+    ):
+        raise RuntimeError(
+            "macOS backend staged native library content does not match source state"
+        )
+    return staged
+
+
+def _replace_staged_native_library(
+    venv: Path,
+    snapshot: _SigningSnapshot,
+    staged: _StagedNativeLibrary,
+    *,
+    staging_root: Path,
+    staging_root_identity: _PathIdentity,
+) -> _NativeLibrary:
+    _assert_snapshot_roots(venv, snapshot)
+    _assert_native_library(venv, staged.source)
+    _assert_staged_library(
+        venv,
+        staging_root,
+        staging_root_identity,
+        staged,
+    )
+
+    if os.name == "nt":
+        os.replace(staged.path, staged.source.path)
+    else:
+        directory_flags = os.O_RDONLY
+        directory_flags |= int(getattr(os, "O_CLOEXEC", 0))
+        directory_flags |= int(getattr(os, "O_DIRECTORY", 0))
+        directory_flags |= int(getattr(os, "O_NOFOLLOW", 0))
+        staging_parent_descriptor = os.open(staged.path.parent, directory_flags)
+        target_parent_descriptor = os.open(
+            staged.source.path.parent,
+            directory_flags,
+        )
+        try:
+            if not _same_directory_identity(
+                _identity_from_stat(os.fstat(staging_parent_descriptor)),
+                staged.parent_identity,
+            ):
+                raise RuntimeError(
+                    "macOS backend codesign staging directory identity changed"
+                )
+            if not _same_directory_identity(
+                _identity_from_stat(os.fstat(target_parent_descriptor)),
+                staged.source.parent_identity,
+            ):
+                raise RuntimeError(
+                    "macOS backend native library parent identity changed"
+                )
+            _assert_native_library(venv, staged.source)
+            _assert_staged_library(
+                venv,
+                staging_root,
+                staging_root_identity,
+                staged,
+            )
+            os.replace(
+                staged.path.name,
+                staged.source.path.name,
+                src_dir_fd=staging_parent_descriptor,
+                dst_dir_fd=target_parent_descriptor,
+            )
+        finally:
+            os.close(staging_parent_descriptor)
+            os.close(target_parent_descriptor)
+
+    _assert_plain_directory(
+        staged.source.path.parent,
+        role="native library parent",
+        expected_identity=staged.source.parent_identity,
+    )
+    _assert_resolved_containment(
+        staged.source.path,
+        venv / "lib",
+        role="native library",
+    )
+    signed_identity = _assert_plain_file(
+        staged.source.path,
+        role="native library",
+    )
+    return _NativeLibrary(
+        path=staged.source.path,
+        identity=signed_identity,
+        parent_identity=staged.source.parent_identity,
+    )
 
 
 def build_macos_backend_codesign_state(
@@ -652,145 +1218,236 @@ def _sign_macos_backend_runtime_locked(
                 )
 
         stamp_path.unlink(missing_ok=True)
-        snapshot = _build_signing_snapshot(venv, state_path)
-        expected_state = _codesign_state_from_snapshot(venv, state_path, snapshot)
-        snapshot, expected_state = _stable_rescan(
-            venv,
-            state_path,
-            expected_snapshot=snapshot,
-            expected_state=expected_state,
-            phase="before extended attribute cleanup",
-        )
-        libraries = snapshot.libraries
-
-        for library in libraries:
-            _assert_snapshot_roots(venv, snapshot)
-            _assert_native_library(venv, library)
-            try:
-                xattr_result = run_bounded_subprocess(
-                    ["xattr", "-c", str(library.path)],
-                    run_command=run_command,
+        staging_root: Path | None = None
+        staging_root_identity: _PathIdentity | None = None
+        try:
+            snapshot = _build_signing_snapshot(venv, state_path)
+            expected_state = _codesign_state_from_snapshot(
+                venv,
+                state_path,
+                snapshot,
+            )
+            snapshot, expected_state = _stable_rescan(
+                venv,
+                state_path,
+                expected_snapshot=snapshot,
+                expected_state=expected_state,
+                phase="before staging native libraries",
+            )
+            libraries = snapshot.libraries
+            staging_root, staging_root_identity = _create_private_staging_root(
+                venv,
+                snapshot,
+            )
+            expected_hashes = {
+                str(entry["path"]): str(entry["sha256"])
+                for entry in expected_state["native_libraries"]
+            }
+            staged_libraries = [
+                _copy_native_library_to_staging(
+                    venv,
+                    snapshot,
+                    library,
+                    staging_root=staging_root,
+                    staging_root_identity=staging_root_identity,
+                    index=index,
+                    expected_sha256=expected_hashes[
+                        library.path.relative_to(venv).as_posix()
+                    ],
                 )
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(
-                    "macOS backend extended attribute cleanup timed out"
-                ) from exc
-            if xattr_result.returncode != 0:
-                detail = bounded_process_failure_detail(
-                    xattr_result,
+                for index, library in enumerate(libraries)
+            ]
+            snapshot, expected_state = _stable_rescan(
+                venv,
+                state_path,
+                expected_snapshot=snapshot,
+                expected_state=expected_state,
+                phase="while staging native libraries",
+            )
+
+            signed_staged_libraries: list[_StagedNativeLibrary] = []
+            for staged in staged_libraries:
+                _assert_snapshot_roots(venv, snapshot)
+                _assert_native_library(venv, staged.source)
+                _assert_staged_library(
+                    venv,
+                    staging_root,
+                    staging_root_identity,
+                    staged,
+                )
+                try:
+                    xattr_result = run_bounded_subprocess(
+                        ["xattr", "-c", str(staged.path)],
+                        run_command=run_command,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError(
+                        "macOS backend extended attribute cleanup timed out"
+                    ) from exc
+                if xattr_result.returncode != 0:
+                    detail = bounded_process_failure_detail(
+                        xattr_result,
+                        path_prefixes=path_prefixes,
+                    )
+                    suffix = f": {detail}" if detail else ""
+                    raise RuntimeError(
+                        "macOS backend extended attribute cleanup failed"
+                        f"{suffix}"
+                    )
+                _assert_staged_library(
+                    venv,
+                    staging_root,
+                    staging_root_identity,
+                    staged,
+                )
+                _assert_native_library(venv, staged.source)
+
+                _run_codesign_command(
+                    [
+                        "codesign",
+                        "--force",
+                        "--sign",
+                        "-",
+                        "--timestamp=none",
+                        str(staged.path),
+                    ],
+                    action="sign staged library",
+                    run_command=run_command,
                     path_prefixes=path_prefixes,
                 )
-                suffix = f": {detail}" if detail else ""
-                raise RuntimeError(
-                    f"macOS backend extended attribute cleanup failed{suffix}"
+                _assert_snapshot_roots(venv, snapshot)
+                _assert_native_library(venv, staged.source)
+                signed_staged = _StagedNativeLibrary(
+                    source=staged.source,
+                    path=staged.path,
+                    identity=_assert_plain_file(
+                        staged.path,
+                        role="staged native library",
+                    ),
+                    parent_identity=staged.parent_identity,
                 )
-            _assert_snapshot_roots(venv, snapshot)
-            _assert_native_library(venv, library)
-        snapshot, expected_state = _stable_rescan(
-            venv,
-            state_path,
-            expected_snapshot=snapshot,
-            expected_state=expected_state,
-            phase="during extended attribute cleanup",
-        )
-        libraries = snapshot.libraries
+                _assert_staged_library(
+                    venv,
+                    staging_root,
+                    staging_root_identity,
+                    signed_staged,
+                )
+                _run_codesign_command(
+                    [
+                        "codesign",
+                        "--verify",
+                        "--strict",
+                        "--verbose=2",
+                        str(signed_staged.path),
+                    ],
+                    action="verify staged library",
+                    run_command=run_command,
+                    path_prefixes=path_prefixes,
+                )
+                _assert_staged_library(
+                    venv,
+                    staging_root,
+                    staging_root_identity,
+                    signed_staged,
+                )
+                _assert_native_library(venv, staged.source)
+                signed_staged_libraries.append(signed_staged)
 
-        signed_libraries: list[_NativeLibrary] = []
-        for library in libraries:
-            _assert_snapshot_roots(venv, snapshot)
-            _assert_native_library(venv, library)
-            _run_codesign_command(
-                [
-                    "codesign",
-                    "--force",
-                    "--sign",
-                    "-",
-                    "--timestamp=none",
-                    str(library.path),
-                ],
-                action="sign",
+            snapshot, expected_state = _stable_rescan(
+                venv,
+                state_path,
+                expected_snapshot=snapshot,
+                expected_state=expected_state,
+                phase="while signing staged native libraries",
+            )
+            signed_libraries = [
+                _replace_staged_native_library(
+                    venv,
+                    snapshot,
+                    staged,
+                    staging_root=staging_root,
+                    staging_root_identity=staging_root_identity,
+                )
+                for staged in signed_staged_libraries
+            ]
+
+            signed_snapshot = _build_signing_snapshot(venv, state_path)
+            expected_signed_snapshot = _SigningSnapshot(
+                venv_identity=snapshot.venv_identity,
+                library_root_identity=snapshot.library_root_identity,
+                state_identity=snapshot.state_identity,
+                libraries=tuple(signed_libraries),
+            )
+            _assert_equivalent_snapshot(
+                expected_signed_snapshot,
+                signed_snapshot,
+                phase="while replacing signed native libraries",
+            )
+            signed_state = _codesign_state_from_snapshot(
+                venv,
+                state_path,
+                signed_snapshot,
+            )
+            signed_snapshot, signed_state = _stable_rescan(
+                venv,
+                state_path,
+                expected_snapshot=signed_snapshot,
+                expected_state=signed_state,
+                phase="before signed signature verification",
+            )
+            _verify_native_libraries(
+                venv,
+                signed_snapshot,
+                action="verify signed library",
                 run_command=run_command,
                 path_prefixes=path_prefixes,
             )
-            _assert_snapshot_roots(venv, snapshot)
-            signed_identity = _assert_plain_file(
-                library.path,
-                role="native library",
+            verified_snapshot, verified_state = _stable_rescan(
+                venv,
+                state_path,
+                expected_snapshot=signed_snapshot,
+                expected_state=signed_state,
+                phase="during signed signature verification",
+            )
+            write_macos_backend_codesign_state(
+                stamp_path,
+                verified_state,
+                replace_file=replace_file,
+            )
+            written_stamp_identity = _assert_plain_file(
+                stamp_path,
+                role="signature stamp",
             )
             _assert_resolved_containment(
-                library.path,
-                venv / "lib",
-                role="native library",
+                stamp_path,
+                venv,
+                role="signature stamp",
             )
-            signed_libraries.append(
-                _NativeLibrary(path=library.path, identity=signed_identity)
+            final_snapshot, final_state = _stable_rescan(
+                venv,
+                state_path,
+                expected_snapshot=verified_snapshot,
+                expected_state=verified_state,
+                phase="while writing signature stamp",
             )
-
-        signed_snapshot = _build_signing_snapshot(venv, state_path)
-        expected_signed_snapshot = _SigningSnapshot(
-            venv_identity=snapshot.venv_identity,
-            library_root_identity=snapshot.library_root_identity,
-            state_identity=snapshot.state_identity,
-            libraries=tuple(signed_libraries),
-        )
-        _assert_equivalent_snapshot(
-            expected_signed_snapshot,
-            signed_snapshot,
-            phase="while signing",
-        )
-        signed_state = _codesign_state_from_snapshot(
-            venv,
-            state_path,
-            signed_snapshot,
-        )
-        signed_snapshot, signed_state = _stable_rescan(
-            venv,
-            state_path,
-            expected_snapshot=signed_snapshot,
-            expected_state=signed_state,
-            phase="before signed signature verification",
-        )
-        _verify_native_libraries(
-            venv,
-            signed_snapshot,
-            action="verify signed library",
-            run_command=run_command,
-            path_prefixes=path_prefixes,
-        )
-        verified_snapshot, verified_state = _stable_rescan(
-            venv,
-            state_path,
-            expected_snapshot=signed_snapshot,
-            expected_state=signed_state,
-            phase="during signed signature verification",
-        )
-        write_macos_backend_codesign_state(
-            stamp_path,
-            verified_state,
-            replace_file=replace_file,
-        )
-        written_stamp_identity = _assert_plain_file(
-            stamp_path,
-            role="signature stamp",
-        )
-        _assert_resolved_containment(stamp_path, venv, role="signature stamp")
-        final_snapshot, final_state = _stable_rescan(
-            venv,
-            state_path,
-            expected_snapshot=verified_snapshot,
-            expected_state=verified_state,
-            phase="while writing signature stamp",
-        )
-        _assert_stamp_unchanged(
-            venv,
-            stamp_path,
-            expected_identity=written_stamp_identity,
-            expected_state=final_state,
-        )
-        return MacOSBackendSigningOutcome(
-            reused=False,
-            library_count=len(final_snapshot.libraries),
-        )
+            _assert_stamp_unchanged(
+                venv,
+                stamp_path,
+                expected_identity=written_stamp_identity,
+                expected_state=final_state,
+            )
+            return MacOSBackendSigningOutcome(
+                reused=False,
+                library_count=len(final_snapshot.libraries),
+            )
+        finally:
+            if staging_root is not None and staging_root_identity is not None:
+                _cleanup_private_staging_root(
+                    venv,
+                    snapshot.venv_identity,
+                    staging_root,
+                    staging_root_identity,
+                )
     except BaseException:
         stamp_path.unlink(missing_ok=True)
         raise
