@@ -56,6 +56,16 @@ from src.utils.subprocess_safety import (  # noqa: E402
 STAGING_PREFIX = ".vantage-codesign-staging-"
 FRONTEND_STAMP_NAME = ".macos-native-codesign.sha256"
 STATE_SCHEMA_VERSION = 1
+MACHO_MAGICS = {
+    b"\xfe\xed\xfa\xce",
+    b"\xce\xfa\xed\xfe",
+    b"\xfe\xed\xfa\xcf",
+    b"\xcf\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe",
+    b"\xbe\xba\xfe\xca",
+    b"\xca\xfe\xba\xbf",
+    b"\xbf\xba\xfe\xca",
+}
 
 
 @dataclass(frozen=True)
@@ -182,6 +192,27 @@ def _matches_profile(relative_path: str, profile: str) -> bool:
     }
 
 
+def _is_macho_file(path: Path) -> bool:
+    identity = _path_identity(path)
+    if _identity_is_link(identity) or not stat.S_ISREG(identity.file_type):
+        return False
+    flags = os.O_RDONLY | int(getattr(os, "O_CLOEXEC", 0))
+    flags |= int(getattr(os, "O_BINARY", 0))
+    flags |= int(getattr(os, "O_NOFOLLOW", 0))
+    descriptor = os.open(path, flags)
+    try:
+        if _identity_from_stat(os.fstat(descriptor)) != identity:
+            raise RuntimeError("macOS frontend artifact identity changed before probing")
+        magic = os.read(descriptor, 4)
+        if _identity_from_stat(os.fstat(descriptor)) != identity:
+            raise RuntimeError("macOS frontend artifact identity changed while probing")
+    finally:
+        os.close(descriptor)
+    if _path_identity(path) != identity:
+        raise RuntimeError("macOS frontend artifact identity changed after probing")
+    return magic in MACHO_MAGICS
+
+
 def _assert_parent_chain(root: Path, parent: Path) -> None:
     relative = parent.relative_to(root)
     current = root
@@ -263,7 +294,9 @@ def _candidate_paths(
                         "macOS frontend native artifact must not be a link"
                     )
                 continue
-            if _matches_profile(relative_path, profile):
+            if _matches_profile(relative_path, profile) and (
+                profile != "frontend" or _is_macho_file(path)
+            ):
                 candidates.append(path)
 
     unique_candidates = {

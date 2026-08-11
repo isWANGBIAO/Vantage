@@ -9,6 +9,9 @@ from types import SimpleNamespace
 import pytest
 
 
+MACHO_64_MAGIC = b"\xcf\xfa\xed\xfe"
+
+
 def _module():
     return importlib.import_module("src.scripts.sign_macos_artifacts")
 
@@ -19,7 +22,7 @@ def _write_frontend_tree(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     root = webapp / "node_modules"
     native = root / "sample" / "addon.node"
     native.parent.mkdir(parents=True)
-    native.write_bytes(b"native-v1")
+    native.write_bytes(MACHO_64_MAGIC + b"native-v1")
     package_lock = webapp / "package-lock.json"
     package_lock.write_text('{"lockfileVersion": 3}\n', encoding="utf-8")
     stamp = root / ".macos-native-codesign.sha256"
@@ -70,6 +73,31 @@ def test_frontend_signs_private_copy_then_strictly_verifies_installed_file(tmp_p
     assert all("--strict" in command for command in verify_commands)
 
 
+def test_frontend_skips_javascript_esbuild_wrapper_but_signs_macho_binary(tmp_path):
+    module = _module()
+    project_root, root, native, stamp = _write_frontend_tree(tmp_path)
+    wrapper = root / "esbuild" / "bin" / "esbuild"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text(
+        "#!/usr/bin/env node\nrequire('../lib/main').run();\n",
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    outcome = module.sign_macos_artifacts(
+        project_root=project_root,
+        root=root,
+        profile="frontend",
+        stamp_path=stamp,
+        run_command=_successful_runner(commands),
+        system_name="Darwin",
+    )
+
+    assert outcome.artifact_count == 1
+    assert any(Path(command[-1]).name == native.name for command in commands)
+    assert all(Path(command[-1]) != wrapper for command in commands)
+
+
 def test_frontend_cache_reuse_still_strictly_verifies_current_closure(tmp_path):
     module = _module()
     project_root, root, native, stamp = _write_frontend_tree(tmp_path)
@@ -102,7 +130,7 @@ def test_frontend_native_hardlink_is_rejected_before_external_side_effect(tmp_pa
     module = _module()
     project_root, root, native, stamp = _write_frontend_tree(tmp_path)
     outside = tmp_path / "outside.node"
-    outside.write_bytes(b"outside-sentinel")
+    outside.write_bytes(MACHO_64_MAGIC + b"outside-sentinel")
     native.unlink()
     os.link(outside, native)
     commands: list[list[str]] = []
@@ -118,7 +146,7 @@ def test_frontend_native_hardlink_is_rejected_before_external_side_effect(tmp_pa
         )
 
     assert commands == []
-    assert outside.read_bytes() == b"outside-sentinel"
+    assert outside.read_bytes() == MACHO_64_MAGIC + b"outside-sentinel"
     assert not stamp.exists()
 
 
@@ -195,7 +223,7 @@ def test_new_native_file_during_signing_invalidates_closure_and_stamp(tmp_path):
 
     def add_file(command: list[str]) -> None:
         if command[0] == "codesign" and "--force" in command and not added.exists():
-            added.write_bytes(b"late")
+            added.write_bytes(MACHO_64_MAGIC + b"late")
 
     with pytest.raises(RuntimeError, match="closure changed"):
         module.sign_macos_artifacts(
