@@ -227,21 +227,28 @@ test('collects every path replacement from one immutable source value', () => {
 });
 
 test('requires a real left boundary before Windows and POSIX path prefixes', () => {
-    const pathPrefixes = [
-        { prefix: 'C:\\Users\\Alice\\repo', label: '<windows-root>' },
-        { prefix: '/Users/Alice/repo', label: '<posix-root>' },
-    ];
-    const value = [
+    const windowsValue = [
         'embedded=XC:/Users/Alice/repo/src/main.cjs',
+        'valid=C:/Users/Alice/repo/src/worker.cjs',
+    ].join('\n');
+    const posixValue = [
         'partial=file:///NotUsers/Alice/repo/src/main.cjs',
         'valid=file:///Users/Alice/repo/src/main.cjs',
+        'compact=path:/Users/Alice/repo/src/compact.cjs',
     ].join('\n');
 
-    const redacted = redactSensitiveText(value, pathPrefixes);
+    const windowsRedacted = redactSensitiveText(windowsValue, [
+        { prefix: 'C:\\Users\\Alice\\repo', label: '<windows-root>' },
+    ]);
+    const posixRedacted = redactSensitiveText(posixValue, [
+        { prefix: '/Users/Alice/repo', label: '<posix-root>' },
+    ]);
 
-    assert.match(redacted, /embedded=XC:\/Users\/Alice\/repo\/src\/main\.cjs/);
-    assert.match(redacted, /partial=file:\/\/\/NotUsers\/Alice\/repo\/src\/main\.cjs/);
-    assert.match(redacted, /valid=file:\/\/\/<posix-root>\/src\/main\.cjs/);
+    assert.match(windowsRedacted, /embedded=XC:\/Users\/Alice\/repo\/src\/main\.cjs/);
+    assert.match(windowsRedacted, /valid=<windows-root>\/src\/worker\.cjs/);
+    assert.match(posixRedacted, /partial=file:\/\/\/NotUsers\/Alice\/repo\/src\/main\.cjs/);
+    assert.match(posixRedacted, /valid=file:\/\/\/<posix-root>\/src\/main\.cjs/);
+    assert.match(posixRedacted, /compact=path:<posix-root>\/src\/compact\.cjs/);
 });
 
 test('redacts many path matches without quadratic rescanning', () => {

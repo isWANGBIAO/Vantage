@@ -112,7 +112,7 @@ function compilePathPrefixes(pathPrefixes) {
         || prefix.includes('\\');
       const beginsWithSeparator = /^[\\/]/.test(prefix);
       const rawLeftBoundary = beginsWithSeparator
-        ? '(?<![:\\\\/])'
+        ? '(?<![\\\\/])'
         : (windowsPath ? '(?<![A-Za-z0-9_])' : '');
       const fileUrlLeftBoundary = beginsWithSeparator
         ? '(?<=/)'
@@ -142,7 +142,7 @@ function collectUrlContextEvents(value) {
   const schemePattern = /\b([A-Za-z][A-Za-z0-9+.-]*):\/\//g;
   for (const match of value.matchAll(schemePattern)) {
     events.push({
-      index: match.index + match[0].length,
+      index: match.index,
       scheme: match[1].toLowerCase(),
     });
   }
