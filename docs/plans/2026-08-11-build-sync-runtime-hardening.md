@@ -83,8 +83,14 @@ git commit -m "fix: synchronize persistent frontend dependencies" -m "Key fronte
 
 **Files:**
 - Create: `src/core/backend_environment_state.py`
+- Create: `src/core/backend_runtime_lock.py`
 - Create: `src/scripts/sync_backend_runtime_environment.py`
+- Create: `src/scripts/run_with_backend_runtime_lock.py`
+- Create: `src/scripts/sign_macos_backend_runtime.py`
 - Create: `tests/test_sync_backend_runtime_environment.py`
+- Create: `tests/test_backend_runtime_lock.py`
+- Create: `tests/test_macos_cleanup_launcher.py`
+- Create: `tests/test_sign_macos_backend_runtime.py`
 - Modify: `RUN.bat`
 - Modify: `RUN.sh`
 - Modify: `RUN_DEV.sh`
@@ -137,7 +143,17 @@ acquire or safely inherit the same lock. A helper error aborts before packaging.
 Add the verified distribution closure to
 `build_backend_runtime_fingerprint()`. Packaging must validate that its current
 interpreter matches the state file and closure before considering reuse.
-Exclude the sync CLI from the packaged application.
+Exclude the sync and macOS signing CLIs from the packaged application.
+
+After macOS synchronization, invoke only the shared signing CLI. It holds the
+lifecycle lock and keys its JSON stamp to the environment-state SHA plus the
+stable relative-path, size, and SHA-256 closure of native libraries. Even a
+matching stamp must pass strict `codesign` verification for every library. A
+state/content change or failed verification invalidates the stamp before all
+libraries are ad-hoc signed with timestamping disabled, verified again, and the
+post-sign closure is atomically recorded. Any signing, verification, or atomic
+replacement failure leaves no valid stamp. The launchers retain no independent
+backend signing implementation.
 
 This is a shared exact top-level-pin plus clean-resolver contract, not a single
 all-platform transitive hash lock. Simultaneously forging both the dedicated

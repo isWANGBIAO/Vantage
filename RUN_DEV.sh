@@ -16,6 +16,7 @@ BACKEND_RUNTIME_REQUIREMENTS="${PROJECT_ROOT}/requirements-backend-runtime-gpu.t
 OPENCV_NORMALIZER="${PROJECT_ROOT}/src/scripts/normalize_opencv_installation.py"
 BACKEND_RUNTIME_SYNC="${PROJECT_ROOT}/src/scripts/sync_backend_runtime_environment.py"
 BACKEND_RUNTIME_LOCK_RUNNER="${PROJECT_ROOT}/src/scripts/run_with_backend_runtime_lock.py"
+BACKEND_RUNTIME_SIGNER="${PROJECT_ROOT}/src/scripts/sign_macos_backend_runtime.py"
 BACKEND_RUNTIME_STATE="${BACKEND_RUNTIME_VENV}/.vantage-backend-runtime-state.json"
 BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.sha256"
 LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.13.5/bin/python3.13"
@@ -89,33 +90,6 @@ select_backend_cleanup_python() {
     printf '%s\n' "$BOOTSTRAP_PYTHON"
 }
 
-codesign_macos_native_libraries() {
-    if [[ "$(uname -s)" != "Darwin" ]]; then
-        return 0
-    fi
-
-    local environment_state_hash
-    environment_state_hash="$(shasum -a 256 "$BACKEND_RUNTIME_STATE" | awk '{print $1}')"
-    local stored_codesign_hash=""
-    if [[ -f "$BACKEND_RUNTIME_CODESIGN_STAMP" ]]; then
-        stored_codesign_hash="$(cat "$BACKEND_RUNTIME_CODESIGN_STAMP")"
-    fi
-    if [[ "$environment_state_hash" == "$stored_codesign_hash" && "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" != "1" ]]; then
-        echo "      macOS native Python libraries already ad-hoc signed"
-        return 0
-    fi
-
-    echo "      Ad-hoc signing macOS native Python libraries..."
-    while IFS= read -r -d '' native_library; do
-        if ! codesign --force --sign - "$native_library" >/dev/null 2>&1; then
-            rm -f "$BACKEND_RUNTIME_CODESIGN_STAMP"
-            echo "      macOS native Python library signing failed" >&2
-            return 1
-        fi
-    done < <(find "${BACKEND_RUNTIME_VENV}/lib" -type f \( -name '*.so' -o -name '*.dylib' \) -print0)
-    printf '%s\n' "$environment_state_hash" > "$BACKEND_RUNTIME_CODESIGN_STAMP"
-}
-
 codesign_macos_frontend_binaries() {
     if [[ "$(uname -s)" != "Darwin" || ! -d "${FRONTEND_ROOT}/node_modules" ]]; then
         return 0
@@ -164,7 +138,16 @@ if [[ "${VANTAGE_FORCE_BACKEND_DEPS:-0}" == "1" ]]; then
     backend_sync_args+=(--force)
 fi
 "$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_SYNC" "${backend_sync_args[@]}"
-codesign_macos_native_libraries
+backend_sign_args=(
+    --project-root "$PROJECT_ROOT"
+    --venv "$BACKEND_RUNTIME_VENV"
+    --state "$BACKEND_RUNTIME_STATE"
+    --stamp "$BACKEND_RUNTIME_CODESIGN_STAMP"
+)
+if [[ "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" == "1" ]]; then
+    backend_sign_args+=(--force)
+fi
+"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_SIGNER" "${backend_sign_args[@]}"
 
 echo "[2/4] Starting backend..."
 mkdir -p "${PROJECT_ROOT}/logs"

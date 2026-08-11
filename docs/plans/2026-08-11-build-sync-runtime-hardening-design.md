@@ -126,10 +126,15 @@ checked before any state invalidation or command execution, so a POSIX venv
 Python symlink cannot make the process delete its own active environment.
 Failed creation, installation, normalization, validation, or atomic replacement
 therefore cannot leave a reusable state. On macOS, successful synchronization
-is followed by the existing ad-hoc signing pass, keyed to the new environment
-state rather than the retired requirements-only hash. A native-library signing
-failure removes the signature stamp and aborts the launcher; it cannot be
-recorded as successfully signed.
+is followed by a shared stdlib-only signing CLI that holds the same lifecycle
+lock. Its JSON stamp hashes the backend environment state and a stable closure
+of every native library's venv-relative path, size, and SHA-256. A matching
+stamp is reusable only after `codesign --verify --strict --verbose=2` succeeds
+for every library. A state or byte change, forced signing, or failed cached
+verification removes the stamp before ad-hoc signing, verifies every refreshed
+signature, recomputes the post-signing closure, and atomically replaces the
+stamp. Signing, verification, or stamp replacement failure leaves no valid
+stamp and aborts the launcher.
 
 The complete venv lifecycle is serialized by a sibling
 `.vantage-backend-runtime.lock`. POSIX uses `flock`; Windows locks one byte with
@@ -141,6 +146,12 @@ inherited. The synchronizer captures the old root's `lstat` identity before its
 atomic rename, then revalidates identity, parent, and quarantine prefix. A root
 or nested Windows reparse point, an identity race, or an unsafe inspection
 retains the quarantine with a warning and never enters recursive deletion.
+Nested POSIX venv symlinks are unlinked as leaves without following their
+targets; a POSIX symlink at the venv root is retained in quarantine and is
+never recursively traversed. Before synchronization, the macOS launchers prefer
+an executable existing runtime Python for the best-effort psutil cleanup, then
+fall back to bootstrap Python, allowing an old development server to release
+its inherited lock.
 Rename failure leaves the canonical environment and state untouched; later
 installation failure leaves the new canonical environment without valid state.
 
@@ -148,8 +159,9 @@ The packaged-runtime fingerprint includes the verified distribution closure.
 Consequently, manually changing the venv cannot reuse an older PyInstaller
 bundle even if source files and requirements text are unchanged. Packaging
 validation also rejects a venv whose state is absent or inconsistent. The
-fingerprint schema is version 2, and the environment sync CLI is explicitly
-excluded from the shipped backend application as build-only code. There is no
+fingerprint schema is version 2, and the environment sync and macOS signing CLIs
+are explicitly excluded from the shipped backend application as build-only
+code. There is no
 environment-variable bypass for the fixed venv, state, or installed-closure
 checks.
 
