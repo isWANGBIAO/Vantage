@@ -12,6 +12,7 @@ const {
     createBoundedLogger,
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_FILES,
+    redactSensitiveText,
 } = boundedLogger;
 
 const ELECTRON_LOG_PATTERN = /^electron.*\.log.*$/;
@@ -37,6 +38,99 @@ function createWritableStream(overrides = {}) {
 test('uses the production size and global retention defaults', () => {
     assert.equal(DEFAULT_MAX_BYTES, 10 * 1024 * 1024);
     assert.equal(DEFAULT_MAX_FILES, 6);
+});
+
+test('redacts explicit path prefixes without rewriting URLs or diagnostics', () => {
+    const secret = '2615cad9be45f50badccd2fa5ffc2bd4596c01eb937c5204388a9c59dfc77b19';
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice', label: '<user-home>' },
+        {
+            prefix: 'C:\\Users\\Alice\\AppData\\Roaming\\Vantage',
+            label: '<runtime-data>',
+        },
+        { prefix: 'D:\\work\\Vantage[dev]', label: '<project-root>' },
+    ];
+    const url = 'https://example.test/D:/work/Vantage[dev]/guide';
+    const value = [
+        'home=C:\\USERS\\ALICE\\Desktop\\note.txt',
+        'runtime=c:/users/alice/appdata/roaming/vantage/logs/electron.log',
+        'project=D:/work/Vantage[dev]/src/main.cjs:123:45',
+        `url=${url}`,
+        `api_key: ${secret}`,
+    ].join('\n');
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.match(redacted, /home=<user-home>\\Desktop\\note\.txt/);
+    assert.match(redacted, /runtime=<runtime-data>\/logs\/electron\.log/);
+    assert.match(redacted, /project=<project-root>\/src\/main\.cjs:123:45/);
+    assert.match(redacted, new RegExp(`url=${url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.doesNotMatch(redacted, /<user-home>\/AppData/i);
+    assert.doesNotMatch(redacted, new RegExp(secret));
+    assert.match(redacted, /api_key: \[REDACTED_API_KEY\]/);
+    assert.equal(redactSensitiveText(42, pathPrefixes), 42);
+});
+
+test('redacts messages and error stacks before file and console output', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-bounded-logger-'));
+    const logFile = path.join(tempDir, 'electron.log');
+    const mirroredEntries = [];
+    const consoleObject = {
+        log(entry) {
+            mirroredEntries.push(entry);
+        },
+        error(entry) {
+            mirroredEntries.push(entry);
+        },
+    };
+    const secret = '2615cad9be45f50badccd2fa5ffc2bd4596c01eb937c5204388a9c59dfc77b19';
+    const error = new Error('backend failed');
+    error.stack = [
+        'Error: backend failed',
+        '    at start (D:\\Projects\\Vantage+prod\\src\\main.cjs:42:7)',
+        '    at executable (C:/Program Files/Vantage+/Vantage.exe:1:2)',
+    ].join('\n');
+
+    try {
+        const logger = createBoundedLogger({
+            logFile,
+            consoleObject,
+            stdout: null,
+            stderr: null,
+            pathPrefixes: [
+                { prefix: 'C:\\Users\\Alice', label: '<user-home>' },
+                {
+                    prefix: 'C:\\Users\\Alice\\AppData\\Roaming\\Vantage',
+                    label: '<runtime-data>',
+                },
+                { prefix: 'D:\\Projects\\Vantage+prod', label: '<project-root>' },
+                { prefix: 'C:\\Program Files\\Vantage+', label: '<app-executable>' },
+            ],
+            maxBytes: 4096,
+            maxFiles: 2,
+        });
+
+        logger.error(
+            `Cannot open c:/users/alice/appdata/roaming/vantage/cache/state.json api_key=${secret}`,
+            error,
+        );
+        assert.doesNotThrow(() => logger.error('Opaque failure', Symbol('opaque')));
+
+        const contents = fs.readFileSync(logFile, 'utf8');
+        const mirrored = mirroredEntries.join('\n');
+        for (const output of [contents, mirrored]) {
+            assert.match(output, /<runtime-data>\/cache\/state\.json/);
+            assert.match(output, /<project-root>\\src\\main\.cjs:42:7/);
+            assert.match(output, /<app-executable>\/Vantage\.exe:1:2/);
+            assert.doesNotMatch(output, /C:[\\/]Users[\\/]Alice/i);
+            assert.doesNotMatch(output, /D:[\\/]Projects[\\/]Vantage\+prod/i);
+            assert.doesNotMatch(output, new RegExp(secret));
+            assert.match(output, /api_key=\[REDACTED_API_KEY\]/);
+        }
+        assert.match(contents, /Stack: Symbol\(opaque\)/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
 });
 
 test('keeps writing after console output fails with EPIPE', () => {

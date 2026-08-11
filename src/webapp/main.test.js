@@ -33,6 +33,11 @@ test('Electron main process activates and cleans file logging only for the prima
     /createBoundedLogger\(\{/,
     'the file logger must not be constructed before the instance lock',
   );
+  assert.doesNotMatch(
+    mainSource.slice(0, lockIndex),
+    /app\.getPath\(['"](?:home|userData)['"]\)/,
+    'sensitive logger roots must not query app paths before the instance lock',
+  );
 
   const singleInstanceBranch = mainSource
     .slice(lockIndex + lockCall.length)
@@ -45,12 +50,22 @@ test('Electron main process activates and cleans file logging only for the prima
   const { secondary, primaryPrefix } = singleInstanceBranch.groups;
   assert.doesNotMatch(secondary, /createBoundedLogger\(\{/);
   assert.doesNotMatch(secondary, /log\.(?:info|warn|error|cleanup)\(/);
+  assert.doesNotMatch(secondary, /app\.getPath\(/);
   assert.match(secondary, /app\.quit\(\)/);
 
-  assert.match(
-    primaryPrefix,
-    /log\s*=\s*createBoundedLogger\(\{\s*logFile,\s*consoleObject:\s*console,\s*stdout:\s*process\.stdout,\s*stderr:\s*process\.stderr,\s*\}\);/,
-  );
+  assert.match(primaryPrefix, /log\s*=\s*createBoundedLogger\(\{/);
+  const expectedPathMappings = [
+    [/prefix:\s*app\.getPath\('home'\),\s*label:\s*'<user-home>'/],
+    [/prefix:\s*app\.getPath\('userData'\),\s*label:\s*'<user-data>'/],
+    [/prefix:\s*runtimePaths\.dataDir,\s*label:\s*'<runtime-data>'/],
+    [/prefix:\s*runtimePaths\.logDir,\s*label:\s*'<runtime-logs>'/],
+    [/prefix:\s*__dirname,\s*label:\s*'<app-root>'/],
+    [/prefix:\s*projectRoot,\s*label:\s*'<project-root>'/],
+    [/prefix:\s*path\.dirname\(process\.execPath\),\s*label:\s*'<app-executable>'/],
+  ];
+  for (const [mappingPattern] of expectedPathMappings) {
+    assert.match(primaryPrefix, mappingPattern);
+  }
   const constructionIndex = primaryPrefix.indexOf('log = createBoundedLogger({');
   const cleanupIndex = primaryPrefix.indexOf('log.cleanup();');
   const startupIndex = primaryPrefix.indexOf("log.info('Vantage Electron starting...');");

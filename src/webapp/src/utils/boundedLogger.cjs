@@ -5,8 +5,141 @@ const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 6;
 const ELECTRON_LOG_PATTERN = /^electron.*\.log.*$/;
 const UTF8_BOUNDARY_BYTES = 3;
+const URL_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>"']+/g;
 
 let temporaryFileSequence = 0;
+
+function escapeRegExpCharacter(character) {
+  return /[\\^$.*+?()[\]{}|]/.test(character)
+    ? `\\${character}`
+    : character;
+}
+
+function buildPathPrefixPattern(prefix) {
+  let pattern = '';
+  let previousWasSeparator = false;
+
+  for (const character of prefix) {
+    if (character === '/' || character === '\\') {
+      if (!previousWasSeparator) {
+        pattern += '[\\\\/]+';
+      }
+      previousWasSeparator = true;
+      continue;
+    }
+
+    pattern += escapeRegExpCharacter(character);
+    previousWasSeparator = false;
+  }
+
+  return pattern;
+}
+
+function compilePathPrefixes(pathPrefixes) {
+  if (!Array.isArray(pathPrefixes)) {
+    return [];
+  }
+
+  return pathPrefixes
+    .map((mapping, order) => {
+      if (
+        !mapping
+        || typeof mapping.prefix !== 'string'
+        || typeof mapping.label !== 'string'
+      ) {
+        return null;
+      }
+
+      const prefix = mapping.prefix.replace(/[\\/]+$/g, '');
+      if (!prefix || !mapping.label) {
+        return null;
+      }
+
+      const windowsPath = /^[A-Za-z]:[\\/]/.test(prefix)
+        || /^\\\\/.test(prefix)
+        || prefix.includes('\\');
+      return {
+        label: mapping.label,
+        order,
+        prefix,
+        regex: new RegExp(
+          `${buildPathPrefixPattern(prefix)}(?=$|[\\\\/])`,
+          windowsPath ? 'gi' : 'g',
+        ),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => (
+      right.prefix.length - left.prefix.length || left.order - right.order
+    ));
+}
+
+function redactPathSegment(value, compiledPathPrefixes) {
+  let redacted = value;
+  for (const mapping of compiledPathPrefixes) {
+    redacted = redacted.replace(mapping.regex, () => mapping.label);
+  }
+  return redacted;
+}
+
+function redactPathPrefixes(value, compiledPathPrefixes) {
+  if (compiledPathPrefixes.length === 0) {
+    return value;
+  }
+
+  let redacted = '';
+  let lastIndex = 0;
+  for (const match of value.matchAll(URL_PATTERN)) {
+    redacted += redactPathSegment(
+      value.slice(lastIndex, match.index),
+      compiledPathPrefixes,
+    );
+    redacted += match[0];
+    lastIndex = match.index + match[0].length;
+  }
+  redacted += redactPathSegment(value.slice(lastIndex), compiledPathPrefixes);
+  return redacted;
+}
+
+function redactSensitiveTextWithCompiledPaths(value, compiledPathPrefixes) {
+  return redactPathPrefixes(value, compiledPathPrefixes)
+    .replace(/sk-[A-Za-z0-9_-]{8,}/g, 'sk-[REDACTED]')
+    .replace(/("api[_-]?key"\s*:\s*")[^"]{8,}(")/gi, '$1[REDACTED_API_KEY]$2')
+    .replace(/(api[_-]?key\s*[:=]\s*)[A-Za-z0-9_-]{16,}/gi, '$1[REDACTED_API_KEY]');
+}
+
+function redactSensitiveText(value, pathPrefixes = []) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  return redactSensitiveTextWithCompiledPaths(
+    value,
+    compilePathPrefixes(pathPrefixes),
+  );
+}
+
+function safeString(value, fallback) {
+  if (typeof value === 'string') {
+    return value;
+  }
+  try {
+    return String(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function safeErrorText(error) {
+  try {
+    if (error && typeof error === 'object' && error.stack) {
+      return safeString(error.stack, '[unprintable error]');
+    }
+  } catch {
+    // Fall through to a guarded conversion of the error itself.
+  }
+  return safeString(error, '[unprintable error]');
+}
 
 function utf8SequenceLength(firstByte) {
   if (firstByte <= 0x7f) {
@@ -338,11 +471,13 @@ function createBoundedLogger({
   consoleObject = console,
   maxBytes = DEFAULT_MAX_BYTES,
   maxFiles = DEFAULT_MAX_FILES,
+  pathPrefixes = [],
   stdout,
   stderr,
 }) {
   let consoleMirroringEnabled = true;
   let disposed = false;
+  const compiledPathPrefixes = compilePathPrefixes(pathPrefixes);
   const guardedStreams = new Set();
   const resolvedStreams = [
     stdout === undefined
@@ -380,10 +515,18 @@ function createBoundedLogger({
 
   function writeLog(level, message, error = null) {
     const timestamp = new Date().toISOString();
-    let logEntry = `[${timestamp}] [${level}] ${message}`;
+    const redactedMessage = redactSensitiveTextWithCompiledPaths(
+      safeString(message, '[unprintable message]'),
+      compiledPathPrefixes,
+    );
+    let logEntry = `[${timestamp}] [${level}] ${redactedMessage}`;
 
     if (error) {
-      logEntry += `\n  Stack: ${error.stack || error}`;
+      const redactedError = redactSensitiveTextWithCompiledPaths(
+        safeErrorText(error),
+        compiledPathPrefixes,
+      );
+      logEntry += `\n  Stack: ${redactedError}`;
     }
 
     logEntry += '\n';
@@ -456,4 +599,5 @@ module.exports = {
   createBoundedLogger,
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_FILES,
+  redactSensitiveText,
 };
