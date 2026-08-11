@@ -376,6 +376,26 @@ def _stop_guarded_target_tree(
             os.killpg(process_group_id, signal.SIGKILL)
         except (OSError, ProcessLookupError):
             pass
+        # macOS can leave an orphaned descendant visible after the group
+        # leader has already exited. Kill any remaining members individually
+        # before the bounded confirmation so the lease is never released
+        # while a target descendant still uses the runtime.
+        try:
+            import psutil
+
+            for member in psutil.process_iter(["pid", "status"]):
+                try:
+                    if member.info.get("status") in {
+                        psutil.STATUS_ZOMBIE,
+                        getattr(psutil, "STATUS_DEAD", "dead"),
+                    }:
+                        continue
+                    if os.getpgid(member.info["pid"]) == process_group_id:
+                        os.kill(member.info["pid"], signal.SIGKILL)
+                except (OSError, psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except ImportError:
+            pass
     else:
         terminate_tree(process)
     try:

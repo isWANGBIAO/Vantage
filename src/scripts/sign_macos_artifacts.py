@@ -346,7 +346,11 @@ def _build_snapshot(
     )
     for path in candidate_paths:
         _assert_parent_chain(root, path.parent)
-        identity = _assert_plain_file(path, role="native artifact")
+        relative_path = path.relative_to(root).as_posix()
+        identity = _assert_plain_file(
+            path,
+            role=f"native artifact {relative_path}",
+        )
         _assert_resolved_containment(path, root, role="native artifact")
         parent_identity = _assert_plain_directory(
             path.parent,
