@@ -601,7 +601,7 @@ def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(t
         entry["path"] == "src/scripts/sign_macos_artifacts.py"
         for entry in original["inputs"]
     )
-    assert original["version"] == 3
+    assert original["version"] == 4
     assert original["distributions"] == closure
 
 

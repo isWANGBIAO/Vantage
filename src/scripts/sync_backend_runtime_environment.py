@@ -31,6 +31,7 @@ from src.core.backend_environment_state import (
     LEGACY_REQUIREMENTS_STAMP_NAME,
     PINNED_BOOTSTRAP_PIP,
     build_backend_environment_state,
+    compute_backend_environment_integrity,
     compute_requirements_sha256,
     current_platform_identity,
     current_python_identity,
@@ -575,12 +576,22 @@ def _reuse_validation_error(
         return "target Python identity differs from the creating interpreter", None
     if probe.get("platform") != dict(creator_platform_identity):
         return "target platform identity differs from the creating interpreter", None
+    try:
+        environment_integrity = compute_backend_environment_integrity(
+            venv,
+            platform_name=str(
+                creator_platform_identity.get("sys_platform") or sys.platform
+            ),
+        )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        return f"backend environment integrity probe failed: {exc}", None
     error = environment_state_validation_error(
         state,
         requirements_sha256=requirements_sha256,
         python_identity=creator_python_identity,
         platform_identity=creator_platform_identity,
         distributions=probe.get("distributions", []),
+        environment_integrity=environment_integrity,
     )
     if error:
         return error, None
@@ -654,6 +665,17 @@ def _synchronize_backend_runtime_environment_locked(
         resolved_root,
         safe_venv,
     )
+    if not force and os.path.lexists(safe_venv):
+        try:
+            venv_identity = _lstat_identity(safe_venv)
+        except OSError:
+            venv_identity = None
+        if venv_identity is not None and not _identity_is_unsafe_root(venv_identity):
+            try:
+                remove_conflicting_packaging_environment_libraries(resolved_root)
+            except BaseException:
+                (safe_venv / BACKEND_ENVIRONMENT_STATE_NAME).unlink(missing_ok=True)
+                raise
     reuse_error, reusable_state = _reuse_validation_error(
         venv=safe_venv,
         target_python=target_python,
@@ -668,29 +690,6 @@ def _synchronize_backend_runtime_environment_locked(
         import_check=import_check,
         opencv_check=opencv_check,
     )
-    if reuse_error is None and reusable_state is not None:
-        try:
-            removed_packaging_dlls = (
-                remove_conflicting_packaging_environment_libraries(resolved_root)
-            )
-        except BaseException:
-            (safe_venv / BACKEND_ENVIRONMENT_STATE_NAME).unlink(missing_ok=True)
-            raise
-        if removed_packaging_dlls:
-            reuse_error, reusable_state = _reuse_validation_error(
-                venv=safe_venv,
-                target_python=target_python,
-                requirements_sha256=requirements_sha256,
-                creator_python_identity=expected_python_identity,
-                creator_platform_identity=expected_platform_identity,
-                core_requirements=resolved_core,
-                force=False,
-                run_command=run_command,
-                probe_environment=probe_environment,
-                pip_check=pip_check,
-                import_check=import_check,
-                opencv_check=opencv_check,
-            )
     if reuse_error is None and reusable_state is not None:
         return BackendEnvironmentSyncOutcome(
             reused=True,
@@ -764,6 +763,7 @@ def _synchronize_backend_runtime_environment_locked(
             python_identity=expected_python_identity,
             platform_identity=expected_platform_identity,
             distributions=probe.get("distributions", []),
+            venv=safe_venv,
         )
         write_backend_environment_state(safe_venv, state)
     except BaseException:

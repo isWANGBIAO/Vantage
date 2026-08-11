@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.core.backend_environment_state import (
+    compute_backend_environment_integrity,
     compute_requirements_sha256,
     current_platform_identity,
     current_python_identity,
@@ -26,7 +27,7 @@ RUNTIME_NAME = "VantageBackend"
 APP_EXE_NAME = f"{RUNTIME_NAME}.exe"
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
 BACKEND_RUNTIME_FINGERPRINT_NAME = "runtime-fingerprint.json"
-BACKEND_RUNTIME_FINGERPRINT_VERSION = 3
+BACKEND_RUNTIME_FINGERPRINT_VERSION = 4
 BACKEND_RUNTIME_SOURCE_INPUTS = (
     "requirements-core.txt",
     "requirements-backend-runtime-gpu.txt",
@@ -236,7 +237,11 @@ def validate_packaging_python_environment(
         )
         resolved_python_identity = python_identity or current_python_identity()
         resolved_platform_identity = platform_identity or current_platform_identity()
-    except (OSError, TypeError, ValueError) as exc:
+        resolved_environment_integrity = compute_backend_environment_integrity(
+            expected_venv,
+            platform_name=str(resolved_platform_identity.get("sys_platform") or sys.platform),
+        )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         return f"Backend runtime environment state could not be validated: {exc}"
 
     state_error = environment_state_validation_error(
@@ -245,6 +250,7 @@ def validate_packaging_python_environment(
         python_identity=resolved_python_identity,
         platform_identity=resolved_platform_identity,
         distributions=resolved_closure,
+        environment_integrity=resolved_environment_integrity,
     )
     if state_error:
         return f"Backend runtime environment state is not reusable: {state_error}."
@@ -518,6 +524,7 @@ def build_backend_runtime_fingerprint(
     distribution_closure: list[str] | None = None,
     python_identity: dict[str, str] | None = None,
     platform_identity: dict[str, str] | None = None,
+    environment_integrity: dict[str, object] | None = None,
 ) -> dict[str, object]:
     resolved_root = Path(project_root).resolve()
     entries_by_path: dict[str, dict[str, object]] = {}
@@ -540,11 +547,20 @@ def build_backend_runtime_fingerprint(
     )
     resolved_python_identity = dict(python_identity or current_python_identity())
     resolved_platform_identity = dict(platform_identity or current_platform_identity())
+    resolved_environment_integrity = dict(
+        compute_backend_environment_integrity(
+            resolved_root / BACKEND_RUNTIME_VENV_NAME,
+            platform_name=str(resolved_platform_identity.get("sys_platform") or sys.platform),
+        )
+        if environment_integrity is None
+        else environment_integrity
+    )
     digest_payload = {
         "version": BACKEND_RUNTIME_FINGERPRINT_VERSION,
         "python": resolved_python_identity,
         "platform": resolved_platform_identity,
         "distributions": resolved_distribution_closure,
+        "environment_integrity": resolved_environment_integrity,
         "inputs": inputs,
     }
     digest = hashlib.sha256(
@@ -557,6 +573,7 @@ def build_backend_runtime_fingerprint(
         "python": digest_payload["python"],
         "platform": digest_payload["platform"],
         "distributions": resolved_distribution_closure,
+        "environment_integrity": resolved_environment_integrity,
         "digest": digest,
         "inputs": inputs,
     }
@@ -847,5 +864,9 @@ def backend_runtime_fingerprint_matches(
     if stored_fingerprint.get("platform") != expected_fingerprint.get("platform"):
         return False
     if stored_fingerprint.get("distributions") != expected_fingerprint.get("distributions"):
+        return False
+    if stored_fingerprint.get("environment_integrity") != expected_fingerprint.get(
+        "environment_integrity"
+    ):
         return False
     return not validate_backend_runtime_bundle(layout, resources)

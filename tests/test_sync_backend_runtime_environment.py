@@ -186,6 +186,7 @@ def test_environment_state_rejects_input_identity_and_closure_drift(
         python_identity=PYTHON_IDENTITY,
         platform_identity=PLATFORM_IDENTITY,
         distributions=CLEAN_CLOSURE,
+        environment_integrity=state["integrity"],
     )
 
     assert expected_reason in error
@@ -198,6 +199,7 @@ def test_environment_state_rejects_legacy_schema():
         python_identity=PYTHON_IDENTITY,
         platform_identity=PLATFORM_IDENTITY,
         distributions=CLEAN_CLOSURE,
+        environment_integrity={},
     )
 
     assert "schema" in error
@@ -237,8 +239,19 @@ def test_conflicting_packaging_dll_cleanup_waits_for_exclusive_lock_and_preserve
     )
     unrelated_dll = conflicting_dll.with_name("extension.dll")
     conflicting_dll.parent.mkdir(parents=True, exist_ok=True)
-    conflicting_dll.write_bytes(b"conflicting-runtime")
     unrelated_dll.write_bytes(b"package-extension")
+    write_backend_environment_state(
+        venv,
+        build_backend_environment_state(
+            core,
+            overlay,
+            python_identity=PYTHON_IDENTITY,
+            platform_identity=PLATFORM_IDENTITY,
+            distributions=CLEAN_CLOSURE,
+            venv=venv,
+        ),
+    )
+    conflicting_dll.write_bytes(b"conflicting-runtime")
     state_path = venv / BACKEND_ENVIRONMENT_STATE_NAME
     original_state = load_backend_environment_state(venv)
 
@@ -399,6 +412,19 @@ def test_unclean_or_forced_environment_is_deleted_and_rebuilt(
 
     pip_results = iter([False, True]) if scenario == "pip_check" else None
 
+    if scenario == "pip_check":
+        write_backend_environment_state(
+            venv,
+            build_backend_environment_state(
+                core,
+                overlay,
+                python_identity=PYTHON_IDENTITY,
+                platform_identity=PLATFORM_IDENTITY,
+                distributions=CLEAN_CLOSURE,
+                venv=venv,
+            ),
+        )
+
     outcome = synchronize_backend_runtime_environment(
         project_root=tmp_path,
         venv=venv,
@@ -431,6 +457,40 @@ def test_unclean_or_forced_environment_is_deleted_and_rebuilt(
     assert any("-r" in command and str(overlay) in command for command in commands)
     assert any(str(normalizer) in command for command in commands)
     assert load_backend_environment_state(venv) == outcome.state
+
+
+def test_integrity_probe_race_rebuilds_instead_of_aborting(tmp_path, monkeypatch):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+    commands: list[list[str]] = []
+
+    def fail_integrity_probe(*_args, **_kwargs):
+        raise RuntimeError("environment changed during integrity scan")
+
+    monkeypatch.setattr(
+        "src.scripts.sync_backend_runtime_environment.compute_backend_environment_integrity",
+        fail_integrity_probe,
+    )
+
+    outcome = synchronize_backend_runtime_environment(
+        project_root=tmp_path,
+        venv=venv,
+        core_requirements=core,
+        requirements=overlay,
+        opencv_normalizer=normalizer,
+        creator_python=tmp_path / "bootstrap" / "python.exe",
+        creator_prefix=tmp_path / "bootstrap",
+        creator_python_identity=PYTHON_IDENTITY,
+        creator_platform_identity=PLATFORM_IDENTITY,
+        run_command=_successful_runner(venv, commands),
+        probe_environment=lambda *_args: _probe_payload(),
+        pip_check=lambda *_args: True,
+        import_check=lambda *_args: True,
+        opencv_check=lambda *_args: True,
+    )
+
+    assert outcome.reused is False
+    assert any(command[1:3] == ["-m", "venv"] for command in commands)
+    assert load_backend_environment_state(venv) is not None
 
 
 def test_failed_rebuild_leaves_no_valid_state(tmp_path):
@@ -1007,6 +1067,7 @@ def test_bootstrap_pip_pin_is_part_of_environment_state_identity(tmp_path):
         python_identity=PYTHON_IDENTITY,
         platform_identity=PLATFORM_IDENTITY,
         distributions=CLEAN_CLOSURE,
+        environment_integrity=stale_state["integrity"],
         bootstrap_pip=backend_state.PINNED_BOOTSTRAP_PIP,
     )
 
