@@ -36,6 +36,19 @@ function buildPathPrefixPattern(prefix) {
   return pattern;
 }
 
+function encodeFileUrlPathPrefix(prefix) {
+  try {
+    const normalized = prefix
+      .replace(/\\/g, '/')
+      .replace(/^\/+/, '');
+    return encodeURI(normalized)
+      .replace(/#/g, '%23')
+      .replace(/\?/g, '%3F');
+  } catch {
+    return null;
+  }
+}
+
 function compilePathPrefixes(pathPrefixes) {
   if (!Array.isArray(pathPrefixes)) {
     return [];
@@ -59,6 +72,7 @@ function compilePathPrefixes(pathPrefixes) {
       const windowsPath = /^[A-Za-z]:[\\/]/.test(prefix)
         || /^\\\\/.test(prefix)
         || prefix.includes('\\');
+      const encodedFileUrlPrefix = encodeFileUrlPathPrefix(prefix);
       return {
         label: mapping.label,
         order,
@@ -67,6 +81,12 @@ function compilePathPrefixes(pathPrefixes) {
           `${buildPathPrefixPattern(prefix)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
           windowsPath ? 'gi' : 'g',
         ),
+        fileUrlRegex: encodedFileUrlPrefix
+          ? new RegExp(
+            `${buildPathPrefixPattern(encodedFileUrlPrefix)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
+            windowsPath ? 'gi' : 'g',
+          )
+          : null,
       };
     })
     .filter(Boolean)
@@ -79,6 +99,16 @@ function redactPathSegment(value, compiledPathPrefixes) {
   let redacted = value;
   for (const mapping of compiledPathPrefixes) {
     redacted = redacted.replace(mapping.regex, () => mapping.label);
+  }
+  return redacted;
+}
+
+function redactLocalFileUrl(value, compiledPathPrefixes) {
+  let redacted = redactPathSegment(value, compiledPathPrefixes);
+  for (const mapping of compiledPathPrefixes) {
+    if (mapping.fileUrlRegex) {
+      redacted = redacted.replace(mapping.fileUrlRegex, () => mapping.label);
+    }
   }
   return redacted;
 }
@@ -96,7 +126,7 @@ function redactPathPrefixes(value, compiledPathPrefixes) {
       compiledPathPrefixes,
     );
     redacted += /^file:/i.test(match[0])
-      ? redactPathSegment(match[0], compiledPathPrefixes)
+      ? redactLocalFileUrl(match[0], compiledPathPrefixes)
       : match[0];
     lastIndex = match.index + match[0].length;
   }

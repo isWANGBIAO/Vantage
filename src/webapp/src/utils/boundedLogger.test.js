@@ -113,6 +113,34 @@ test('redacts local file URLs and exact diagnostic roots without touching siblin
     );
 });
 
+test('redacts percent-encoded local file URLs without decoding remote or malformed URLs', () => {
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice Smith\\repo', label: '<spaced-root>' },
+        { prefix: 'C:\\Users\\王表\\repo', label: '<unicode-root>' },
+    ];
+    const remoteUrl = 'https://example.test/C:/Users/Alice%20Smith/repo/guide';
+    const malformedFileUrl = 'file:///C:/Users/Alice%2/repo/main.cjs';
+    const value = [
+        'at file:///C:/Users/Alice%20Smith/repo/src/main.cjs:42:7',
+        'at file:///C:/Users/%E7%8E%8B%E8%A1%A8/repo/src/main.cjs:8:2',
+        `remote=${remoteUrl}`,
+        `malformed=${malformedFileUrl}`,
+    ].join('\n');
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.match(redacted, /file:\/\/\/<spaced-root>\/src\/main\.cjs:42:7/);
+    assert.match(redacted, /file:\/\/\/<unicode-root>\/src\/main\.cjs:8:2/);
+    assert.match(
+        redacted,
+        new RegExp(`remote=${remoteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    );
+    assert.match(
+        redacted,
+        new RegExp(`malformed=${malformedFileUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    );
+});
+
 test('redacts messages and error stacks before file and console output', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-bounded-logger-'));
     const logFile = path.join(tempDir, 'electron.log');
