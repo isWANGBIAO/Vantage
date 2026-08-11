@@ -24,6 +24,8 @@ def _ensure_project_root_on_sys_path(
 
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
+from src.core.backend_runtime_lock import backend_runtime_lock
+
 
 def _configure_console_encoding():
     for stream in (sys.stdout, sys.stderr):
@@ -156,7 +158,7 @@ def run_packaging_builds(
     return 0
 
 
-def main() -> int:
+def _main_without_backend_runtime_lock() -> int:
     _configure_console_encoding()
     parser = _build_parser()
     args = parser.parse_args()
@@ -165,6 +167,11 @@ def main() -> int:
         backend_python=args.backend_python,
     )
     return run_packaging_builds(commands, workers=args.workers)
+
+
+def main() -> int:
+    with backend_runtime_lock(PROJECT_ROOT, mode="shared"):
+        return _main_without_backend_runtime_lock()
 
 
 if __name__ == "__main__":

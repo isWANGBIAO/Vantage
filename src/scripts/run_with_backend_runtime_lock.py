@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -20,7 +21,6 @@ _ensure_project_root_on_sys_path()
 from src.core.backend_runtime_lock import (
     DEFAULT_BACKEND_RUNTIME_LOCK_TIMEOUT_SECONDS,
     backend_runtime_lock,
-    inherited_backend_runtime_lock_environment,
 )
 
 
@@ -51,8 +51,10 @@ def main(argv: list[str] | None = None) -> int:
         with backend_runtime_lock(
             args.project_root,
             timeout_seconds=args.timeout_seconds,
+            mode="shared",
         ):
-            environment = inherited_backend_runtime_lock_environment(args.project_root)
+            environment = os.environ.copy()
+            environment.pop("VANTAGE_BACKEND_RUNTIME_LOCK_HELD", None)
             process = subprocess.Popen(command, env=environment)
             return process.wait()
     except (OSError, TimeoutError, ValueError) as exc:

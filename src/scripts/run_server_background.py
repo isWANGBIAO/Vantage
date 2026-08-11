@@ -213,12 +213,9 @@ def main():
 
     from src.core.backend_runtime_lock import (
         backend_runtime_lock,
-        backend_runtime_lock_is_inherited,
     )
 
-    if backend_runtime_lock_is_inherited(PROJECT_ROOT):
-        return _main_without_backend_runtime_lock()
-    with backend_runtime_lock(PROJECT_ROOT):
+    with backend_runtime_lock(PROJECT_ROOT, mode="shared"):
         return _main_without_backend_runtime_lock()
 
 

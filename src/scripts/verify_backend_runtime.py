@@ -37,7 +37,6 @@ from src.core.backend_runtime_packaging import (
 )
 from src.core.backend_runtime_lock import (
     backend_runtime_lock,
-    backend_runtime_lock_is_inherited,
 )
 from src.core.runtime_library_bootstrap import collect_runtime_library_dirs
 from src.core.media_storage import save_media_paths_settings
@@ -363,9 +362,7 @@ def _main_without_backend_runtime_lock() -> int:
 
 
 def main() -> int:
-    if backend_runtime_lock_is_inherited(PROJECT_ROOT):
-        return _main_without_backend_runtime_lock()
-    with backend_runtime_lock(PROJECT_ROOT):
+    with backend_runtime_lock(PROJECT_ROOT, mode="shared"):
         return _main_without_backend_runtime_lock()
 
 

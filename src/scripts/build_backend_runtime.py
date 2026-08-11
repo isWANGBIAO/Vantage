@@ -25,7 +25,6 @@ PROJECT_ROOT = _ensure_project_root_on_sys_path()
 from src.core.backend_environment_state import installed_distribution_closure
 from src.core.backend_runtime_lock import (
     backend_runtime_lock,
-    backend_runtime_lock_is_inherited,
 )
 from src.core.backend_runtime_packaging import (
     PROJECT_ACTIVITY_SNAPSHOT_NAME,
@@ -198,9 +197,7 @@ def _main_without_backend_runtime_lock() -> int:
 
 
 def main() -> int:
-    if backend_runtime_lock_is_inherited(PROJECT_ROOT):
-        return _main_without_backend_runtime_lock()
-    with backend_runtime_lock(PROJECT_ROOT):
+    with backend_runtime_lock(PROJECT_ROOT, mode="shared"):
         return _main_without_backend_runtime_lock()
 
 

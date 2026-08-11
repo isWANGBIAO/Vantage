@@ -194,15 +194,17 @@ def test_target_backend_runtime_consumers_use_the_shared_lock_supervisor():
     assert '"$PYTHON_BIN" src/scripts/run_frontend_background.py' not in run_dev_sh
 
 
-def test_direct_backend_runtime_consumers_acquire_or_inherit_the_shared_lock():
+def test_direct_backend_runtime_consumers_own_a_real_shared_os_lock():
     for source_path in (
         Path("src/scripts/build_backend_runtime.py"),
         Path("src/scripts/verify_backend_runtime.py"),
         Path("src/scripts/run_server_background.py"),
+        Path("src/scripts/run_packaging_builds.py"),
     ):
         source = source_path.read_text(encoding="utf-8")
         assert "backend_runtime_lock" in source, source_path
-        assert "backend_runtime_lock_is_inherited" in source, source_path
+        assert 'mode="shared"' in source, source_path
+        assert "backend_runtime_lock_is_inherited" not in source, source_path
 
 
 def test_macos_backend_environment_sync_precedes_state_based_resigning():

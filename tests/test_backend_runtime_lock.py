@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
+
+import pytest
 
 
 def _lock_module():
@@ -97,21 +100,24 @@ def test_residual_unlocked_file_does_not_block_lock_acquisition(tmp_path):
         assert lock_module.backend_runtime_lock_is_held(tmp_path)
 
 
-def test_lock_supervisor_sets_inherited_marker_and_returns_child_status(tmp_path):
+def test_lock_supervisor_child_owns_a_real_shared_lock_and_returns_status(tmp_path):
     lock_module = _lock_module()
     output_path = tmp_path / "inherited-lock.txt"
-    child_source = (
-        "import os, pathlib, sys; "
-        "from src.core.backend_runtime_lock import backend_runtime_lock; "
-        "root = pathlib.Path(sys.argv[1]); "
-        "output = pathlib.Path(sys.argv[2]); "
-        "lock = backend_runtime_lock(root, timeout_seconds=0.1); "
-        "lock.__enter__(); "
-        "output.write_text(os.environ.get("
-        "'VANTAGE_BACKEND_RUNTIME_LOCK_HELD', ''), encoding='utf-8'); "
-        "lock.__exit__(None, None, None); "
-        "raise SystemExit(7)"
+    child_source = """
+import os
+import pathlib
+import sys
+from src.core.backend_runtime_lock import backend_runtime_lock
+
+root = pathlib.Path(sys.argv[1])
+output = pathlib.Path(sys.argv[2])
+with backend_runtime_lock(root, mode="shared", timeout_seconds=1):
+    output.write_text(
+        os.environ.get("VANTAGE_BACKEND_RUNTIME_LOCK_HELD", "absent"),
+        encoding="utf-8",
     )
+raise SystemExit(7)
+"""
     result = subprocess.run(
         [
             sys.executable,
@@ -133,9 +139,113 @@ def test_lock_supervisor_sets_inherited_marker_and_returns_child_status(tmp_path
     )
 
     assert result.returncode == 7, result.stderr
-    assert output_path.read_text(encoding="utf-8") == str(
+    assert output_path.read_text(encoding="utf-8") == "absent"
+
+
+def test_forged_inherited_marker_never_bypasses_an_owned_lock(tmp_path):
+    lock_module = _lock_module()
+    environment = _subprocess_environment()
+    environment["VANTAGE_BACKEND_RUNTIME_LOCK_HELD"] = str(
         lock_module.backend_runtime_lock_path(tmp_path)
     )
+    holder = _spawn_holder(tmp_path, "time.sleep(10)")
+    contender_source = """
+from pathlib import Path
+import sys
+from src.core.backend_runtime_lock import backend_runtime_lock
+
+with backend_runtime_lock(Path(sys.argv[1]), timeout_seconds=0.2):
+    raise SystemExit(0)
+"""
+    try:
+        contender = subprocess.run(
+            [sys.executable, "-c", contender_source, str(tmp_path)],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    finally:
+        holder.terminate()
+        holder.wait(timeout=5)
+
+    assert contender.returncode != 0
+    assert "timed out waiting for backend runtime lock" in contender.stderr
+
+
+def test_supervisor_death_does_not_release_live_child_runtime_lease(tmp_path):
+    lock_module = _lock_module()
+    ready_path = tmp_path / "child-ready.txt"
+    stop_path = tmp_path / "child-stop.txt"
+    done_path = tmp_path / "child-done.txt"
+    child_source = """
+import os
+import pathlib
+import sys
+import time
+from src.core.backend_runtime_lock import backend_runtime_lock
+
+root = pathlib.Path(sys.argv[1])
+ready = pathlib.Path(sys.argv[2])
+stop = pathlib.Path(sys.argv[3])
+done = pathlib.Path(sys.argv[4])
+with backend_runtime_lock(root, mode="shared", timeout_seconds=2):
+    ready.write_text(str(os.getpid()), encoding="utf-8")
+    while not stop.exists():
+        time.sleep(0.02)
+done.write_text("done", encoding="utf-8")
+"""
+    supervisor = subprocess.Popen(
+        [
+            sys.executable,
+            "src/scripts/run_with_backend_runtime_lock.py",
+            "--project-root",
+            str(tmp_path),
+            "--",
+            sys.executable,
+            "-c",
+            child_source,
+            str(tmp_path),
+            str(ready_path),
+            str(stop_path),
+            str(done_path),
+        ],
+        env=_subprocess_environment(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 5
+    while not ready_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert ready_path.exists(), supervisor.stderr.read() if supervisor.stderr else ""
+    child_pid = int(ready_path.read_text(encoding="utf-8"))
+
+    try:
+        supervisor.kill()
+        supervisor.wait(timeout=5)
+        with pytest.raises(TimeoutError, match="backend runtime lock"):
+            with lock_module.backend_runtime_lock(tmp_path, timeout_seconds=0.2):
+                pytest.fail("sync-style exclusive lock entered while child was alive")
+    finally:
+        stop_path.write_text("stop", encoding="utf-8")
+        deadline = time.monotonic() + 5
+        while not done_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if not done_path.exists():
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(child_pid), "/F"],
+                    capture_output=True,
+                    check=False,
+                )
+            else:
+                os.kill(child_pid, 15)
+            pytest.fail("child did not release its runtime lease after stop")
+
+    with lock_module.backend_runtime_lock(tmp_path, timeout_seconds=2):
+        assert lock_module.backend_runtime_lock_is_held(tmp_path)
 
 
 def test_lock_and_retained_quarantine_artifacts_are_gitignored():
