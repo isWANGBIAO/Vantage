@@ -24,7 +24,7 @@ RUNTIME_NAME = "VantageBackend"
 APP_EXE_NAME = f"{RUNTIME_NAME}.exe"
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
 BACKEND_RUNTIME_FINGERPRINT_NAME = "runtime-fingerprint.json"
-BACKEND_RUNTIME_FINGERPRINT_VERSION = 2
+BACKEND_RUNTIME_FINGERPRINT_VERSION = 3
 BACKEND_RUNTIME_SOURCE_INPUTS = (
     "requirements-core.txt",
     "requirements-backend-runtime-gpu.txt",
@@ -488,6 +488,8 @@ def build_backend_runtime_fingerprint(
     *,
     resources: list[BundledResource],
     distribution_closure: list[str] | None = None,
+    python_identity: dict[str, str] | None = None,
+    platform_identity: dict[str, str] | None = None,
 ) -> dict[str, object]:
     resolved_root = Path(project_root).resolve()
     entries_by_path: dict[str, dict[str, object]] = {}
@@ -508,9 +510,12 @@ def build_backend_runtime_fingerprint(
         if distribution_closure is None
         else distribution_closure
     )
+    resolved_python_identity = dict(python_identity or current_python_identity())
+    resolved_platform_identity = dict(platform_identity or current_platform_identity())
     digest_payload = {
         "version": BACKEND_RUNTIME_FINGERPRINT_VERSION,
-        "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "python": resolved_python_identity,
+        "platform": resolved_platform_identity,
         "distributions": resolved_distribution_closure,
         "inputs": inputs,
     }
@@ -522,6 +527,7 @@ def build_backend_runtime_fingerprint(
         "version": BACKEND_RUNTIME_FINGERPRINT_VERSION,
         "algorithm": "sha256",
         "python": digest_payload["python"],
+        "platform": digest_payload["platform"],
         "distributions": resolved_distribution_closure,
         "digest": digest,
         "inputs": inputs,
@@ -809,6 +815,8 @@ def backend_runtime_fingerprint_matches(
     if stored_fingerprint.get("version") != expected_fingerprint.get("version"):
         return False
     if stored_fingerprint.get("python") != expected_fingerprint.get("python"):
+        return False
+    if stored_fingerprint.get("platform") != expected_fingerprint.get("platform"):
         return False
     if stored_fingerprint.get("distributions") != expected_fingerprint.get("distributions"):
         return False

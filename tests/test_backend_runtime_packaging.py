@@ -561,7 +561,7 @@ def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(t
         entry["path"] == "src/scripts/sign_macos_backend_runtime.py"
         for entry in original["inputs"]
     )
-    assert original["version"] == 2
+    assert original["version"] == 3
     assert original["distributions"] == closure
 
 
@@ -582,6 +582,48 @@ def test_backend_runtime_fingerprint_changes_with_distribution_closure(tmp_path)
 
     assert original["digest"] != changed["digest"]
     assert original["distributions"] != changed["distributions"]
+
+
+def test_backend_runtime_fingerprint_tracks_full_python_and_platform_identity(tmp_path):
+    _create_required_runtime_resources(tmp_path)
+    resources = collect_backend_runtime_resources(tmp_path)
+    python_identity = {
+        "implementation": "CPython",
+        "version": "3.13.5",
+        "cache_tag": "cpython-313",
+    }
+    platform_identity = {
+        "sys_platform": "darwin",
+        "system": "Darwin",
+        "machine": "arm64",
+    }
+
+    original = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["pip==25.3"],
+        python_identity=python_identity,
+        platform_identity=platform_identity,
+    )
+    changed_python = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["pip==25.3"],
+        python_identity={**python_identity, "cache_tag": "cpython-313t"},
+        platform_identity=platform_identity,
+    )
+    changed_machine = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["pip==25.3"],
+        python_identity=python_identity,
+        platform_identity={**platform_identity, "machine": "x86_64"},
+    )
+
+    assert original["python"] == python_identity
+    assert original["platform"] == platform_identity
+    assert original["digest"] != changed_python["digest"]
+    assert original["digest"] != changed_machine["digest"]
 
 
 def test_backend_runtime_cache_match_requires_existing_runtime_and_matching_fingerprint(tmp_path):
