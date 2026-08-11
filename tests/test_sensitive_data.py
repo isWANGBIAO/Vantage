@@ -1,5 +1,8 @@
 import io
+import subprocess
+import sys
 
+from src.utils import sensitive_data
 from src.utils.sensitive_data import (
     RedactingPipeLog,
     RedactingTextStream,
@@ -181,3 +184,54 @@ def test_redacting_pipe_log_redacts_an_unterminated_record_at_eof(tmp_path):
     assert secret not in persisted
     assert r"path=<HISTORY_DIR>\face.jpg" in persisted
     assert "Authorization: Bearer [REDACTED_TOKEN]" in persisted
+
+
+def test_runtime_path_registration_updates_active_and_future_pipe_logs(tmp_path):
+    media_root = tmp_path / "Private Photos"
+    media_root.mkdir()
+    active_log_path = tmp_path / "active.log"
+    future_log_path = tmp_path / "future.log"
+
+    with sensitive_data._RUNTIME_LOG_PATH_PREFIXES_LOCK:
+        original_prefixes = dict(sensitive_data._RUNTIME_LOG_PATH_PREFIXES)
+
+    try:
+        with RedactingPipeLog(active_log_path) as active_log:
+            with active_log.capture_subprocess_output(stream_name="media") as output:
+                sensitive_data.register_runtime_log_path_prefixes(
+                    {"<TEST_MEDIA_ROOT>": media_root}
+                )
+                record = (
+                    f"Scanning paths: {media_root / 'history'}; "
+                    f"BASE_DIR: {media_root}; "
+                    "Authorization: Bearer runtime-media-secret-1234567890\n"
+                )
+                subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        (
+                            "import os, sys; data=sys.argv[1].encode(); "
+                            "mid=len(data)//2; os.write(1,data[:mid]); "
+                            "os.write(1,data[mid:])"
+                        ),
+                        record,
+                    ],
+                    check=True,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                )
+
+        with RedactingPipeLog(future_log_path) as future_log:
+            future_log.write_record(f"Scanning paths: {media_root / 'history'}\n")
+
+        for log_path in (active_log_path, future_log_path):
+            persisted = log_path.read_text(encoding="utf-8")
+            assert str(media_root) not in persisted
+            assert "runtime-media-secret-1234567890" not in persisted
+            assert "<TEST_MEDIA_ROOT>" in persisted
+            assert "history" in persisted
+    finally:
+        with sensitive_data._RUNTIME_LOG_PATH_PREFIXES_LOCK:
+            sensitive_data._RUNTIME_LOG_PATH_PREFIXES.clear()
+            sensitive_data._RUNTIME_LOG_PATH_PREFIXES.update(original_prefixes)

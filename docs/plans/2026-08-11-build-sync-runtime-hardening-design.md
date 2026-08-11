@@ -327,7 +327,9 @@ macOS launchers but does not notarize or publish a macOS release.
 - Main-backend output, independently redirected face-analysis output, frontend
   bootstrap/npm/Electron output, and Electron application messages replace
   known user-data/project prefixes and credentials with stable labels before
-  persistence. The pipe sinks redact complete records even when native writes
+  persistence. The backend registers its discovered photo and screenshot roots
+  before their first startup log, updating the active server sink and every
+  later face-analysis sink. The pipe sinks redact complete records even when native writes
   split a secret or leave the final record unterminated. Electron redaction scans URL-context
   events and all explicit-prefix candidates from the immutable original text,
   selects longest non-overlapping ranges, and applies replacements once. It

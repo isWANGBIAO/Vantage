@@ -48,6 +48,80 @@ def _static_route_directories():
     return directories
 
 
+def test_startup_registers_media_roots_before_logging_or_monitor_creation():
+    original_routes = list(server.app.router.routes)
+    original_photos = server.state.photos_path
+    original_screenshots = server.state.screenshots_path
+    original_monitor = server.state.monitor
+    original_paths = dict(server.state.paths)
+    original_running = server.state.is_running
+    original_background_thread_status = dict(server.state.background_thread_status)
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            photos_path = tmp_path / "private-photos"
+            screenshots_path = tmp_path / "private-screenshots"
+            photos_path.mkdir()
+            screenshots_path.mkdir()
+            events = []
+
+            def register_prefixes(prefixes):
+                events.append(("register", prefixes))
+
+            def record_print(*values, **_kwargs):
+                message = " ".join(str(value) for value in values)
+                if "[Storage]" in message:
+                    events.append(("print", message))
+
+            def create_monitor(*_args, **_kwargs):
+                events.append(("monitor", None))
+                return object()
+
+            with (
+                patch.object(
+                    server,
+                    "identify_logs_folder",
+                    return_value=(str(photos_path), str(screenshots_path)),
+                ),
+                patch.object(
+                    server,
+                    "register_runtime_log_path_prefixes",
+                    side_effect=register_prefixes,
+                    create=True,
+                ),
+                patch.object(server, "Monitor", side_effect=create_monitor),
+                patch.object(server, "prewarm_runtime_models"),
+                patch.object(server, "_start_background_thread_once"),
+                patch.object(server, "_mount_static_once"),
+                patch.object(server, "_get_plot_dir", return_value=tmp_path / "plots"),
+                patch("builtins.print", side_effect=record_print),
+            ):
+                asyncio.run(server.startup_event())
+
+            assert events[0] == (
+                "register",
+                {
+                    "<PHOTOS_ROOT>": str(photos_path),
+                    "<SCREENSHOTS_ROOT>": str(screenshots_path),
+                },
+            )
+            assert [event[0] for event in events[:4]] == [
+                "register",
+                "print",
+                "print",
+                "monitor",
+            ]
+    finally:
+        server.app.router.routes[:] = original_routes
+        server.state.photos_path = original_photos
+        server.state.screenshots_path = original_screenshots
+        server.state.monitor = original_monitor
+        server.state.paths = original_paths
+        server.state.is_running = original_running
+        server.state.background_thread_status = original_background_thread_status
+
+
 def test_startup_event_is_idempotent_for_static_mounts_and_threads():
     original_routes = list(server.app.router.routes)
     original_photos = server.state.photos_path

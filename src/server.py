@@ -99,6 +99,7 @@ from src.utils.sensitive_data import (
     RedactingPipeLog,
     build_log_path_prefixes,
     redact_sensitive_text,
+    register_runtime_log_path_prefixes,
 )
 
 
@@ -2301,6 +2302,12 @@ async def startup_event():
     # RESUME initialization (Unindented to run regardless of camera init success/failure)
     try:
         state.photos_path, state.screenshots_path = identify_logs_folder()
+        register_runtime_log_path_prefixes(
+            {
+                "<PHOTOS_ROOT>": state.photos_path,
+                "<SCREENSHOTS_ROOT>": state.screenshots_path,
+            }
+        )
         print(f"----------------------------------------------------------------")
         print(f"[Storage] Photos Path: {state.photos_path}")
         print(f"[Storage] Screenshots Path: {state.screenshots_path}")

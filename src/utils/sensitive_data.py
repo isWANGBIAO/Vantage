@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import threading
+import weakref
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,6 +12,37 @@ from pathlib import Path
 _LOG_REDACTION_FAILURE_TEXT = "[LOG_REDACTION_FAILED]"
 _LOG_RECORD_TOO_LARGE_TEXT = "[LOG_RECORD_DROPPED]"
 _MAX_LOG_RECORD_CHARS = 1024 * 1024
+_RUNTIME_LOG_PATH_PREFIXES = {}
+_ACTIVE_REDACTING_PIPE_LOGS = weakref.WeakSet()
+_RUNTIME_LOG_PATH_PREFIXES_LOCK = threading.RLock()
+
+
+def _normalize_runtime_log_path_prefixes(path_prefixes):
+    if not isinstance(path_prefixes, Mapping):
+        raise TypeError("path_prefixes must map stable labels to local path prefixes")
+
+    normalized = {}
+    for label, prefix in path_prefixes.items():
+        if not isinstance(label, str) or not label:
+            continue
+        try:
+            prefix_text = os.fspath(prefix)
+        except TypeError:
+            continue
+        if isinstance(prefix_text, str) and prefix_text:
+            normalized[label] = prefix_text
+    return normalized
+
+
+def register_runtime_log_path_prefixes(path_prefixes):
+    """Add newly discovered private roots to current and future pipe logs."""
+
+    normalized = _normalize_runtime_log_path_prefixes(path_prefixes)
+    with _RUNTIME_LOG_PATH_PREFIXES_LOCK:
+        _RUNTIME_LOG_PATH_PREFIXES.update(normalized)
+        active_logs = tuple(_ACTIVE_REDACTING_PIPE_LOGS)
+        for pipe_log in active_logs:
+            pipe_log.add_path_prefixes(normalized)
 
 
 def build_log_path_prefixes(
@@ -229,7 +261,11 @@ class RedactingPipeLog:
         max_record_chars=_MAX_LOG_RECORD_CHARS,
     ):
         self._stream = open(log_path, "a", encoding="utf-8", buffering=1)
-        self._path_prefixes = dict(path_prefixes or {})
+        self._path_prefixes_lock = threading.Lock()
+        with _RUNTIME_LOG_PATH_PREFIXES_LOCK:
+            self._path_prefixes = dict(_RUNTIME_LOG_PATH_PREFIXES)
+            self._path_prefixes.update(dict(path_prefixes or {}))
+            _ACTIVE_REDACTING_PIPE_LOGS.add(self)
         self._redact_fn = redact_fn
         self._max_record_chars = max(1, int(max_record_chars))
         self._write_lock = threading.Lock()
@@ -237,6 +273,11 @@ class RedactingPipeLog:
         self._redirected = []
         self._captures = []
         self._closed = False
+
+    def add_path_prefixes(self, path_prefixes):
+        normalized = _normalize_runtime_log_path_prefixes(path_prefixes)
+        with self._path_prefixes_lock:
+            self._path_prefixes.update(normalized)
 
     def __enter__(self):
         return self
@@ -317,10 +358,12 @@ class RedactingPipeLog:
             pass
 
     def _persist(self, value):
+        with self._path_prefixes_lock:
+            path_prefixes = dict(self._path_prefixes)
         try:
             redacted = self._redact_fn(
                 value,
-                path_prefixes=self._path_prefixes,
+                path_prefixes=path_prefixes,
             )
         except Exception:
             redacted = _LOG_REDACTION_FAILURE_TEXT
@@ -379,6 +422,8 @@ class RedactingPipeLog:
             if self._closed:
                 return
             self._closed = True
+            with _RUNTIME_LOG_PATH_PREFIXES_LOCK:
+                _ACTIVE_REDACTING_PIPE_LOGS.discard(self)
 
             redirected = list(self._redirected)
             captures = list(self._captures)

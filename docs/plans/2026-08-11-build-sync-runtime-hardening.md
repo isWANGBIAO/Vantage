@@ -459,7 +459,9 @@ preserving genuine remote URLs and avoiding mutation-dependent or quadratic
 rescanning leaks. Route the independently redirected face-analysis child and
 the detached frontend npm/Electron process through the same complete-record
 redacting pipe sink; split native writes and an unterminated EOF record must not
-leak a local path or credential. The detached frontend launcher must not report
+leak a local path or credential. Register discovered photo and screenshot roots
+before their first startup log so both the already-active server sink and later
+face-analysis sinks inherit the same labels. The detached frontend launcher must not report
 READY until an independent lifecycle owner has established Windows
 `KILL_ON_JOB_CLOSE` or POSIX process-group/control-pipe cleanup and successfully
 started the target. Killing the returned supervisor, startup timeout, and
