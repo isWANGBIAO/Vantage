@@ -127,17 +127,11 @@ Set-Location $ProjectRoot
 
 try {
     Write-Host "[1/7] Installing frontend dependencies"
-    if ($env:CI -eq "true") {
-        Invoke-WithElectronMirrorFallback -Description "npm ci" -Action {
-            Invoke-Native -FilePath "npm" -ArgumentList @("ci") -WorkingDirectory $WebappRoot
-        }
-    } elseif (-not (Test-Path -LiteralPath (Join-Path $WebappRoot "node_modules"))) {
-        Invoke-WithElectronMirrorFallback -Description "npm install" -Action {
-            Invoke-Native -FilePath "npm" -ArgumentList @("install") -WorkingDirectory $WebappRoot
-        }
-    } else {
-        Write-Host "Frontend dependencies already installed"
-    }
+    Invoke-Native -FilePath "node" -ArgumentList @(
+        "scripts\sync-dependencies.cjs",
+        "--webapp-root",
+        $WebappRoot
+    ) -WorkingDirectory $WebappRoot
 
     Invoke-WithElectronMirrorFallback -Description "Electron binary preparation" -Action {
         Invoke-Native -FilePath "node" -ArgumentList @("node_modules\electron\install.js") -WorkingDirectory $WebappRoot

@@ -35,18 +35,10 @@ python src\scripts\cleanup_vantage_python_processes.py --include-desktop >nul 2>
 call :StepDone "Source cleanup complete"
 
 call :StepStart "[1/7] Checking frontend dependencies..."
-if not exist "%PROJECT_ROOT%src\webapp\node_modules" (
-    echo       Installing dependencies...
-    pushd "%PROJECT_ROOT%src\webapp"
-    call :RunNpmInstallWithFallback
-    if errorlevel 1 (
-        popd
-        echo       npm install failed
-        exit /b 1
-    )
-    popd
-) else (
-    echo       Dependencies already installed
+call node "%PROJECT_ROOT%src\webapp\scripts\sync-dependencies.cjs" --webapp-root "%PROJECT_ROOT%src\webapp"
+if errorlevel 1 (
+    echo       Frontend dependency synchronization failed
+    exit /b 1
 )
 pushd "%PROJECT_ROOT%src\webapp"
 call :EnsureElectronBinary
@@ -236,14 +228,6 @@ if defined ELECTRON_MIRROR (
     echo       Retrying Electron download with mirror fallback: !ELECTRON_MIRROR!
 )
 exit /b 0
-
-:RunNpmInstallWithFallback
-call npm install
-if not errorlevel 1 exit /b 0
-if defined ELECTRON_MIRROR exit /b 1
-call :UseElectronMirrorFallback
-call npm install
-exit /b %ERRORLEVEL%
 
 :EnsureElectronBinary
 call node node_modules\electron\install.js

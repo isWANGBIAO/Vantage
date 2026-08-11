@@ -72,10 +72,53 @@ def test_run_bat_retries_electron_downloads_with_mirror_fallback():
     run_bat = Path("run.bat").read_text(encoding="utf-8")
 
     assert "VANTAGE_ELECTRON_MIRROR_FALLBACK" in run_bat
-    assert "call :RunNpmInstallWithFallback" in run_bat
+    assert "scripts\\sync-dependencies.cjs" in run_bat
     assert "call :EnsureElectronBinary" in run_bat
     assert "call :RunElectronPackageWithFallback" in run_bat
     assert "Retrying Electron download with mirror fallback" in run_bat
+
+
+def test_persistent_launchers_share_validated_frontend_dependency_sync():
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
+    run_sh = Path("RUN.sh").read_text(encoding="utf-8")
+    run_dev_sh = Path("RUN_DEV.sh").read_text(encoding="utf-8")
+    release_script = Path("scripts/build-release-installer.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    sync_cli = "scripts\\sync-dependencies.cjs"
+    assert f"src\\webapp\\{sync_cli}" in run_bat
+    assert "scripts/sync-dependencies.cjs" in run_sh
+    assert "scripts/sync-dependencies.cjs" in run_dev_sh
+    assert sync_cli in release_script
+
+    assert 'if not exist "%PROJECT_ROOT%src\\webapp\\node_modules"' not in run_bat
+    assert 'npm --prefix "${FRONTEND_ROOT}" install' not in run_sh
+    assert 'npm --prefix "${FRONTEND_ROOT}" install' not in run_dev_sh
+    assert 'Join-Path $WebappRoot "node_modules"' not in release_script
+
+    assert "call npm install" not in run_bat
+    assert '@("install")' not in release_script
+
+    assert run_bat.index(sync_cli) < run_bat.index("call :EnsureElectronBinary")
+    assert release_script.index(sync_cli) < release_script.index(
+        'Invoke-WithElectronMirrorFallback -Description "Electron binary preparation"'
+    )
+
+
+def test_macos_frontend_sync_invalidates_native_stamp_before_resigning():
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+        sync_call = 'node "${FRONTEND_ROOT}/scripts/sync-dependencies.cjs"'
+        invalidate_argument = (
+            '--invalidate-stamp "$FRONTEND_NATIVE_CODESIGN_STAMP"'
+        )
+        codesign_call = "codesign_macos_frontend_binaries"
+
+        sync_index = launcher.index(sync_call)
+        invalidate_index = launcher.index(invalidate_argument, sync_index)
+        codesign_index = launcher.index(codesign_call, invalidate_index)
+        assert sync_index < invalidate_index < codesign_index
 
 
 def test_run_bat_primes_custom_nsis_archive_cache():

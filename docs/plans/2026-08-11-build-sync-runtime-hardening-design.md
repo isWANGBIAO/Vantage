@@ -80,6 +80,13 @@ to be reused. The Electron binary check remains after dependency sync. On
 macOS, a frontend rebuild invalidates the native codesign stamp so native
 modules are signed again.
 
+Every persistent entrypoint invokes `scripts/sync-dependencies.cjs` with an
+explicit `--webapp-root`. The two macOS launchers additionally pass their
+frontend native-signature stamp through `--invalidate-stamp`; the CLI removes
+that stamp only when it is about to mutate `node_modules`, and the existing
+signing function runs after a successful sync. `VANTAGE_FORCE_FRONTEND_DEPS=1`
+forces the same clean path without introducing a launcher-specific branch.
+
 ## Backend environment synchronization
 
 A stdlib-only Python CLI owns the dedicated runtime venv lifecycle. The state

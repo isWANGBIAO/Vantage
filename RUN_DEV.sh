@@ -226,12 +226,9 @@ raise SystemExit(1)
 PY
 
 echo "[3/4] Checking frontend dependencies..."
-if [[ ! -d "${FRONTEND_ROOT}/node_modules" ]]; then
-    echo "      Installing dependencies..."
-    npm --prefix "${FRONTEND_ROOT}" install
-else
-    echo "      Dependencies already installed"
-fi
+node "${FRONTEND_ROOT}/scripts/sync-dependencies.cjs" \
+    --webapp-root "$FRONTEND_ROOT" \
+    --invalidate-stamp "$FRONTEND_NATIVE_CODESIGN_STAMP"
 codesign_macos_frontend_binaries
 
 echo "[4/4] Launching Electron..."
