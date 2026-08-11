@@ -1235,45 +1235,62 @@ def update_storage_stats(
     scanners = {"photos": None, "screenshots": None}
     scanner_paths = {"photos": None, "screenshots": None}
 
-    while state.is_running:
-        try:
-            scan_truncated = False
-            sizes = {}
-            for key, configured_path in (
-                ("photos", state.photos_path),
-                ("screenshots", state.screenshots_path),
-            ):
-                normalized_path = (
-                    os.path.abspath(os.fspath(configured_path))
-                    if configured_path
-                    else None
-                )
-                if not normalized_path:
-                    scanners[key] = None
-                    scanner_paths[key] = None
-                    sizes[key] = 0
-                    continue
+    def close_scanner(key):
+        scanner = scanners[key]
+        scanners[key] = None
+        scanner_paths[key] = None
+        if scanner is None:
+            return
+        close = getattr(scanner, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as e:
+                print(f"Storage scanner close error: {e}")
 
-                if scanner_paths[key] != normalized_path:
-                    scanners[key] = scanner_factory(
-                        normalized_path,
-                        max_entries_per_step=max_entries_per_step,
-                        max_seconds_per_step=max_seconds_per_step,
-                        refresh_interval_seconds=refresh_interval_seconds,
-                        monotonic_clock=active_clock,
+    try:
+        while state.is_running:
+            try:
+                scan_truncated = False
+                sizes = {}
+                for key, configured_path in (
+                    ("photos", state.photos_path),
+                    ("screenshots", state.screenshots_path),
+                ):
+                    normalized_path = (
+                        os.path.abspath(os.fspath(configured_path))
+                        if configured_path
+                        else None
                     )
-                    scanner_paths[key] = normalized_path
+                    if not normalized_path:
+                        close_scanner(key)
+                        sizes[key] = 0
+                        continue
 
-                snapshot = scanners[key].step()
-                sizes[key] = snapshot.total_size
-                scan_truncated = scan_truncated or not snapshot.complete
+                    if scanner_paths[key] != normalized_path:
+                        close_scanner(key)
+                        scanners[key] = scanner_factory(
+                            normalized_path,
+                            max_entries_per_step=max_entries_per_step,
+                            max_seconds_per_step=max_seconds_per_step,
+                            refresh_interval_seconds=refresh_interval_seconds,
+                            monotonic_clock=active_clock,
+                        )
+                        scanner_paths[key] = normalized_path
 
-            state.photos_size = sizes["photos"]
-            state.screenshots_size = sizes["screenshots"]
-            state.storage_scan_truncated = scan_truncated
-        except Exception as e:
-            print(f"Storage stats update error: {e}")
-        active_sleep(STORAGE_STATS_UPDATE_INTERVAL_SECONDS)
+                    snapshot = scanners[key].step()
+                    sizes[key] = snapshot.total_size
+                    scan_truncated = scan_truncated or not snapshot.complete
+
+                state.photos_size = sizes["photos"]
+                state.screenshots_size = sizes["screenshots"]
+                state.storage_scan_truncated = scan_truncated
+            except Exception as e:
+                print(f"Storage stats update error: {e}")
+            active_sleep(STORAGE_STATS_UPDATE_INTERVAL_SECONDS)
+    finally:
+        for key in scanners:
+            close_scanner(key)
 
 # Balance Sheet helpers
 def _normalize_cell_value(value):

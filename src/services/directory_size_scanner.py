@@ -37,16 +37,50 @@ class DirectorySizeScanner:
         self._scandir_fn = scandir_fn
         self._getsize_fn = getsize_fn
         self._lock = threading.RLock()
+        self._current_iterator = None
+        self._current_iterator_owner = None
+        self._current_directory = None
+        self._current_directory_key = None
+        self._closed = False
         self._reset_scan_locked()
 
+    def _close_current_iterator_locked(self):
+        iterator = self._current_iterator
+        owner = self._current_iterator_owner
+        self._current_iterator = None
+        self._current_iterator_owner = None
+        self._current_directory = None
+        self._current_directory_key = None
+
+        closed_resources = set()
+        for resource in (iterator, owner):
+            if resource is None or id(resource) in closed_resources:
+                continue
+            closed_resources.add(id(resource))
+            close = getattr(resource, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except OSError:
+                    pass
+
     def _reset_scan_locked(self):
+        self._close_current_iterator_locked()
         self._pending_directories = deque([self.root])
-        self._current_entries = deque()
         self._visited_directories = set()
+        self._processed_entries = set()
         self._total_size = 0
         self._skipped_entries = 0
         self._complete = False
         self._completed_at = None
+
+    def close(self):
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._close_current_iterator_locked()
+            self._pending_directories.clear()
 
     def _snapshot_locked(self, entries_processed):
         return DirectorySizeScanSnapshot(
@@ -63,7 +97,7 @@ class DirectorySizeScanner:
         except (OSError, ValueError):
             return False
 
-    def _load_next_directory_locked(self, started_at):
+    def _open_next_directory_locked(self, started_at):
         while self._pending_directories:
             if self._time_budget_reached_locked(started_at):
                 return False
@@ -78,34 +112,60 @@ class DirectorySizeScanner:
                 continue
             if directory != self.root and os.path.islink(directory):
                 continue
-            self._visited_directories.add(directory_key)
 
-            iterator = None
+            owner = None
             try:
-                iterator = self._scandir_fn(directory)
-                entries = list(iterator)
+                owner = self._scandir_fn(directory)
+                iterator = iter(owner)
             except OSError:
-                self._skipped_entries += 1
-                continue
-            finally:
-                close = getattr(iterator, "close", None)
+                close = getattr(owner, "close", None)
                 if callable(close):
                     close()
+                if directory == self.root:
+                    self._pending_directories.appendleft(self.root)
+                    return False
+                self._skipped_entries += 1
+                continue
 
-            entries.sort(key=lambda entry: (os.path.normcase(entry.name), entry.name))
-            self._current_entries.extend(entries)
-            if self._current_entries:
-                return True
+            self._visited_directories.add(directory_key)
+            self._current_iterator = iterator
+            self._current_iterator_owner = owner
+            self._current_directory = directory
+            self._current_directory_key = directory_key
+            return True
         return False
 
     def _next_entry_locked(self, started_at):
-        while not self._current_entries:
-            if not self._load_next_directory_locked(started_at):
+        while True:
+            if self._time_budget_reached_locked(started_at):
                 return None
-        return self._current_entries.popleft()
+            if self._current_iterator is None:
+                if not self._open_next_directory_locked(started_at):
+                    return None
+                if self._time_budget_reached_locked(started_at):
+                    return None
+
+            try:
+                return next(self._current_iterator)
+            except StopIteration:
+                self._close_current_iterator_locked()
+            except OSError:
+                failed_directory = self._current_directory
+                failed_directory_key = self._current_directory_key
+                self._close_current_iterator_locked()
+                if failed_directory == self.root:
+                    self._visited_directories.discard(failed_directory_key)
+                    self._pending_directories.appendleft(self.root)
+                    return None
+                self._skipped_entries += 1
 
     def _process_entry_locked(self, entry):
         entry_path = Path(entry.path)
+        entry_key = os.path.normcase(os.path.abspath(os.fspath(entry_path)))
+        if entry_key in self._processed_entries:
+            return
+        self._processed_entries.add(entry_key)
+
         if not self._resolved_path_within_root(entry_path):
             self._skipped_entries += 1
             return
@@ -131,6 +191,9 @@ class DirectorySizeScanner:
 
     def step(self):
         with self._lock:
+            if self._closed:
+                raise RuntimeError("directory size scanner is closed")
+
             now = self._monotonic_clock()
             if self._complete:
                 cache_age = now - self._completed_at
@@ -152,14 +215,11 @@ class DirectorySizeScanner:
                 entry = self._next_entry_locked(started_at)
                 if entry is None:
                     break
-                if self._time_budget_reached_locked(started_at):
-                    self._current_entries.appendleft(entry)
-                    break
 
                 entries_processed += 1
                 self._process_entry_locked(entry)
 
-            if not self._current_entries and not self._pending_directories:
+            if self._current_iterator is None and not self._pending_directories:
                 self._complete = True
                 self._completed_at = self._monotonic_clock()
 

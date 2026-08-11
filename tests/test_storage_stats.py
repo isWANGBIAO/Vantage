@@ -139,7 +139,7 @@ class StorageStatsTests(unittest.TestCase):
                         seconds,
                     )
                 )
-                if len(snapshots) == 2:
+                if len(snapshots) == 3:
                     server.state.is_running = False
 
             try:
@@ -162,7 +162,10 @@ class StorageStatsTests(unittest.TestCase):
                     server.state.storage_scan_truncated,
                 ) = original_state
 
-        self.assertEqual(snapshots, [(1, 4, True, 60), (3, 4, False, 60)])
+        self.assertEqual(
+            snapshots,
+            [(1, 4, True, 60), (3, 4, True, 60), (3, 4, False, 60)],
+        )
 
     def test_update_storage_stats_restarts_scanner_when_path_changes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -211,6 +214,69 @@ class StorageStatsTests(unittest.TestCase):
                 ) = original_state
 
         self.assertEqual(observed_sizes, [1, 2])
+
+    def test_update_storage_stats_closes_scanners_on_path_change_and_shutdown(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            first = tmp / "first"
+            second = tmp / "second"
+            first.mkdir()
+            second.mkdir()
+            created = []
+            original_state = (
+                server.state.is_running,
+                server.state.photos_path,
+                server.state.screenshots_path,
+                server.state.photos_size,
+                server.state.screenshots_size,
+                server.state.storage_scan_truncated,
+            )
+
+            class TrackingScanner:
+                def __init__(self, root, **_kwargs):
+                    self.root = Path(root)
+                    self.closed = False
+                    created.append(self)
+
+                def step(self):
+                    return SimpleNamespace(total_size=1, complete=False)
+
+                def close(self):
+                    self.closed = True
+
+            cycles = []
+
+            def sleep_fn(_seconds):
+                cycles.append(len(cycles))
+                if len(cycles) == 1:
+                    server.state.photos_path = str(second)
+                else:
+                    server.state.is_running = False
+
+            try:
+                server.state.is_running = True
+                server.state.photos_path = str(first)
+                server.state.screenshots_path = None
+                server.update_storage_stats(
+                    max_entries_per_step=1,
+                    max_seconds_per_step=None,
+                    monotonic_clock=lambda: 0.0,
+                    sleep_fn=sleep_fn,
+                    scanner_factory=TrackingScanner,
+                )
+            finally:
+                (
+                    server.state.is_running,
+                    server.state.photos_path,
+                    server.state.screenshots_path,
+                    server.state.photos_size,
+                    server.state.screenshots_size,
+                    server.state.storage_scan_truncated,
+                ) = original_state
+
+        self.assertEqual([scanner.root for scanner in created], [first, second])
+        self.assertTrue(created[0].closed)
+        self.assertTrue(created[1].closed)
 
     def test_update_storage_stats_does_not_probe_completed_path_before_refresh(self):
         with tempfile.TemporaryDirectory() as tmpdir:
