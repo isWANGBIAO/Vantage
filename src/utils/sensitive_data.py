@@ -1,9 +1,13 @@
-import re
-from collections.abc import Mapping
+import codecs
 import os
+import re
+import threading
+from collections.abc import Mapping
 
 
 _LOG_REDACTION_FAILURE_TEXT = "[LOG_REDACTION_FAILED]"
+_LOG_RECORD_TOO_LARGE_TEXT = "[LOG_RECORD_DROPPED]"
+_MAX_LOG_RECORD_CHARS = 1024 * 1024
 
 
 def _looks_like_windows_path(value):
@@ -162,3 +166,142 @@ class RedactingTextStream:
 
     def __getattr__(self, name):
         return getattr(self._stream, name)
+
+
+class RedactingPipeLog:
+    """Persist stdout/stderr only after complete-record redaction.
+
+    File descriptors 1 and 2 are redirected to pipes so low-level ``os.write``
+    calls, native extensions, and inherited child-process output cannot bypass
+    the redaction layer.  Each reader buffers through a newline before applying
+    redaction, which keeps credentials and path prefixes intact when producers
+    split one record across multiple writes.
+    """
+
+    def __init__(
+        self,
+        log_path,
+        *,
+        path_prefixes=None,
+        redact_fn=redact_sensitive_text,
+        max_record_chars=_MAX_LOG_RECORD_CHARS,
+    ):
+        self._stream = open(log_path, "a", encoding="utf-8", buffering=1)
+        self._path_prefixes = dict(path_prefixes or {})
+        self._redact_fn = redact_fn
+        self._max_record_chars = max(1, int(max_record_chars))
+        self._write_lock = threading.Lock()
+        self._close_lock = threading.Lock()
+        self._redirected = []
+        self._closed = False
+
+    def redirect(self, fd, *, stream_name):
+        read_fd, write_fd = os.pipe()
+        try:
+            os.dup2(write_fd, fd, inheritable=True)
+        finally:
+            if write_fd != fd:
+                os.close(write_fd)
+
+        text_stream = open(
+            fd,
+            "w",
+            encoding="utf-8",
+            errors="backslashreplace",
+            buffering=1,
+            closefd=False,
+        )
+        reader = threading.Thread(
+            target=self._drain_pipe,
+            args=(read_fd,),
+            name=f"vantage-log-{stream_name}",
+            daemon=True,
+        )
+        reader.start()
+        self._redirected.append((fd, text_stream, reader))
+        return text_stream
+
+    def _persist(self, value):
+        try:
+            redacted = self._redact_fn(
+                value,
+                path_prefixes=self._path_prefixes,
+            )
+        except Exception:
+            redacted = _LOG_REDACTION_FAILURE_TEXT
+            if value.endswith("\n"):
+                redacted += "\n"
+        with self._write_lock:
+            self._stream.write(redacted)
+            self._stream.flush()
+
+    def _drain_pipe(self, read_fd):
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        pending = ""
+        dropping_oversized_record = False
+        try:
+            while True:
+                chunk = os.read(read_fd, 8192)
+                if not chunk:
+                    pending += decoder.decode(b"", final=True)
+                    break
+                pending += decoder.decode(chunk)
+
+                while True:
+                    newline_index = pending.find("\n")
+                    if newline_index < 0:
+                        break
+                    record = pending[: newline_index + 1]
+                    pending = pending[newline_index + 1 :]
+                    if dropping_oversized_record:
+                        dropping_oversized_record = False
+                    elif len(record) > self._max_record_chars:
+                        self._persist(_LOG_RECORD_TOO_LARGE_TEXT + "\n")
+                    else:
+                        self._persist(record)
+
+                if not dropping_oversized_record and len(pending) > self._max_record_chars:
+                    self._persist(_LOG_RECORD_TOO_LARGE_TEXT + "\n")
+                    pending = ""
+                    dropping_oversized_record = True
+
+            if pending and not dropping_oversized_record:
+                if len(pending) > self._max_record_chars:
+                    self._persist(_LOG_RECORD_TOO_LARGE_TEXT + "\n")
+                else:
+                    self._persist(pending)
+        finally:
+            try:
+                os.close(read_fd)
+            except OSError:
+                pass
+
+    def close(self):
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+
+            redirected = list(self._redirected)
+            for _fd, text_stream, _reader in redirected:
+                try:
+                    text_stream.flush()
+                except (OSError, ValueError):
+                    pass
+                try:
+                    text_stream.close()
+                except (OSError, ValueError):
+                    pass
+            for fd, _text_stream, _reader in redirected:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            for _fd, _text_stream, reader in redirected:
+                reader.join(timeout=5)
+
+            with self._write_lock:
+                try:
+                    self._stream.flush()
+                finally:
+                    self._stream.close()

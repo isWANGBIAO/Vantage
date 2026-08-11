@@ -1,3 +1,4 @@
+import atexit
 import importlib
 import os
 import runpy
@@ -23,7 +24,7 @@ PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
 from src.core.config import Config
 from src.core.runtime_library_bootstrap import apply_runtime_library_dirs
-from src.utils.sensitive_data import RedactingTextStream
+from src.utils.sensitive_data import RedactingPipeLog
 
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
@@ -34,18 +35,14 @@ PACKAGED_RUNTIME_REQUIRED_IMPORTS = (
 
 
 def _redirect_standard_streams(log_path: Path, *, path_prefixes=None):
-    log_file = open(log_path, "a", encoding="utf-8", buffering=1)
-    os.dup2(log_file.fileno(), 1)
-    os.dup2(log_file.fileno(), 2)
-    sys.stdout = RedactingTextStream(
-        open(1, "w", encoding="utf-8", buffering=1, closefd=False),
+    pipe_log = RedactingPipeLog(
+        log_path,
         path_prefixes=path_prefixes,
     )
-    sys.stderr = RedactingTextStream(
-        open(2, "w", encoding="utf-8", buffering=1, closefd=False),
-        path_prefixes=path_prefixes,
-    )
-    return log_file
+    sys.stdout = pipe_log.redirect(1, stream_name="stdout")
+    sys.stderr = pipe_log.redirect(2, stream_name="stderr")
+    atexit.register(pipe_log.close)
+    return pipe_log
 
 
 def _prepare_server_runtime_log(logs_dir: Path, launched_at: datetime):

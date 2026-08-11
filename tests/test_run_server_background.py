@@ -144,6 +144,61 @@ def test_redirect_standard_streams_sanitizes_stdout_and_stderr_before_persistenc
     assert "server.py" in persisted
 
 
+def test_redirect_standard_streams_redacts_split_fd_and_child_process_writes(
+    tmp_path,
+):
+    log_path = tmp_path / "server.log"
+    private_home = tmp_path / "Users" / "Alice"
+    secret = "bearer-secret-1234567890"
+    script = "\n".join(
+        (
+            "import os",
+            "import subprocess",
+            "import sys",
+            "from pathlib import Path",
+            "from src.scripts.run_server_background import _redirect_standard_streams",
+            "log_path = Path(sys.argv[1])",
+            "private_home = sys.argv[2]",
+            "secret = sys.argv[3]",
+            "_redirect_standard_streams(",
+            "    log_path,",
+            "    path_prefixes={'<USER_HOME>': private_home},",
+            ")",
+            "private_bytes = private_home.encode('utf-8')",
+            "split = max(1, len(private_bytes) // 2)",
+            "os.write(1, b'fd path=' + private_bytes[:split])",
+            "os.write(1, private_bytes[split:] + b'/private/secret.txt\\n')",
+            "secret_bytes = secret.encode('utf-8')",
+            "os.write(2, b'Authorization: Bea')",
+            "os.write(2, b'rer ' + secret_bytes + b'\\n')",
+            "child = subprocess.run(",
+            "    [sys.executable, '-c', \"import os; os.write(1, b'child path=' + os.environ['PRIVATE_FILE'].encode() + b'\\\\n')\"],",
+            "    env={**os.environ, 'PRIVATE_FILE': private_home + '/child.txt'},",
+            "    check=False,",
+            ")",
+            "raise SystemExit(child.returncode)",
+        )
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(log_path), str(private_home), secret],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+
+    assert result.returncode == 0, result.stderr
+    persisted = log_path.read_text(encoding="utf-8")
+    assert "Alice" not in persisted
+    assert secret not in persisted
+    assert "Authorization: Bearer [REDACTED_TOKEN]" in persisted
+    assert persisted.count("<USER_HOME>") == 2
+    assert "private/secret.txt" in persisted
+    assert "child.txt" in persisted
+
+
 def test_ensure_project_root_on_sys_path_returns_repo_root():
     launcher = _load_launcher_module()
 
