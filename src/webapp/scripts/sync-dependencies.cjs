@@ -16,6 +16,162 @@ const DEPENDENCY_SYNC_COMMAND_POLL_MILLISECONDS = 10;
 const DEPENDENCY_SYNC_COMMAND_TERMINATION_GRACE_MILLISECONDS = 2_000;
 const DEPENDENCY_SYNC_LOCK_HELPER_ARGUMENT = '--dependency-sync-lock-helper';
 const LOCK_SLEEP_ARRAY = new Int32Array(new SharedArrayBuffer(4));
+const WINDOWS_COMMAND_JOB_OWNER_SOURCE = String.raw`
+import ctypes
+from ctypes import wintypes
+import json
+import subprocess
+import sys
+import time
+
+class IOCounters(ctypes.Structure):
+    _fields_ = [
+        ('ReadOperationCount', ctypes.c_ulonglong),
+        ('WriteOperationCount', ctypes.c_ulonglong),
+        ('OtherOperationCount', ctypes.c_ulonglong),
+        ('ReadTransferCount', ctypes.c_ulonglong),
+        ('WriteTransferCount', ctypes.c_ulonglong),
+        ('OtherTransferCount', ctypes.c_ulonglong),
+    ]
+
+class BasicLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ('PerProcessUserTimeLimit', wintypes.LARGE_INTEGER),
+        ('PerJobUserTimeLimit', wintypes.LARGE_INTEGER),
+        ('LimitFlags', wintypes.DWORD),
+        ('MinimumWorkingSetSize', ctypes.c_size_t),
+        ('MaximumWorkingSetSize', ctypes.c_size_t),
+        ('ActiveProcessLimit', wintypes.DWORD),
+        ('Affinity', ctypes.c_size_t),
+        ('PriorityClass', wintypes.DWORD),
+        ('SchedulingClass', wintypes.DWORD),
+    ]
+
+class ExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ('BasicLimitInformation', BasicLimitInformation),
+        ('IoInfo', IOCounters),
+        ('ProcessMemoryLimit', ctypes.c_size_t),
+        ('JobMemoryLimit', ctypes.c_size_t),
+        ('PeakProcessMemoryUsed', ctypes.c_size_t),
+        ('PeakJobMemoryUsed', ctypes.c_size_t),
+    ]
+
+class BasicAccountingInformation(ctypes.Structure):
+    _fields_ = [
+        ('TotalUserTime', wintypes.LARGE_INTEGER),
+        ('TotalKernelTime', wintypes.LARGE_INTEGER),
+        ('ThisPeriodTotalUserTime', wintypes.LARGE_INTEGER),
+        ('ThisPeriodTotalKernelTime', wintypes.LARGE_INTEGER),
+        ('TotalPageFaultCount', wintypes.DWORD),
+        ('TotalProcesses', wintypes.DWORD),
+        ('ActiveProcesses', wintypes.DWORD),
+        ('TotalTerminatedProcesses', wintypes.DWORD),
+    ]
+
+SUPERVISOR_SOURCE = '''
+import json
+import subprocess
+import sys
+
+payload = json.loads(sys.stdin.buffer.read())
+child = subprocess.Popen(
+    payload['command'],
+    cwd=payload['cwd'],
+    stdin=subprocess.DEVNULL,
+)
+raise SystemExit(child.wait())
+'''
+
+kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+kernel32.SetInformationJobObject.argtypes = [
+    wintypes.HANDLE,
+    ctypes.c_int,
+    ctypes.c_void_p,
+    wintypes.DWORD,
+]
+kernel32.SetInformationJobObject.restype = wintypes.BOOL
+kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+kernel32.TerminateJobObject.restype = wintypes.BOOL
+kernel32.QueryInformationJobObject.argtypes = [
+    wintypes.HANDLE,
+    ctypes.c_int,
+    ctypes.c_void_p,
+    wintypes.DWORD,
+    ctypes.POINTER(wintypes.DWORD),
+]
+kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+
+payload = json.loads(sys.stdin.buffer.read())
+job = kernel32.CreateJobObjectW(None, None)
+if not job:
+    raise SystemExit(125)
+
+supervisor = None
+try:
+    limits = ExtendedLimitInformation()
+    limits.BasicLimitInformation.LimitFlags = 0x00002000
+    if not kernel32.SetInformationJobObject(
+        job,
+        9,
+        ctypes.byref(limits),
+        ctypes.sizeof(limits),
+    ):
+        raise SystemExit(125)
+
+    supervisor = subprocess.Popen(
+        [sys.executable, '-c', SUPERVISOR_SOURCE],
+        stdin=subprocess.PIPE,
+        creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200),
+    )
+    if not kernel32.AssignProcessToJobObject(
+        job,
+        wintypes.HANDLE(int(supervisor._handle)),
+    ):
+        supervisor.kill()
+        supervisor.wait()
+        raise SystemExit(125)
+
+    command_payload = json.dumps(
+        {'command': payload['command'], 'cwd': payload['cwd']},
+        ensure_ascii=True,
+    ).encode('utf-8')
+    supervisor.stdin.write(command_payload)
+    supervisor.stdin.close()
+    status = supervisor.wait()
+
+    if not kernel32.TerminateJobObject(job, 1):
+        raise SystemExit(125)
+    deadline = time.monotonic() + 5.0
+    while True:
+        accounting = BasicAccountingInformation()
+        returned_length = wintypes.DWORD()
+        if not kernel32.QueryInformationJobObject(
+            job,
+            1,
+            ctypes.byref(accounting),
+            ctypes.sizeof(accounting),
+            ctypes.byref(returned_length),
+        ):
+            raise SystemExit(125)
+        if accounting.ActiveProcesses == 0:
+            break
+        if time.monotonic() >= deadline:
+            raise SystemExit(125)
+        time.sleep(0.01)
+    raise SystemExit(status)
+finally:
+    if supervisor is not None and supervisor.poll() is None:
+        kernel32.TerminateJobObject(job, 1)
+        supervisor.wait(timeout=5.0)
+    kernel32.CloseHandle(job)
+`;
 const STATE_FIELDS = Object.freeze([
   'packageLockSha256',
   'nodeVersion',
@@ -457,6 +613,28 @@ function writeHelperJsonAtomically(targetPath, payload) {
   }
 }
 
+function spawnWindowsOwnedCommand(execution, options) {
+  const pythonExecutable = process.env.VANTAGE_PYTHON_EXECUTABLE || 'python';
+  const child = spawn(
+    pythonExecutable,
+    ['-c', WINDOWS_COMMAND_JOB_OWNER_SOURCE],
+    {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ['pipe', 'inherit', 'inherit'],
+      windowsHide: true,
+    },
+  );
+  child.stdin.on('error', () => {
+    // A launch failure is reported by the Job owner process exit status.
+  });
+  child.stdin.end(JSON.stringify({
+    command: [execution.command, ...execution.args],
+    cwd: options.cwd,
+  }));
+  return child;
+}
+
 function runDependencySyncLockHelper() {
   const lockPath = process.env.VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_PATH;
   const token = process.env.VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_TOKEN;
@@ -655,13 +833,19 @@ function runDependencySyncLockHelper() {
       args: request.args,
       env: commandEnvironment,
     });
-    const child = spawn(execution.command, execution.args, {
-      cwd: path.dirname(path.dirname(lockPath)),
-      env: commandEnvironment,
-      stdio: 'inherit',
-      detached: process.platform !== 'win32',
-      windowsHide: true,
-    });
+    const commandWorkingDirectory = path.dirname(path.dirname(lockPath));
+    const child = process.platform === 'win32'
+      ? spawnWindowsOwnedCommand(execution, {
+        cwd: commandWorkingDirectory,
+        env: commandEnvironment,
+      })
+      : spawn(execution.command, execution.args, {
+        cwd: commandWorkingDirectory,
+        env: commandEnvironment,
+        stdio: 'inherit',
+        detached: true,
+        windowsHide: true,
+      });
     activeCommand = {
       child,
       requestId: request.requestId,
@@ -689,6 +873,9 @@ function runDependencySyncLockHelper() {
       activeCommand.status = status;
       activeCommand.signal = signal;
       activeCommand.exited = true;
+      if (process.platform === 'win32') {
+        activeCommand.treeTerminationConfirmed = true;
+      }
       finishActiveCommand();
     });
   }

@@ -111,6 +111,23 @@ async function waitFor(predicate, message, timeoutMilliseconds = 5000) {
   assert.fail(message);
 }
 
+async function removeFixtureWhenIdle(webappRoot) {
+  await waitFor(
+    () => {
+      try {
+        rmSync(webappRoot, { recursive: true, force: true });
+        return true;
+      } catch (error) {
+        if (error?.code === 'EPERM') {
+          return false;
+        }
+        throw error;
+      }
+    },
+    'the command fixture remained busy after descendant cleanup',
+  );
+}
+
 function readEventLines(eventsPath) {
   if (!existsSync(eventsPath)) {
     return [];
@@ -330,13 +347,16 @@ if (command === 'ci') {
     const mutator = spawn(
       process.execPath,
       ['-e', 'setInterval(() => {}, 1000)'],
-      { stdio: 'ignore' },
+      { detached: process.platform === 'win32', stdio: 'ignore' },
     );
+    mutator.unref();
     fs.writeFileSync(mutatorPidPath, String(mutator.pid), 'utf8');
-    while (!fs.existsSync(releasePath)) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    if (process.env.NORMAL_EXIT_WITH_DESCENDANT !== '1') {
+      while (!fs.existsSync(releasePath)) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+      mutator.kill('SIGTERM');
     }
-    mutator.kill('SIGTERM');
   } else if (fs.existsSync(mutatorPidPath)) {
     const mutatorPid = Number(fs.readFileSync(mutatorPidPath, 'utf8'));
     if (Number.isSafeInteger(mutatorPid) && processIsAlive(mutatorPid)) {
@@ -1295,6 +1315,68 @@ test('a crashed owner keeps its lease until the mutating command tree stops', as
       }
     }
     rmSync(webappRoot, { recursive: true, force: true });
+  }
+});
+
+test('a successful command cannot publish state while a descendant is still alive', async () => {
+  const webappRoot = createWebappFixture();
+  const workerPath = writeDefaultCommandSyncWorker(webappRoot);
+  const { binDirectory: fakeBinDirectory, npmPath } = writeCrashFixtureNpm(webappRoot);
+  const eventsPath = path.join(webappRoot, 'success-tree-events.log');
+  const mutatorPidPath = path.join(webappRoot, 'success-tree-mutator.pid');
+  const releasePath = path.join(webappRoot, 'unused-release');
+  const worker = spawnSyncWorker({
+    workerPath,
+    webappRoot,
+    workerId: 'holder',
+    eventsPath,
+    releasePath,
+    signStampPath: '',
+    extraEnv: {
+      EVENTS_PATH: eventsPath,
+      MUTATOR_PID_PATH: mutatorPidPath,
+      RELEASE_PATH: releasePath,
+      PATH: `${fakeBinDirectory}${path.delimiter}${process.env.PATH || ''}`,
+      npm_execpath: npmPath,
+      NORMAL_EXIT_WITH_DESCENDANT: '1',
+    },
+  });
+
+  try {
+    const result = await worker.completion;
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(existsSync(statePathFor(webappRoot)), true);
+    const mutatorPid = Number(readFileSync(mutatorPidPath, 'utf8'));
+    assert.throws(
+      () => process.kill(mutatorPid, 0),
+      (error) => error?.code === 'ESRCH',
+      'the dependency state was published before the descendant stopped',
+    );
+  } finally {
+    worker.child.kill('SIGKILL');
+    await Promise.allSettled([worker.completion]);
+    if (existsSync(mutatorPidPath)) {
+      const mutatorPid = Number(readFileSync(mutatorPidPath, 'utf8'));
+      if (Number.isSafeInteger(mutatorPid)) {
+        try {
+          process.kill(mutatorPid, 'SIGKILL');
+        } catch {
+          // The command guardian already stopped the descendant.
+        }
+        await waitFor(
+          () => {
+            try {
+              process.kill(mutatorPid, 0);
+              return false;
+            } catch {
+              return true;
+            }
+          },
+          'the descendant did not stop during test cleanup',
+        );
+      }
+    }
+    await removeFixtureWhenIdle(webappRoot);
   }
 });
 
