@@ -64,3 +64,109 @@ jobs:
       - name: Build frontend
         run: npm run build
         working-directory: src/webapp
+
+  macos-runtime-smoke:
+    name: macOS packaged runtime smoke (${{ matrix.architecture }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            architecture: arm64
+            uname: arm64
+          - runner: macos-15-intel
+            architecture: x64
+            uname: x86_64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+          cache: npm
+          cache-dependency-path: src/webapp/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements-core.txt
+            requirements-ci.txt
+            requirements-backend-runtime-gpu.txt
+      - name: Check runner architecture
+        run: test "$(uname -m)" = "${{ matrix.uname }}"
+      - name: Exercise POSIX runtime and macOS signing safety contracts
+        run: |
+          python -m venv .venv-lock-test
+          pytest_requirement="$(grep -E '^pytest==[^[:space:]]+$' requirements-ci.txt)"
+          psutil_requirement="$(grep -E '^psutil==[^[:space:]]+$' requirements-core.txt)"
+          test -n "$pytest_requirement"
+          test -n "$psutil_requirement"
+          .venv-lock-test/bin/python -m pip install "$pytest_requirement" "$psutil_requirement"
+          .venv-lock-test/bin/python -m pytest \
+            tests/test_backend_runtime_lock.py \
+            tests/test_sign_macos_backend_runtime.py \
+            tests/test_sign_macos_artifacts.py \
+            tests/test_macos_cleanup_launcher.py \
+            -q
+      - name: Exercise frontend native artifact signer and cache verification
+        run: |
+          node src/webapp/scripts/sync-dependencies.cjs \
+            --webapp-root src/webapp \
+            --invalidate-stamp src/webapp/node_modules/.macos-native-codesign.sha256
+          python src/scripts/sign_macos_artifacts.py \
+            --project-root . \
+            --root src/webapp/node_modules \
+            --profile frontend \
+            --stamp src/webapp/node_modules/.macos-native-codesign.sha256
+          cached_output="$(python src/scripts/sign_macos_artifacts.py \
+            --project-root . \
+            --root src/webapp/node_modules \
+            --profile frontend \
+            --stamp src/webapp/node_modules/.macos-native-codesign.sha256)"
+          echo "$cached_output"
+          grep -q "signatures verified" <<<"$cached_output"
+      - name: Synchronize packaged runtime dependencies in the dedicated environment
+        run: |
+          python src/scripts/sync_backend_runtime_environment.py \
+            --project-root . \
+            --venv .venv-backend-runtime-gpu \
+            --core-requirements requirements-core.txt \
+            --requirements requirements-backend-runtime-gpu.txt \
+            --opencv-normalizer src/scripts/normalize_opencv_installation.py
+      - name: Check packaged runtime dependencies
+        run: .venv-backend-runtime-gpu/bin/python -m pip check
+      - name: Prewarm OpenCV YuNet detector
+        run: |
+          .venv-backend-runtime-gpu/bin/python -c "import cv2, numpy as np; from pathlib import Path; model = Path('src/models/face_detection_yunet_2023mar.onnx'); detector = cv2.FaceDetectorYN_create(str(model), '', (640, 640), 0.5, 0.3, 5000); assert detector is not None; detector.detect(np.zeros((640, 640, 3), dtype=np.uint8))"
+      - name: Sign backend runtime native libraries
+        run: |
+          python src/scripts/sign_macos_backend_runtime.py \
+            --project-root . \
+            --venv .venv-backend-runtime-gpu \
+            --state .venv-backend-runtime-gpu/.vantage-backend-runtime-state.json \
+            --stamp .venv-backend-runtime-gpu/.macos-native-codesign.sha256
+          test -f .venv-backend-runtime-gpu/.macos-native-codesign.sha256
+      - name: Verify cached signature state
+        run: |
+          cached_output="$(python src/scripts/sign_macos_backend_runtime.py \
+            --project-root . \
+            --venv .venv-backend-runtime-gpu \
+            --state .venv-backend-runtime-gpu/.vantage-backend-runtime-state.json \
+            --stamp .venv-backend-runtime-gpu/.macos-native-codesign.sha256)"
+          echo "$cached_output"
+          grep -q "signatures verified" <<<"$cached_output"
+      - name: Tamper state and require signature refresh
+        run: |
+          printf '\n' >> .venv-backend-runtime-gpu/.vantage-backend-runtime-state.json
+          refresh_output="$(python src/scripts/sign_macos_backend_runtime.py \
+            --project-root . \
+            --venv .venv-backend-runtime-gpu \
+            --state .venv-backend-runtime-gpu/.vantage-backend-runtime-state.json \
+            --stamp .venv-backend-runtime-gpu/.macos-native-codesign.sha256)"
+          echo "$refresh_output"
+          grep -q "signatures refreshed" <<<"$refresh_output"
+      - name: Check macOS launcher syntax
+        run: bash -n RUN.sh RUN_DEV.sh

@@ -1,0 +1,492 @@
+from __future__ import annotations
+
+import hashlib
+from importlib import metadata
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import stat
+import sys
+import tempfile
+from typing import Iterable, Mapping, Sequence
+
+
+BACKEND_ENVIRONMENT_STATE_NAME = ".vantage-backend-runtime-state.json"
+BACKEND_ENVIRONMENT_STATE_SCHEMA_VERSION = 3
+LEGACY_REQUIREMENTS_STAMP_NAME = ".requirements-backend-runtime-gpu.sha256"
+PINNED_BOOTSTRAP_PIP = "pip==25.3"
+BACKEND_RUNTIME_VENV_NAME = ".venv-backend-runtime-gpu"
+BACKEND_ENVIRONMENT_INTEGRITY_SCHEMA_VERSION = 1
+_MACOS_CODESIGN_STAMP_NAME = ".macos-native-codesign.sha256"
+_CODESIGN_STAGING_PREFIX = ".vantage-codesign-staging-"
+_REGENERABLE_DIRECTORY_NAMES = {"__pycache__"}
+_MACOS_SIGNED_FILE_SUFFIXES = {".dylib", ".so"}
+
+
+def canonicalize_distribution_name(name: str) -> str:
+    normalized = re.sub(r"[-_.]+", "-", str(name).strip()).lower()
+    if not normalized:
+        raise ValueError("distribution name must not be empty")
+    return normalized
+
+
+def normalize_distribution_closure(
+    distributions: Iterable[str | Sequence[str] | Mapping[str, object]],
+) -> list[str]:
+    normalized: dict[str, str] = {}
+    for distribution in distributions:
+        if isinstance(distribution, str):
+            name, separator, version = distribution.partition("==")
+            if not separator:
+                raise ValueError(
+                    f"distribution entry must use exact name==version syntax: {distribution}"
+                )
+        elif isinstance(distribution, Mapping):
+            name = str(distribution.get("name", ""))
+            version = str(distribution.get("version", ""))
+        else:
+            if len(distribution) != 2:
+                raise ValueError("distribution tuple must contain name and version")
+            name, version = str(distribution[0]), str(distribution[1])
+
+        canonical_name = canonicalize_distribution_name(name)
+        exact_version = str(version).strip()
+        if not exact_version:
+            raise ValueError(f"distribution version must not be empty: {canonical_name}")
+        previous = normalized.get(canonical_name)
+        if previous is not None and previous != exact_version:
+            raise ValueError(
+                f"conflicting versions for {canonical_name}: {previous} and {exact_version}"
+            )
+        normalized[canonical_name] = exact_version
+
+    return [f"{name}=={normalized[name]}" for name in sorted(normalized)]
+
+
+def installed_distribution_closure() -> list[str]:
+    return normalize_distribution_closure(
+        {
+            "name": distribution.metadata.get("Name") or distribution.name,
+            "version": distribution.version,
+        }
+        for distribution in metadata.distributions()
+    )
+
+
+def current_python_identity() -> dict[str, str]:
+    return {
+        "implementation": platform.python_implementation(),
+        "version": platform.python_version(),
+        "cache_tag": str(getattr(sys.implementation, "cache_tag", "")),
+    }
+
+
+def current_platform_identity() -> dict[str, str]:
+    return {
+        "sys_platform": sys.platform,
+        "system": platform.system(),
+        "machine": platform.machine(),
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _is_windows_reparse_point(file_stat) -> bool:
+    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    return bool(int(getattr(file_stat, "st_file_attributes", 0)) & reparse_flag)
+
+
+def _environment_integrity_file_is_excluded(
+    relative_path: Path,
+    *,
+    platform_name: str,
+) -> bool:
+    is_root_entry = len(relative_path.parts) == 1
+    if is_root_entry and relative_path.name in {
+        BACKEND_ENVIRONMENT_STATE_NAME,
+        _MACOS_CODESIGN_STAMP_NAME,
+    }:
+        return True
+    if is_root_entry and relative_path.name.startswith(
+        f".{BACKEND_ENVIRONMENT_STATE_NAME}."
+    ):
+        return True
+    if (
+        platform_name == "darwin"
+        and len(relative_path.parts) > 1
+        and relative_path.parts[0] == "lib"
+        and relative_path.suffix.lower() in _MACOS_SIGNED_FILE_SUFFIXES
+    ):
+        return True
+    return False
+
+
+def _environment_integrity_root_identity(root: Path) -> tuple[int, int, int, int]:
+    root_stat = root.lstat()
+    if (
+        not stat.S_ISDIR(root_stat.st_mode)
+        or stat.S_ISLNK(root_stat.st_mode)
+        or _is_windows_reparse_point(root_stat)
+    ):
+        raise ValueError("backend environment integrity root must be a plain directory")
+    return (
+        int(root_stat.st_dev),
+        int(root_stat.st_ino),
+        int(stat.S_IFMT(root_stat.st_mode)),
+        int(getattr(root_stat, "st_file_attributes", 0)),
+    )
+
+
+def _environment_integrity_entry_identity(file_stat) -> dict[str, int]:
+    return {
+        "device": int(file_stat.st_dev),
+        "inode": int(file_stat.st_ino),
+        "mode": int(file_stat.st_mode),
+        "bytes": int(file_stat.st_size),
+        "mtime_ns": int(file_stat.st_mtime_ns),
+        "attributes": int(getattr(file_stat, "st_file_attributes", 0)),
+    }
+
+
+def _scan_backend_environment_metadata(
+    root: Path,
+    *,
+    platform_name: str,
+) -> tuple[tuple[int, int, int, int] | None, list[dict[str, object]]]:
+    if not os.path.lexists(root):
+        return None, []
+
+    root_identity = _environment_integrity_root_identity(root)
+    records: list[dict[str, object]] = []
+    pending_directories = [root]
+    while pending_directories:
+        directory = pending_directories.pop()
+        with os.scandir(directory) as iterator:
+            entries = sorted(iterator, key=lambda entry: entry.name)
+        for entry in entries:
+            path = Path(entry.path)
+            relative_path = path.relative_to(root)
+            entry_stat = path.lstat()
+            is_link = stat.S_ISLNK(entry_stat.st_mode) or _is_windows_reparse_point(
+                entry_stat
+            )
+            if is_link:
+                try:
+                    target = os.readlink(path)
+                except OSError:
+                    target = (
+                        "reparse:"
+                        f"{int(getattr(entry_stat, 'st_file_attributes', 0))}"
+                    )
+                records.append(
+                    {
+                        "path": relative_path.as_posix(),
+                        "kind": "link",
+                        "target": target,
+                        **_environment_integrity_entry_identity(entry_stat),
+                    }
+                )
+                continue
+            if stat.S_ISDIR(entry_stat.st_mode):
+                if (
+                    entry.name in _REGENERABLE_DIRECTORY_NAMES
+                    or (
+                        directory == root
+                        and entry.name.startswith(_CODESIGN_STAGING_PREFIX)
+                    )
+                ):
+                    continue
+                pending_directories.append(path)
+                continue
+            if not stat.S_ISREG(entry_stat.st_mode):
+                raise ValueError(
+                    "backend environment integrity contains an unsupported file type: "
+                    f"{relative_path.as_posix()}"
+                )
+            if _environment_integrity_file_is_excluded(
+                relative_path,
+                platform_name=platform_name,
+            ):
+                continue
+            records.append(
+                {
+                    "path": relative_path.as_posix(),
+                    "kind": "file",
+                    **_environment_integrity_entry_identity(entry_stat),
+                }
+            )
+
+    if _environment_integrity_root_identity(root) != root_identity:
+        raise RuntimeError(
+            "backend environment root changed while computing integrity"
+        )
+    return root_identity, sorted(records, key=lambda item: str(item["path"]))
+
+
+def compute_backend_environment_integrity(
+    venv: str | Path,
+    *,
+    platform_name: str | None = None,
+) -> dict[str, object]:
+    """Hash the stable physical file closure of a backend runtime venv.
+
+    Generated bytecode and local codesign bookkeeping are excluded. On macOS,
+    native libraries are covered by the separately verified codesign closure;
+    omitting them here prevents legitimate signing from invalidating the Python
+    environment state that the signer itself consumes.
+    """
+
+    root = Path(os.path.abspath(os.fspath(venv)))
+    resolved_platform = str(platform_name or sys.platform)
+    records: list[dict[str, object]] = []
+    total_bytes = 0
+    file_count = 0
+    link_count = 0
+    initial_root_identity, initial_metadata = _scan_backend_environment_metadata(
+        root,
+        platform_name=resolved_platform,
+    )
+    for metadata_record in initial_metadata:
+        relative_path = str(metadata_record["path"])
+        if metadata_record["kind"] == "link":
+            records.append(
+                {
+                    "path": relative_path,
+                    "kind": "link",
+                    "target": metadata_record["target"],
+                }
+            )
+            link_count += 1
+            continue
+
+        path = root / relative_path
+        expected_identity = {
+            key: metadata_record[key]
+            for key in (
+                "device",
+                "inode",
+                "mode",
+                "bytes",
+                "mtime_ns",
+                "attributes",
+            )
+        }
+        before_stat = path.lstat()
+        if (
+            not stat.S_ISREG(before_stat.st_mode)
+            or _is_windows_reparse_point(before_stat)
+            or _environment_integrity_entry_identity(before_stat) != expected_identity
+        ):
+            raise RuntimeError(
+                "backend environment file changed while computing integrity: "
+                f"{relative_path}"
+            )
+        content_hash = _sha256_file(path)
+        after_stat = path.lstat()
+        if (
+            not stat.S_ISREG(after_stat.st_mode)
+            or _is_windows_reparse_point(after_stat)
+            or _environment_integrity_entry_identity(after_stat) != expected_identity
+        ):
+            raise RuntimeError(
+                "backend environment file changed while computing integrity: "
+                f"{relative_path}"
+            )
+        records.append(
+            {
+                "path": relative_path,
+                "kind": "file",
+                "bytes": metadata_record["bytes"],
+                "mode": int(stat.S_IMODE(int(metadata_record["mode"]))),
+                "sha256": content_hash,
+            }
+        )
+        file_count += 1
+        total_bytes += int(metadata_record["bytes"])
+
+    final_root_identity, final_metadata = _scan_backend_environment_metadata(
+        root,
+        platform_name=resolved_platform,
+    )
+    if (
+        final_root_identity != initial_root_identity
+        or final_metadata != initial_metadata
+    ):
+        raise RuntimeError(
+            "backend environment closure changed while computing integrity"
+        )
+
+    digest = hashlib.sha256()
+    digest.update(
+        json.dumps(
+            {
+                "schema_version": BACKEND_ENVIRONMENT_INTEGRITY_SCHEMA_VERSION,
+                "platform": resolved_platform,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    for record in sorted(records, key=lambda item: str(item["path"])):
+        digest.update(
+            json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        )
+    return {
+        "schema_version": BACKEND_ENVIRONMENT_INTEGRITY_SCHEMA_VERSION,
+        "algorithm": "sha256",
+        "platform": resolved_platform,
+        "digest": digest.hexdigest(),
+        "file_count": file_count,
+        "link_count": link_count,
+        "total_bytes": total_bytes,
+    }
+
+
+def compute_requirements_sha256(
+    core_requirements: str | Path,
+    requirements: str | Path,
+) -> str:
+    inputs = [
+        {
+            "role": "core",
+            "sha256": _sha256_file(Path(core_requirements).resolve()),
+        },
+        {
+            "role": "overlay",
+            "sha256": _sha256_file(Path(requirements).resolve()),
+        },
+    ]
+    payload = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def build_backend_environment_state(
+    core_requirements: str | Path,
+    requirements: str | Path,
+    *,
+    python_identity: Mapping[str, object] | None = None,
+    platform_identity: Mapping[str, object] | None = None,
+    distributions: Iterable[str | Sequence[str] | Mapping[str, object]] | None = None,
+    bootstrap_pip: str = PINNED_BOOTSTRAP_PIP,
+    environment_integrity: Mapping[str, object] | None = None,
+    venv: str | Path | None = None,
+) -> dict[str, object]:
+    resolved_python_identity = dict(python_identity or current_python_identity())
+    resolved_platform_identity = dict(platform_identity or current_platform_identity())
+    resolved_distributions = normalize_distribution_closure(
+        installed_distribution_closure() if distributions is None else distributions
+    )
+    resolved_venv = (
+        Path(venv)
+        if venv is not None
+        else Path(core_requirements).resolve().parent / BACKEND_RUNTIME_VENV_NAME
+    )
+    resolved_integrity = dict(
+        compute_backend_environment_integrity(
+            resolved_venv,
+            platform_name=str(resolved_platform_identity.get("sys_platform") or sys.platform),
+        )
+        if environment_integrity is None
+        else environment_integrity
+    )
+    return {
+        "schema_version": BACKEND_ENVIRONMENT_STATE_SCHEMA_VERSION,
+        "requirements_sha256": compute_requirements_sha256(
+            core_requirements,
+            requirements,
+        ),
+        "python": resolved_python_identity,
+        "platform": resolved_platform_identity,
+        "bootstrap_pip": str(bootstrap_pip),
+        "distributions": resolved_distributions,
+        "integrity": resolved_integrity,
+    }
+
+
+def backend_environment_state_path(venv: str | Path) -> Path:
+    return Path(venv) / BACKEND_ENVIRONMENT_STATE_NAME
+
+
+def load_backend_environment_state(venv: str | Path) -> dict[str, object] | None:
+    state_path = backend_environment_state_path(venv)
+    if not state_path.is_file():
+        return None
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def write_backend_environment_state(
+    venv: str | Path,
+    state: Mapping[str, object],
+) -> Path:
+    state_path = backend_environment_state_path(venv)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(dict(state), indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=state_path.parent,
+            prefix=f".{state_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, state_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return state_path
+
+
+def environment_state_validation_error(
+    state: Mapping[str, object] | None,
+    *,
+    requirements_sha256: str,
+    python_identity: Mapping[str, object],
+    platform_identity: Mapping[str, object],
+    distributions: Iterable[str | Sequence[str] | Mapping[str, object]],
+    environment_integrity: Mapping[str, object],
+    bootstrap_pip: str = PINNED_BOOTSTRAP_PIP,
+) -> str | None:
+    if not isinstance(state, Mapping):
+        return "backend environment state is missing or invalid"
+    if state.get("schema_version") != BACKEND_ENVIRONMENT_STATE_SCHEMA_VERSION:
+        return "backend environment state schema is unsupported"
+    if state.get("requirements_sha256") != requirements_sha256:
+        return "backend environment requirements do not match"
+    if state.get("python") != dict(python_identity):
+        return "backend environment Python identity does not match"
+    if state.get("platform") != dict(platform_identity):
+        return "backend environment platform identity does not match"
+    if state.get("bootstrap_pip") != str(bootstrap_pip):
+        return "backend environment bootstrap pip identity does not match"
+    try:
+        expected_closure = normalize_distribution_closure(distributions)
+        stored_closure = normalize_distribution_closure(state.get("distributions", []))
+    except (TypeError, ValueError):
+        return "backend environment distribution closure is invalid"
+    if stored_closure != expected_closure:
+        return "backend environment distribution closure does not match"
+    stored_integrity = state.get("integrity")
+    if not isinstance(stored_integrity, Mapping):
+        return "backend environment file integrity is missing or invalid"
+    if dict(stored_integrity) != dict(environment_integrity):
+        return "backend environment file integrity does not match"
+    return None

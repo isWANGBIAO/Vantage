@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+.vantage-frontend-dependency-sync.lock*
 
 # Editor directories and files
 .vscode/*

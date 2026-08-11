@@ -3,16 +3,30 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { walkAsync } = require('@electron/osx-sign');
+const { redactSensitiveText } = require('../src/utils/boundedLogger.cjs');
+
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
+const BOUNDED_COMMAND_RUNNER = path.join(
+  PROJECT_ROOT,
+  'src',
+  'scripts',
+  'run_bounded_command.py',
+);
+const BOOTSTRAP_PYTHON = process.env.VANTAGE_BOOTSTRAP_PYTHON || 'python3';
+const COMMAND_TIMEOUT_SECONDS = 300;
+const COMMAND_BRIDGE_TIMEOUT_MS = 310 * 1000;
+const COMMAND_OUTPUT_LIMIT_BYTES = 16 * 1024;
+const COMMAND_BRIDGE_MAX_BUFFER_BYTES = 64 * 1024;
+const REDACTION_PATH_PREFIXES = [
+  { label: '<PROJECT_ROOT>', prefix: PROJECT_ROOT },
+  { label: '<HOME>', prefix: os.homedir() },
+  { label: '<TEMP>', prefix: os.tmpdir() },
+];
 
 const SIGNING_IDENTITY = process.env.VANTAGE_MAC_CODESIGN_IDENTITY || '-';
 const USE_STABLE_DESIGNATED_REQUIREMENT = process.env.VANTAGE_MAC_CODESIGN_STABLE_REQUIREMENT !== '0';
-const SIGN_BLOCKING_XATTRS = [
-  'com.apple.FinderInfo',
-  'com.apple.ResourceFork',
-  'com.apple.fileprovider.fpfs#P',
-  'com.apple.macl',
-  'com.apple.quarantine',
-];
+const XATTR_BATCH_SIZE = 128;
+const XATTR_BATCH_PATH_BYTES = 24 * 1024;
 
 const AD_HOC_MAIN_ENTITLEMENTS = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -38,75 +52,104 @@ const AD_HOC_MAIN_ENTITLEMENTS = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `;
 
-function commandPath(filePath) {
-  return path.relative(process.cwd(), filePath) || filePath;
+function boundedErrorDetail(error) {
+  const rawDetail = error?.stderr?.toString()
+    || error?.stdout?.toString()
+    || '';
+  const redacted = redactSensitiveText(rawDetail, REDACTION_PATH_PREFIXES);
+  return Buffer.from(redacted, 'utf8')
+    .subarray(0, COMMAND_OUTPUT_LIMIT_BYTES)
+    .toString('utf8')
+    .trim();
 }
 
-function formatCommandArg(arg) {
-  return path.isAbsolute(arg) ? commandPath(arg) : arg;
+function executeBoundedCommand(command, args) {
+  const bridgeArgs = [
+    BOUNDED_COMMAND_RUNNER,
+    '--timeout-seconds',
+    String(COMMAND_TIMEOUT_SECONDS),
+    '--output-limit-bytes',
+    String(COMMAND_OUTPUT_LIMIT_BYTES),
+  ];
+  for (const mapping of REDACTION_PATH_PREFIXES) {
+    bridgeArgs.push('--redact-path', mapping.label, mapping.prefix);
+  }
+  bridgeArgs.push('--', command, ...args);
+
+  return execFileSync(BOOTSTRAP_PYTHON, bridgeArgs, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: COMMAND_BRIDGE_TIMEOUT_MS,
+    maxBuffer: COMMAND_BRIDGE_MAX_BUFFER_BYTES,
+  });
 }
 
 function run(command, args, { ignoreFailure = false } = {}) {
   try {
-    execFileSync(command, args, { stdio: 'pipe' });
+    executeBoundedCommand(command, args);
   } catch (error) {
     if (ignoreFailure) {
       return false;
     }
-    const stderr = error.stderr?.toString().trim();
-    const suffix = stderr ? `\n${stderr}` : '';
-    throw new Error(`${command} ${args.map(formatCommandArg).join(' ')} failed${suffix}`);
+    const detail = boundedErrorDetail(error);
+    const suffix = detail ? `\n${detail}` : '';
+    throw new Error(`macOS signing command failed${suffix}`);
   }
   return true;
 }
 
 function capture(command, args) {
-  return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-}
-
-function clearSignBlockingAttributes(targetPath) {
-  for (const attribute of SIGN_BLOCKING_XATTRS) {
-    run('xattr', ['-d', attribute, targetPath], { ignoreFailure: true });
-  }
-}
-
-function clearSignBlockingAttributesRecursive(targetPath) {
-  clearSignBlockingAttributes(targetPath);
-
-  let stat = null;
   try {
-    stat = fs.lstatSync(targetPath);
-  } catch {
-    return;
-  }
-
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    return;
-  }
-
-  for (const entryName of fs.readdirSync(targetPath)) {
-    clearSignBlockingAttributesRecursive(path.join(targetPath, entryName));
+    return executeBoundedCommand(command, args).trim();
+  } catch (error) {
+    const detail = boundedErrorDetail(error);
+    const suffix = detail ? `\n${detail}` : '';
+    throw new Error(`macOS signing command failed${suffix}`);
   }
 }
 
-function clearPathAndAncestors(targetPath, stopPath) {
-  let currentPath = targetPath;
-  const resolvedStopPath = path.resolve(stopPath);
-
-  while (path.resolve(currentPath).startsWith(resolvedStopPath)) {
-    clearSignBlockingAttributes(currentPath);
-    const parentPath = path.dirname(currentPath);
-    if (parentPath === currentPath) {
-      break;
-    }
-    currentPath = parentPath;
+function collectSignBlockingAttributeTargets(targetPath, targets = []) {
+  const stat = fs.lstatSync(targetPath);
+  if (stat.isSymbolicLink()) {
+    return targets;
   }
+  if (stat.isFile() && stat.nlink !== 1) {
+    throw new Error('The macOS app bundle contains a hard-linked file');
+  }
+
+  targets.push(targetPath);
+  if (stat.isDirectory()) {
+    for (const entryName of fs.readdirSync(targetPath)) {
+      collectSignBlockingAttributeTargets(path.join(targetPath, entryName), targets);
+    }
+  }
+  return targets;
 }
 
 function clearBundleSignBlockingAttributes(bundlePath) {
-  run('xattr', ['-cr', bundlePath], { ignoreFailure: true });
-  clearSignBlockingAttributesRecursive(bundlePath);
-  clearPathAndAncestors(bundlePath, bundlePath);
+  const targets = collectSignBlockingAttributeTargets(bundlePath);
+  let batch = [];
+  let batchPathBytes = 0;
+  for (const targetPath of targets) {
+    const targetPathBytes = Buffer.byteLength(targetPath, 'utf8') + 1;
+    if (targetPathBytes > XATTR_BATCH_PATH_BYTES) {
+      throw new Error('A macOS app bundle path exceeds the xattr command limit');
+    }
+    if (
+      batch.length > 0
+      && (batch.length >= XATTR_BATCH_SIZE
+        || batchPathBytes + targetPathBytes > XATTR_BATCH_PATH_BYTES)
+    ) {
+      run('xattr', ['-c', ...batch]);
+      batch = [];
+      batchPathBytes = 0;
+    }
+    batch.push(targetPath);
+    batchPathBytes += targetPathBytes;
+  }
+  if (batch.length > 0) {
+    run('xattr', ['-c', ...batch]);
+  }
 }
 
 function depth(filePath) {
@@ -307,8 +350,6 @@ function stableDesignatedRequirementForPath(filePath, signingOptions = {}) {
 }
 
 function codesignPath(filePath, signingOptions = {}) {
-  clearPathAndAncestors(filePath, path.dirname(filePath));
-
   const args = [
     '--force',
     '--sign',
@@ -416,13 +457,17 @@ async function signAppBundle(appPath) {
   }
 
   if (fs.existsSync(mainExecutablePath)) {
+    const mainExecutableStat = fs.lstatSync(mainExecutablePath);
+    if (!mainExecutableStat.isFile() || mainExecutableStat.isSymbolicLink()) {
+      throw new Error('The main macOS executable must be a regular file');
+    }
     codesignPathWithShell(mainExecutablePath, signingOptions);
   }
 
   codesignTopLevelApp(appPath, signingOptions);
 }
 
-module.exports = async function signMacAdHoc(context) {
+async function signMacAdHoc(context) {
   if (context?.electronPlatformName !== 'darwin') {
     return;
   }
@@ -441,7 +486,16 @@ module.exports = async function signMacAdHoc(context) {
     fs.rmSync(outputAppPath, { recursive: true, force: true });
     run('ditto', [appPath, outputAppPath]);
     clearBundleSignBlockingAttributes(outputAppPath);
+    run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', outputAppPath]);
+  } catch (error) {
+    fs.rmSync(outputAppPath, { recursive: true, force: true });
+    throw error;
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+}
+
+module.exports = signMacAdHoc;
+module.exports._testing = {
+  collectSignBlockingAttributeTargets,
 };

@@ -5,8 +5,290 @@ const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 6;
 const ELECTRON_LOG_PATTERN = /^electron.*\.log.*$/;
 const UTF8_BOUNDARY_BYTES = 3;
+const PATH_PREFIX_BOUNDARY_PATTERN = "(?=$|[\\\\/\\s'\":,\\]\\};>)]|[.!?](?=$|\\s))";
+const REMOTE_URL_SCHEMES = new Set(['ftp', 'http', 'https', 'ws', 'wss']);
 
 let temporaryFileSequence = 0;
+
+function escapeRegExpCharacter(character) {
+  return /[\\^$.*+?()[\]{}|]/.test(character)
+    ? `\\${character}`
+    : character;
+}
+
+function buildPathPrefixPattern(prefix) {
+  let pattern = '';
+  let previousWasSeparator = false;
+
+  for (const character of prefix) {
+    if (character === '/' || character === '\\') {
+      if (!previousWasSeparator) {
+        pattern += '[\\\\/]+';
+      }
+      previousWasSeparator = true;
+      continue;
+    }
+
+    pattern += escapeRegExpCharacter(character);
+    previousWasSeparator = false;
+  }
+
+  return pattern;
+}
+
+function percentHexCharacterPattern(character) {
+  if (/[A-Fa-f]/.test(character)) {
+    return `[${character.toLowerCase()}${character.toUpperCase()}]`;
+  }
+  return character;
+}
+
+function percentEncodedCharacterPattern(character) {
+  return [...Buffer.from(character, 'utf8')]
+    .map((byte) => {
+      const hex = byte.toString(16).padStart(2, '0');
+      return `%${percentHexCharacterPattern(hex[0])}${percentHexCharacterPattern(hex[1])}`;
+    })
+    .join('');
+}
+
+function buildFileUrlCharacterPattern(character, windowsPath) {
+  const variants = new Set([
+    escapeRegExpCharacter(character),
+    percentEncodedCharacterPattern(character),
+  ]);
+  if (windowsPath && /^[A-Za-z]$/.test(character)) {
+    variants.add(percentEncodedCharacterPattern(character.toLowerCase()));
+    variants.add(percentEncodedCharacterPattern(character.toUpperCase()));
+  }
+  return `(?:${[...variants].join('|')})`;
+}
+
+function buildFileUrlPrefixPattern(prefix, windowsPath) {
+  const normalized = prefix
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+  let pattern = '';
+  let previousWasSeparator = false;
+
+  for (const character of normalized) {
+    if (character === '/') {
+      if (!previousWasSeparator) {
+        pattern += '[\\/]+';
+      }
+      previousWasSeparator = true;
+      continue;
+    }
+
+    pattern += buildFileUrlCharacterPattern(character, windowsPath);
+    previousWasSeparator = false;
+  }
+
+  return pattern;
+}
+
+function compilePathPrefixes(pathPrefixes) {
+  if (!Array.isArray(pathPrefixes)) {
+    return [];
+  }
+
+  return pathPrefixes
+    .map((mapping, order) => {
+      if (
+        !mapping
+        || typeof mapping.prefix !== 'string'
+        || typeof mapping.label !== 'string'
+      ) {
+        return null;
+      }
+
+      const prefix = mapping.prefix.replace(/[\\/]+$/g, '');
+      if (!prefix || !mapping.label) {
+        return null;
+      }
+
+      const windowsPath = /^[A-Za-z]:[\\/]/.test(prefix)
+        || /^\\\\/.test(prefix)
+        || prefix.includes('\\');
+      const beginsWithSeparator = /^[\\/]/.test(prefix);
+      const rawLeftBoundary = beginsWithSeparator
+        ? '(?<![\\\\/])'
+        : (windowsPath ? '(?<![A-Za-z0-9_])' : '');
+      const fileUrlLeftBoundary = beginsWithSeparator
+        ? '(?<=/)'
+        : '(?<![A-Za-z0-9_])';
+      return {
+        label: mapping.label,
+        order,
+        prefix,
+        regex: new RegExp(
+          `${rawLeftBoundary}${buildPathPrefixPattern(prefix)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
+          windowsPath ? 'gi' : 'g',
+        ),
+        fileUrlRegex: new RegExp(
+          `${fileUrlLeftBoundary}${buildFileUrlPrefixPattern(prefix, windowsPath)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
+          windowsPath ? 'gi' : 'g',
+        ),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => (
+      right.prefix.length - left.prefix.length || left.order - right.order
+    ));
+}
+
+function collectUrlContextEvents(value) {
+  const events = [];
+  const schemePattern = /\b([A-Za-z][A-Za-z0-9+.-]*):\/\//g;
+  for (const match of value.matchAll(schemePattern)) {
+    events.push({
+      index: match.index,
+      scheme: match[1].toLowerCase(),
+    });
+  }
+
+  const resetPattern = /[\s<>"]|[;,](?=\s*['"]?[A-Za-z_][A-Za-z0-9_.-]*\s*=)/g;
+  for (const match of value.matchAll(resetPattern)) {
+    events.push({ index: match.index, scheme: null });
+  }
+
+  events.sort((left, right) => left.index - right.index);
+  return events;
+}
+
+function collectPathCandidates(value, compiledPathPrefixes) {
+  const candidates = [];
+
+  compiledPathPrefixes.forEach((mapping, priority) => {
+    for (const match of value.matchAll(mapping.regex)) {
+      candidates.push({
+        end: match.index + match[0].length,
+        urlPattern: false,
+        label: mapping.label,
+        priority,
+        start: match.index,
+      });
+    }
+    for (const match of value.matchAll(mapping.fileUrlRegex)) {
+      candidates.push({
+        end: match.index + match[0].length,
+        urlPattern: true,
+        label: mapping.label,
+        priority,
+        start: match.index,
+      });
+    }
+  });
+
+  candidates.sort((left, right) => (
+    left.start - right.start
+    || left.priority - right.priority
+    || right.end - left.end
+    || Number(left.urlPattern) - Number(right.urlPattern)
+  ));
+  return candidates;
+}
+
+function selectPathReplacements(value, compiledPathPrefixes) {
+  const events = collectUrlContextEvents(value);
+  const candidates = collectPathCandidates(value, compiledPathPrefixes);
+  const replacements = [];
+  let activeScheme = null;
+  let eventIndex = 0;
+  let replacedUntil = 0;
+
+  for (const candidate of candidates) {
+    while (
+      eventIndex < events.length
+      && events[eventIndex].index <= candidate.start
+    ) {
+      activeScheme = events[eventIndex].scheme;
+      eventIndex += 1;
+    }
+
+    if (candidate.start < replacedUntil) {
+      continue;
+    }
+    if (activeScheme && REMOTE_URL_SCHEMES.has(activeScheme)) {
+      continue;
+    }
+    if (candidate.urlPattern !== Boolean(activeScheme)) {
+      continue;
+    }
+
+    replacements.push(candidate);
+    replacedUntil = candidate.end;
+  }
+
+  return replacements;
+}
+
+function applyPathReplacements(value, replacements) {
+  if (replacements.length === 0) {
+    return value;
+  }
+
+  const segments = [];
+  let cursor = 0;
+  for (const replacement of replacements) {
+    segments.push(value.slice(cursor, replacement.start));
+    segments.push(replacement.label);
+    cursor = replacement.end;
+  }
+  segments.push(value.slice(cursor));
+  return segments.join('');
+}
+
+function redactPathPrefixes(value, compiledPathPrefixes) {
+  if (compiledPathPrefixes.length === 0) {
+    return value;
+  }
+
+  return applyPathReplacements(
+    value,
+    selectPathReplacements(value, compiledPathPrefixes),
+  );
+}
+
+function redactSensitiveTextWithCompiledPaths(value, compiledPathPrefixes) {
+  return redactPathPrefixes(value, compiledPathPrefixes)
+    .replace(/sk-[A-Za-z0-9_-]{8,}/g, 'sk-[REDACTED]')
+    .replace(/("api[_-]?key"\s*:\s*")[^"]{8,}(")/gi, '$1[REDACTED_API_KEY]$2')
+    .replace(/(api[_-]?key\s*[:=]\s*)[A-Za-z0-9_-]{16,}/gi, '$1[REDACTED_API_KEY]');
+}
+
+function redactSensitiveText(value, pathPrefixes = []) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  return redactSensitiveTextWithCompiledPaths(
+    value,
+    compilePathPrefixes(pathPrefixes),
+  );
+}
+
+function safeString(value, fallback) {
+  if (typeof value === 'string') {
+    return value;
+  }
+  try {
+    return String(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function safeErrorText(error) {
+  try {
+    if (error && typeof error === 'object' && error.stack) {
+      return safeString(error.stack, '[unprintable error]');
+    }
+  } catch {
+    // Fall through to a guarded conversion of the error itself.
+  }
+  return safeString(error, '[unprintable error]');
+}
 
 function utf8SequenceLength(firstByte) {
   if (firstByte <= 0x7f) {
@@ -338,11 +620,13 @@ function createBoundedLogger({
   consoleObject = console,
   maxBytes = DEFAULT_MAX_BYTES,
   maxFiles = DEFAULT_MAX_FILES,
+  pathPrefixes = [],
   stdout,
   stderr,
 }) {
   let consoleMirroringEnabled = true;
   let disposed = false;
+  const compiledPathPrefixes = compilePathPrefixes(pathPrefixes);
   const guardedStreams = new Set();
   const resolvedStreams = [
     stdout === undefined
@@ -380,10 +664,18 @@ function createBoundedLogger({
 
   function writeLog(level, message, error = null) {
     const timestamp = new Date().toISOString();
-    let logEntry = `[${timestamp}] [${level}] ${message}`;
+    const redactedMessage = redactSensitiveTextWithCompiledPaths(
+      safeString(message, '[unprintable message]'),
+      compiledPathPrefixes,
+    );
+    let logEntry = `[${timestamp}] [${level}] ${redactedMessage}`;
 
     if (error) {
-      logEntry += `\n  Stack: ${error.stack || error}`;
+      const redactedError = redactSensitiveTextWithCompiledPaths(
+        safeErrorText(error),
+        compiledPathPrefixes,
+      );
+      logEntry += `\n  Stack: ${redactedError}`;
     }
 
     logEntry += '\n';
@@ -456,4 +748,5 @@ module.exports = {
   createBoundedLogger,
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_FILES,
+  redactSensitiveText,
 };

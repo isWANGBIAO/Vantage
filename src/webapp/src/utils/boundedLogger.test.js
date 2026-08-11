@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 
 import boundedLogger from './boundedLogger.cjs';
@@ -12,6 +13,7 @@ const {
     createBoundedLogger,
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_FILES,
+    redactSensitiveText,
 } = boundedLogger;
 
 const ELECTRON_LOG_PATTERN = /^electron.*\.log.*$/;
@@ -37,6 +39,296 @@ function createWritableStream(overrides = {}) {
 test('uses the production size and global retention defaults', () => {
     assert.equal(DEFAULT_MAX_BYTES, 10 * 1024 * 1024);
     assert.equal(DEFAULT_MAX_FILES, 6);
+});
+
+test('redacts explicit path prefixes without rewriting URLs or diagnostics', () => {
+    const secret = '2615cad9be45f50badccd2fa5ffc2bd4596c01eb937c5204388a9c59dfc77b19';
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice', label: '<user-home>' },
+        {
+            prefix: 'C:\\Users\\Alice\\AppData\\Roaming\\Vantage',
+            label: '<runtime-data>',
+        },
+        { prefix: 'D:\\work\\Vantage[dev]', label: '<project-root>' },
+    ];
+    const url = 'https://example.test/D:/work/Vantage[dev]/guide';
+    const value = [
+        'home=C:\\USERS\\ALICE\\Desktop\\note.txt',
+        'runtime=c:/users/alice/appdata/roaming/vantage/logs/electron.log',
+        'project=D:/work/Vantage[dev]/src/main.cjs:123:45',
+        `url=${url}`,
+        `api_key: ${secret}`,
+    ].join('\n');
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.match(redacted, /home=<user-home>\\Desktop\\note\.txt/);
+    assert.match(redacted, /runtime=<runtime-data>\/logs\/electron\.log/);
+    assert.match(redacted, /project=<project-root>\/src\/main\.cjs:123:45/);
+    assert.match(redacted, new RegExp(`url=${url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.doesNotMatch(redacted, /<user-home>\/AppData/i);
+    assert.doesNotMatch(redacted, new RegExp(secret));
+    assert.match(redacted, /api_key: \[REDACTED_API_KEY\]/);
+    assert.equal(redactSensitiveText(42, pathPrefixes), 42);
+});
+
+test('redacts local file URLs and exact diagnostic roots without touching siblings', () => {
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice\\repo', label: '<project-root>' },
+    ];
+    const remoteUrl = 'https://example.test/C:/Users/Alice/repo/guide';
+    const value = [
+        'stack=at start (file:///C:/Users/Alice/repo/src/main.cjs:42:7)',
+        'bundle=webpack:///C:/Users/Alice/repo/src/chunk.cjs:5:6',
+        'cwd="C:\\Users\\Alice\\repo"',
+        'diagnostic=C:/Users/Alice/repo:',
+        'sibling=C:/Users/Alice/repo-other/main.cjs',
+        'archive=C:/Users/Alice/repo.txt',
+        'longer=C:/Users/Alice/repository/main.cjs',
+        'plus=C:/Users/Alice/repo+other/main.cjs',
+        'paren=C:/Users/Alice/repo(backup)/main.cjs',
+        'at=C:/Users/Alice/repo@old/main.cjs',
+        'tilde=C:/Users/Alice/repo~old/main.cjs',
+        'hash=C:/Users/Alice/repo#old/main.cjs',
+        `remote=${remoteUrl}`,
+    ].join('\n');
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.match(
+        redacted,
+        /stack=at start \(file:\/\/\/<project-root>\/src\/main\.cjs:42:7\)/,
+    );
+    assert.match(
+        redacted,
+        /bundle=webpack:\/\/\/<project-root>\/src\/chunk\.cjs:5:6/,
+    );
+    assert.match(redacted, /cwd="<project-root>"/);
+    assert.match(redacted, /diagnostic=<project-root>:/);
+    assert.match(redacted, /sibling=C:\/Users\/Alice\/repo-other\/main\.cjs/);
+    assert.match(redacted, /archive=C:\/Users\/Alice\/repo\.txt/);
+    assert.match(redacted, /longer=C:\/Users\/Alice\/repository\/main\.cjs/);
+    assert.match(redacted, /plus=C:\/Users\/Alice\/repo\+other\/main\.cjs/);
+    assert.match(redacted, /paren=C:\/Users\/Alice\/repo\(backup\)\/main\.cjs/);
+    assert.match(redacted, /at=C:\/Users\/Alice\/repo@old\/main\.cjs/);
+    assert.match(redacted, /tilde=C:\/Users\/Alice\/repo~old\/main\.cjs/);
+    assert.match(redacted, /hash=C:\/Users\/Alice\/repo#old\/main\.cjs/);
+    assert.match(
+        redacted,
+        new RegExp(`remote=${remoteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    );
+});
+
+test('redacts percent-encoded local file URLs without decoding remote or malformed URLs', () => {
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice Smith\\repo', label: '<spaced-root>' },
+        { prefix: 'C:\\Users\\王表\\repo', label: '<unicode-root>' },
+        { prefix: '/Users/王表/repo', label: '<posix-unicode-root>' },
+        { prefix: '/Users/Alice?Dev/repo', label: '<posix-question-root>' },
+        { prefix: 'C:\\Users\\Alice~Dev\\repo', label: '<tilde-root>' },
+        { prefix: "C:\\Users\\O'Neil\\repo", label: '<apostrophe-root>' },
+    ];
+    const remoteUrl = 'https://example.test/C:/Users/Alice%20Smith/repo/guide';
+    const malformedFileUrl = 'file:///C:/Users/Alice%2/repo/main.cjs';
+    const value = [
+        'at file:///C:/Users/Alice%20Smith/repo/src/main.cjs:42:7',
+        'at file:///C:/Users/%E7%8E%8B%E8%A1%A8/repo/src/main.cjs:8:2',
+        'at file:///Users/%e7%8e%8b%e8%a1%a8/repo/src/main.cjs:9:3',
+        'at file:///Users/Alice%3fDev/repo/src/main.cjs:10:4',
+        'at file:///C:/Users/Alice%7eDev/repo/src/main.cjs:11:5',
+        "at file:///C:/Users/O'Neil/repo/src/main.cjs:12:6",
+        `remote=${remoteUrl}`,
+        `malformed=${malformedFileUrl}`,
+    ].join('\n');
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.match(redacted, /file:\/\/\/<spaced-root>\/src\/main\.cjs:42:7/);
+    assert.match(redacted, /file:\/\/\/<unicode-root>\/src\/main\.cjs:8:2/);
+    assert.match(
+        redacted,
+        /file:\/\/\/<posix-unicode-root>\/src\/main\.cjs:9:3/,
+    );
+    assert.match(
+        redacted,
+        /file:\/\/\/<posix-question-root>\/src\/main\.cjs:10:4/,
+    );
+    assert.match(redacted, /file:\/\/\/<tilde-root>\/src\/main\.cjs:11:5/);
+    assert.match(
+        redacted,
+        /file:\/\/\/<apostrophe-root>\/src\/main\.cjs:12:6/,
+    );
+    assert.match(
+        redacted,
+        new RegExp(`remote=${remoteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    );
+    assert.match(
+        redacted,
+        new RegExp(`malformed=${malformedFileUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    );
+});
+
+test('redacts every local file URL when remote and local URLs share one token', () => {
+    const pathPrefixes = [
+        { prefix: "C:\\Users\\O'Neil\\repo", label: '<apostrophe-root>' },
+    ];
+    const value = [
+        "urls='https://example.test','file:///C:/Users/O'Neil/repo/src/one.cjs:1:2'",
+        "https://example.test/guide;local='file:///C:/Users/O'Neil/repo/src/two.cjs:3:4'",
+    ].join('\n');
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.match(redacted, /https:\/\/example\.test/);
+    assert.match(redacted, /file:\/\/\/<apostrophe-root>\/src\/one\.cjs:1:2/);
+    assert.match(redacted, /file:\/\/\/<apostrophe-root>\/src\/two\.cjs:3:4/);
+    assert.doesNotMatch(redacted, /C:\/Users\/O'Neil\/repo/);
+});
+
+test('ends remote URL context at structured diagnostic field boundaries', () => {
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice\\repo', label: '<project-root>' },
+    ];
+    const trueRemoteUrl = 'https://example.test/path;matrix,part/C:/Users/Alice/repo/guide';
+    const value = [
+        'remote=https://example.test;cwd=C:/Users/Alice/repo/src/main.cjs',
+        'remote=https://example.test,cwd=C:/Users/Alice/repo/src/worker.cjs',
+        "remote='https://example.test';cwd='C:/Users/Alice/repo/src/quoted.cjs'",
+        `actual=${trueRemoteUrl}`,
+    ].join('\n');
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.match(redacted, /cwd=<project-root>\/src\/main\.cjs/);
+    assert.match(redacted, /cwd=<project-root>\/src\/worker\.cjs/);
+    assert.match(redacted, /cwd='<project-root>\/src\/quoted\.cjs'/);
+    assert.match(
+        redacted,
+        new RegExp(`actual=${trueRemoteUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    );
+});
+
+test('collects every path replacement from one immutable source value', () => {
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice\\repo', label: '<alice-root>' },
+        { prefix: 'C:\\Users\\Bob Smith\\repo', label: '<bob-root>' },
+    ];
+    const value = (
+        'file:///C:/Users/Alice/repo/index.html'
+        + '?next=C:/Users/Bob%20Smith/repo/secret.txt'
+    );
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.equal(
+        redacted,
+        'file:///<alice-root>/index.html?next=<bob-root>/secret.txt',
+    );
+});
+
+test('requires a real left boundary before Windows and POSIX path prefixes', () => {
+    const windowsValue = [
+        'embedded=XC:/Users/Alice/repo/src/main.cjs',
+        'valid=C:/Users/Alice/repo/src/worker.cjs',
+    ].join('\n');
+    const posixValue = [
+        'partial=file:///NotUsers/Alice/repo/src/main.cjs',
+        'valid=file:///Users/Alice/repo/src/main.cjs',
+        'compact=path:/Users/Alice/repo/src/compact.cjs',
+    ].join('\n');
+
+    const windowsRedacted = redactSensitiveText(windowsValue, [
+        { prefix: 'C:\\Users\\Alice\\repo', label: '<windows-root>' },
+    ]);
+    const posixRedacted = redactSensitiveText(posixValue, [
+        { prefix: '/Users/Alice/repo', label: '<posix-root>' },
+    ]);
+
+    assert.match(windowsRedacted, /embedded=XC:\/Users\/Alice\/repo\/src\/main\.cjs/);
+    assert.match(windowsRedacted, /valid=<windows-root>\/src\/worker\.cjs/);
+    assert.match(posixRedacted, /partial=file:\/\/\/NotUsers\/Alice\/repo\/src\/main\.cjs/);
+    assert.match(posixRedacted, /valid=file:\/\/\/<posix-root>\/src\/main\.cjs/);
+    assert.match(posixRedacted, /compact=path:<posix-root>\/src\/compact\.cjs/);
+});
+
+test('redacts many path matches without quadratic rescanning', () => {
+    const pathPrefixes = [
+        { prefix: 'C:\\Users\\Alice\\repo', label: '<project-root>' },
+    ];
+    const value = Array.from(
+        { length: 10_000 },
+        (_, index) => `C:/Users/Alice/repo/${index}`,
+    ).join(' ');
+
+    const startedAt = performance.now();
+    const redacted = redactSensitiveText(value, pathPrefixes);
+    const elapsedMs = performance.now() - startedAt;
+
+    assert.doesNotMatch(redacted, /C:\/Users\/Alice\/repo/);
+    assert.equal(redacted.match(/<project-root>/g)?.length, 10_000);
+    assert.ok(elapsedMs < 1_000, `redaction took ${elapsedMs.toFixed(1)}ms`);
+});
+
+test('redacts messages and error stacks before file and console output', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-bounded-logger-'));
+    const logFile = path.join(tempDir, 'electron.log');
+    const mirroredEntries = [];
+    const consoleObject = {
+        log(entry) {
+            mirroredEntries.push(entry);
+        },
+        error(entry) {
+            mirroredEntries.push(entry);
+        },
+    };
+    const secret = '2615cad9be45f50badccd2fa5ffc2bd4596c01eb937c5204388a9c59dfc77b19';
+    const error = new Error('backend failed');
+    error.stack = [
+        'Error: backend failed',
+        '    at start (D:\\Projects\\Vantage+prod\\src\\main.cjs:42:7)',
+        '    at executable (C:/Program Files/Vantage+/Vantage.exe:1:2)',
+    ].join('\n');
+
+    try {
+        const logger = createBoundedLogger({
+            logFile,
+            consoleObject,
+            stdout: null,
+            stderr: null,
+            pathPrefixes: [
+                { prefix: 'C:\\Users\\Alice', label: '<user-home>' },
+                {
+                    prefix: 'C:\\Users\\Alice\\AppData\\Roaming\\Vantage',
+                    label: '<runtime-data>',
+                },
+                { prefix: 'D:\\Projects\\Vantage+prod', label: '<project-root>' },
+                { prefix: 'C:\\Program Files\\Vantage+', label: '<app-executable>' },
+            ],
+            maxBytes: 4096,
+            maxFiles: 2,
+        });
+
+        logger.error(
+            `Cannot open c:/users/alice/appdata/roaming/vantage/cache/state.json api_key=${secret}`,
+            error,
+        );
+        assert.doesNotThrow(() => logger.error('Opaque failure', Symbol('opaque')));
+
+        const contents = fs.readFileSync(logFile, 'utf8');
+        const mirrored = mirroredEntries.join('\n');
+        for (const output of [contents, mirrored]) {
+            assert.match(output, /<runtime-data>\/cache\/state\.json/);
+            assert.match(output, /<project-root>\\src\\main\.cjs:42:7/);
+            assert.match(output, /<app-executable>\/Vantage\.exe:1:2/);
+            assert.doesNotMatch(output, /C:[\\/]Users[\\/]Alice/i);
+            assert.doesNotMatch(output, /D:[\\/]Projects[\\/]Vantage\+prod/i);
+            assert.doesNotMatch(output, new RegExp(secret));
+            assert.match(output, /api_key=\[REDACTED_API_KEY\]/);
+        }
+        assert.match(contents, /Stack: Symbol\(opaque\)/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
 });
 
 test('keeps writing after console output fails with EPIPE', () => {

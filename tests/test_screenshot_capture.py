@@ -1,4 +1,5 @@
 import os
+import inspect
 
 import numpy as np
 import pytest
@@ -30,7 +31,9 @@ def test_macos_screencapture_fallback_when_mss_has_no_displays(monkeypatch, tmp_
         saved["longitude"] = longitude
 
     monkeypatch.setattr(screenshot_module.sys, "platform", "darwin")
-    monkeypatch.setattr(screenshot_module.mss, "mss", lambda: EmptyMssContext())
+    monkeypatch.setattr(
+        screenshot_module.mss, "MSS", lambda: EmptyMssContext(), raising=False
+    )
     monkeypatch.setattr(screenshot_module.subprocess, "run", fake_run)
     monkeypatch.setattr(screenshot_module.cv2, "imread", lambda path, flags: "image-data")
     monkeypatch.setattr(screenshot_module, "save_image_with_gps", fake_save_image)
@@ -83,7 +86,9 @@ def test_multi_monitor_capture_returns_primary_screen_for_latest_ui(
     def fake_save_image(path, img, latitude, longitude):
         saved_shapes[os.path.basename(path)] = img.shape
 
-    monkeypatch.setattr(screenshot_module.mss, "mss", lambda: MultiMonitorMssContext())
+    monkeypatch.setattr(
+        screenshot_module.mss, "MSS", lambda: MultiMonitorMssContext(), raising=False
+    )
     monkeypatch.setattr(screenshot_module, "save_image_with_gps", fake_save_image)
 
     result = screenshot_module.take_and_save_screenshots(12.3, 45.6, str(tmp_path))
@@ -114,7 +119,12 @@ def test_multi_monitor_capture_is_atomic_when_any_monitor_fails(monkeypatch, tmp
                 raise RuntimeError("secondary display unavailable")
             return np.zeros((monitor["height"], monitor["width"], 4), dtype=np.uint8)
 
-    monkeypatch.setattr(screenshot_module.mss, "mss", lambda: PartiallyUnavailableMssContext())
+    monkeypatch.setattr(
+        screenshot_module.mss,
+        "MSS",
+        lambda: PartiallyUnavailableMssContext(),
+        raising=False,
+    )
     monkeypatch.setattr(
         screenshot_module,
         "save_image_with_gps",
@@ -125,3 +135,10 @@ def test_multi_monitor_capture_is_atomic_when_any_monitor_fails(monkeypatch, tmp
 
     assert result is None
     assert saved_paths == []
+
+
+def test_screenshot_capture_uses_supported_mss_constructor():
+    source = inspect.getsource(screenshot_module.take_and_save_screenshots)
+
+    assert "mss.MSS()" in source
+    assert "mss.mss" not in source

@@ -104,6 +104,8 @@ celerybeat-schedule
 !.env.example
 .venv
 .venv-backend-runtime-gpu/
+.venv-backend-runtime-gpu.quarantine-*/
+.vantage-backend-runtime.lock
 .local-python-*/
 env/
 venv/

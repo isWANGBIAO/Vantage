@@ -47,6 +47,17 @@ def clear_static_location(monkeypatch):
     monkeypatch.delenv("VANTAGE_STATIC_LONGITUDE", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def reset_location_outcome_log_limiter(monkeypatch):
+    limiter_type = getattr(get_location, "LocationOutcomeLogLimiter", None)
+    if limiter_type is not None:
+        monkeypatch.setattr(
+            get_location,
+            "_LOCATION_OUTCOME_LOG_LIMITER",
+            limiter_type(),
+        )
+
+
 def test_save_image_with_gps_skips_exif_when_location_missing(monkeypatch, tmp_path):
     frame = np.zeros((8, 8, 3), dtype=np.uint8)
     photo_path = tmp_path / "photo.jpg"
@@ -86,6 +97,88 @@ def test_get_location_returns_empty_coordinates_without_platform_geolocator(monk
         None,
         None,
     )
+
+
+def test_location_outcome_logs_transitions_and_hourly_summary_without_coordinates(
+    capsys,
+):
+    clock = [0.0]
+    limiter = get_location.LocationOutcomeLogLimiter(
+        monotonic_clock=lambda: clock[0]
+    )
+
+    get_location._log_location_result(
+        "wi_fi", 25.0, "rejected", "accuracy_too_low", limiter=limiter
+    )
+    clock[0] = 1.0
+    get_location._log_location_result(
+        "wi_fi", 900.0, "rejected", "accuracy_too_low", limiter=limiter
+    )
+    clock[0] = 2.0
+    get_location._log_location_result(
+        "wi_fi", 900.0, "rejected", "remote_source", limiter=limiter
+    )
+    clock[0] = 3.0
+    get_location._log_location_result(
+        "wi_fi", 50.0, "rejected", "accuracy_too_low", limiter=limiter
+    )
+    clock[0] = 4.0
+    get_location._log_location_result(
+        "wi_fi", 10.0, "rejected", "accuracy_too_low", limiter=limiter
+    )
+    clock[0] = 3603.0
+    get_location._log_location_result(
+        "wi_fi", 1.0, "rejected", "accuracy_too_low", limiter=limiter
+    )
+
+    output = capsys.readouterr().out
+    assert output.count("Location source=wi_fi") == 4
+    assert "suppressed=1" in output
+    assert "31.2304" not in output
+    assert "121.4737" not in output
+
+
+@pytest.mark.parametrize(
+    "invalid_reading",
+    [9.0, float("nan"), float("inf"), RuntimeError("clock failed")],
+    ids=("rollback", "nan", "infinity", "exception"),
+)
+def test_location_outcome_limiter_fails_open_and_rebaselines_after_bad_clock(
+    invalid_reading,
+):
+    readings = iter([10.0, 11.0, invalid_reading, 20.0])
+
+    def clock():
+        reading = next(readings)
+        if isinstance(reading, Exception):
+            raise reading
+        return reading
+
+    limiter = get_location.LocationOutcomeLogLimiter(monotonic_clock=clock)
+
+    assert limiter.consume("wi_fi", "rejected", "accuracy_too_low") == 0
+    assert limiter.consume("wi_fi", "rejected", "accuracy_too_low") is None
+    try:
+        invalid_result = limiter.consume(
+            "wi_fi", "rejected", "accuracy_too_low"
+        )
+    except Exception as exc:
+        pytest.fail(f"limiter leaked a clock failure: {exc}")
+    assert invalid_result == 0
+    assert limiter.consume("wi_fi", "rejected", "accuracy_too_low") == 0
+
+
+def test_location_outcome_limiter_summary_excludes_current_event():
+    clock = [0.0]
+    limiter = get_location.LocationOutcomeLogLimiter(
+        monotonic_clock=lambda: clock[0]
+    )
+
+    assert limiter.consume("winrt", "unknown", "timeout") == 0
+    clock[0] = 1.0
+    assert limiter.consume("winrt", "unknown", "timeout") is None
+    clock[0] = 3600.0
+    assert limiter.consume("winrt", "unknown", "timeout") == 1
 
 
 def test_get_location_uses_configured_static_coordinates(monkeypatch):

@@ -8,6 +8,7 @@ echo ========================================
 echo.
 
 set "PROJECT_ROOT=%~dp0"
+set "PROJECT_ROOT_ARG=%PROJECT_ROOT:~0,-1%"
 cd /d "%PROJECT_ROOT%"
 set "INSTALL_ROOT=%LOCALAPPDATA%\Programs\Vantage"
 set "INSTALLED_EXE=%INSTALL_ROOT%\Vantage.exe"
@@ -17,7 +18,8 @@ set "BACKEND_RUNTIME_PYTHON=%BACKEND_RUNTIME_VENV%\Scripts\python.exe"
 set "BACKEND_RUNTIME_CORE_REQUIREMENTS=%PROJECT_ROOT%requirements-core.txt"
 set "BACKEND_RUNTIME_REQUIREMENTS=%PROJECT_ROOT%requirements-backend-runtime-gpu.txt"
 set "OPENCV_NORMALIZER=%PROJECT_ROOT%src\scripts\normalize_opencv_installation.py"
-set "BACKEND_RUNTIME_REQUIREMENTS_STAMP=%BACKEND_RUNTIME_VENV%\.requirements-backend-runtime-gpu.sha256"
+set "BACKEND_RUNTIME_SYNC=%PROJECT_ROOT%src\scripts\sync_backend_runtime_environment.py"
+set "BACKEND_RUNTIME_LOCK_RUNNER=%PROJECT_ROOT%src\scripts\run_with_backend_runtime_lock.py"
 set "WEBAPP_BUILD_INFO=%PROJECT_ROOT%src\webapp\build-info.json"
 set "RUN_BUILD_INFO_BACKUP=%TEMP%\vantage-build-info-%RANDOM%-%RANDOM%.json"
 set "BUILD_INFO_BACKUP_CREATED=0"
@@ -35,18 +37,10 @@ python src\scripts\cleanup_vantage_python_processes.py --include-desktop >nul 2>
 call :StepDone "Source cleanup complete"
 
 call :StepStart "[1/7] Checking frontend dependencies..."
-if not exist "%PROJECT_ROOT%src\webapp\node_modules" (
-    echo       Installing dependencies...
-    pushd "%PROJECT_ROOT%src\webapp"
-    call :RunNpmInstallWithFallback
-    if errorlevel 1 (
-        popd
-        echo       npm install failed
-        exit /b 1
-    )
-    popd
-) else (
-    echo       Dependencies already installed
+call node "%PROJECT_ROOT%src\webapp\scripts\sync-dependencies.cjs" --webapp-root "%PROJECT_ROOT%src\webapp"
+if errorlevel 1 (
+    echo       Frontend dependency synchronization failed
+    exit /b 1
 )
 pushd "%PROJECT_ROOT%src\webapp"
 call :EnsureElectronBinary
@@ -59,57 +53,11 @@ popd
 call :StepDone "Frontend dependency check complete"
 
 call :StepStart "[2/7] Preparing backend packaging environment..."
-if not exist "%BACKEND_RUNTIME_PYTHON%" (
-    echo       Creating clean backend runtime venv...
-    python -m venv "%BACKEND_RUNTIME_VENV%"
-    if errorlevel 1 (
-        echo       Backend runtime venv creation failed
-        exit /b 1
-    )
-) else (
-    echo       Backend runtime venv already exists
-)
-
-for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath '%BACKEND_RUNTIME_CORE_REQUIREMENTS%').Hash"`) do set "BACKEND_RUNTIME_CORE_REQUIREMENTS_HASH=%%H"
-for /f "usebackq delims=" %%H in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath '%BACKEND_RUNTIME_REQUIREMENTS%').Hash"`) do set "BACKEND_RUNTIME_OVERLAY_REQUIREMENTS_HASH=%%H"
-set "BACKEND_RUNTIME_REQUIREMENTS_HASH=!BACKEND_RUNTIME_CORE_REQUIREMENTS_HASH!:!BACKEND_RUNTIME_OVERLAY_REQUIREMENTS_HASH!"
-set "BACKEND_RUNTIME_REQUIREMENTS_STORED_HASH="
-if exist "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" (
-    for /f "usebackq delims=" %%H in ("%BACKEND_RUNTIME_REQUIREMENTS_STAMP%") do set "BACKEND_RUNTIME_REQUIREMENTS_STORED_HASH=%%H"
-)
-
-set "BACKEND_RUNTIME_DEPS_NEED_SYNC=1"
-if /I "!BACKEND_RUNTIME_REQUIREMENTS_HASH!"=="!BACKEND_RUNTIME_REQUIREMENTS_STORED_HASH!" if not "%VANTAGE_FORCE_BACKEND_DEPS%"=="1" set "BACKEND_RUNTIME_DEPS_NEED_SYNC=0"
-
-if "!BACKEND_RUNTIME_DEPS_NEED_SYNC!"=="0" (
-    echo       Backend runtime dependencies already synced
-) else (
-    echo       Syncing backend runtime dependencies...
-    if exist "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" del /F /Q "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" >nul 2>&1
-    if exist "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" (
-        echo       Backend runtime dependency stamp invalidation failed
-        exit /b 1
-    )
-    "%BACKEND_RUNTIME_PYTHON%" -m pip install --upgrade pip
-    if errorlevel 1 (
-        echo       Backend runtime pip upgrade failed
-        exit /b 1
-    )
-    "%BACKEND_RUNTIME_PYTHON%" -m pip install -r "%BACKEND_RUNTIME_REQUIREMENTS%"
-    if errorlevel 1 (
-        echo       Backend runtime dependency install failed
-        exit /b 1
-    )
-    "%BACKEND_RUNTIME_PYTHON%" "%OPENCV_NORMALIZER%" --requirements-core "%BACKEND_RUNTIME_CORE_REQUIREMENTS%"
-    if errorlevel 1 (
-        echo       Backend runtime OpenCV normalization failed
-        exit /b 1
-    )
-    > "%BACKEND_RUNTIME_REQUIREMENTS_STAMP%" echo !BACKEND_RUNTIME_REQUIREMENTS_HASH!
-)
-"%BACKEND_RUNTIME_PYTHON%" -c "import chinese_calendar, lap, zhdate; print('backend runtime dependency imports ok')"
+set "BACKEND_RUNTIME_SYNC_FORCE_ARG="
+if "%VANTAGE_FORCE_BACKEND_DEPS%"=="1" set "BACKEND_RUNTIME_SYNC_FORCE_ARG=--force"
+python "%BACKEND_RUNTIME_SYNC%" --project-root "%PROJECT_ROOT_ARG%" --venv "%BACKEND_RUNTIME_VENV%" --core-requirements "%BACKEND_RUNTIME_CORE_REQUIREMENTS%" --requirements "%BACKEND_RUNTIME_REQUIREMENTS%" --opencv-normalizer "%OPENCV_NORMALIZER%" %BACKEND_RUNTIME_SYNC_FORCE_ARG%
 if errorlevel 1 (
-    echo       Backend runtime dependency import check failed
+    echo       Backend runtime environment synchronization failed
     exit /b 1
 )
 call :StepDone "Backend packaging environment ready"
@@ -136,7 +84,7 @@ call :StepDone "Build version prepared"
 
 call :StepStart "[4/8] Building frontend and backend runtime in parallel..."
 echo       Build workers requested: %VANTAGE_BUILD_WORKERS%
-"%BACKEND_RUNTIME_PYTHON%" src\scripts\run_packaging_builds.py --backend-python "%BACKEND_RUNTIME_PYTHON%" --workers "%VANTAGE_BUILD_WORKERS%"
+python "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT_ARG%" -- "%BACKEND_RUNTIME_PYTHON%" src\scripts\run_packaging_builds.py --backend-python "%BACKEND_RUNTIME_PYTHON%" --workers "%VANTAGE_BUILD_WORKERS%"
 if errorlevel 1 (
     call :RestoreBuildInfo
     echo       Parallel packaging build failed
@@ -145,7 +93,7 @@ if errorlevel 1 (
 call :StepDone "Frontend and backend build step complete"
 
 call :StepStart "[5/8] Verifying backend runtime..."
-"%BACKEND_RUNTIME_PYTHON%" src\scripts\verify_backend_runtime.py --timeout-seconds 60
+python "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT_ARG%" -- "%BACKEND_RUNTIME_PYTHON%" src\scripts\verify_backend_runtime.py --timeout-seconds 60
 if errorlevel 1 (
     call :RestoreBuildInfo
     echo       Backend runtime verification failed
@@ -236,14 +184,6 @@ if defined ELECTRON_MIRROR (
     echo       Retrying Electron download with mirror fallback: !ELECTRON_MIRROR!
 )
 exit /b 0
-
-:RunNpmInstallWithFallback
-call npm install
-if not errorlevel 1 exit /b 0
-if defined ELECTRON_MIRROR exit /b 1
-call :UseElectronMirrorFallback
-call npm install
-exit /b %ERRORLEVEL%
 
 :EnsureElectronBinary
 call node node_modules\electron\install.js

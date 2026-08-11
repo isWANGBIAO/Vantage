@@ -22,36 +22,65 @@ BACKEND_RUNTIME_PYTHON="${BACKEND_RUNTIME_VENV}/bin/python"
 BACKEND_RUNTIME_CORE_REQUIREMENTS="${PROJECT_ROOT}/requirements-core.txt"
 BACKEND_RUNTIME_REQUIREMENTS="${PROJECT_ROOT}/requirements-backend-runtime-gpu.txt"
 OPENCV_NORMALIZER="${PROJECT_ROOT}/src/scripts/normalize_opencv_installation.py"
-BACKEND_RUNTIME_REQUIREMENTS_STAMP="${BACKEND_RUNTIME_VENV}/.requirements-backend-runtime-gpu.sha256"
+BACKEND_RUNTIME_SYNC="${PROJECT_ROOT}/src/scripts/sync_backend_runtime_environment.py"
+BACKEND_RUNTIME_LOCK_RUNNER="${PROJECT_ROOT}/src/scripts/run_with_backend_runtime_lock.py"
+BACKEND_RUNTIME_SIGNER="${PROJECT_ROOT}/src/scripts/sign_macos_backend_runtime.py"
+MACOS_ARTIFACT_SIGNER="${PROJECT_ROOT}/src/scripts/sign_macos_artifacts.py"
+BACKEND_RUNTIME_STATE="${BACKEND_RUNTIME_VENV}/.vantage-backend-runtime-state.json"
 BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.sha256"
 LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.13.5/bin/python3.13"
 FRONTEND_ROOT="${PROJECT_ROOT}/src/webapp"
-FRONTEND_PACKAGE_LOCK="${FRONTEND_ROOT}/package-lock.json"
 FRONTEND_NATIVE_CODESIGN_STAMP="${FRONTEND_ROOT}/node_modules/.macos-native-codesign.sha256"
 VANTAGE_BUILD_WORKERS="${VANTAGE_BUILD_WORKERS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
 
 python_supports_backend_venv() {
     local candidate="$1"
-    local probe_file probe_pid waited status
+    local probe_pid waited status timed_out descendants monitor_was_enabled
 
-    probe_file="$(mktemp "${TMPDIR:-/tmp}/vantage-python-probe.XXXXXX")" || return 1
-    "$candidate" -c 'import pathlib, sqlite3, ssl, subprocess, venv' >"$probe_file" 2>&1 &
+    monitor_was_enabled=0
+    case "$-" in
+        *m*) monitor_was_enabled=1 ;;
+    esac
+    set -m
+    "$candidate" -c 'import pathlib, sqlite3, ssl, subprocess, venv' >/dev/null 2>&1 &
     probe_pid=$!
+    if (( monitor_was_enabled == 0 )); then
+        set +m
+    fi
     waited=0
+    timed_out=0
     while kill -0 "$probe_pid" 2>/dev/null; do
-        if (( waited >= 5 )); then
-            kill "$probe_pid" >/dev/null 2>&1 || true
-            wait "$probe_pid" >/dev/null 2>&1 || true
-            rm -f "$probe_file"
-            return 1
+        if (( waited >= 50 )); then
+            timed_out=1
+            break
         fi
-        sleep 1
+        sleep 0.1
         waited=$((waited + 1))
     done
 
-    wait "$probe_pid"
-    status=$?
-    rm -f "$probe_file"
+    if (( timed_out == 1 )); then
+        status=1
+    elif wait "$probe_pid"; then
+        status=0
+    else
+        status=$?
+    fi
+    descendants=0
+    if kill -0 -- "-$probe_pid" 2>/dev/null; then
+        descendants=1
+    fi
+    if (( timed_out == 1 || descendants == 1 )); then
+        kill -TERM -- "-$probe_pid" >/dev/null 2>&1 || true
+        for _attempt in {1..10}; do
+            if ! kill -0 -- "-$probe_pid" 2>/dev/null; then
+                break
+            fi
+            sleep 0.1
+        done
+        kill -KILL -- "-$probe_pid" >/dev/null 2>&1 || true
+        wait "$probe_pid" >/dev/null 2>&1 || true
+        return 1
+    fi
     return "$status"
 }
 
@@ -81,6 +110,15 @@ resolve_bootstrap_python() {
 }
 
 BOOTSTRAP_PYTHON="$(resolve_bootstrap_python)"
+export VANTAGE_BOOTSTRAP_PYTHON="$BOOTSTRAP_PYTHON"
+
+select_backend_cleanup_python() {
+    if [[ -x "$BACKEND_RUNTIME_PYTHON" ]]; then
+        printf '%s\n' "$BACKEND_RUNTIME_PYTHON"
+        return 0
+    fi
+    printf '%s\n' "$BOOTSTRAP_PYTHON"
+}
 
 step_start() {
     STEP_START_SECONDS="$(date +%s)"
@@ -93,53 +131,22 @@ step_done() {
     echo "      $1 ($((step_end_seconds - STEP_START_SECONDS))s)"
 }
 
-codesign_macos_native_libraries() {
-    local stored_codesign_hash=""
-    if [[ -f "$BACKEND_RUNTIME_CODESIGN_STAMP" ]]; then
-        stored_codesign_hash="$(cat "$BACKEND_RUNTIME_CODESIGN_STAMP")"
-    fi
-    if [[ "$requirements_hash" == "$stored_codesign_hash" && "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" != "1" ]]; then
-        echo "      macOS native Python libraries already ad-hoc signed"
-        return 0
-    fi
-
-    echo "      Ad-hoc signing macOS native Python libraries..."
-    xattr -cr "${BACKEND_RUNTIME_VENV}/lib" >/dev/null 2>&1 || true
-    find "${BACKEND_RUNTIME_VENV}/lib" -type f \( -name '*.so' -o -name '*.dylib' \) -print0 |
-        while IFS= read -r -d '' native_library; do
-            codesign --force --sign - "$native_library" >/dev/null 2>&1 || true
-        done
-    printf '%s\n' "$requirements_hash" > "$BACKEND_RUNTIME_CODESIGN_STAMP"
-}
-
 codesign_macos_frontend_binaries() {
     if [[ ! -d "${FRONTEND_ROOT}/node_modules" ]]; then
         return 0
     fi
 
-    local package_lock_hash="no-package-lock"
-    if [[ -f "$FRONTEND_PACKAGE_LOCK" ]]; then
-        package_lock_hash="$(shasum -a 256 "$FRONTEND_PACKAGE_LOCK" | awk '{print $1}')"
-    fi
-
-    local stored_frontend_hash=""
-    if [[ -f "$FRONTEND_NATIVE_CODESIGN_STAMP" ]]; then
-        stored_frontend_hash="$(cat "$FRONTEND_NATIVE_CODESIGN_STAMP")"
-    fi
-    if [[ "$package_lock_hash" == "$stored_frontend_hash" && "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" != "1" ]]; then
-        echo "      macOS frontend native binaries already ad-hoc signed"
-        return 0
-    fi
-
     echo "      Ad-hoc signing macOS frontend native binaries..."
-    xattr -dr com.apple.provenance "${FRONTEND_ROOT}/node_modules/@rollup" "${FRONTEND_ROOT}/node_modules/@esbuild" "${FRONTEND_ROOT}/node_modules/esbuild" "${FRONTEND_ROOT}/node_modules/app-builder-bin" >/dev/null 2>&1 || true
-    find "${FRONTEND_ROOT}/node_modules" \
-        -path "${FRONTEND_ROOT}/node_modules/electron" -prune -o \
-        -type f \( -name '*.node' -o -name '*.dylib' -o -path '*/@esbuild/*/bin/esbuild' -o -path '*/esbuild/bin/esbuild' -o -path '*/app-builder-bin/mac/app-builder*' -o -path '*/7zip-bin/mac/*/7za' \) -print0 |
-        while IFS= read -r -d '' native_binary; do
-            codesign --force --sign - "$native_binary" >/dev/null 2>&1 || true
-        done
-    printf '%s\n' "$package_lock_hash" > "$FRONTEND_NATIVE_CODESIGN_STAMP"
+    local signer_args=(
+        --project-root "$PROJECT_ROOT"
+        --root "${FRONTEND_ROOT}/node_modules"
+        --profile "frontend"
+        --stamp "$FRONTEND_NATIVE_CODESIGN_STAMP"
+    )
+    if [[ "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" == "1" ]]; then
+        signer_args+=(--force)
+    fi
+    "$BOOTSTRAP_PYTHON" "$MACOS_ARTIFACT_SIGNER" "${signer_args[@]}"
 }
 
 codesign_macos_backend_runtime_bundle() {
@@ -149,11 +156,10 @@ codesign_macos_backend_runtime_bundle() {
     fi
 
     echo "      Ad-hoc signing packaged backend runtime binaries..."
-    xattr -cr "$backend_runtime_dir" >/dev/null 2>&1 || true
-    find "$backend_runtime_dir" -type f \( -name '*.so' -o -name '*.dylib' -o -name 'VantageBackend' -o -name 'Python' \) -print0 |
-        while IFS= read -r -d '' runtime_binary; do
-            codesign --force --sign - "$runtime_binary" >/dev/null 2>&1 || true
-        done
+    "$BOOTSTRAP_PYTHON" "$MACOS_ARTIFACT_SIGNER" \
+        --project-root "$PROJECT_ROOT" \
+        --root "$backend_runtime_dir" \
+        --profile "backend-bundle"
 }
 
 prepare_macos_app_bundle() {
@@ -259,51 +265,42 @@ clean_macos_package_outputs() {
 RUN_START_SECONDS="$(date +%s)"
 
 step_start "[0/8] Cleaning residual source processes..."
-"$BOOTSTRAP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
+BACKEND_CLEANUP_PYTHON="$(select_backend_cleanup_python)"
+"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_LOCK_RUNNER" --project-root "$PROJECT_ROOT" -- \
+    "$BACKEND_CLEANUP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
 pkill -f "${INSTALLED_APP}/Contents" >/dev/null 2>&1 || true
 terminate_installed_vantage_apps
 step_done "Source cleanup complete"
 
 step_start "[1/8] Checking frontend dependencies..."
-if [[ ! -d "${FRONTEND_ROOT}/node_modules" ]]; then
-    echo "      Installing dependencies..."
-    npm --prefix "${FRONTEND_ROOT}" install
-else
-    echo "      Dependencies already installed"
-fi
+node "${FRONTEND_ROOT}/scripts/sync-dependencies.cjs" \
+    --webapp-root "$FRONTEND_ROOT" \
+    --invalidate-stamp "$FRONTEND_NATIVE_CODESIGN_STAMP"
 codesign_macos_frontend_binaries
 step_done "Frontend dependency check complete"
 
 step_start "[2/8] Preparing backend packaging environment..."
-if [[ ! -x "$BACKEND_RUNTIME_PYTHON" ]]; then
-    echo "      Creating clean backend runtime venv..."
-    "$BOOTSTRAP_PYTHON" -m venv "$BACKEND_RUNTIME_VENV"
-else
-    echo "      Backend runtime venv already exists"
+backend_sync_args=(
+    --project-root "$PROJECT_ROOT"
+    --venv "$BACKEND_RUNTIME_VENV"
+    --core-requirements "$BACKEND_RUNTIME_CORE_REQUIREMENTS"
+    --requirements "$BACKEND_RUNTIME_REQUIREMENTS"
+    --opencv-normalizer "$OPENCV_NORMALIZER"
+)
+if [[ "${VANTAGE_FORCE_BACKEND_DEPS:-0}" == "1" ]]; then
+    backend_sync_args+=(--force)
 fi
-
-core_requirements_hash="$(shasum -a 256 "$BACKEND_RUNTIME_CORE_REQUIREMENTS" | awk '{print $1}')"
-overlay_requirements_hash="$(shasum -a 256 "$BACKEND_RUNTIME_REQUIREMENTS" | awk '{print $1}')"
-requirements_hash="${core_requirements_hash}:${overlay_requirements_hash}"
-stored_hash=""
-if [[ -f "$BACKEND_RUNTIME_REQUIREMENTS_STAMP" ]]; then
-    stored_hash="$(cat "$BACKEND_RUNTIME_REQUIREMENTS_STAMP")"
+"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_SYNC" "${backend_sync_args[@]}"
+backend_sign_args=(
+    --project-root "$PROJECT_ROOT"
+    --venv "$BACKEND_RUNTIME_VENV"
+    --state "$BACKEND_RUNTIME_STATE"
+    --stamp "$BACKEND_RUNTIME_CODESIGN_STAMP"
+)
+if [[ "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" == "1" ]]; then
+    backend_sign_args+=(--force)
 fi
-
-if [[ "$requirements_hash" == "$stored_hash" && "${VANTAGE_FORCE_BACKEND_DEPS:-0}" != "1" ]]; then
-    echo "      Backend runtime dependencies already synced"
-else
-    echo "      Syncing backend runtime dependencies..."
-    rm -f "$BACKEND_RUNTIME_REQUIREMENTS_STAMP" "$BACKEND_RUNTIME_CODESIGN_STAMP"
-    "$BACKEND_RUNTIME_PYTHON" -m pip install --upgrade "pip==25.3"
-    "$BACKEND_RUNTIME_PYTHON" -m pip install -r "$BACKEND_RUNTIME_REQUIREMENTS"
-    if ! "$BACKEND_RUNTIME_PYTHON" "$OPENCV_NORMALIZER" --requirements-core "$BACKEND_RUNTIME_CORE_REQUIREMENTS"; then
-        echo "      Backend runtime OpenCV normalization failed" >&2
-        exit 1
-    fi
-    printf '%s\n' "$requirements_hash" > "$BACKEND_RUNTIME_REQUIREMENTS_STAMP"
-fi
-codesign_macos_native_libraries
+"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_SIGNER" "${backend_sign_args[@]}"
 step_done "Backend packaging environment ready"
 
 step_start "[3/8] Preparing build version..."
@@ -312,12 +309,15 @@ step_done "Build version prepared"
 
 step_start "[4/8] Building frontend and backend runtime in parallel..."
 echo "      Build workers requested: ${VANTAGE_BUILD_WORKERS}"
-"$BACKEND_RUNTIME_PYTHON" src/scripts/run_packaging_builds.py --backend-python "$BACKEND_RUNTIME_PYTHON" --workers "$VANTAGE_BUILD_WORKERS"
+"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_LOCK_RUNNER" --project-root "$PROJECT_ROOT" -- \
+    "$BACKEND_RUNTIME_PYTHON" src/scripts/run_packaging_builds.py \
+    --backend-python "$BACKEND_RUNTIME_PYTHON" --workers "$VANTAGE_BUILD_WORKERS"
 codesign_macos_backend_runtime_bundle
 step_done "Frontend and backend build step complete"
 
 step_start "[5/8] Verifying backend runtime..."
-"$BACKEND_RUNTIME_PYTHON" src/scripts/verify_backend_runtime.py --timeout-seconds 300
+"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_LOCK_RUNNER" --project-root "$PROJECT_ROOT" -- \
+    "$BACKEND_RUNTIME_PYTHON" src/scripts/verify_backend_runtime.py --timeout-seconds 300
 step_done "Backend runtime verification complete"
 
 step_start "[6/8] Building macOS app package..."

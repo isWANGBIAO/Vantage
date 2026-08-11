@@ -701,6 +701,18 @@ if (!gotTheLock) {
         consoleObject: console,
         stdout: process.stdout,
         stderr: process.stderr,
+        pathPrefixes: [
+            { prefix: app.getPath('home'), label: '<user-home>' },
+            { prefix: app.getPath('userData'), label: '<user-data>' },
+            { prefix: runtimePaths.dataDir, label: '<runtime-data>' },
+            { prefix: runtimePaths.logDir, label: '<runtime-logs>' },
+            { prefix: __dirname, label: '<app-root>' },
+            { prefix: projectRoot, label: '<project-root>' },
+            {
+                prefix: path.dirname(process.execPath),
+                label: '<app-executable>',
+            },
+        ],
     });
     log.cleanup();
     log.info('Vantage Electron starting...');

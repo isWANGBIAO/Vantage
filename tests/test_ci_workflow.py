@@ -44,17 +44,18 @@ def test_frontend_workflows_pin_electron_node_runtime():
         == expected_electron_version
     )
 
-    for workflow_path in (
-        Path(".github/workflows/ci.yml"),
-        Path(".github/workflows/release.yml"),
-    ):
+    expected_occurrences = {
+        Path(".github/workflows/ci.yml"): 2,
+        Path(".github/workflows/release.yml"): 1,
+    }
+    for workflow_path, expected_count in expected_occurrences.items():
         workflow = workflow_path.read_text(encoding="utf-8")
         configured_node_versions = re.findall(
             r'^\s+node-version:\s*["\']?([^"\'\s]+)["\']?\s*$',
             workflow,
             flags=re.MULTILINE,
         )
-        assert configured_node_versions == [expected_node_version], (
+        assert configured_node_versions == [expected_node_version] * expected_count, (
             f"{workflow_path} should use the Node.js version embedded in "
             f"Electron {expected_electron_version}"
         )
@@ -152,6 +153,81 @@ def test_python_workflow_caches_include_shared_core_and_environment_overlay():
             f"{workflow_path} must invalidate the pip cache for both the "
             "shared core and its environment overlay"
         )
+
+
+def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "  macos-runtime-smoke:" in workflow
+    macos_job = workflow[workflow.index("  macos-runtime-smoke:") :]
+
+    for runner, architecture in (("macos-15", "arm64"), ("macos-15-intel", "x64")):
+        assert runner in macos_job
+        assert architecture in macos_job
+
+    assert "macos-14" not in macos_job
+    assert "actions/setup-node@v4" in macos_job
+    assert 'node-version: "24.18.0"' in macos_job
+    assert "cache-dependency-path: src/webapp/package-lock.json" in macos_job
+    assert 'python-version: "3.13"' in macos_job
+    assert "actions/setup-python@v5" in macos_job
+    assert (
+        "- uses: actions/checkout@v4\n"
+        "        with:\n"
+        "          lfs: false"
+    ) in macos_job
+    assert (
+        "cache-dependency-path: |\n"
+        "            requirements-core.txt\n"
+        "            requirements-ci.txt\n"
+        "            requirements-backend-runtime-gpu.txt"
+    ) in macos_job
+    assert "sync_backend_runtime_environment.py" in macos_job
+    assert "--venv .venv-backend-runtime-gpu" in macos_job
+    assert (
+        ".venv-backend-runtime-gpu/bin/python -m pip check"
+    ) in macos_job
+    assert ".venv-backend-runtime-gpu/bin/python -c" in macos_job
+    assert "import cv2, numpy as np" in macos_job
+    assert "cv2.FaceDetectorYN_create" in macos_job
+    assert "src/models/face_detection_yunet_2023mar.onnx" in macos_job
+    assert "detector.detect" in macos_job
+    assert "bash -n RUN.sh RUN_DEV.sh" in macos_job
+    assert "tests/test_backend_runtime_lock.py" in macos_job
+    assert "tests/test_sign_macos_backend_runtime.py" in macos_job
+    assert "tests/test_sign_macos_artifacts.py" in macos_job
+    assert "tests/test_macos_cleanup_launcher.py" in macos_job
+    assert not re.findall(
+        r"^\s+(?:run:\s*)?python (?:-m pip (?:install|check)\b|-c\b)",
+        macos_job,
+        flags=re.MULTILINE,
+    ), "macOS runtime install, validation, and probe must use the isolated venv"
+
+    assert "sign_macos_backend_runtime.py" in macos_job
+    assert macos_job.count("sign_macos_backend_runtime.py") >= 3
+    assert "macos-native-codesign.sha256" in macos_job
+    assert "cached signature" in macos_job.lower()
+    assert "tamper" in macos_job.lower()
+    assert "signature refresh" in macos_job.lower()
+    assert "uname -m" in macos_job
+    assert "python -m venv .venv-lock-test" in macos_job
+    assert "grep -E '^pytest==[^[:space:]]+$' requirements-ci.txt" in macos_job
+    assert "grep -E '^psutil==[^[:space:]]+$' requirements-core.txt" in macos_job
+    assert (
+        '.venv-lock-test/bin/python -m pip install '
+        '"$pytest_requirement" "$psutil_requirement"'
+        in macos_job
+    )
+    assert ".venv-lock-test/bin/python -m pytest" in macos_job
+
+    forbidden_steps = (
+        "notarize",
+        "upload-artifact",
+        "publish",
+        "release",
+    )
+    normalized_job = macos_job.lower()
+    assert not [step for step in forbidden_steps if step in normalized_job]
 
 
 def test_release_metadata_matches_package_version():

@@ -3,19 +3,32 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from src.core.backend_environment_state import (
+    BACKEND_ENVIRONMENT_STATE_NAME,
+    compute_backend_environment_integrity,
+    compute_requirements_sha256,
+    current_platform_identity,
+    current_python_identity,
+    environment_state_validation_error,
+    installed_distribution_closure,
+    load_backend_environment_state,
+    normalize_distribution_closure,
+)
+from src.utils.sensitive_data import redact_sensitive_text
+from src.utils.subprocess_safety import run_bounded_subprocess
+
 
 RUNTIME_NAME = "VantageBackend"
 APP_EXE_NAME = f"{RUNTIME_NAME}.exe"
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
 BACKEND_RUNTIME_FINGERPRINT_NAME = "runtime-fingerprint.json"
-BACKEND_RUNTIME_FINGERPRINT_VERSION = 1
+BACKEND_RUNTIME_FINGERPRINT_VERSION = 5
 BACKEND_RUNTIME_SOURCE_INPUTS = (
     "requirements-core.txt",
     "requirements-backend-runtime-gpu.txt",
@@ -57,7 +70,6 @@ CONFLICTING_RUNTIME_DLL_NAMES = (
 )
 
 BACKEND_RUNTIME_VENV_NAME = ".venv-backend-runtime-gpu"
-DIRTY_PACKAGING_ENV_BYPASS = "VANTAGE_ALLOW_DIRTY_PACKAGING_ENV"
 
 PYINSTALLER_EXCLUDES = (
     "Cython",
@@ -85,13 +97,20 @@ PYINSTALLER_EXCLUDES = (
     "polars",
     "src.AI_Prediction",
     "src.battery_monitor",
+    "src.core.backend_runtime_lock",
     "src.face_analyzer_mediapipe",
     "src.scripts.convert_icon",
     "src.scripts.debug_single_face",
     "src.scripts.install_requirements",
+    "src.scripts.launch_locked_backend_background",
     "src.scripts.normalize_opencv_installation",
     "src.scripts.render_face_pipeline_markdown",
+    "src.scripts.run_bounded_command",
     "src.scripts.run_packaging_builds",
+    "src.scripts.run_with_backend_runtime_lock",
+    "src.scripts.sign_macos_artifacts",
+    "src.scripts.sign_macos_backend_runtime",
+    "src.scripts.sync_backend_runtime_environment",
     "src.scripts.test_gpu_inference",
     "tensorrt",
     "tensorrt_bindings",
@@ -188,23 +207,66 @@ def validate_packaging_python_environment(
     executable: str | Path | None = None,
     prefix: str | Path | None = None,
     environ: dict[str, str] | None = None,
+    distribution_closure: list[str] | None = None,
+    python_identity: dict[str, str] | None = None,
+    platform_identity: dict[str, str] | None = None,
 ) -> str | None:
-    resolved_environ = environ if environ is not None else os.environ
-    if resolved_environ.get(DIRTY_PACKAGING_ENV_BYPASS) == "1":
-        return None
-
     expected_venv = Path(project_root).resolve() / BACKEND_RUNTIME_VENV_NAME
     resolved_executable = Path(executable or sys.executable).resolve()
     resolved_prefix = Path(prefix or sys.prefix).resolve()
-    if _path_is_relative_to(resolved_executable, expected_venv) or _path_is_relative_to(
-        resolved_prefix,
-        expected_venv,
+    if not (
+        _path_is_relative_to(resolved_executable, expected_venv)
+        or _path_is_relative_to(
+            resolved_prefix,
+            expected_venv,
+        )
     ):
-        return None
-    return (
-        "Backend runtime must be built with the clean packaging venv: "
-        f"{expected_venv}. Set {DIRTY_PACKAGING_ENV_BYPASS}=1 only for emergency local debugging."
+        return (
+            "Backend runtime must be built with the validated packaging venv: "
+            f"{expected_venv}. Environment state and closure validation cannot be bypassed."
+        )
+
+    try:
+        requirements_sha256 = compute_requirements_sha256(
+            Path(project_root).resolve() / "requirements-core.txt",
+            Path(project_root).resolve() / "requirements-backend-runtime-gpu.txt",
+        )
+        resolved_closure = normalize_distribution_closure(
+            installed_distribution_closure()
+            if distribution_closure is None
+            else distribution_closure
+        )
+        resolved_python_identity = python_identity or current_python_identity()
+        resolved_platform_identity = platform_identity or current_platform_identity()
+        resolved_environment_integrity = compute_backend_environment_integrity(
+            expected_venv,
+            platform_name=str(resolved_platform_identity.get("sys_platform") or sys.platform),
+        )
+        if resolved_platform_identity.get("sys_platform") == "darwin":
+            from src.scripts.sign_macos_backend_runtime import (
+                MACOS_BACKEND_CODESIGN_STAMP_NAME,
+                validated_macos_backend_codesign_state,
+            )
+
+            validated_macos_backend_codesign_state(
+                expected_venv,
+                expected_venv / BACKEND_ENVIRONMENT_STATE_NAME,
+                expected_venv / MACOS_BACKEND_CODESIGN_STAMP_NAME,
+            )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        return f"Backend runtime environment state could not be validated: {exc}"
+
+    state_error = environment_state_validation_error(
+        load_backend_environment_state(expected_venv),
+        requirements_sha256=requirements_sha256,
+        python_identity=resolved_python_identity,
+        platform_identity=resolved_platform_identity,
+        distributions=resolved_closure,
+        environment_integrity=resolved_environment_integrity,
     )
+    if state_error:
+        return f"Backend runtime environment state is not reusable: {state_error}."
+    return None
 
 
 def _path_is_relative_to(path: Path, parent: Path) -> bool:
@@ -213,7 +275,6 @@ def _path_is_relative_to(path: Path, parent: Path) -> bool:
     except ValueError:
         return False
     return True
-    return None
 
 
 def _normalize_destination(relative_destination: str | Path) -> Path:
@@ -334,8 +395,19 @@ def build_project_activity_snapshot(
     built_at = built_at or datetime.now()
     time_limit = (built_at - timedelta(days=days)).strftime("%Y-%m-%d")
     git_cmd = ["git", "log", f'--since="{time_limit}"', "--pretty=format:%h|%ad|%s", "--date=short"]
-    run = run_command or subprocess.run
-    proc = run(git_cmd, capture_output=True, cwd=resolved_root)
+    try:
+        proc = run_bounded_subprocess(
+            git_cmd,
+            run_command=run_command,
+            timeout_seconds=30,
+            cwd=resolved_root,
+            path_prefixes={
+                "<PROJECT_ROOT>": resolved_root,
+                "<USER_HOME>": Path.home(),
+            },
+        )
+    except subprocess.TimeoutExpired:
+        proc = subprocess.CompletedProcess(git_cmd, 124, stdout="", stderr="")
 
     commits: list[dict[str, str]] = []
     if proc.returncode == 0 and getattr(proc, "stdout", None):
@@ -343,7 +415,19 @@ def build_project_activity_snapshot(
         for line in out_text.splitlines():
             parts = line.split("|", 2)
             if len(parts) == 3:
-                commits.append({"hash": parts[0], "date": parts[1], "message": parts[2]})
+                commits.append(
+                    {
+                        "hash": parts[0],
+                        "date": parts[1],
+                        "message": redact_sensitive_text(
+                            parts[2],
+                            path_prefixes={
+                                "<PROJECT_ROOT>": resolved_root,
+                                "<USER_HOME>": Path.home(),
+                            },
+                        ),
+                    }
+                )
 
     return {
         "generated_at": built_at.isoformat(timespec="seconds"),
@@ -449,6 +533,11 @@ def build_backend_runtime_fingerprint(
     project_root: str | Path,
     *,
     resources: list[BundledResource],
+    distribution_closure: list[str] | None = None,
+    python_identity: dict[str, str] | None = None,
+    platform_identity: dict[str, str] | None = None,
+    environment_integrity: dict[str, object] | None = None,
+    macos_codesign_state: dict[str, object] | None = None,
 ) -> dict[str, object]:
     resolved_root = Path(project_root).resolve()
     entries_by_path: dict[str, dict[str, object]] = {}
@@ -464,9 +553,47 @@ def build_backend_runtime_fingerprint(
         entries_by_path[logical_path] = _fingerprint_entry(resolved_root, resource.source, logical_path)
 
     inputs = [entries_by_path[key] for key in sorted(entries_by_path)]
+    resolved_distribution_closure = normalize_distribution_closure(
+        installed_distribution_closure()
+        if distribution_closure is None
+        else distribution_closure
+    )
+    resolved_python_identity = dict(python_identity or current_python_identity())
+    resolved_platform_identity = dict(platform_identity or current_platform_identity())
+    resolved_environment_integrity = dict(
+        compute_backend_environment_integrity(
+            resolved_root / BACKEND_RUNTIME_VENV_NAME,
+            platform_name=str(resolved_platform_identity.get("sys_platform") or sys.platform),
+        )
+        if environment_integrity is None
+        else environment_integrity
+    )
+    resolved_macos_codesign_state = macos_codesign_state
+    if (
+        resolved_platform_identity.get("sys_platform") == "darwin"
+        and resolved_macos_codesign_state is None
+    ):
+        from src.scripts.sign_macos_backend_runtime import (
+            MACOS_BACKEND_CODESIGN_STAMP_NAME,
+            validated_macos_backend_codesign_state,
+        )
+
+        resolved_macos_codesign_state = validated_macos_backend_codesign_state(
+            resolved_root / BACKEND_RUNTIME_VENV_NAME,
+            resolved_root
+            / BACKEND_RUNTIME_VENV_NAME
+            / BACKEND_ENVIRONMENT_STATE_NAME,
+            resolved_root
+            / BACKEND_RUNTIME_VENV_NAME
+            / MACOS_BACKEND_CODESIGN_STAMP_NAME,
+        )
     digest_payload = {
         "version": BACKEND_RUNTIME_FINGERPRINT_VERSION,
-        "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "python": resolved_python_identity,
+        "platform": resolved_platform_identity,
+        "distributions": resolved_distribution_closure,
+        "environment_integrity": resolved_environment_integrity,
+        "macos_codesign_state": resolved_macos_codesign_state,
         "inputs": inputs,
     }
     digest = hashlib.sha256(
@@ -477,6 +604,10 @@ def build_backend_runtime_fingerprint(
         "version": BACKEND_RUNTIME_FINGERPRINT_VERSION,
         "algorithm": "sha256",
         "python": digest_payload["python"],
+        "platform": digest_payload["platform"],
+        "distributions": resolved_distribution_closure,
+        "environment_integrity": resolved_environment_integrity,
+        "macos_codesign_state": resolved_macos_codesign_state,
         "digest": digest,
         "inputs": inputs,
     }
@@ -763,5 +894,17 @@ def backend_runtime_fingerprint_matches(
     if stored_fingerprint.get("version") != expected_fingerprint.get("version"):
         return False
     if stored_fingerprint.get("python") != expected_fingerprint.get("python"):
+        return False
+    if stored_fingerprint.get("platform") != expected_fingerprint.get("platform"):
+        return False
+    if stored_fingerprint.get("distributions") != expected_fingerprint.get("distributions"):
+        return False
+    if stored_fingerprint.get("environment_integrity") != expected_fingerprint.get(
+        "environment_integrity"
+    ):
+        return False
+    if stored_fingerprint.get("macos_codesign_state") != expected_fingerprint.get(
+        "macos_codesign_state"
+    ):
         return False
     return not validate_backend_runtime_bundle(layout, resources)

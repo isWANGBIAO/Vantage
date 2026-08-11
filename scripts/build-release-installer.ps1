@@ -14,7 +14,8 @@ $BackendRuntimePython = Join-Path $BackendRuntimeVenv "Scripts\python.exe"
 $BackendRuntimeCoreRequirements = Join-Path $ProjectRoot "requirements-core.txt"
 $BackendRuntimeRequirements = Join-Path $ProjectRoot "requirements-backend-runtime-gpu.txt"
 $OpenCvNormalizer = Join-Path $ProjectRoot "src\scripts\normalize_opencv_installation.py"
-$BackendRuntimeRequirementsStamp = Join-Path $BackendRuntimeVenv ".requirements-backend-runtime-gpu.sha256"
+$BackendRuntimeSync = Join-Path $ProjectRoot "src\scripts\sync_backend_runtime_environment.py"
+$BackendRuntimeLockRunner = Join-Path $ProjectRoot "src\scripts\run_with_backend_runtime_lock.py"
 $WebappBuildInfo = Join-Path $WebappRoot "build-info.json"
 $BuildInfoBackup = Join-Path $env:TEMP ("vantage-release-build-info-{0}-{1}.json" -f $PID, [Guid]::NewGuid().ToString("N"))
 $BuildInfoBackupCreated = $false
@@ -127,17 +128,11 @@ Set-Location $ProjectRoot
 
 try {
     Write-Host "[1/7] Installing frontend dependencies"
-    if ($env:CI -eq "true") {
-        Invoke-WithElectronMirrorFallback -Description "npm ci" -Action {
-            Invoke-Native -FilePath "npm" -ArgumentList @("ci") -WorkingDirectory $WebappRoot
-        }
-    } elseif (-not (Test-Path -LiteralPath (Join-Path $WebappRoot "node_modules"))) {
-        Invoke-WithElectronMirrorFallback -Description "npm install" -Action {
-            Invoke-Native -FilePath "npm" -ArgumentList @("install") -WorkingDirectory $WebappRoot
-        }
-    } else {
-        Write-Host "Frontend dependencies already installed"
-    }
+    Invoke-Native -FilePath "node" -ArgumentList @(
+        "scripts\sync-dependencies.cjs",
+        "--webapp-root",
+        $WebappRoot
+    ) -WorkingDirectory $WebappRoot
 
     Invoke-WithElectronMirrorFallback -Description "Electron binary preparation" -Action {
         Invoke-Native -FilePath "node" -ArgumentList @("node_modules\electron\install.js") -WorkingDirectory $WebappRoot
@@ -145,30 +140,23 @@ try {
     Invoke-Native -FilePath "npm" -ArgumentList @("exec", "--", "electron", "--version") -WorkingDirectory $WebappRoot
 
     Write-Host "[2/7] Preparing backend runtime environment"
-    if (-not (Test-Path -LiteralPath $BackendRuntimePython)) {
-        Invoke-Native -FilePath "python" -ArgumentList @("-m", "venv", $BackendRuntimeVenv)
+    $backendSyncArgs = @(
+        $BackendRuntimeSync,
+        "--project-root",
+        $ProjectRoot,
+        "--venv",
+        $BackendRuntimeVenv,
+        "--core-requirements",
+        $BackendRuntimeCoreRequirements,
+        "--requirements",
+        $BackendRuntimeRequirements,
+        "--opencv-normalizer",
+        $OpenCvNormalizer
+    )
+    if ($env:VANTAGE_FORCE_BACKEND_DEPS -eq "1") {
+        $backendSyncArgs += "--force"
     }
-
-    $coreRequirementsHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $BackendRuntimeCoreRequirements).Hash
-    $overlayRequirementsHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $BackendRuntimeRequirements).Hash
-    $requirementsHash = "${coreRequirementsHash}:$overlayRequirementsHash"
-    $storedHash = $null
-    if (Test-Path -LiteralPath $BackendRuntimeRequirementsStamp) {
-        $storedHash = (Get-Content -LiteralPath $BackendRuntimeRequirementsStamp -Raw).Trim()
-    }
-
-    if ($requirementsHash -eq $storedHash -and $env:VANTAGE_FORCE_BACKEND_DEPS -ne "1") {
-        Write-Host "Backend runtime dependencies already synced"
-    } else {
-        if (Test-Path -LiteralPath $BackendRuntimeRequirementsStamp) {
-            Remove-Item -LiteralPath $BackendRuntimeRequirementsStamp -Force
-        }
-        Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @("-m", "pip", "install", "--upgrade", "pip")
-        Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @("-m", "pip", "install", "-r", $BackendRuntimeRequirements)
-        Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @($OpenCvNormalizer, "--requirements-core", $BackendRuntimeCoreRequirements)
-        Set-Content -LiteralPath $BackendRuntimeRequirementsStamp -Value $requirementsHash -Encoding ascii
-    }
-    Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @("-c", "import chinese_calendar, lap, zhdate; print('backend runtime dependency imports ok')")
+    Invoke-Native -FilePath "python" -ArgumentList $backendSyncArgs
 
     Write-Host "[3/7] Preparing release build metadata"
     if (Test-Path -LiteralPath $WebappBuildInfo) {
@@ -178,7 +166,12 @@ try {
     Invoke-Native -FilePath "node" -ArgumentList @("scripts\prepare-build-version.mjs", "--mode", "sync") -WorkingDirectory $WebappRoot
 
     Write-Host "[4/7] Building frontend and backend runtime"
-    Invoke-Native -FilePath $BackendRuntimePython -ArgumentList @(
+    Invoke-Native -FilePath "python" -ArgumentList @(
+        $BackendRuntimeLockRunner,
+        "--project-root",
+        $ProjectRoot,
+        "--",
+        $BackendRuntimePython,
         "src\scripts\run_packaging_builds.py",
         "--backend-python",
         $BackendRuntimePython,
@@ -187,11 +180,20 @@ try {
     )
 
     Write-Host "[5/7] Verifying backend runtime"
-    $verifyArgs = @("src\scripts\verify_backend_runtime.py", "--timeout-seconds", "$BackendVerifyTimeoutSeconds")
+    $verifyArgs = @(
+        $BackendRuntimeLockRunner,
+        "--project-root",
+        $ProjectRoot,
+        "--",
+        $BackendRuntimePython,
+        "src\scripts\verify_backend_runtime.py",
+        "--timeout-seconds",
+        "$BackendVerifyTimeoutSeconds"
+    )
     if ($SkipBackendSmoke) {
         $verifyArgs += "--skip-launch"
     }
-    Invoke-Native -FilePath $BackendRuntimePython -ArgumentList $verifyArgs
+    Invoke-Native -FilePath "python" -ArgumentList $verifyArgs
 
     Write-Host "[6/7] Building Windows installer"
     Ensure-CustomNsisArchiveCache

@@ -24,6 +24,13 @@ def _ensure_project_root_on_sys_path(
 
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
+from src.core.backend_runtime_lock import backend_runtime_lock
+from src.utils.subprocess_safety import BoundedTextEmitter, run_bounded_subprocess
+
+
+PACKAGING_SUBPROCESS_TIMEOUT_SECONDS = 60 * 60
+PACKAGING_SUBPROCESS_OUTPUT_LIMIT_BYTES = 256 * 1024
+
 
 def _configure_console_encoding():
     for stream in (sys.stdout, sys.stderr):
@@ -89,23 +96,51 @@ def build_packaging_commands(
     }
 
 
-def _run_command(name: str, command: list[str], cwd: Path) -> int:
-    print(f"[{name}] starting: {' '.join(command)}", flush=True)
-    process = subprocess.Popen(
-        command,
-        cwd=str(cwd),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+def _run_command(
+    name: str,
+    command: list[str],
+    cwd: Path,
+    *,
+    timeout_seconds: float = PACKAGING_SUBPROCESS_TIMEOUT_SECONDS,
+    output_limit_bytes: int = PACKAGING_SUBPROCESS_OUTPUT_LIMIT_BYTES,
+) -> int:
+    path_prefixes = {
+        "<PROJECT_ROOT>": PROJECT_ROOT,
+        "<WORKER_CWD>": cwd,
+        "<USER_HOME>": Path.home(),
+    }
+    emitter = BoundedTextEmitter(
+        limit_bytes=output_limit_bytes,
+        path_prefixes=path_prefixes,
     )
-    assert process.stdout is not None
-    for line in process.stdout:
-        print(f"[{name}] {line}", end="", flush=True)
-    return_code = process.wait()
-    print(f"[{name}] exited with {return_code}", flush=True)
-    return return_code
+
+    def emit(value: str) -> None:
+        filtered = emitter.filter(value)
+        if filtered:
+            print(filtered, end="", flush=True)
+
+    emit(f"[{name}] starting: {' '.join(command)}\n")
+    try:
+        result = run_bounded_subprocess(
+            command,
+            timeout_seconds=timeout_seconds,
+            output_limit_bytes=output_limit_bytes,
+            cwd=str(cwd),
+            path_prefixes=path_prefixes,
+        )
+    except subprocess.TimeoutExpired as exc:
+        for captured in (exc.output, exc.stderr):
+            if captured:
+                if isinstance(captured, bytes):
+                    captured = captured.decode("utf-8", errors="replace")
+                emit(f"[{name}] {captured}")
+        emit(f"[{name}] timed out after {timeout_seconds:g} seconds\n")
+        return 124
+    for captured in (result.stdout, result.stderr):
+        if captured:
+            emit(f"[{name}] {captured}")
+    emit(f"[{name}] exited with {result.returncode}\n")
+    return result.returncode
 
 
 def resolve_build_worker_count(
@@ -156,7 +191,7 @@ def run_packaging_builds(
     return 0
 
 
-def main() -> int:
+def _main_without_backend_runtime_lock() -> int:
     _configure_console_encoding()
     parser = _build_parser()
     args = parser.parse_args()
@@ -165,6 +200,11 @@ def main() -> int:
         backend_python=args.backend_python,
     )
     return run_packaging_builds(commands, workers=args.workers)
+
+
+def main() -> int:
+    with backend_runtime_lock(PROJECT_ROOT, mode="shared"):
+        return _main_without_backend_runtime_lock()
 
 
 if __name__ == "__main__":

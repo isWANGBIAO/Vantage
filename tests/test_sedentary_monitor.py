@@ -230,6 +230,72 @@ def test_run_task_reports_grace_from_trusted_away_time_after_unknown_gap(
     assert "Grace period: 30s left" in capsys.readouterr().err
 
 
+def test_run_task_logs_confirmed_absence_reset_only_on_transition(tmp_path, capsys):
+    monitor = _make_monitor(tmp_path)
+    _record(monitor, True, 100.0)
+    _record(monitor, False, 110.0)
+
+    with (
+        patch("src.manager.manager_main.get_location", return_value=(None, None)),
+        patch("src.manager.manager_main.take_photo", return_value=(False, None)),
+        patch(
+            "src.manager.manager_main.time.time",
+            side_effect=[230.0, 230.0, 290.0, 290.0],
+        ),
+    ):
+        assert monitor.run_task() == monitor.ABSENT
+        assert monitor.run_task() == monitor.ABSENT
+
+    output = capsys.readouterr().out
+    assert output.count("User left for >2mins. Resetting sedentary timer.") == 1
+
+
+def test_run_task_does_not_log_reset_after_stale_gap_clears_focus(
+    tmp_path,
+    capsys,
+):
+    monitor = _make_monitor(tmp_path)
+    monitor.monitor_stale_timeout = 120.0
+    _record(monitor, True, 100.0)
+    _record(monitor, False, 110.0)
+    monitor.last_monitor_heartbeat = 110.0
+
+    with (
+        patch("src.manager.manager_main.get_location", return_value=(None, None)),
+        patch("src.manager.manager_main.take_photo", return_value=(False, None)),
+        patch("src.manager.manager_main.time.time", side_effect=[300.0, 300.0]),
+    ):
+        assert monitor.run_task() == monitor.ABSENT
+
+    output = capsys.readouterr().out
+    assert "Monitor gap 190s exceeded timeout. Pausing timers." in output
+    assert "User left for >2mins. Resetting sedentary timer." not in output
+    assert monitor.continuous_sit_start is None
+    assert monitor.focus_elapsed_seconds == 0.0
+
+
+def test_run_task_does_not_log_reset_after_clock_rollback_and_absence(
+    tmp_path,
+    capsys,
+):
+    monitor = _make_monitor(tmp_path)
+    _record(monitor, True, 100.0)
+    monitor.last_monitor_heartbeat = 100.0
+
+    with (
+        patch("src.manager.manager_main.get_location", return_value=(None, None)),
+        patch("src.manager.manager_main.take_photo", return_value=(False, None)),
+        patch("src.manager.manager_main.time.time", side_effect=[90.0, 90.0]),
+    ):
+        assert monitor.run_task() == monitor.ABSENT
+
+    output = capsys.readouterr().out
+    assert "User left for >2mins. Resetting sedentary timer." not in output
+    assert monitor.continuous_sit_start is None
+    assert monitor.focus_elapsed_seconds == 0.0
+    assert monitor.away_elapsed_seconds == 0.0
+
+
 def test_stale_cutoff_that_completes_away_grace_clears_only_focus_session(
     tmp_path,
 ):

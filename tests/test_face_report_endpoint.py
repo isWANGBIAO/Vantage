@@ -45,16 +45,80 @@ class FaceReportEndpointTests(unittest.TestCase):
 
                 stdout_handle = mock_run.call_args.kwargs["stdout"]
                 stderr_handle = mock_run.call_args.kwargs["stderr"]
-                self.assertEqual(Path(stdout_handle.name).name, "face-analysis-20260420_221530.log")
-                self.assertEqual(stdout_handle, stderr_handle)
+                self.assertTrue(stdout_handle.closed)
+                self.assertEqual(stderr_handle, server.subprocess.STDOUT)
                 self.assertEqual(
-                    Path(stdout_handle.name),
-                    tmp / "logs" / "face-analysis" / "face-analysis-20260420_221530.log",
+                    Path(latest_pointer_content).resolve(),
+                    (tmp / "logs" / "face-analysis" / "face-analysis-20260420_221530.log").resolve(),
                 )
                 self.assertEqual(
                     latest_pointer_content,
                     str((tmp / "logs" / "face-analysis" / "face-analysis-20260420_221530.log").resolve()),
                 )
+
+    def test_face_analysis_background_log_redacts_split_native_child_output(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            scripts_dir = tmp / "scripts"
+            scripts_dir.mkdir()
+            private_history = tmp / "Private History"
+            private_history.mkdir()
+            private_photo = private_history / "face-secret.jpg"
+            secret = "face-analysis-bearer-secret-1234567890"
+            script_path = scripts_dir / "analyze_face.py"
+            script_path.write_text(
+                "\n".join(
+                    (
+                        "import os",
+                        f"private_path = {str(private_photo)!r}.encode('utf-8')",
+                        f"secret = {secret!r}.encode('utf-8')",
+                        "path_split = max(1, len(private_path) // 2)",
+                        "os.write(1, b'search_paths=[' + private_path[:path_split])",
+                        "os.write(1, private_path[path_split:] + b']\\n')",
+                        "os.write(2, b'Authorization: Bea')",
+                        "os.write(2, b'rer ' + secret + b'\\n')",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            runtime_paths = {
+                "app_mode": "development",
+                "data_dir": tmp / "data",
+                "config_dir": tmp / "config",
+                "history_dir": private_history,
+                "log_dir": tmp / "logs",
+                "plot_dir": tmp / "plots",
+                "cache_dir": tmp / "cache",
+                "runtime_dir": tmp / "runtime",
+                "migration_dir": tmp / "migration",
+            }
+            background_tasks = BackgroundTasks()
+
+            try:
+                with (
+                    patch.object(server, "__file__", str(tmp / "server.py")),
+                    patch.object(server.Config, "get_project_root", return_value=tmp),
+                    patch.object(server.Config, "get_runtime_paths", return_value=runtime_paths),
+                    patch.object(server.Config, "get_logs_dir", return_value=runtime_paths["log_dir"]),
+                ):
+                    payload = asyncio.run(server.analyze_face_history(background_tasks))
+                    self.assertEqual(payload["message"], "Analysis started in background")
+                    task = background_tasks.tasks[0]
+                    task.func(*task.args, **task.kwargs)
+
+                latest = (runtime_paths["log_dir"] / "face-analysis.latest.log").read_text(
+                    encoding="utf-8"
+                )
+                persisted = Path(latest).read_text(encoding="utf-8")
+            finally:
+                with server._face_analysis_job_lock:
+                    server._face_analysis_job_running = False
+
+            self.assertNotIn(str(private_history), persisted)
+            self.assertNotIn(secret, persisted)
+            self.assertIn("<HISTORY_DIR>", persisted)
+            self.assertIn("Authorization: Bearer [REDACTED_TOKEN]", persisted)
+            self.assertIn("face-secret.jpg", persisted)
 
     def test_face_analysis_rejects_duplicate_background_start(self):
         background_tasks = BackgroundTasks()

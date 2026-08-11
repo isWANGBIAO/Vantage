@@ -73,6 +73,7 @@ from src.manager.manager_main import Monitor
 from src.manager.get_location import get_location, get_trusted_location_sample_async
 from src.manager.take_photo.take_a_photo import PresencePhotoSaveCoordinator
 from src.services.llm_client import LLMClient
+from src.services.directory_size_scanner import DirectorySizeScanner
 from src.services.model_call_recorder import (
     get_session_usage_summary,
     get_usage_dashboard_snapshot,
@@ -94,7 +95,12 @@ from src.services.location_trust import (
     LocationTrustResolver,
 )
 from src.utils.data_loader import DataLoader
-from src.utils.sensitive_data import redact_sensitive_text
+from src.utils.sensitive_data import (
+    RedactingPipeLog,
+    build_log_path_prefixes,
+    redact_sensitive_text,
+    register_runtime_log_path_prefixes,
+)
 
 
 _cv2_module = None
@@ -150,6 +156,8 @@ ACTION_PLAN_PROVIDER_READY_REQUEST_TIMEOUT_SECONDS = 3
 STORAGE_SCAN_MAX_SECONDS = 3.0
 STORAGE_SCAN_MAX_ENTRIES = 20000
 STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS = 3600.0
+STORAGE_SCAN_REFRESH_INTERVAL_SECONDS = 15 * 60
+STORAGE_STATS_UPDATE_INTERVAL_SECONDS = 60
 LATEST_MEDIA_SCAN_MAX_SECONDS = 3.0
 LATEST_MEDIA_SCAN_MAX_ENTRIES = 30000
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
@@ -201,6 +209,13 @@ _plot_dashboard_cache_payload = None
 
 def _get_runtime_workdir():
     return Path(Config.get_project_root())
+
+
+def _build_runtime_log_path_prefixes():
+    return build_log_path_prefixes(
+        project_root=Config.get_project_root(),
+        runtime_paths=Config.get_runtime_paths(),
+    )
 
 
 def _get_project_progress_root():
@@ -1217,26 +1232,77 @@ def update_legacy_storage_stats():
     except Exception as e:
         print(f"Legacy storage scan error: {e}")
 
-def update_storage_stats():
+def update_storage_stats(
+    *,
+    max_entries_per_step=STORAGE_SCAN_MAX_ENTRIES,
+    max_seconds_per_step=STORAGE_SCAN_MAX_SECONDS,
+    refresh_interval_seconds=STORAGE_SCAN_REFRESH_INTERVAL_SECONDS,
+    monotonic_clock=None,
+    sleep_fn=None,
+    scanner_factory=DirectorySizeScanner,
+):
     """Background thread to periodically update photos/screenshots storage size cache."""
-    while state.is_running:
-        try:
-            scan_truncated = False
-            photos_size = 0
-            if state.photos_path and os.path.exists(state.photos_path):
-                photos_size = _safe_directory_size(state.photos_path)
-                scan_truncated = scan_truncated or bool(getattr(_safe_directory_size, "last_truncated", False))
-            state.photos_size = photos_size
+    active_clock = monotonic_clock or time.monotonic
+    active_sleep = sleep_fn or time.sleep
+    scanners = {"photos": None, "screenshots": None}
+    scanner_paths = {"photos": None, "screenshots": None}
 
-            screenshots_size = 0
-            if state.screenshots_path and os.path.exists(state.screenshots_path):
-                screenshots_size = _safe_directory_size(state.screenshots_path)
-                scan_truncated = scan_truncated or bool(getattr(_safe_directory_size, "last_truncated", False))
-            state.screenshots_size = screenshots_size
-            state.storage_scan_truncated = scan_truncated
-        except Exception as e:
-            print(f"Storage stats update error: {e}")
-        time.sleep(60)  # Update every 60 seconds
+    def close_scanner(key):
+        scanner = scanners[key]
+        scanners[key] = None
+        scanner_paths[key] = None
+        if scanner is None:
+            return
+        close = getattr(scanner, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as e:
+                print(f"Storage scanner close error: {e}")
+
+    try:
+        while state.is_running:
+            try:
+                scan_truncated = False
+                sizes = {}
+                for key, configured_path in (
+                    ("photos", state.photos_path),
+                    ("screenshots", state.screenshots_path),
+                ):
+                    normalized_path = (
+                        os.path.abspath(os.fspath(configured_path))
+                        if configured_path
+                        else None
+                    )
+                    if not normalized_path:
+                        close_scanner(key)
+                        sizes[key] = 0
+                        continue
+
+                    if scanner_paths[key] != normalized_path:
+                        close_scanner(key)
+                        scanners[key] = scanner_factory(
+                            normalized_path,
+                            max_entries_per_step=max_entries_per_step,
+                            max_seconds_per_step=max_seconds_per_step,
+                            refresh_interval_seconds=refresh_interval_seconds,
+                            monotonic_clock=active_clock,
+                        )
+                        scanner_paths[key] = normalized_path
+
+                    snapshot = scanners[key].step()
+                    sizes[key] = snapshot.total_size
+                    scan_truncated = scan_truncated or not snapshot.complete
+
+                state.photos_size = sizes["photos"]
+                state.screenshots_size = sizes["screenshots"]
+                state.storage_scan_truncated = scan_truncated
+            except Exception as e:
+                print(f"Storage stats update error: {e}")
+            active_sleep(STORAGE_STATS_UPDATE_INTERVAL_SECONDS)
+    finally:
+        for key in scanners:
+            close_scanner(key)
 
 # Balance Sheet helpers
 def _normalize_cell_value(value):
@@ -2236,6 +2302,12 @@ async def startup_event():
     # RESUME initialization (Unindented to run regardless of camera init success/failure)
     try:
         state.photos_path, state.screenshots_path = identify_logs_folder()
+        register_runtime_log_path_prefixes(
+            {
+                "<PHOTOS_ROOT>": state.photos_path,
+                "<SCREENSHOTS_ROOT>": state.screenshots_path,
+            }
+        )
         print(f"----------------------------------------------------------------")
         print(f"[Storage] Photos Path: {state.photos_path}")
         print(f"[Storage] Screenshots Path: {state.screenshots_path}")
@@ -5300,16 +5372,23 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
         print("Starting face analysis...")
         try:
             log_path = _create_runtime_log_path("face-analysis", "face-analysis")
-            with open(log_path, "a", encoding="utf-8", buffering=1) as log_file:
-                log_file.write(f"\n=== Face analysis launch {datetime.now().isoformat()} ===\n")
-                log_file.flush()
-                subprocess.run(
-                    [sys.executable, script_path],
-                    check=True,
-                    cwd=str(_get_runtime_workdir()),
-                    stdout=log_file,
-                    stderr=log_file,
+            with RedactingPipeLog(
+                log_path,
+                path_prefixes=_build_runtime_log_path_prefixes(),
+            ) as log_file:
+                log_file.write_record(
+                    f"\n=== Face analysis launch {datetime.now().isoformat()} ===\n"
                 )
+                with log_file.capture_subprocess_output(
+                    stream_name="face-analysis"
+                ) as child_output:
+                    subprocess.run(
+                        [sys.executable, script_path],
+                        check=True,
+                        cwd=str(_get_runtime_workdir()),
+                        stdout=child_output,
+                        stderr=subprocess.STDOUT,
+                    )
             print("Face analysis complete.")
         except Exception as e:
             print(f"Face analysis failed: {e}")

@@ -1,3 +1,4 @@
+import atexit
 import importlib
 import os
 import runpy
@@ -19,10 +20,11 @@ def _ensure_project_root_on_sys_path(
     return project_root
 
 
-_ensure_project_root_on_sys_path()
+PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
 from src.core.config import Config
 from src.core.runtime_library_bootstrap import apply_runtime_library_dirs
+from src.utils.sensitive_data import RedactingPipeLog, build_log_path_prefixes
 
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
@@ -32,13 +34,15 @@ PACKAGED_RUNTIME_REQUIRED_IMPORTS = (
 )
 
 
-def _redirect_standard_streams(log_path: Path):
-    log_file = open(log_path, "a", encoding="utf-8", buffering=1)
-    os.dup2(log_file.fileno(), 1)
-    os.dup2(log_file.fileno(), 2)
-    sys.stdout = open(1, "w", encoding="utf-8", buffering=1, closefd=False)
-    sys.stderr = open(2, "w", encoding="utf-8", buffering=1, closefd=False)
-    return log_file
+def _redirect_standard_streams(log_path: Path, *, path_prefixes=None):
+    pipe_log = RedactingPipeLog(
+        log_path,
+        path_prefixes=path_prefixes,
+    )
+    sys.stdout = pipe_log.redirect(1, stream_name="stdout")
+    sys.stderr = pipe_log.redirect(2, stream_name="stderr")
+    atexit.register(pipe_log.close)
+    return pipe_log
 
 
 def _prepare_server_runtime_log(logs_dir: Path, launched_at: datetime):
@@ -53,12 +57,32 @@ def _prepare_server_runtime_log(logs_dir: Path, launched_at: datetime):
     return log_path, latest_pointer
 
 
+def _build_log_path_prefixes(
+    *,
+    project_root: Path,
+    runtime_paths: dict,
+    executable: str | Path | None = None,
+    user_home: str | Path | None = None,
+):
+    return build_log_path_prefixes(
+        project_root=project_root,
+        runtime_paths=runtime_paths,
+        executable=executable,
+        user_home=user_home,
+    )
+
+
 def _resolve_runtime_context():
     runtime_paths = Config.get_runtime_paths()
+    project_root = Config.get_project_root()
     return {
-        "project_root": Config.get_project_root(),
+        "project_root": project_root,
         "log_dir": runtime_paths["log_dir"],
         "env": Config.build_runtime_environment(),
+        "path_prefixes": _build_log_path_prefixes(
+            project_root=project_root,
+            runtime_paths=runtime_paths,
+        ),
     }
 
 
@@ -133,7 +157,7 @@ def _run_prompt_entrypoint(
         sys.argv = previous_argv
 
 
-def main():
+def _main_without_backend_runtime_lock():
     if len(sys.argv) > 1 and sys.argv[1] == RUN_PROMPT_BRIDGE_ARG:
         _run_prompt_entrypoint(sys.argv[2:])
         return
@@ -151,8 +175,23 @@ def main():
 
     os.environ.update(runtime_context["env"])
     os.chdir(project_root)
-    _redirect_standard_streams(log_path)
+    _redirect_standard_streams(
+        log_path,
+        path_prefixes=runtime_context["path_prefixes"],
+    )
     _run_server_entrypoint(project_root)
+
+
+def main():
+    if getattr(sys, "frozen", False):
+        return _main_without_backend_runtime_lock()
+
+    from src.core.backend_runtime_lock import (
+        backend_runtime_lock,
+    )
+
+    with backend_runtime_lock(PROJECT_ROOT, mode="shared"):
+        return _main_without_backend_runtime_lock()
 
 
 if __name__ == "__main__":

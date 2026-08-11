@@ -22,13 +22,16 @@ def _ensure_project_root_on_sys_path(
 
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
+from src.core.backend_environment_state import installed_distribution_closure
+from src.core.backend_runtime_lock import (
+    backend_runtime_lock,
+)
 from src.core.backend_runtime_packaging import (
     PROJECT_ACTIVITY_SNAPSHOT_NAME,
     backend_runtime_fingerprint_matches,
     build_backend_runtime_fingerprint,
     build_pyinstaller_arguments,
     collect_backend_runtime_resources,
-    remove_conflicting_packaging_environment_libraries,
     remove_conflicting_runtime_libraries,
     resolve_backend_runtime_layout,
     validate_packaging_python_environment,
@@ -93,7 +96,7 @@ def _sync_extra_runtime_resources(layout: dict[str, Path], resources):
         shutil.copy2(resource.source, target)
 
 
-def main() -> int:
+def _main_without_backend_runtime_lock() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -103,10 +106,12 @@ def main() -> int:
         print(environment_error)
         return 1
 
+    distribution_closure = installed_distribution_closure()
     static_resources = collect_backend_runtime_resources(PROJECT_ROOT)
     runtime_fingerprint = build_backend_runtime_fingerprint(
         PROJECT_ROOT,
         resources=static_resources,
+        distribution_closure=distribution_closure,
     )
 
     if args.reuse_if_unchanged and backend_runtime_fingerprint_matches(
@@ -142,7 +147,6 @@ def main() -> int:
     if not args.keep_build_root:
         _clean_existing_build(layout)
 
-    removed_packaging_dlls = remove_conflicting_packaging_environment_libraries(PROJECT_ROOT)
     _prepare_build_directories(layout)
     project_activity_resource = write_project_activity_snapshot(
         PROJECT_ROOT,
@@ -176,7 +180,6 @@ def main() -> int:
     print(f"Built backend runtime: {layout['executable_path']}")
     print(f"Runtime manifest: {layout['manifest_path']}")
     print(f"Bundled resources: {len(manifest['resource_outputs'])}")
-    print(f"Removed conflicting packaging DLLs: {len(removed_packaging_dlls)}")
     print(f"Removed conflicting runtime DLLs: {len(removed_runtime_dlls)}")
     print(f"Runtime size: {size_report['total_mb']} MB")
     if size_report["top_directories"]:
@@ -188,6 +191,11 @@ def main() -> int:
     else:
         print("Forbidden runtime packages present: none")
     return 0
+
+
+def main() -> int:
+    with backend_runtime_lock(PROJECT_ROOT, mode="shared"):
+        return _main_without_backend_runtime_lock()
 
 
 if __name__ == "__main__":
