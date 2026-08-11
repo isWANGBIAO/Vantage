@@ -350,6 +350,7 @@ def _build_snapshot(
         identity = _assert_plain_file(
             path,
             role=f"native artifact {relative_path}",
+            allow_hardlink=True,
         )
         _assert_resolved_containment(path, root, role="native artifact")
         parent_identity = _assert_plain_directory(
@@ -366,6 +367,7 @@ def _build_snapshot(
                     path,
                     expected_identity=identity,
                     role="native artifact",
+                    allow_hardlink=True,
                 ),
             )
         )
@@ -545,12 +547,14 @@ def _assert_source(root: Path, artifact: _Artifact) -> None:
         artifact.path,
         role="native artifact",
         expected_identity=artifact.identity,
+        allow_hardlink=True,
     )
     if (
         _sha256_file(
             artifact.path,
             expected_identity=identity,
             role="native artifact",
+            allow_hardlink=True,
         )
         != artifact.sha256
     ):

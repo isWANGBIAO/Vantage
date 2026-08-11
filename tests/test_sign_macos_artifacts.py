@@ -227,7 +227,7 @@ def test_cached_verify_is_fd_bound_during_artifact_root_swap(tmp_path):
     assert not (moved_root / stamp.name).exists()
 
 
-def test_frontend_native_hardlink_is_rejected_before_external_side_effect(tmp_path):
+def test_frontend_native_hardlink_is_staged_without_external_side_effect(tmp_path):
     module = _module()
     project_root, root, native, stamp = _write_frontend_tree(tmp_path)
     outside = tmp_path / "outside.node"
@@ -236,19 +236,19 @@ def test_frontend_native_hardlink_is_rejected_before_external_side_effect(tmp_pa
     os.link(outside, native)
     commands: list[list[str]] = []
 
-    with pytest.raises(ValueError, match="hard link"):
-        module.sign_macos_artifacts(
-            project_root=project_root,
-            root=root,
-            profile="frontend",
-            stamp_path=stamp,
-            run_command=_successful_runner(commands),
-            system_name="Darwin",
-        )
+    outcome = module.sign_macos_artifacts(
+        project_root=project_root,
+        root=root,
+        profile="frontend",
+        stamp_path=stamp,
+        run_command=_successful_runner(commands),
+        system_name="Darwin",
+    )
 
-    assert commands == []
+    assert outcome.artifact_count == 1
+    assert commands
     assert outside.read_bytes() == MACHO_64_MAGIC + b"outside-sentinel"
-    assert not stamp.exists()
+    assert stamp.exists()
 
 
 def test_source_swap_during_codesign_never_mutates_external_hardlink(tmp_path):

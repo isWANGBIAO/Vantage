@@ -156,6 +156,7 @@ def _assert_plain_file(
     *,
     role: str,
     expected_identity: _PathIdentity | None = None,
+    allow_hardlink: bool = False,
 ) -> _PathIdentity:
     try:
         identity = _path_identity(path)
@@ -165,7 +166,7 @@ def _assert_plain_file(
         raise ValueError(f"macOS backend {role} must not be a link or reparse point")
     if not stat.S_ISREG(identity.file_type):
         raise ValueError(f"macOS backend {role} must be a regular file")
-    if identity.link_count != 1:
+    if identity.link_count != 1 and not allow_hardlink:
         raise ValueError(f"macOS backend {role} must not be a hard link")
     if expected_identity is not None and identity != expected_identity:
         raise RuntimeError(f"macOS backend {role} identity changed")
@@ -223,11 +224,13 @@ def _sha256_file(
     *,
     expected_identity: _PathIdentity | None = None,
     role: str = "file",
+    allow_hardlink: bool = False,
 ) -> str:
     identity = _assert_plain_file(
         path,
         role=role,
         expected_identity=expected_identity,
+        allow_hardlink=allow_hardlink,
     )
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -239,7 +242,12 @@ def _sha256_file(
         final_identity = _identity_from_stat(os.fstat(handle.fileno()))
         if final_identity != identity:
             raise RuntimeError(f"macOS backend {role} identity changed while hashing")
-    _assert_plain_file(path, role=role, expected_identity=identity)
+    _assert_plain_file(
+        path,
+        role=role,
+        expected_identity=identity,
+        allow_hardlink=allow_hardlink,
+    )
     return digest.hexdigest()
 
 
