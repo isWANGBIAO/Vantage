@@ -172,13 +172,28 @@ def test_shared_frontend_sync_cli_owns_the_complete_cross_process_lock_scope():
         ],
         (
             "acquireDependencySyncLock({",
-            "return synchronizeDependenciesUnlocked(options);",
+            "lock.assertOwned();",
+            "const result = synchronizeDependenciesUnlocked({",
+            "assertLockOwned: () => lock.assertOwned(),",
+            "return result;",
             "finally {",
             "lock.release();",
         ),
     )
     assert "--dependency-sync-lock-helper" in sync_script
     assert "--lock-timeout-seconds" in sync_script
+    assert "fs.renameSync(quarantinePath, lockPath)" not in sync_script
+    assert "lock.assertOwned();" in sync_script
+    assert "CHOOSING_LEASE_PATTERN" in sync_script
+    assert "TICKET_LEASE_PATTERN" in sync_script
+    assert "removeUniqueLeaseFile" in sync_script
+    state_writer = sync_script[
+        sync_script.index("function writeStateAtomically(") :
+    ]
+    publish_hook_index = state_writer.index("publishRaceHook();")
+    rename_index = state_writer.index("fileSystem.renameSync(tempPath, statePath);")
+    assert state_writer.rfind("beforeRename();", 0, publish_hook_index) >= 0
+    assert state_writer.find("beforeRename();", publish_hook_index) < rename_index
 
     for launcher_path in (
         Path("RUN.bat"),

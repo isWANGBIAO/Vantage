@@ -47,6 +47,13 @@ function sanitizedDependencyLockError(error) {
   );
 }
 
+function isDependencySyncLockLeaseError(error) {
+  return error instanceof Error
+    && error.message === (
+      'Frontend dependency synchronization lock lease was lost.'
+    );
+}
+
 function sleepSynchronously(milliseconds) {
   Atomics.wait(LOCK_SLEEP_ARRAY, 0, 0, milliseconds);
 }
@@ -57,12 +64,35 @@ function sameFileIdentity(left, right) {
     && left.mode === right.mode;
 }
 
+const CHOOSING_LEASE_PATTERN = /^choosing-(\d+)-([a-f0-9]{32})\.json$/u;
+const TICKET_LEASE_PATTERN = /^ticket-(\d{16})-(\d+)-([a-f0-9]{32})\.json$/u;
+
 function validateLockFileStats(stats) {
-  if (!stats.isFile() || stats.isSymbolicLink()) {
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) {
     throw new Error('Frontend dependency synchronization lock is unsafe.');
   }
-  if (stats.nlink !== 1) {
+}
+
+function validateLockDirectoryStats(stats) {
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
     throw new Error('Frontend dependency synchronization lock is unsafe.');
+  }
+}
+
+function assertLockDirectoryIdentity(lockDirectory, expectedStats) {
+  let currentStats;
+  try {
+    currentStats = fs.lstatSync(lockDirectory);
+    validateLockDirectoryStats(currentStats);
+  } catch {
+    throw new Error(
+      'Frontend dependency synchronization lock lease was lost.',
+    );
+  }
+  if (!sameFileIdentity(expectedStats, currentStats)) {
+    throw new Error(
+      'Frontend dependency synchronization lock lease was lost.',
+    );
   }
 }
 
@@ -97,7 +127,7 @@ function readLockSnapshot(lockPath) {
     try {
       const candidate = JSON.parse(contents);
       if (
-        candidate.schemaVersion === 1
+        (candidate.schemaVersion === 1 || candidate.schemaVersion === 2)
         && Number.isSafeInteger(candidate.pid)
         && candidate.pid > 0
         && typeof candidate.token === 'string'
@@ -136,32 +166,27 @@ function processIsAlive(pid) {
   }
 }
 
-function quarantineStaleLock(lockPath, snapshot) {
-  const quarantinePath = `${lockPath}.stale-${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+function removeUniqueLeaseFile(leasePath, snapshot) {
+  let currentStats;
   try {
-    fs.renameSync(lockPath, quarantinePath);
+    currentStats = fs.lstatSync(leasePath);
   } catch (error) {
     if (error.code === 'ENOENT') {
-      return;
+      return false;
     }
     throw error;
   }
-
+  if (!sameFileIdentity(snapshot.stats, currentStats)) {
+    return false;
+  }
   try {
-    const quarantinedStats = fs.lstatSync(quarantinePath);
-    if (!sameFileIdentity(snapshot.stats, quarantinedStats)) {
-      try {
-        fs.renameSync(quarantinePath, lockPath);
-      } catch {
-        // Preserve the unexpected replacement for manual recovery.
-      }
-      throw new Error('Frontend dependency synchronization lock changed.');
-    }
-    fs.rmSync(quarantinePath, { force: true });
+    fs.unlinkSync(leasePath);
+    return true;
   } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
+    if (error.code === 'ENOENT' || error.code === 'EISDIR' || error.code === 'EPERM') {
+      return false;
     }
+    throw error;
   }
 }
 
@@ -175,7 +200,168 @@ function removeOwnedLock(lockPath, token) {
   if (snapshot.kind !== 'owned' || snapshot.owner.token !== token) {
     return;
   }
-  quarantineStaleLock(lockPath, snapshot);
+  removeUniqueLeaseFile(lockPath, snapshot);
+}
+
+function assertOwnedLock({
+  lockDirectory,
+  lockDirectoryStats,
+  lockPath,
+  token,
+  descriptor,
+  expectedStats,
+}) {
+  assertLockDirectoryIdentity(lockDirectory, lockDirectoryStats);
+  let descriptorStats;
+  let snapshot;
+  try {
+    descriptorStats = fs.fstatSync(descriptor);
+    snapshot = readLockSnapshot(lockPath);
+  } catch {
+    throw new Error(
+      'Frontend dependency synchronization lock lease was lost.',
+    );
+  }
+  if (
+    !sameFileIdentity(expectedStats, descriptorStats)
+    || snapshot.kind !== 'owned'
+    || snapshot.owner.pid !== process.pid
+    || snapshot.owner.token !== token
+    || !sameFileIdentity(expectedStats, snapshot.stats)
+  ) {
+    throw new Error(
+      'Frontend dependency synchronization lock lease was lost.',
+    );
+  }
+}
+
+function parseLeaseEntryName(name) {
+  let match = CHOOSING_LEASE_PATTERN.exec(name);
+  if (match) {
+    return {
+      phase: 'choosing',
+      pid: Number(match[1]),
+      token: match[2],
+      ticket: null,
+    };
+  }
+  match = TICKET_LEASE_PATTERN.exec(name);
+  if (!match) {
+    return null;
+  }
+  return {
+    phase: 'ticket',
+    ticket: Number(match[1]),
+    pid: Number(match[2]),
+    token: match[3],
+  };
+}
+
+function scanLiveLeaseEntries(lockDirectory, lockDirectoryStats) {
+  assertLockDirectoryIdentity(lockDirectory, lockDirectoryStats);
+  const liveEntries = [];
+  const directoryEntries = fs.readdirSync(lockDirectory, {
+    withFileTypes: true,
+  });
+  for (const directoryEntry of directoryEntries) {
+    const parsed = parseLeaseEntryName(directoryEntry.name);
+    if (parsed === null) {
+      continue;
+    }
+    const leasePath = path.join(lockDirectory, directoryEntry.name);
+    let snapshot;
+    try {
+      snapshot = readLockSnapshot(leasePath);
+    } catch {
+      throw new Error('Frontend dependency synchronization lock is unsafe.');
+    }
+    if (snapshot.kind === 'missing') {
+      continue;
+    }
+    const ownerMatchesName = snapshot.kind === 'owned'
+      && snapshot.owner.pid === parsed.pid
+      && snapshot.owner.token === parsed.token;
+    if (ownerMatchesName && processIsAlive(parsed.pid)) {
+      liveEntries.push({ ...parsed, path: leasePath, snapshot });
+      continue;
+    }
+    const initializingLeaseIsRecent = snapshot.kind === 'initializing'
+      && Date.now() - snapshot.stats.mtimeMs
+        < DEPENDENCY_SYNC_LOCK_INITIALIZATION_GRACE_MILLISECONDS;
+    if (initializingLeaseIsRecent) {
+      liveEntries.push({
+        ...parsed,
+        phase: 'choosing',
+        path: leasePath,
+        snapshot,
+      });
+      continue;
+    }
+    removeUniqueLeaseFile(leasePath, snapshot);
+  }
+  assertLockDirectoryIdentity(lockDirectory, lockDirectoryStats);
+  return liveEntries;
+}
+
+function ensureLockDirectory(lockDirectory) {
+  try {
+    fs.mkdirSync(lockDirectory, { mode: 0o700 });
+    const createdStats = fs.lstatSync(lockDirectory);
+    validateLockDirectoryStats(createdStats);
+    return createdStats;
+  } catch (error) {
+    if (error.code !== 'EEXIST') {
+      throw error;
+    }
+  }
+
+  let existingStats;
+  try {
+    existingStats = fs.lstatSync(lockDirectory);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
+  if (existingStats.isDirectory() && !existingStats.isSymbolicLink()) {
+    validateLockDirectoryStats(existingStats);
+    return existingStats;
+  }
+  validateLockFileStats(existingStats);
+  let legacySnapshot;
+  try {
+    legacySnapshot = readLockSnapshot(lockDirectory);
+  } catch (error) {
+    try {
+      const replacementStats = fs.lstatSync(lockDirectory);
+      if (
+        replacementStats.isDirectory()
+        && !replacementStats.isSymbolicLink()
+      ) {
+        validateLockDirectoryStats(replacementStats);
+        return replacementStats;
+      }
+    } catch (replacementError) {
+      if (replacementError.code === 'ENOENT') {
+        return null;
+      }
+    }
+    throw error;
+  }
+  if (legacySnapshot.kind === 'missing') {
+    return null;
+  }
+  const legacyOwnerIsAlive = legacySnapshot.kind === 'owned'
+    && processIsAlive(legacySnapshot.owner.pid);
+  const initializingLegacyIsRecent = legacySnapshot.kind === 'initializing'
+    && Date.now() - legacySnapshot.stats.mtimeMs
+      < DEPENDENCY_SYNC_LOCK_INITIALIZATION_GRACE_MILLISECONDS;
+  if (legacyOwnerIsAlive || initializingLegacyIsRecent) {
+    return null;
+  }
+  removeUniqueLeaseFile(lockDirectory, legacySnapshot);
+  return null;
 }
 
 function runDependencySyncLockHelper() {
@@ -243,7 +429,7 @@ function createOwnedLock(lockPath, token) {
   try {
     descriptor = fs.openSync(lockPath, 'wx', 0o600);
     const owner = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       pid: process.pid,
       token,
       createdAtMilliseconds: Date.now(),
@@ -328,66 +514,14 @@ function acquireDependencySyncLockRaw({
   if (!Number.isFinite(timeoutMilliseconds) || timeoutMilliseconds < 0) {
     throw new Error('Frontend dependency synchronization lock timeout is invalid.');
   }
-  const lockPath = dependencySyncLockPath(webappRoot);
+  const lockDirectory = dependencySyncLockPath(webappRoot);
   const deadline = performance.now() + timeoutMilliseconds;
-
+  let lockDirectoryStats = null;
   while (true) {
-    const token = crypto.randomBytes(16).toString('hex');
-    let ownedLock;
-    try {
-      ownedLock = createOwnedLock(lockPath, token);
-    } catch (error) {
-      if (error.code !== 'EEXIST') {
-        throw error;
-      }
+    lockDirectoryStats = ensureLockDirectory(lockDirectory);
+    if (lockDirectoryStats !== null) {
+      break;
     }
-
-    if (ownedLock) {
-      let helperState;
-      try {
-        helperState = startDependencySyncLockHelper({
-          lockPath,
-          token,
-          deadline,
-        });
-      } catch (error) {
-        fs.closeSync(ownedLock.descriptor);
-        removeOwnedLock(lockPath, token);
-        throw error;
-      }
-      let released = false;
-      return {
-        path: lockPath,
-        release() {
-          if (released) {
-            return;
-          }
-          released = true;
-          fs.closeSync(ownedLock.descriptor);
-          removeOwnedLock(lockPath, token);
-          fs.rmSync(helperState.readyPath, { force: true });
-          if (helperState.helper.connected) {
-            helperState.helper.disconnect();
-          }
-          helperState.helper.unref();
-        },
-      };
-    }
-
-    const snapshot = readLockSnapshot(lockPath);
-    if (snapshot.kind === 'missing') {
-      continue;
-    }
-    const lockIsActive = snapshot.kind === 'owned'
-      && processIsAlive(snapshot.owner.pid);
-    const initializingLockIsRecent = snapshot.kind === 'initializing'
-      && Date.now() - snapshot.stats.mtimeMs
-        < DEPENDENCY_SYNC_LOCK_INITIALIZATION_GRACE_MILLISECONDS;
-    if (!lockIsActive && !initializingLockIsRecent) {
-      quarantineStaleLock(lockPath, snapshot);
-      continue;
-    }
-
     const remaining = deadline - performance.now();
     if (remaining <= 0) {
       throw new Error(
@@ -399,12 +533,146 @@ function acquireDependencySyncLockRaw({
       remaining,
     ));
   }
+
+  const token = crypto.randomBytes(16).toString('hex');
+  const choosingPath = path.join(
+    lockDirectory,
+    `choosing-${process.pid}-${token}.json`,
+  );
+  const choosingLock = createOwnedLock(choosingPath, token);
+  let ticketPath = null;
+  let ticketLock = null;
+  let helperState = null;
+
+  function cleanupAttempt() {
+    if (choosingLock.descriptor !== null) {
+      fs.closeSync(choosingLock.descriptor);
+      choosingLock.descriptor = null;
+    }
+    removeOwnedLock(choosingPath, token);
+    if (ticketLock?.descriptor !== null && ticketLock?.descriptor !== undefined) {
+      fs.closeSync(ticketLock.descriptor);
+      ticketLock.descriptor = null;
+    }
+    if (ticketPath !== null) {
+      removeOwnedLock(ticketPath, token);
+    }
+    if (helperState !== null) {
+      fs.rmSync(helperState.readyPath, { force: true });
+      if (helperState.helper.connected) {
+        helperState.helper.disconnect();
+      }
+      helperState.helper.unref();
+    }
+  }
+
+  try {
+    const existingEntries = scanLiveLeaseEntries(
+      lockDirectory,
+      lockDirectoryStats,
+    );
+    const highestTicket = existingEntries.reduce(
+      (highest, entry) => (
+        entry.phase === 'ticket' ? Math.max(highest, entry.ticket) : highest
+      ),
+      0,
+    );
+    if (highestTicket >= Number.MAX_SAFE_INTEGER) {
+      throw new Error('Frontend dependency synchronization lock ticket overflow.');
+    }
+    const ticket = highestTicket + 1;
+    ticketPath = path.join(
+      lockDirectory,
+      `ticket-${String(ticket).padStart(16, '0')}-${process.pid}-${token}.json`,
+    );
+    ticketLock = createOwnedLock(ticketPath, token);
+    fs.closeSync(choosingLock.descriptor);
+    choosingLock.descriptor = null;
+    removeOwnedLock(choosingPath, token);
+    helperState = startDependencySyncLockHelper({
+      lockPath: ticketPath,
+      token,
+      deadline,
+    });
+
+    while (true) {
+      assertOwnedLock({
+        lockDirectory,
+        lockDirectoryStats,
+        lockPath: ticketPath,
+        token,
+        descriptor: ticketLock.descriptor,
+        expectedStats: ticketLock.stats,
+      });
+      const liveEntries = scanLiveLeaseEntries(
+        lockDirectory,
+        lockDirectoryStats,
+      );
+      const anotherProcessIsChoosing = liveEntries.some(
+        (entry) => entry.phase === 'choosing',
+      );
+      const tickets = liveEntries
+        .filter((entry) => entry.phase === 'ticket')
+        .sort((left, right) => (
+          left.ticket - right.ticket || compareText(left.token, right.token)
+        ));
+      if (
+        !anotherProcessIsChoosing
+        && tickets.length > 0
+        && tickets[0].path === ticketPath
+      ) {
+        break;
+      }
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) {
+        throw new Error(
+          'Timed out waiting for frontend dependency synchronization lock.',
+        );
+      }
+      sleepSynchronously(Math.min(
+        DEPENDENCY_SYNC_LOCK_POLL_MILLISECONDS,
+        remaining,
+      ));
+    }
+  } catch (error) {
+    cleanupAttempt();
+    throw error;
+  }
+
+  let released = false;
+  return {
+    path: ticketPath,
+    assertOwned() {
+      assertOwnedLock({
+        lockDirectory,
+        lockDirectoryStats,
+        lockPath: ticketPath,
+        token,
+        descriptor: ticketLock.descriptor,
+        expectedStats: ticketLock.stats,
+      });
+    },
+    release() {
+      if (released) {
+        return;
+      }
+      released = true;
+      cleanupAttempt();
+    },
+  };
 }
 
 function acquireDependencySyncLock(options) {
   try {
     const lock = acquireDependencySyncLockRaw(options);
     return {
+      assertOwned() {
+        try {
+          lock.assertOwned();
+        } catch (error) {
+          throw sanitizedDependencyLockError(error);
+        }
+      },
       release() {
         try {
           lock.release();
@@ -602,6 +870,8 @@ function writeStateAtomically(
   {
     fileSystem = fs,
     tempSuffix = `${process.pid}-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`,
+    beforeRename = () => {},
+    publishRaceHook = () => {},
   } = {},
 ) {
   const tempPath = `${statePath}.${tempSuffix}.tmp`;
@@ -612,6 +882,9 @@ function writeStateAtomically(
       `${JSON.stringify(state, null, 2)}\n`,
       { encoding: 'utf8', flag: 'wx' },
     );
+    beforeRename();
+    publishRaceHook();
+    beforeRename();
     fileSystem.renameSync(tempPath, statePath);
   } catch (error) {
     fileSystem.rmSync(tempPath, { force: true });
@@ -677,6 +950,9 @@ function runNpmCiWithFallback({
     runCommand(npmCommand, ['ci'], { cwd: webappRoot, env });
     return;
   } catch (error) {
+    if (isDependencySyncLockLeaseError(error)) {
+      throw error;
+    }
     const fallback = env.VANTAGE_ELECTRON_MIRROR_FALLBACK;
     if (env.ELECTRON_MIRROR || !fallback) {
       throw error;
@@ -698,7 +974,10 @@ function synchronizeDependenciesUnlocked({
   invalidateStampPath = null,
   runCommand = defaultRunCommand,
   logger = console,
+  assertLockOwned = () => {},
+  statePublishRaceHook = () => {},
 }) {
+  assertLockOwned();
   const resolvedWebappRoot = path.resolve(webappRoot);
   const statePath = path.join(
     resolvedWebappRoot,
@@ -709,46 +988,74 @@ function synchronizeDependenciesUnlocked({
     webappRoot: resolvedWebappRoot,
     runtime,
   });
+  assertLockOwned();
   const npmCommand = 'npm';
   const commandOptions = { cwd: resolvedWebappRoot, env };
+  const guardedRunCommand = (...args) => {
+    assertLockOwned();
+    try {
+      return runCommand(...args);
+    } finally {
+      assertLockOwned();
+    }
+  };
+  const guardedInstalledPackageScan = () => {
+    assertLockOwned();
+    const installedPackages = scanInstalledPackages({
+      webappRoot: resolvedWebappRoot,
+    });
+    assertLockOwned();
+    return installedPackages;
+  };
 
+  assertLockOwned();
   const savedState = readState(statePath);
+  assertLockOwned();
   if (!force && stateMatches(savedState, desiredState)) {
     try {
-      runCommand(npmCommand, ['ls', '--depth=0'], commandOptions);
-      const installedPackages = scanInstalledPackages({
-        webappRoot: resolvedWebappRoot,
-      });
+      guardedRunCommand(npmCommand, ['ls', '--depth=0'], commandOptions);
+      const installedPackages = guardedInstalledPackageScan();
       if (installedPackagesMatch(savedState.installedPackages, installedPackages)) {
+        assertLockOwned();
         return {
           synchronized: false,
           state: { ...desiredState, installedPackages },
         };
       }
       logger.warn('Frontend dependency closure changed; running a clean sync.');
-    } catch {
+    } catch (error) {
+      if (isDependencySyncLockLeaseError(error)) {
+        throw error;
+      }
       logger.warn('Frontend dependency validation failed; running a clean sync.');
     }
   }
 
+  assertLockOwned();
   fs.rmSync(statePath, { force: true });
+  assertLockOwned();
   if (invalidateStampPath) {
+    assertLockOwned();
     fs.rmSync(invalidateStampPath, { force: true });
+    assertLockOwned();
   }
 
   runNpmCiWithFallback({
     npmCommand,
     webappRoot: resolvedWebappRoot,
     env,
-    runCommand,
+    runCommand: guardedRunCommand,
     logger,
   });
-  runCommand(npmCommand, ['ls', '--depth=0'], commandOptions);
-  const installedPackages = scanInstalledPackages({
-    webappRoot: resolvedWebappRoot,
-  });
+  guardedRunCommand(npmCommand, ['ls', '--depth=0'], commandOptions);
+  const installedPackages = guardedInstalledPackageScan();
   const synchronizedState = { ...desiredState, installedPackages };
-  writeStateAtomically(statePath, synchronizedState);
+  assertLockOwned();
+  writeStateAtomically(statePath, synchronizedState, {
+    beforeRename: assertLockOwned,
+    publishRaceHook: statePublishRaceHook,
+  });
+  assertLockOwned();
   return { synchronized: true, state: synchronizedState };
 }
 
@@ -762,7 +1069,13 @@ function synchronizeDependencies(options) {
     timeoutMilliseconds: lockTimeoutMilliseconds,
   });
   try {
-    return synchronizeDependenciesUnlocked(options);
+    lock.assertOwned();
+    const result = synchronizeDependenciesUnlocked({
+      ...options,
+      assertLockOwned: () => lock.assertOwned(),
+    });
+    lock.assertOwned();
+    return result;
   } finally {
     lock.release();
   }

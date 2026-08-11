@@ -4,10 +4,13 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import {
   existsSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -114,6 +117,26 @@ function readEventLines(eventsPath) {
   return readFileSync(eventsPath, 'utf8').trim().split(/\r?\n/u).filter(Boolean);
 }
 
+function findActiveDependencyLease(lockPath) {
+  const lockStats = lstatSync(lockPath);
+  if (lockStats.isFile()) {
+    return lockPath;
+  }
+  const tickets = readdirSync(lockPath)
+    .filter((name) => /^ticket-.*\.json$/u.test(name));
+  assert.equal(tickets.length, 1, `expected one active ticket: ${tickets}`);
+  return path.join(lockPath, tickets[0]);
+}
+
+function listDependencyLeaseNames(lockPath) {
+  if (!existsSync(lockPath) || !lstatSync(lockPath).isDirectory()) {
+    return [];
+  }
+  return readdirSync(lockPath).filter((name) => (
+    /^choosing-.*\.json$/u.test(name) || /^ticket-.*\.json$/u.test(name)
+  ));
+}
+
 function writeSyncWorker(webappRoot) {
   const workerPath = path.join(webappRoot, 'sync-worker.cjs');
   writeFileSync(
@@ -133,6 +156,9 @@ function sleepSync(milliseconds) {
 }
 
 try {
+  while (process.env.START_PATH && !fs.existsSync(process.env.START_PATH)) {
+    sleepSync(10);
+  }
   synchronizeDependencies({
     webappRoot,
     env: {},
@@ -176,6 +202,7 @@ function spawnSyncWorker({
   eventsPath,
   releasePath,
   signStampPath,
+  startPath = '',
   lockTimeoutMilliseconds = 5000,
 }) {
   const child = spawn(process.execPath, [workerPath], {
@@ -187,6 +214,7 @@ function spawnSyncWorker({
       EVENTS_PATH: eventsPath,
       RELEASE_PATH: releasePath,
       SIGN_STAMP_PATH: signStampPath,
+      START_PATH: startPath,
       LOCK_TIMEOUT_MS: String(lockTimeoutMilliseconds),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -736,7 +764,7 @@ test('dependency mutation invalidates the macOS native codesign stamp first', ()
   });
 });
 
-test('two real processes serialize the complete dependency synchronization transaction', async () => {
+test('three real processes serialize the complete dependency synchronization transaction', async () => {
   const webappRoot = createWebappFixture();
   const workerPath = writeSyncWorker(webappRoot);
   const eventsPath = path.join(webappRoot, 'events.log');
@@ -751,17 +779,26 @@ test('two real processes serialize the complete dependency synchronization trans
     releasePath,
     signStampPath,
   });
-  let follower;
+  let firstFollower;
+  let secondFollower;
 
   try {
     await waitFor(
       () => readEventLines(eventsPath).includes('holder:ci:start'),
       'the holder process never entered npm ci',
     );
-    follower = spawnSyncWorker({
+    firstFollower = spawnSyncWorker({
       workerPath,
       webappRoot,
-      workerId: 'follower',
+      workerId: 'first-follower',
+      eventsPath,
+      releasePath,
+      signStampPath,
+    });
+    secondFollower = spawnSyncWorker({
+      workerPath,
+      webappRoot,
+      workerId: 'second-follower',
       eventsPath,
       releasePath,
       signStampPath,
@@ -771,12 +808,14 @@ test('two real processes serialize the complete dependency synchronization trans
     assert.deepEqual(readEventLines(eventsPath), ['holder:ci:start']);
 
     writeFileSync(releasePath, 'release\n', 'utf8');
-    const [holderResult, followerResult] = await Promise.all([
+    const [holderResult, firstFollowerResult, secondFollowerResult] = await Promise.all([
       holder.completion,
-      follower.completion,
+      firstFollower.completion,
+      secondFollower.completion,
     ]);
     assert.equal(holderResult.code, 0, holderResult.stderr);
-    assert.equal(followerResult.code, 0, followerResult.stderr);
+    assert.equal(firstFollowerResult.code, 0, firstFollowerResult.stderr);
+    assert.equal(secondFollowerResult.code, 0, secondFollowerResult.stderr);
     assert.deepEqual(readEventLines(eventsPath), [
       'holder:ci:start',
       'holder:ci:end',
@@ -786,13 +825,156 @@ test('two real processes serialize the complete dependency synchronization trans
   } finally {
     writeFileSync(releasePath, 'release\n', 'utf8');
     holder.child.kill('SIGKILL');
-    follower?.child.kill('SIGKILL');
+    firstFollower?.child.kill('SIGKILL');
+    secondFollower?.child.kill('SIGKILL');
     await Promise.allSettled([
       holder.completion,
-      ...(follower ? [follower.completion] : []),
+      ...(firstFollower ? [firstFollower.completion] : []),
+      ...(secondFollower ? [secondFollower.completion] : []),
     ]);
     rmSync(webappRoot, { recursive: true, force: true });
   }
+});
+
+test('three simultaneous processes migrate one orphaned legacy lock without clobbering a new lease', async () => {
+  const webappRoot = createWebappFixture();
+  const workerPath = writeSyncWorker(webappRoot);
+  const eventsPath = path.join(webappRoot, 'events.log');
+  const releasePath = path.join(webappRoot, 'release-holder');
+  const startPath = path.join(webappRoot, 'start-workers');
+  const signStampPath = path.join(webappRoot, 'native-sign-stamp');
+  const lockPath = dependencySyncLockPath(webappRoot);
+  writeFileSync(
+    lockPath,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      pid: 2147483647,
+      token: 'legacy-orphan',
+      createdAtMilliseconds: 1,
+    })}\n`,
+    { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+  );
+  const workers = ['first', 'second', 'third'].map((workerId) => (
+    spawnSyncWorker({
+      workerPath,
+      webappRoot,
+      workerId,
+      eventsPath,
+      releasePath,
+      startPath,
+      signStampPath,
+    })
+  ));
+
+  try {
+    writeFileSync(startPath, 'start\n', 'utf8');
+    const results = await Promise.all(workers.map((worker) => worker.completion));
+    for (const result of results) {
+      assert.equal(result.code, 0, result.stderr);
+    }
+    const events = readEventLines(eventsPath);
+    assert.equal(events.filter((event) => event.endsWith(':ci:start')).length, 1);
+    assert.equal(events.filter((event) => event.endsWith(':ci:end')).length, 1);
+    assert.equal(lstatSync(lockPath).isDirectory(), true);
+    assert.deepEqual(listDependencyLeaseNames(lockPath), []);
+  } finally {
+    for (const worker of workers) {
+      worker.child.kill('SIGKILL');
+    }
+    await Promise.allSettled(workers.map((worker) => worker.completion));
+    rmSync(webappRoot, { recursive: true, force: true });
+  }
+});
+
+test('an identity swap makes the displaced holder fail closed before publishing state', async () => {
+  const webappRoot = createWebappFixture();
+  const workerPath = writeSyncWorker(webappRoot);
+  const eventsPath = path.join(webappRoot, 'events.log');
+  const releasePath = path.join(webappRoot, 'release-holder');
+  const signStampPath = path.join(webappRoot, 'native-sign-stamp');
+  const lockPath = dependencySyncLockPath(webappRoot);
+  const holder = spawnSyncWorker({
+    workerPath,
+    webappRoot,
+    workerId: 'holder',
+    eventsPath,
+    releasePath,
+    signStampPath,
+  });
+  let recovery;
+  let displacedLeasePath;
+  let activeLeasePath;
+
+  try {
+    await waitFor(
+      () => readEventLines(eventsPath).includes('holder:ci:start'),
+      'the holder process never entered npm ci',
+    );
+    activeLeasePath = findActiveDependencyLease(lockPath);
+    displacedLeasePath = `${activeLeasePath}.identity-swapped`;
+    renameSync(activeLeasePath, displacedLeasePath);
+    recovery = spawnSyncWorker({
+      workerPath,
+      webappRoot,
+      workerId: 'recovery',
+      eventsPath,
+      releasePath,
+      signStampPath,
+    });
+    const recoveryResult = await recovery.completion;
+    assert.equal(recoveryResult.code, 0, recoveryResult.stderr);
+    assert.ok(readEventLines(eventsPath).includes('recovery:ci:end'));
+
+    writeFileSync(releasePath, 'release\n', 'utf8');
+    const holderResult = await holder.completion;
+    assert.equal(holderResult.code, 1, holderResult.stderr);
+    assert.match(holderResult.stderr, /lock lease was lost/iu);
+    assert.equal(existsSync(statePathFor(webappRoot)), true);
+
+    rmSync(displacedLeasePath, { force: true });
+  } finally {
+    writeFileSync(releasePath, 'release\n', 'utf8');
+    holder.child.kill('SIGKILL');
+    recovery?.child.kill('SIGKILL');
+    await Promise.allSettled([
+      holder.completion,
+      ...(recovery ? [recovery.completion] : []),
+    ]);
+    if (activeLeasePath) {
+      rmSync(activeLeasePath, { force: true });
+    }
+    if (displacedLeasePath) {
+      rmSync(displacedLeasePath, { force: true });
+    }
+    rmSync(webappRoot, { recursive: true, force: true });
+  }
+});
+
+test('lease displacement in the final publish window cannot publish reusable state', () => {
+  withFixture((webappRoot) => {
+    const lockPath = dependencySyncLockPath(webappRoot);
+    let displacedLeasePath;
+
+    assert.throws(
+      () => synchronizeDependencies({
+        webappRoot,
+        runtime: TEST_RUNTIME,
+        env: {},
+        runCommand() {},
+        statePublishRaceHook() {
+          const activeLeasePath = findActiveDependencyLease(lockPath);
+          displacedLeasePath = `${activeLeasePath}.publish-window-swap`;
+          renameSync(activeLeasePath, displacedLeasePath);
+        },
+      }),
+      /lock lease was lost/iu,
+    );
+    assert.equal(existsSync(statePathFor(webappRoot)), false);
+
+    if (displacedLeasePath) {
+      rmSync(displacedLeasePath, { force: true });
+    }
+  });
 });
 
 test('dependency synchronization lock timeout fails closed without exposing the root path', async () => {
@@ -887,7 +1069,8 @@ test('a crashed owner releases the lock and does not strand the next synchronize
     });
     const recoveryResult = await recovery.completion;
     assert.equal(recoveryResult.code, 0, recoveryResult.stderr);
-    assert.equal(existsSync(lockPath), false);
+    assert.equal(lstatSync(lockPath).isDirectory(), true);
+    assert.deepEqual(listDependencyLeaseNames(lockPath), []);
     assert.ok(readEventLines(eventsPath).includes('recovery:ci:end'));
   } finally {
     writeFileSync(releasePath, 'release\n', 'utf8');
@@ -924,8 +1107,112 @@ test('an orphaned lock file is reclaimed instead of blocking synchronization', (
     });
 
     assert.equal(result.synchronized, true);
-    assert.equal(existsSync(lockPath), false);
+    assert.equal(lstatSync(lockPath).isDirectory(), true);
+    assert.deepEqual(listDependencyLeaseNames(lockPath), []);
   });
+});
+
+test('orphaned choosing and ticket leases are removed by their unique paths', () => {
+  withFixture((webappRoot) => {
+    const lockPath = dependencySyncLockPath(webappRoot);
+    mkdirSync(lockPath, { mode: 0o700 });
+    const staleToken = '0123456789abcdef0123456789abcdef';
+    const staleOwner = `${JSON.stringify({
+      schemaVersion: 2,
+      pid: 2147483647,
+      token: staleToken,
+      createdAtMilliseconds: 1,
+    })}\n`;
+    writeFileSync(
+      path.join(lockPath, `choosing-2147483647-${staleToken}.json`),
+      staleOwner,
+      { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+    );
+    writeFileSync(
+      path.join(
+        lockPath,
+        `ticket-0000000000000001-2147483647-${staleToken}.json`,
+      ),
+      staleOwner,
+      { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+    );
+
+    const result = synchronizeDependencies({
+      webappRoot,
+      runtime: TEST_RUNTIME,
+      env: {},
+      lockTimeoutMilliseconds: 500,
+      runCommand() {},
+    });
+
+    assert.equal(result.synchronized, true);
+    assert.deepEqual(listDependencyLeaseNames(lockPath), []);
+  });
+});
+
+test('a linked lock path fails closed without touching the link target', (context) => {
+  const webappRoot = createWebappFixture();
+  const externalRoot = mkdtempSync(path.join(tmpdir(), 'vantage-lock-target-'));
+  const lockPath = dependencySyncLockPath(webappRoot);
+  const externalFile = path.join(externalRoot, 'owner.json');
+  const externalContents = '{"external":true}\n';
+  writeFileSync(externalFile, externalContents, 'utf8');
+
+  try {
+    try {
+      linkSync(externalFile, lockPath);
+    } catch (error) {
+      context.skip(`hard-link creation unavailable: ${error.code}`);
+      return;
+    }
+    assert.throws(
+      () => synchronizeDependencies({
+        webappRoot,
+        runtime: TEST_RUNTIME,
+        env: {},
+        lockTimeoutMilliseconds: 100,
+        runCommand() {},
+      }),
+      /lock is unsafe/iu,
+    );
+    assert.equal(readFileSync(externalFile, 'utf8'), externalContents);
+  } finally {
+    rmSync(webappRoot, { recursive: true, force: true });
+    rmSync(externalRoot, { recursive: true, force: true });
+  }
+});
+
+test('a lock-directory junction fails closed without writing through it', (context) => {
+  const webappRoot = createWebappFixture();
+  const externalRoot = mkdtempSync(path.join(tmpdir(), 'vantage-lock-dir-'));
+  const lockPath = dependencySyncLockPath(webappRoot);
+
+  try {
+    try {
+      symlinkSync(
+        externalRoot,
+        lockPath,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch (error) {
+      context.skip(`directory-link creation unavailable: ${error.code}`);
+      return;
+    }
+    assert.throws(
+      () => synchronizeDependencies({
+        webappRoot,
+        runtime: TEST_RUNTIME,
+        env: {},
+        lockTimeoutMilliseconds: 100,
+        runCommand() {},
+      }),
+      /lock is unsafe/iu,
+    );
+    assert.deepEqual(readdirSync(externalRoot), []);
+  } finally {
+    rmSync(webappRoot, { recursive: true, force: true });
+    rmSync(externalRoot, { recursive: true, force: true });
+  }
 });
 
 test('transient dependency lock artifacts cannot dirty the public worktree', () => {
