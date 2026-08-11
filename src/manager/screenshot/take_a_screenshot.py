@@ -63,7 +63,7 @@ def take_and_save_screenshots(latitude, longitude, screenshots_path):
     # A multi-monitor sample is intentionally atomic: if any display capture
     # fails, discard the whole cycle instead of mixing timestamps across screens.
     try:
-        with mss.mss() as sct:
+        with mss.MSS() as sct:
             monitors = _ordered_physical_monitors(sct.monitors)
             screenshots = []  # 用于存储所有屏幕截图
 

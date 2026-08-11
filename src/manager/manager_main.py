@@ -760,6 +760,9 @@ class Monitor:
 
         cycle_started_at = time.time()
         with self._state_lock:
+            had_active_session_at_cycle_start = (
+                self.continuous_sit_start is not None
+            )
             if self.last_monitor_heartbeat is not None:
                 monitor_gap = cycle_started_at - self.last_monitor_heartbeat
                 if monitor_gap >= self.monitor_stale_timeout:
@@ -808,7 +811,10 @@ class Monitor:
                     real_person = None
 
             current_time = time.time()
-            had_active_session = self.continuous_sit_start is not None
+            had_active_session = (
+                had_active_session_at_cycle_start
+                or self.continuous_sit_start is not None
+            )
             observation_status = self.record_presence_observation(
                 real_person,
                 observed_at=current_time,
@@ -850,9 +856,7 @@ class Monitor:
                     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} User left for >2mins. Resetting sedentary timer.")
                 elif self.last_missing_time is not None:
                     missing_duration = self.away_elapsed_seconds
-                    if missing_duration >= self.grace_period:
-                        print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} User left for >2mins. Resetting sedentary timer.")
-                    else:
+                    if missing_duration < self.grace_period:
                         print(
                             f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
                             f"No person detected. (Grace period: {int(self.grace_period - missing_duration)}s left)",

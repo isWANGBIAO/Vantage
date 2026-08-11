@@ -1,6 +1,8 @@
 import asyncio
 import os
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,21 +51,71 @@ _POSITION_SOURCE_VALUES = {
 }
 _MISSING = object()
 _SHARED_LOCATION_TRUST_RESOLVER = LocationTrustResolver()
+LOCATION_OUTCOME_LOG_INTERVAL_SECONDS = 60 * 60
+
+
+class LocationOutcomeLogLimiter:
+    def __init__(
+        self,
+        *,
+        monotonic_clock=time.monotonic,
+        interval_seconds=LOCATION_OUTCOME_LOG_INTERVAL_SECONDS,
+    ):
+        self._monotonic_clock = monotonic_clock
+        self._interval_seconds = interval_seconds
+        self._lock = threading.Lock()
+        self._last_key = None
+        self._last_logged_at = None
+        self._suppressed_repeats = 0
+
+    def consume(self, source, status, reason):
+        key = (source, status, reason)
+        now = self._monotonic_clock()
+        with self._lock:
+            if key != self._last_key:
+                self._last_key = key
+                self._last_logged_at = now
+                self._suppressed_repeats = 0
+                return 0
+
+            if now - self._last_logged_at >= self._interval_seconds:
+                suppressed_repeats = self._suppressed_repeats
+                self._last_logged_at = now
+                self._suppressed_repeats = 0
+                return suppressed_repeats
+
+            self._suppressed_repeats += 1
+            return None
+
+
+_LOCATION_OUTCOME_LOG_LIMITER = LocationOutcomeLogLimiter()
 
 
 def _timestamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _log_location_result(source, accuracy, status, reason):
+def _log_location_result(source, accuracy, status, reason, *, limiter=None):
+    active_limiter = (
+        _LOCATION_OUTCOME_LOG_LIMITER if limiter is None else limiter
+    )
+    suppressed_repeats = active_limiter.consume(source, status, reason)
+    if suppressed_repeats is None:
+        return
+
     displayed_accuracy = (
         accuracy
         if isinstance(accuracy, (int, float)) and not isinstance(accuracy, bool)
         else "unknown"
     )
+    summary = (
+        f" suppressed={suppressed_repeats}"
+        if suppressed_repeats > 0
+        else ""
+    )
     print(
         f"Time {_timestamp()} Location source={source} accuracy={displayed_accuracy} "
-        f"status={status} reason={reason}"
+        f"status={status} reason={reason}{summary}"
     )
 
 
