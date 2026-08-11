@@ -23,6 +23,7 @@ _ensure_project_root_on_sys_path()
 
 from src.core.config import Config
 from src.utils.sensitive_data import RedactingPipeLog, build_log_path_prefixes
+from src.utils.subprocess_safety import terminate_process_tree
 
 
 SUPERVISE_ARG = "--supervise"
@@ -212,7 +213,7 @@ def _wait_for_supervisor_signal(
     reader.start()
     reader.join(timeout=max(0.0, float(timeout_seconds)))
     if reader.is_alive():
-        process.kill()
+        terminate_process_tree(process)
         process.wait(timeout=5)
         reader.join(timeout=1)
         return b""
@@ -243,7 +244,7 @@ def _launch_frontend_supervisor(mode: str) -> int:
     try:
         returncode = process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        process.kill()
+        terminate_process_tree(process)
         returncode = process.wait(timeout=5)
     print(
         "Frontend supervisor failed before the application started; "

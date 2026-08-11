@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import psutil
+
 
 def _load_launcher_module():
     spec = importlib.util.spec_from_file_location(
@@ -232,3 +234,47 @@ def test_frontend_launcher_reports_real_supervisor_start_failure_without_private
     persisted = Path(pointer.read_text(encoding="utf-8")).read_text(encoding="utf-8")
     assert str(project_root) not in persisted
     assert "Frontend process failed:" in persisted
+
+
+def test_frontend_ready_timeout_terminates_supervisor_and_pipe_descendants(tmp_path):
+    launcher = _load_launcher_module()
+    child_pid_path = tmp_path / "child.pid"
+    supervisor_source = "\n".join(
+        (
+            "import pathlib",
+            "import subprocess",
+            "import sys",
+            "import time",
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])",
+            "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8')",
+            "time.sleep(30)",
+        )
+    )
+    supervisor = subprocess.Popen(
+        [sys.executable, "-c", supervisor_source, str(child_pid_path)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        creationflags=launcher._get_creationflags(),
+        start_new_session=launcher._get_start_new_session(),
+        close_fds=True,
+    )
+    deadline = time.monotonic() + 5
+    while not child_pid_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert child_pid_path.exists(), "supervisor did not start its pipe-inheriting child"
+    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+
+    signal = launcher._wait_for_supervisor_signal(
+        supervisor,
+        timeout_seconds=0.2,
+    )
+    if supervisor.stdout is not None:
+        supervisor.stdout.close()
+
+    assert signal == b""
+    assert supervisor.poll() is not None
+    deadline = time.monotonic() + 5
+    while psutil.pid_exists(child_pid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not psutil.pid_exists(child_pid)
