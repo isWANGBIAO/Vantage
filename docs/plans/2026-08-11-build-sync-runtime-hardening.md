@@ -32,6 +32,13 @@ running `npm ci`, `npm ls --depth=0` invalidating an otherwise matching state,
 exact installed-version drift plus missing/extra scoped and nested packages,
 legacy state without a closure, failure leaving no stamp, and atomic stamp
 creation only after validation.
+Exercise the persistent Lamport choosing/ticket lease with real multi-process
+contenders, orphan recovery, identity replacement, and displacement immediately
+before state publication. Kill the original sync process while a descendant
+mutator is active on both Windows and POSIX; recovery must not acquire the next
+ticket until the guardian has terminated and reaped the old command tree. Assert
+that guardian state never persists credentials or caller-specific absolute
+paths and that recovery leaves no private command directory.
 Static launcher tests must require every persistent entrypoint to call the same
 CLI and must forbid the old `node_modules`-existence shortcut.
 
@@ -57,6 +64,15 @@ run `npm ls --depth=0`, and atomically replace the state. On a valid fast path,
 still run `npm ls --depth=0`, then compare a stable physical package closure of
 relative path, name, and exact version; validation failure or any closure drift
 forces a clean resync without following symbolic links.
+
+Serialize the full operation with a persistent lock-directory Lamport ticket.
+An independent schema-3 guardian owns each live ticket and launches every npm
+command. Parent loss must make the guardian terminate and confirm the whole
+Windows task tree or POSIX process group before releasing the ticket. Pass only
+a fixed inherited/fallback-mirror mode to the guardian; never serialize the
+caller's environment, cwd, executable path, or credentials. Remove only the
+current ticket's private state after normal release or confirmed dead-guardian
+recovery, and fail closed on identity or publication-window races.
 
 Replace duplicated install branches with this CLI. Preserve the existing
 Electron binary verification. In Bash launchers, dependency sync must remove
@@ -209,9 +225,11 @@ all-platform transitive hash lock. Simultaneously forging both the dedicated
 venv and its matching state remains inside the trusted local build-host
 boundary.
 
-The runtime fingerprint schema is version 3 and binds full Python identity,
-cache tag, platform, operating system, machine architecture, and the verified
-distribution closure. The signer rejects link/reparse and
+The environment-state schema is version 3 and binds a stable physical-content
+integrity summary in addition to the verified distribution closure. The runtime
+fingerprint schema is version 5 and binds full Python identity, cache tag,
+platform, operating system, machine architecture, environment integrity, and
+the verified macOS signing state. The signer rejects link/reparse and
 hard-link/containment/identity races for the runtime, `lib`, state, stamp, and
 native files. It clears attributes only on individually validated native files
 and performs stable post-verification and post-stamp closure rescans. The lock
@@ -253,7 +271,8 @@ git commit -m "fix: rebuild unclean backend packaging environments" -m "Replace 
 
 **Step 1: Write the failing workflow contract**
 
-Require a `macos-14` arm64 and `macos-15-intel` matrix. Require Python 3.13,
+Require a `macos-15` arm64 and `macos-15-intel` matrix. Pin Node 24.18.0 on
+both runners and require Python 3.13,
 shared clean runtime synchronization, `pip check`, OpenCV/NumPy/YuNet
 constructor probe, model prewarm, real native-library signing plus cached
 verification/state-tamper refresh, real frontend dependency synchronization
@@ -269,7 +288,8 @@ Expected: no macOS job exists.
 
 **Step 3: Add the job and verify GREEN**
 
-Use official GitHub-hosted labels and `actions/setup-python@v5` pip caching
+Use official GitHub-hosted labels, `actions/setup-node@v4` for Node 24.18.0,
+and `actions/setup-python@v5` pip caching
 keyed by both runtime requirements files. Assert each runner's actual machine
 architecture; run the shared environment, frontend synchronization, and both
 signer CLIs; verify the frontend cache path; and make `RUN.sh` strictly sign and
@@ -368,8 +388,12 @@ Keep one persistent `os.scandir()` iterator for the current directory and
 preserve filesystem enumeration order; never materialize or sort a whole
 directory. Check the time budget around iterator open, advance, and entry
 processing. Retain processed-entry identities so retrying a failed root cannot
-double-count, and close iterators on completion, failure, path replacement, and
-shutdown. `update_storage_stats()` owns one scanner per current path, publishes
+double-count. Preserve the lexical configured root and re-resolve plus compare
+its physical identity before, during, and before completing each step; a
+rename/recreate or symlink/junction retarget must close the old iterator and
+restart rather than publish/cache an exact result for the former tree. Close
+iterators on completion, failure, path replacement, and shutdown.
+`update_storage_stats()` owns one scanner per current path, publishes
 partial totals with `storage_scan_truncated=true`, and serves completed cached
 totals until refresh. Legacy one-shot scanning keeps its bounded helper.
 
@@ -391,8 +415,12 @@ git commit -m "perf: resume bounded storage scans" -m "Continue directory-size t
 **Files:**
 - Modify: `src/utils/sensitive_data.py`
 - Modify: `src/scripts/run_server_background.py`
+- Modify: `src/scripts/run_frontend_background.py`
+- Modify: `src/server.py`
 - Modify: `tests/test_sensitive_data.py`
 - Modify: `tests/test_run_server_background.py`
+- Modify: `tests/test_run_frontend_background.py`
+- Modify: `tests/test_face_analysis_report.py`
 - Modify: `src/webapp/src/utils/boundedLogger.cjs`
 - Modify: `src/webapp/src/utils/boundedLogger.test.js`
 - Modify: `src/webapp/main.cjs`
@@ -424,19 +452,26 @@ and every explicit-prefix candidate from the immutable original message,
 selects the longest non-overlapping ranges, and applies replacements once. This
 handles encoded local file URLs and structured diagnostic fields while
 preserving genuine remote URLs and avoiding mutation-dependent or quadratic
-rescanning leaks.
+rescanning leaks. Route the independently redirected face-analysis child and
+the detached frontend npm/Electron process through the same complete-record
+redacting pipe sink; split native writes and an unterminated EOF record must not
+leak a local path or credential. The detached frontend launcher must not report
+READY until an independent lifecycle owner has established Windows
+`KILL_ON_JOB_CLOSE` or POSIX process-group/control-pipe cleanup and successfully
+started the target. Killing the returned supervisor, startup timeout, and
+notification failure must remove the target and pipe-inheriting descendants.
 
 **Step 4: Verify GREEN**
 
 ```powershell
-python -m pytest tests/test_sensitive_data.py tests/test_run_server_background.py -q
+python -m pytest tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_run_frontend_background.py tests/test_face_analysis_report.py -q
 npm --prefix src/webapp test -- --run
 ```
 
 **Step 5: Commit**
 
 ```powershell
-git add src/utils/sensitive_data.py src/scripts/run_server_background.py tests/test_sensitive_data.py tests/test_run_server_background.py src/webapp/src/utils/boundedLogger.cjs src/webapp/src/utils/boundedLogger.test.js src/webapp/main.cjs src/webapp/main.test.js
+git add src/utils/sensitive_data.py src/scripts/run_server_background.py src/scripts/run_frontend_background.py src/server.py tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_run_frontend_background.py tests/test_face_analysis_report.py src/webapp/src/utils/boundedLogger.cjs src/webapp/src/utils/boundedLogger.test.js src/webapp/main.cjs src/webapp/main.test.js
 git commit -m "fix: redact local paths from persisted logs" -m "Replace explicit user-data, project, and executable prefixes before backend and Electron logs are persisted while preserving basenames, diagnostics, log rotation, and existing secret redaction."
 ```
 
@@ -491,7 +526,7 @@ git commit -m "test: exercise YuNet with a CC0 face fixture" -m "Add a documente
 **Step 1: Run focused integration suites**
 
 ```powershell
-python -m pytest tests/test_sync_backend_runtime_environment.py tests/test_backend_runtime_packaging.py tests/test_backend_runtime_lock.py tests/test_sign_macos_backend_runtime.py tests/test_packaging_builds_orchestrator.py tests/test_subprocess_safety.py tests/test_launch_locked_backend_background.py tests/test_launcher_safety.py tests/test_backend_requirements.py tests/test_ci_workflow.py tests/test_screenshot_capture.py tests/test_sedentary_monitor.py tests/test_get_location_save_image.py tests/test_directory_size_scanner.py tests/test_storage_stats.py tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_person_detection_real_model.py -q
+python -m pytest tests/test_sync_backend_runtime_environment.py tests/test_backend_runtime_packaging.py tests/test_backend_runtime_lock.py tests/test_sign_macos_backend_runtime.py tests/test_packaging_builds_orchestrator.py tests/test_subprocess_safety.py tests/test_launch_locked_backend_background.py tests/test_launcher_safety.py tests/test_backend_requirements.py tests/test_ci_workflow.py tests/test_screenshot_capture.py tests/test_sedentary_monitor.py tests/test_get_location_save_image.py tests/test_directory_size_scanner.py tests/test_storage_stats.py tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_run_frontend_background.py tests/test_face_analysis_report.py tests/test_person_detection_real_model.py -q
 ```
 
 **Step 2: Run full source validation**
@@ -549,3 +584,38 @@ Important finding with its own RED/GREEN cycle and re-review.
 git add docs/plans/2026-08-11-build-sync-runtime-hardening-design.md docs/plans/2026-08-11-build-sync-runtime-hardening.md
 git commit -m "docs: record build hardening verification" -m "Record fresh source, dependency, packaged-runtime, installed-app, CPU, log, and provider verification evidence after the deterministic synchronization fixes."
 ```
+
+### Task 9: Integrate and release Vantage 1.0.68
+
+**Files:**
+- Modify: `src/webapp/package.json`
+- Modify: `src/webapp/package-lock.json`
+- Modify: `README.md`
+- Modify: `.github/workflows/release.yml`
+
+**Step 1: Prepare and verify the release metadata**
+
+Set the package and lockfile versions to `1.0.68`, update the tracked release
+examples to `v1.0.68`, and rerun the package/workflow contract tests. Commit the
+version change separately from behavioral fixes.
+
+**Step 2: Push and merge through a ready PR**
+
+Push `feature/build-sync-runtime-hardening`, create a ready PR targeting
+`main`, and wait for every required Python, frontend, CodeQL, and macOS job.
+Investigate and fix any CI failure with a focused RED/GREEN cycle; do not merge
+around a failed or missing required check. Merge normally only after the PR is
+mergeable and all checks are successful.
+
+**Step 3: Tag and verify the release**
+
+Synchronize local `main` to the merge commit, create and push the annotated tag
+`v1.0.68`, wait for the Release workflow, and verify the installer, blockmap,
+and `SHA256SUMS.txt` assets and checksums.
+
+**Step 4: Verify the installed release from merged main**
+
+Run `RUN.bat` from merged `main` and let it finish naturally. Verify that the
+installed UI and status API report `1.0.68` and the merge commit; check runtime
+health, the YuNet-only manifest, dependency identities, fresh redacted logs,
+and the established CPU target before reporting completion.

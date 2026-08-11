@@ -87,17 +87,29 @@ cannot be reused. The Electron binary check remains after dependency sync. On
 macOS, a frontend rebuild invalidates the native codesign stamp so native
 modules are signed again.
 
-The CLI holds one cross-process Node lock from before the first state or
+The CLI holds one cross-process Node lease from before the first state or
 lockfile read until after the final atomic state replacement. The same lease
 therefore serializes state validation, native-signature-stamp invalidation,
 `npm ci`, `npm ls`, physical closure scanning, and state publication across all
-launchers. Exclusive creation records only a process id, random owner token,
-and timestamp; an IPC child lease removes the lock when its parent exits or
-crashes. A subsequent process quarantines a dead owner's residue before
-continuing. Lock files are checked by physical identity and reject links,
-non-regular files, and hard links. Waiting is bounded to 300 seconds by default
-and fails closed with path-free diagnostics; transient lease and quarantine
-files are ignored by Git.
+launchers. A persistent lock directory contains unique Lamport choosing and
+numbered ticket files, so contenders never move or overwrite another live
+owner's lease. Directory and ticket identities are validated; links,
+non-regular files, hard links, lost leases, and publish-window displacement all
+fail closed.
+
+Each schema-3 ticket has an independent guardian as its live owner. The
+guardian executes dependency commands itself and retains the ticket until the
+complete command tree has exited. If the original synchronizer exits or
+crashes, the guardian first terminates and confirms the command tree (`taskkill
+/T /F` on Windows, an isolated process group with TERM/KILL on POSIX), then
+releases the ticket. Its request file records only a fixed safe environment
+mode; it never serializes the caller's environment, working directory, npm
+path, credentials, or other secrets. Private command state lives under that
+ticket and is removed on normal release or confirmed stale-ticket recovery.
+Waiting is bounded to 300 seconds and diagnostics are path-free. This protocol
+covers cooperative contenders and original-owner crashes; deliberate same-user
+filesystem tampering or force-killing the actual guardian remains inside the
+local host trust boundary.
 
 `RUN.bat`, `RUN.sh`, `RUN_DEV.bat`, `RUN_DEV.sh`, and the release-installer
 builder invoke `scripts/sync-dependencies.cjs` with an explicit
@@ -108,6 +120,19 @@ frontend native-signature stamp through `--invalidate-stamp`; the CLI removes
 that stamp only when it is about to mutate `node_modules`, and the existing
 signing function runs after a successful sync. `VANTAGE_FORCE_FRONTEND_DEPS=1`
 forces the same clean path without introducing a launcher-specific branch.
+
+Frontend background launch uses a separate long-lived lifecycle owner. The
+short launcher reports READY only after redacting log sinks exist, the owner has
+established its platform cleanup contract, and npm/Electron has started. On
+Windows the owner binds itself to a `KILL_ON_JOB_CLOSE` Job before it receives
+the target payload, so the target and descendants inherit the job without a
+post-launch attach window. On POSIX it watches the returned supervisor's control
+pipe and handled termination signals and owns the target's isolated process
+group. Losing the returned supervisor therefore closes the pipe and removes the
+whole target tree; startup timeout, notification failure, and pipe-inheriting
+grandchildren follow the same cleanup path. POSIX cannot generally guarantee
+cleanup if the lifecycle owner itself is killed with `SIGKILL`; that local
+administrative action remains an explicit platform boundary.
 
 ## Backend environment synchronization
 
@@ -243,15 +268,24 @@ its shared lease.
 Rename failure leaves the canonical environment and state untouched; later
 installation failure leaves the new canonical environment without valid state.
 
-The packaged-runtime fingerprint includes the verified distribution closure.
+The environment state includes a stable SHA-256 summary of the physical venv
+closure in addition to the verified distribution closure. The integrity walk
+binds file contents, links, and the complete path set while validating that the
+root identity remains stable throughout each scan; it rescans the metadata
+closure after hashing and again after runtime probes so a late
+add, replacement, executable sourceless bytecode file, or probe side effect
+cannot be certified. Regenerable `__pycache__` directories are excluded. On
+macOS, only native files under `lib` that are owned by the strict signing
+closure are excluded from the general integrity hash.
+
 Consequently, manually changing the venv cannot reuse an older PyInstaller
 bundle even if source files and requirements text are unchanged. Packaging
 validation also rejects a venv whose state is absent or inconsistent. The
-environment-state schema is version 2. The packaged-runtime fingerprint schema
-is version 3 and includes the complete Python, platform, machine, and installed
-distribution identities. Environment sync, lifecycle, signing, and background
-launch helpers are explicitly excluded from the shipped backend application as
-build-only code. There is no
+environment-state schema is version 3. The packaged-runtime fingerprint schema
+is version 5 and includes the complete Python, platform, machine, distribution,
+environment-integrity, and verified macOS signing identities. Environment sync,
+lifecycle, signing, and background launch helpers are explicitly excluded from
+the shipped backend application as build-only code. There is no
 environment-variable bypass for the fixed venv, state, or installed-closure
 checks.
 
@@ -265,8 +299,8 @@ not deliberate same-host state forgery.
 
 ## macOS CI
 
-CI uses GitHub's `macos-14` (arm64) and `macos-15-intel` (x64) runners. Both
-architectures run the shared clean environment synchronizer, `pip check`, YuNet
+CI uses GitHub's `macos-15` (arm64) and `macos-15-intel` (x64) runners. Both
+architectures pin Node 24.18.0 and run the shared clean environment synchronizer, `pip check`, YuNet
 prewarm, real native-library signing, cached-signature verification, and a
 state-tamper refresh check. They also exercise the real POSIX shared/exclusive
 lock semantics and synchronize, sign, and cache-verify the real frontend native
@@ -283,8 +317,11 @@ macOS launchers but does not notarize or publish a macOS release.
   crosses into confirmed absence. Continued absence is silent.
 - Repeated location outcomes are logged on transition and then at most hourly,
   with a suppressed-repeat count. Coordinates remain absent from logs.
-- Backend and Electron log messages replace known user-data/project prefixes
-  with stable labels before persistence. Electron redaction scans URL-context
+- Main-backend output, independently redirected face-analysis output, frontend
+  bootstrap/npm/Electron output, and Electron application messages replace
+  known user-data/project prefixes and credentials with stable labels before
+  persistence. The pipe sinks redact complete records even when native writes
+  split a secret or leave the final record unterminated. Electron redaction scans URL-context
   events and all explicit-prefix candidates from the immutable original text,
   selects longest non-overlapping ranges, and applies replacements once. It
   handles encoded local file URLs and structured diagnostic fields while
@@ -292,10 +329,14 @@ macOS launchers but does not notarize or publish a macOS release.
   remain for diagnostics; raw absolute user paths do not.
 - Directory-size scans retain one `os.scandir()` iterator across bounded steps
   and preserve filesystem enumeration order; they never materialize or sort a
-  whole directory. Processed-entry identities prevent double counting after a
-  retry, and iterators close on completion, failure, path replacement, and
-  shutdown. A completed result is cached for fifteen minutes; partial results
-  keep `storage_scan_truncated=true`.
+  whole directory. The scanner retains the lexical configured root, resolves
+  it anew before, during, and immediately before completing each bounded step,
+  and compares the root identity. Rename/recreate and symlink/junction retargets
+  close the old iterator and restart against the new root instead of caching an
+  exact value for the old tree. Processed-entry identities prevent double
+  counting after a retry, and iterators close on completion, failure, path
+  replacement, and shutdown. A completed result is cached for fifteen minutes;
+  partial results keep `storage_scan_truncated=true`.
 
 ## Real YuNet smoke fixture
 
@@ -330,6 +371,8 @@ an extra package causes a clean rebuild and cannot receive a valid state.
 `RUN.bat` is executed only after source validation and is allowed to finish
 naturally. The installed package must match the tested commit, report healthy
 status/sedentary endpoints, contain YuNet and no YOLOX/forbidden distribution,
-use the locked frontend versions, and stay below the existing CPU target. No
-push, PR, merge, tag, or release is performed without the user's integration
-choice after the verified branch is complete.
+use the locked frontend versions, and stay below the existing CPU target. The
+user has authorized the verified branch to be pushed as a ready PR, merged only
+after every required GitHub check passes, tagged as `v1.0.68`, released, and
+installed again from merged `main`; the installer assets and
+`SHA256SUMS.txt` must be checked before completion is claimed.
