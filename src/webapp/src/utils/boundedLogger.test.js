@@ -78,6 +78,7 @@ test('redacts local file URLs and exact diagnostic roots without touching siblin
     const remoteUrl = 'https://example.test/C:/Users/Alice/repo/guide';
     const value = [
         'stack=at start (file:///C:/Users/Alice/repo/src/main.cjs:42:7)',
+        'bundle=webpack:///C:/Users/Alice/repo/src/chunk.cjs:5:6',
         'cwd="C:\\Users\\Alice\\repo"',
         'diagnostic=C:/Users/Alice/repo:',
         'sibling=C:/Users/Alice/repo-other/main.cjs',
@@ -96,6 +97,10 @@ test('redacts local file URLs and exact diagnostic roots without touching siblin
     assert.match(
         redacted,
         /stack=at start \(file:\/\/\/<project-root>\/src\/main\.cjs:42:7\)/,
+    );
+    assert.match(
+        redacted,
+        /bundle=webpack:\/\/\/<project-root>\/src\/chunk\.cjs:5:6/,
     );
     assert.match(redacted, /cwd="<project-root>"/);
     assert.match(redacted, /diagnostic=<project-root>:/);
@@ -160,6 +165,23 @@ test('redacts percent-encoded local file URLs without decoding remote or malform
         redacted,
         new RegExp(`malformed=${malformedFileUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
     );
+});
+
+test('redacts every local file URL when remote and local URLs share one token', () => {
+    const pathPrefixes = [
+        { prefix: "C:\\Users\\O'Neil\\repo", label: '<apostrophe-root>' },
+    ];
+    const value = [
+        "urls='https://example.test','file:///C:/Users/O'Neil/repo/src/one.cjs:1:2'",
+        "https://example.test/guide;local='file:///C:/Users/O'Neil/repo/src/two.cjs:3:4'",
+    ].join('\n');
+
+    const redacted = redactSensitiveText(value, pathPrefixes);
+
+    assert.match(redacted, /https:\/\/example\.test/);
+    assert.match(redacted, /file:\/\/\/<apostrophe-root>\/src\/one\.cjs:1:2/);
+    assert.match(redacted, /file:\/\/\/<apostrophe-root>\/src\/two\.cjs:3:4/);
+    assert.doesNotMatch(redacted, /C:\/Users\/O'Neil\/repo/);
 });
 
 test('redacts messages and error stacks before file and console output', () => {

@@ -5,8 +5,8 @@ const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 6;
 const ELECTRON_LOG_PATTERN = /^electron.*\.log.*$/;
 const UTF8_BOUNDARY_BYTES = 3;
-const URL_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>"]+/g;
 const PATH_PREFIX_BOUNDARY_PATTERN = "(?=$|[\\\\/\\s'\":,\\]\\};>)]|[.!?](?=$|\\s))";
+const REMOTE_URL_SCHEMES = new Set(['ftp', 'http', 'https', 'ws', 'wss']);
 
 let temporaryFileSequence = 0;
 
@@ -36,20 +36,6 @@ function buildPathPrefixPattern(prefix) {
   return pattern;
 }
 
-function encodeFileUrlPathPrefix(prefix) {
-  try {
-    const normalized = prefix
-      .replace(/\\/g, '/')
-      .replace(/^\/+/, '');
-    return encodeURI(normalized)
-      .replace(/#/g, '%23')
-      .replace(/\?/g, '%3F')
-      .replace(/~/g, '%7E');
-  } catch {
-    return null;
-  }
-}
-
 function percentHexCharacterPattern(character) {
   if (/[A-Fa-f]/.test(character)) {
     return `[${character.toLowerCase()}${character.toUpperCase()}]`;
@@ -57,12 +43,35 @@ function percentHexCharacterPattern(character) {
   return character;
 }
 
-function buildFileUrlPrefixPattern(prefix) {
+function percentEncodedCharacterPattern(character) {
+  return [...Buffer.from(character, 'utf8')]
+    .map((byte) => {
+      const hex = byte.toString(16).padStart(2, '0');
+      return `%${percentHexCharacterPattern(hex[0])}${percentHexCharacterPattern(hex[1])}`;
+    })
+    .join('');
+}
+
+function buildFileUrlCharacterPattern(character, windowsPath) {
+  const variants = new Set([
+    escapeRegExpCharacter(character),
+    percentEncodedCharacterPattern(character),
+  ]);
+  if (windowsPath && /^[A-Za-z]$/.test(character)) {
+    variants.add(percentEncodedCharacterPattern(character.toLowerCase()));
+    variants.add(percentEncodedCharacterPattern(character.toUpperCase()));
+  }
+  return `(?:${[...variants].join('|')})`;
+}
+
+function buildFileUrlPrefixPattern(prefix, windowsPath) {
+  const normalized = prefix
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
   let pattern = '';
   let previousWasSeparator = false;
 
-  for (let index = 0; index < prefix.length; index += 1) {
-    const character = prefix[index];
+  for (const character of normalized) {
     if (character === '/') {
       if (!previousWasSeparator) {
         pattern += '[\\/]+';
@@ -71,17 +80,7 @@ function buildFileUrlPrefixPattern(prefix) {
       continue;
     }
 
-    if (
-      character === '%'
-      && index + 2 < prefix.length
-      && /^[0-9A-Fa-f]{2}$/.test(prefix.slice(index + 1, index + 3))
-    ) {
-      pattern += `%${percentHexCharacterPattern(prefix[index + 1])}`;
-      pattern += percentHexCharacterPattern(prefix[index + 2]);
-      index += 2;
-    } else {
-      pattern += escapeRegExpCharacter(character);
-    }
+    pattern += buildFileUrlCharacterPattern(character, windowsPath);
     previousWasSeparator = false;
   }
 
@@ -111,7 +110,6 @@ function compilePathPrefixes(pathPrefixes) {
       const windowsPath = /^[A-Za-z]:[\\/]/.test(prefix)
         || /^\\\\/.test(prefix)
         || prefix.includes('\\');
-      const encodedFileUrlPrefix = encodeFileUrlPathPrefix(prefix);
       return {
         label: mapping.label,
         order,
@@ -120,12 +118,10 @@ function compilePathPrefixes(pathPrefixes) {
           `${buildPathPrefixPattern(prefix)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
           windowsPath ? 'gi' : 'g',
         ),
-        fileUrlRegex: encodedFileUrlPrefix
-          ? new RegExp(
-            `${buildFileUrlPrefixPattern(encodedFileUrlPrefix)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
-            windowsPath ? 'gi' : 'g',
-          )
-          : null,
+        fileUrlRegex: new RegExp(
+          `${buildFileUrlPrefixPattern(prefix, windowsPath)}${PATH_PREFIX_BOUNDARY_PATTERN}`,
+          windowsPath ? 'gi' : 'g',
+        ),
       };
     })
     .filter(Boolean)
@@ -137,16 +133,45 @@ function compilePathPrefixes(pathPrefixes) {
 function redactPathSegment(value, compiledPathPrefixes) {
   let redacted = value;
   for (const mapping of compiledPathPrefixes) {
-    redacted = redacted.replace(mapping.regex, () => mapping.label);
+    redacted = redacted.replace(mapping.regex, (match, offset, source) => {
+      const scheme = activeUrlSchemeAt(source, offset);
+      return scheme && REMOTE_URL_SCHEMES.has(scheme) ? match : mapping.label;
+    });
   }
   return redacted;
 }
 
-function redactLocalFileUrl(value, compiledPathPrefixes) {
-  let redacted = redactPathSegment(value, compiledPathPrefixes);
+function activeUrlSchemeAt(value, index) {
+  const prefix = value.slice(0, index);
+  const schemePattern = /\b([A-Za-z][A-Za-z0-9+.-]*):\/\//g;
+  let activeMatch = null;
+  for (const match of prefix.matchAll(schemePattern)) {
+    activeMatch = match;
+  }
+  if (!activeMatch) {
+    return null;
+  }
+
+  const sinceScheme = prefix.slice(activeMatch.index + activeMatch[0].length);
+  if (/[\s<>"]/.test(sinceScheme)) {
+    return null;
+  }
+  return activeMatch[1].toLowerCase();
+}
+
+function redactEncodedLocalFilePaths(value, compiledPathPrefixes) {
+  let redacted = value;
   for (const mapping of compiledPathPrefixes) {
     if (mapping.fileUrlRegex) {
-      redacted = redacted.replace(mapping.fileUrlRegex, () => mapping.label);
+      redacted = redacted.replace(
+        mapping.fileUrlRegex,
+        (match, offset, source) => {
+          const scheme = activeUrlSchemeAt(source, offset);
+          return scheme && !REMOTE_URL_SCHEMES.has(scheme)
+            ? mapping.label
+            : match;
+        },
+      );
     }
   }
   return redacted;
@@ -157,20 +182,10 @@ function redactPathPrefixes(value, compiledPathPrefixes) {
     return value;
   }
 
-  let redacted = '';
-  let lastIndex = 0;
-  for (const match of value.matchAll(URL_PATTERN)) {
-    redacted += redactPathSegment(
-      value.slice(lastIndex, match.index),
-      compiledPathPrefixes,
-    );
-    redacted += /^file:/i.test(match[0])
-      ? redactLocalFileUrl(match[0], compiledPathPrefixes)
-      : match[0];
-    lastIndex = match.index + match[0].length;
-  }
-  redacted += redactPathSegment(value.slice(lastIndex), compiledPathPrefixes);
-  return redacted;
+  return redactEncodedLocalFilePaths(
+    redactPathSegment(value, compiledPathPrefixes),
+    compiledPathPrefixes,
+  );
 }
 
 function redactSensitiveTextWithCompiledPaths(value, compiledPathPrefixes) {
