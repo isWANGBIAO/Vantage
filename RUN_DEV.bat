@@ -8,6 +8,7 @@ echo ========================================
 echo.
 
 set "PROJECT_ROOT=%~dp0"
+set "PROJECT_ROOT_ARG=%PROJECT_ROOT:~0,-1%"
 cd /d "%PROJECT_ROOT%"
 set "ELECTRON_RUN_AS_NODE="
 set "BOOTSTRAP_PYTHON=python"
@@ -27,14 +28,14 @@ set "SERVER_LATEST_POINTER=%PROJECT_ROOT%logs\server.latest.log"
 echo [0/4] Cleaning residual processes...
 set "CLEANUP_PYTHON=%BOOTSTRAP_PYTHON%"
 if exist "%BACKEND_RUNTIME_PYTHON%" set "CLEANUP_PYTHON=%BACKEND_RUNTIME_PYTHON%"
-"%BOOTSTRAP_PYTHON%" "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT%" -- "%CLEANUP_PYTHON%" src\scripts\cleanup_vantage_python_processes.py --include-desktop >nul 2>&1
+"%BOOTSTRAP_PYTHON%" "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT_ARG%" -- "%CLEANUP_PYTHON%" src\scripts\cleanup_vantage_python_processes.py --include-desktop >nul 2>&1
 echo       Cleanup complete
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 2"
 
 echo [1/4] Preparing the dedicated backend environment...
 set "BACKEND_RUNTIME_SYNC_FORCE_ARG="
 if "%VANTAGE_FORCE_BACKEND_DEPS%"=="1" set "BACKEND_RUNTIME_SYNC_FORCE_ARG=--force"
-"%BOOTSTRAP_PYTHON%" "%BACKEND_RUNTIME_SYNC%" --project-root "%PROJECT_ROOT%" --venv "%BACKEND_RUNTIME_VENV%" --core-requirements "%BACKEND_RUNTIME_CORE_REQUIREMENTS%" --requirements "%BACKEND_RUNTIME_REQUIREMENTS%" --opencv-normalizer "%OPENCV_NORMALIZER%" %BACKEND_RUNTIME_SYNC_FORCE_ARG%
+"%BOOTSTRAP_PYTHON%" "%BACKEND_RUNTIME_SYNC%" --project-root "%PROJECT_ROOT_ARG%" --venv "%BACKEND_RUNTIME_VENV%" --core-requirements "%BACKEND_RUNTIME_CORE_REQUIREMENTS%" --requirements "%BACKEND_RUNTIME_REQUIREMENTS%" --opencv-normalizer "%OPENCV_NORMALIZER%" %BACKEND_RUNTIME_SYNC_FORCE_ARG%
 if errorlevel 1 (
     echo       Backend runtime environment synchronization failed
     exit /b 1
@@ -42,7 +43,7 @@ if errorlevel 1 (
 
 echo [2/4] Starting the locked backend...
 if not exist "%PROJECT_ROOT%logs" mkdir "%PROJECT_ROOT%logs"
-"%BOOTSTRAP_PYTHON%" "%BACKEND_RUNTIME_BACKGROUND_LAUNCHER%" --project-root "%PROJECT_ROOT%" --lock-runner "%BACKEND_RUNTIME_LOCK_RUNNER%" --backend-python "%BACKEND_RUNTIME_PYTHON%"
+"%BOOTSTRAP_PYTHON%" "%BACKEND_RUNTIME_BACKGROUND_LAUNCHER%" --project-root "%PROJECT_ROOT_ARG%" --lock-runner "%BACKEND_RUNTIME_LOCK_RUNNER%" --backend-python "%BACKEND_RUNTIME_PYTHON%"
 if errorlevel 1 (
     echo       Backend launch failed
     exit /b 1

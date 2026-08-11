@@ -300,7 +300,7 @@ def test_launcher_cleanup_and_target_runtime_commands_own_shared_leases():
 
     assert (
         '"%BOOTSTRAP_PYTHON%" "%BACKEND_RUNTIME_LOCK_RUNNER%" '
-        '--project-root "%PROJECT_ROOT%" -- "%CLEANUP_PYTHON%" '
+        '--project-root "%PROJECT_ROOT_ARG%" -- "%CLEANUP_PYTHON%" '
         'src\\scripts\\cleanup_vantage_python_processes.py --include-desktop'
         in run_dev_bat
     )
@@ -326,6 +326,14 @@ def test_launcher_cleanup_and_target_runtime_commands_own_shared_leases():
             'src/scripts/cleanup_vantage_python_processes.py --include-desktop'
             in launcher
         )
+
+
+def test_windows_launchers_strip_trailing_separator_from_project_root_arguments():
+    for launcher_path in (Path("RUN.bat"), Path("RUN_DEV.bat")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+        assert 'set "PROJECT_ROOT_ARG=%PROJECT_ROOT:~0,-1%"' in launcher
+        assert '--project-root "%PROJECT_ROOT_ARG%"' in launcher
+        assert '--project-root "%PROJECT_ROOT%"' not in launcher
 
 
 def test_macos_development_server_cannot_override_the_fixed_runtime_python():

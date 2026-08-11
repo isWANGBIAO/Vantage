@@ -8,6 +8,7 @@ echo ========================================
 echo.
 
 set "PROJECT_ROOT=%~dp0"
+set "PROJECT_ROOT_ARG=%PROJECT_ROOT:~0,-1%"
 cd /d "%PROJECT_ROOT%"
 set "INSTALL_ROOT=%LOCALAPPDATA%\Programs\Vantage"
 set "INSTALLED_EXE=%INSTALL_ROOT%\Vantage.exe"
@@ -54,7 +55,7 @@ call :StepDone "Frontend dependency check complete"
 call :StepStart "[2/7] Preparing backend packaging environment..."
 set "BACKEND_RUNTIME_SYNC_FORCE_ARG="
 if "%VANTAGE_FORCE_BACKEND_DEPS%"=="1" set "BACKEND_RUNTIME_SYNC_FORCE_ARG=--force"
-python "%BACKEND_RUNTIME_SYNC%" --project-root "%PROJECT_ROOT%" --venv "%BACKEND_RUNTIME_VENV%" --core-requirements "%BACKEND_RUNTIME_CORE_REQUIREMENTS%" --requirements "%BACKEND_RUNTIME_REQUIREMENTS%" --opencv-normalizer "%OPENCV_NORMALIZER%" %BACKEND_RUNTIME_SYNC_FORCE_ARG%
+python "%BACKEND_RUNTIME_SYNC%" --project-root "%PROJECT_ROOT_ARG%" --venv "%BACKEND_RUNTIME_VENV%" --core-requirements "%BACKEND_RUNTIME_CORE_REQUIREMENTS%" --requirements "%BACKEND_RUNTIME_REQUIREMENTS%" --opencv-normalizer "%OPENCV_NORMALIZER%" %BACKEND_RUNTIME_SYNC_FORCE_ARG%
 if errorlevel 1 (
     echo       Backend runtime environment synchronization failed
     exit /b 1
@@ -83,7 +84,7 @@ call :StepDone "Build version prepared"
 
 call :StepStart "[4/8] Building frontend and backend runtime in parallel..."
 echo       Build workers requested: %VANTAGE_BUILD_WORKERS%
-python "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT%" -- "%BACKEND_RUNTIME_PYTHON%" src\scripts\run_packaging_builds.py --backend-python "%BACKEND_RUNTIME_PYTHON%" --workers "%VANTAGE_BUILD_WORKERS%"
+python "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT_ARG%" -- "%BACKEND_RUNTIME_PYTHON%" src\scripts\run_packaging_builds.py --backend-python "%BACKEND_RUNTIME_PYTHON%" --workers "%VANTAGE_BUILD_WORKERS%"
 if errorlevel 1 (
     call :RestoreBuildInfo
     echo       Parallel packaging build failed
@@ -92,7 +93,7 @@ if errorlevel 1 (
 call :StepDone "Frontend and backend build step complete"
 
 call :StepStart "[5/8] Verifying backend runtime..."
-python "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT%" -- "%BACKEND_RUNTIME_PYTHON%" src\scripts\verify_backend_runtime.py --timeout-seconds 60
+python "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT_ARG%" -- "%BACKEND_RUNTIME_PYTHON%" src\scripts\verify_backend_runtime.py --timeout-seconds 60
 if errorlevel 1 (
     call :RestoreBuildInfo
     echo       Backend runtime verification failed
