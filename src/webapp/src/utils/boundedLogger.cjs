@@ -5,7 +5,7 @@ const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 6;
 const ELECTRON_LOG_PATTERN = /^electron.*\.log.*$/;
 const UTF8_BOUNDARY_BYTES = 3;
-const URL_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>"']+/g;
+const URL_PATTERN = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>"]+/g;
 const PATH_PREFIX_BOUNDARY_PATTERN = "(?=$|[\\\\/\\s'\":,\\]\\};>)]|[.!?](?=$|\\s))";
 
 let temporaryFileSequence = 0;
