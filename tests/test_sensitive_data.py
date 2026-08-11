@@ -1,6 +1,10 @@
 import io
 
-from src.utils.sensitive_data import RedactingTextStream, redact_sensitive_text
+from src.utils.sensitive_data import (
+    RedactingPipeLog,
+    RedactingTextStream,
+    redact_sensitive_text,
+)
 
 
 def test_redact_sensitive_text_removes_provider_api_key_values():
@@ -153,3 +157,27 @@ def test_redacting_text_stream_fails_closed_if_redaction_raises():
     stream.write(r"secret path C:\Users\Alice\private.txt")
 
     assert target.getvalue() == "[LOG_REDACTION_FAILED]"
+
+
+def test_redacting_pipe_log_redacts_an_unterminated_record_at_eof(tmp_path):
+    log_path = tmp_path / "child.log"
+    secret = "unterminated-bearer-secret-1234567890"
+    private_root = r"C:\Users\Alice\Private Photos"
+
+    with RedactingPipeLog(
+        log_path,
+        path_prefixes={"<HISTORY_DIR>": private_root},
+    ) as pipe_log:
+        with pipe_log.capture_subprocess_output(stream_name="eof") as output:
+            output.write(
+                (
+                    f"path={private_root}\\face.jpg "
+                    f"Authorization: Bearer {secret}"
+                ).encode("utf-8")
+            )
+
+    persisted = log_path.read_text(encoding="utf-8")
+    assert private_root not in persisted
+    assert secret not in persisted
+    assert r"path=<HISTORY_DIR>\face.jpg" in persisted
+    assert "Authorization: Bearer [REDACTED_TOKEN]" in persisted
