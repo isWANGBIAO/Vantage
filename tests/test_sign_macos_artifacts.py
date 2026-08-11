@@ -98,6 +98,28 @@ def test_frontend_skips_javascript_esbuild_wrapper_but_signs_macho_binary(tmp_pa
     assert all(Path(command[-1]) != wrapper for command in commands)
 
 
+def test_frontend_rejects_corrupted_native_candidate_instead_of_shrinking_closure(
+    tmp_path,
+):
+    module = _module()
+    project_root, root, native, stamp = _write_frontend_tree(tmp_path)
+    native.write_bytes(b"truncated-not-macho")
+    commands: list[list[str]] = []
+
+    with pytest.raises(ValueError, match="Mach-O"):
+        module.sign_macos_artifacts(
+            project_root=project_root,
+            root=root,
+            profile="frontend",
+            stamp_path=stamp,
+            run_command=_successful_runner(commands),
+            system_name="Darwin",
+        )
+
+    assert commands == []
+    assert not stamp.exists()
+
+
 def test_frontend_cache_reuse_still_strictly_verifies_current_closure(tmp_path):
     module = _module()
     project_root, root, native, stamp = _write_frontend_tree(tmp_path)
@@ -248,7 +270,7 @@ def test_native_change_after_stamp_replace_is_detected_and_stamp_removed(
 
     def write_then_tamper(stamp_path, state, **kwargs):
         result = real_write(stamp_path, state, **kwargs)
-        native.write_bytes(b"tampered-after-stamp")
+        native.write_bytes(MACHO_64_MAGIC + b"tampered-after-stamp")
         return result
 
     monkeypatch.setattr(module, "write_macos_backend_codesign_state", write_then_tamper)

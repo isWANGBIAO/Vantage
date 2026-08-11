@@ -92,13 +92,35 @@ jobs:
             requirements-backend-runtime-gpu.txt
       - name: Check runner architecture
         run: test "$(uname -m)" = "${{ matrix.uname }}"
-      - name: Exercise POSIX backend runtime lock semantics
+      - name: Exercise POSIX runtime and macOS signing safety contracts
         run: |
           python -m venv .venv-lock-test
           pytest_requirement="$(grep -E '^pytest==[^[:space:]]+$' requirements-ci.txt)"
           test -n "$pytest_requirement"
           .venv-lock-test/bin/python -m pip install "$pytest_requirement"
-          .venv-lock-test/bin/python -m pytest tests/test_backend_runtime_lock.py -q
+          .venv-lock-test/bin/python -m pytest \
+            tests/test_backend_runtime_lock.py \
+            tests/test_sign_macos_backend_runtime.py \
+            tests/test_sign_macos_artifacts.py \
+            tests/test_macos_cleanup_launcher.py \
+            -q
+      - name: Exercise frontend native artifact signer and cache verification
+        run: |
+          node src/webapp/scripts/sync-dependencies.cjs \
+            --webapp-root src/webapp \
+            --invalidate-stamp src/webapp/node_modules/.macos-native-codesign.sha256
+          python src/scripts/sign_macos_artifacts.py \
+            --project-root . \
+            --root src/webapp/node_modules \
+            --profile frontend \
+            --stamp src/webapp/node_modules/.macos-native-codesign.sha256
+          cached_output="$(python src/scripts/sign_macos_artifacts.py \
+            --project-root . \
+            --root src/webapp/node_modules \
+            --profile frontend \
+            --stamp src/webapp/node_modules/.macos-native-codesign.sha256)"
+          echo "$cached_output"
+          grep -q "signatures verified" <<<"$cached_output"
       - name: Synchronize packaged runtime dependencies in the dedicated environment
         run: |
           python src/scripts/sync_backend_runtime_environment.py \

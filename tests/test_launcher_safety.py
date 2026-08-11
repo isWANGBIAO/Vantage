@@ -292,13 +292,34 @@ def test_final_macos_backend_bundle_signing_is_strict_and_verified():
     end = launcher.index("\n}\n", start)
     signing_function = launcher[start:end]
 
-    assert "--timestamp=none" in signing_function
-    assert "codesign --verify --strict --verbose=2" in signing_function
-    assert 'codesign --force --sign - "$runtime_binary"' not in signing_function
-    assert "codesign" in signing_function
-    assert "|| true" not in "\n".join(
-        line for line in signing_function.splitlines() if "codesign" in line
-    )
+    assert '"$BOOTSTRAP_PYTHON" "$MACOS_ARTIFACT_SIGNER"' in signing_function
+    assert '--profile "backend-bundle"' in signing_function
+    assert '--root "$backend_runtime_dir"' in signing_function
+    assert "codesign --" not in signing_function
+    assert "xattr " not in signing_function
+
+
+def test_macos_frontend_signing_uses_bounded_shared_artifact_signer():
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+        start = launcher.index("codesign_macos_frontend_binaries()")
+        end = launcher.index("\n}\n", start)
+        signing_function = launcher[start:end]
+
+        assert '"$BOOTSTRAP_PYTHON" "$MACOS_ARTIFACT_SIGNER"' in signing_function
+        assert '--profile "frontend"' in signing_function
+        assert '--root "${FRONTEND_ROOT}/node_modules"' in signing_function
+        assert '--stamp "$FRONTEND_NATIVE_CODESIGN_STAMP"' in signing_function
+        assert "codesign --" not in signing_function
+        assert "xattr " not in signing_function
+        assert "|| true" not in signing_function
+
+
+def test_macos_launchers_do_not_execute_codesign_directly():
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        launcher = launcher_path.read_text(encoding="utf-8")
+        assert "codesign --force" not in launcher
+        assert "codesign --verify" not in launcher
 
 
 def test_macos_backend_signing_finishes_before_target_venv_consumers_start():

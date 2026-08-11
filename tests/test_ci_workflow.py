@@ -188,6 +188,10 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert "src/models/face_detection_yunet_2023mar.onnx" in macos_job
     assert "detector.detect" in macos_job
     assert "bash -n RUN.sh RUN_DEV.sh" in macos_job
+    assert "tests/test_backend_runtime_lock.py" in macos_job
+    assert "tests/test_sign_macos_backend_runtime.py" in macos_job
+    assert "tests/test_sign_macos_artifacts.py" in macos_job
+    assert "tests/test_macos_cleanup_launcher.py" in macos_job
     assert not re.findall(
         r"^\s+(?:run:\s*)?python (?:-m pip (?:install|check)\b|-c\b)",
         macos_job,
@@ -204,10 +208,7 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert "python -m venv .venv-lock-test" in macos_job
     assert "grep -E '^pytest==[^[:space:]]+$' requirements-ci.txt" in macos_job
     assert '.venv-lock-test/bin/python -m pip install "$pytest_requirement"' in macos_job
-    assert (
-        ".venv-lock-test/bin/python -m pytest "
-        "tests/test_backend_runtime_lock.py -q"
-    ) in macos_job
+    assert ".venv-lock-test/bin/python -m pytest" in macos_job
 
     forbidden_steps = (
         "notarize",

@@ -105,6 +105,7 @@ PYINSTALLER_EXCLUDES = (
     "src.scripts.render_face_pipeline_markdown",
     "src.scripts.run_packaging_builds",
     "src.scripts.run_with_backend_runtime_lock",
+    "src.scripts.sign_macos_artifacts",
     "src.scripts.sign_macos_backend_runtime",
     "src.scripts.sync_backend_runtime_environment",
     "src.scripts.test_gpu_inference",

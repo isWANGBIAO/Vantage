@@ -175,7 +175,6 @@ def _matches_frontend(relative_path: str) -> bool:
         fnmatch.fnmatchcase(relative_path, pattern)
         for pattern in (
             "@esbuild/*/bin/esbuild",
-            "esbuild/bin/esbuild",
             "app-builder-bin/mac/app-builder*",
             "7zip-bin/mac/*/7za",
         )
@@ -294,10 +293,13 @@ def _candidate_paths(
                         "macOS frontend native artifact must not be a link"
                     )
                 continue
-            if _matches_profile(relative_path, profile) and (
-                profile != "frontend" or _is_macho_file(path)
-            ):
-                candidates.append(path)
+            if not _matches_profile(relative_path, profile):
+                continue
+            if profile == "frontend" and not _is_macho_file(path):
+                raise ValueError(
+                    "macOS frontend native artifact is not a valid Mach-O file"
+                )
+            candidates.append(path)
 
     unique_candidates = {
         os.path.normcase(str(path)): path

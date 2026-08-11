@@ -25,36 +25,62 @@ OPENCV_NORMALIZER="${PROJECT_ROOT}/src/scripts/normalize_opencv_installation.py"
 BACKEND_RUNTIME_SYNC="${PROJECT_ROOT}/src/scripts/sync_backend_runtime_environment.py"
 BACKEND_RUNTIME_LOCK_RUNNER="${PROJECT_ROOT}/src/scripts/run_with_backend_runtime_lock.py"
 BACKEND_RUNTIME_SIGNER="${PROJECT_ROOT}/src/scripts/sign_macos_backend_runtime.py"
+MACOS_ARTIFACT_SIGNER="${PROJECT_ROOT}/src/scripts/sign_macos_artifacts.py"
 BACKEND_RUNTIME_STATE="${BACKEND_RUNTIME_VENV}/.vantage-backend-runtime-state.json"
 BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.sha256"
 LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.13.5/bin/python3.13"
 FRONTEND_ROOT="${PROJECT_ROOT}/src/webapp"
-FRONTEND_PACKAGE_LOCK="${FRONTEND_ROOT}/package-lock.json"
 FRONTEND_NATIVE_CODESIGN_STAMP="${FRONTEND_ROOT}/node_modules/.macos-native-codesign.sha256"
 VANTAGE_BUILD_WORKERS="${VANTAGE_BUILD_WORKERS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
 
 python_supports_backend_venv() {
     local candidate="$1"
-    local probe_file probe_pid waited status
+    local probe_pid waited status timed_out descendants monitor_was_enabled
 
-    probe_file="$(mktemp "${TMPDIR:-/tmp}/vantage-python-probe.XXXXXX")" || return 1
-    "$candidate" -c 'import pathlib, sqlite3, ssl, subprocess, venv' >"$probe_file" 2>&1 &
+    monitor_was_enabled=0
+    case "$-" in
+        *m*) monitor_was_enabled=1 ;;
+    esac
+    set -m
+    "$candidate" -c 'import pathlib, sqlite3, ssl, subprocess, venv' >/dev/null 2>&1 &
     probe_pid=$!
+    if (( monitor_was_enabled == 0 )); then
+        set +m
+    fi
     waited=0
+    timed_out=0
     while kill -0 "$probe_pid" 2>/dev/null; do
-        if (( waited >= 5 )); then
-            kill "$probe_pid" >/dev/null 2>&1 || true
-            wait "$probe_pid" >/dev/null 2>&1 || true
-            rm -f "$probe_file"
-            return 1
+        if (( waited >= 50 )); then
+            timed_out=1
+            break
         fi
-        sleep 1
+        sleep 0.1
         waited=$((waited + 1))
     done
 
-    wait "$probe_pid"
-    status=$?
-    rm -f "$probe_file"
+    if (( timed_out == 1 )); then
+        status=1
+    elif wait "$probe_pid"; then
+        status=0
+    else
+        status=$?
+    fi
+    descendants=0
+    if kill -0 -- "-$probe_pid" 2>/dev/null; then
+        descendants=1
+    fi
+    if (( timed_out == 1 || descendants == 1 )); then
+        kill -TERM -- "-$probe_pid" >/dev/null 2>&1 || true
+        for _attempt in {1..10}; do
+            if ! kill -0 -- "-$probe_pid" 2>/dev/null; then
+                break
+            fi
+            sleep 0.1
+        done
+        kill -KILL -- "-$probe_pid" >/dev/null 2>&1 || true
+        wait "$probe_pid" >/dev/null 2>&1 || true
+        return 1
+    fi
     return "$status"
 }
 
@@ -109,29 +135,17 @@ codesign_macos_frontend_binaries() {
         return 0
     fi
 
-    local package_lock_hash="no-package-lock"
-    if [[ -f "$FRONTEND_PACKAGE_LOCK" ]]; then
-        package_lock_hash="$(shasum -a 256 "$FRONTEND_PACKAGE_LOCK" | awk '{print $1}')"
-    fi
-
-    local stored_frontend_hash=""
-    if [[ -f "$FRONTEND_NATIVE_CODESIGN_STAMP" ]]; then
-        stored_frontend_hash="$(cat "$FRONTEND_NATIVE_CODESIGN_STAMP")"
-    fi
-    if [[ "$package_lock_hash" == "$stored_frontend_hash" && "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" != "1" ]]; then
-        echo "      macOS frontend native binaries already ad-hoc signed"
-        return 0
-    fi
-
     echo "      Ad-hoc signing macOS frontend native binaries..."
-    xattr -dr com.apple.provenance "${FRONTEND_ROOT}/node_modules/@rollup" "${FRONTEND_ROOT}/node_modules/@esbuild" "${FRONTEND_ROOT}/node_modules/esbuild" "${FRONTEND_ROOT}/node_modules/app-builder-bin" >/dev/null 2>&1 || true
-    find "${FRONTEND_ROOT}/node_modules" \
-        -path "${FRONTEND_ROOT}/node_modules/electron" -prune -o \
-        -type f \( -name '*.node' -o -name '*.dylib' -o -path '*/@esbuild/*/bin/esbuild' -o -path '*/esbuild/bin/esbuild' -o -path '*/app-builder-bin/mac/app-builder*' -o -path '*/7zip-bin/mac/*/7za' \) -print0 |
-        while IFS= read -r -d '' native_binary; do
-            codesign --force --sign - "$native_binary" >/dev/null 2>&1 || true
-        done
-    printf '%s\n' "$package_lock_hash" > "$FRONTEND_NATIVE_CODESIGN_STAMP"
+    local signer_args=(
+        --project-root "$PROJECT_ROOT"
+        --root "${FRONTEND_ROOT}/node_modules"
+        --profile "frontend"
+        --stamp "$FRONTEND_NATIVE_CODESIGN_STAMP"
+    )
+    if [[ "${VANTAGE_FORCE_MACOS_CODESIGN:-0}" == "1" ]]; then
+        signer_args+=(--force)
+    fi
+    "$BOOTSTRAP_PYTHON" "$MACOS_ARTIFACT_SIGNER" "${signer_args[@]}"
 }
 
 codesign_macos_backend_runtime_bundle() {
@@ -141,12 +155,10 @@ codesign_macos_backend_runtime_bundle() {
     fi
 
     echo "      Ad-hoc signing packaged backend runtime binaries..."
-    xattr -cr "$backend_runtime_dir" >/dev/null 2>&1 || true
-    find "$backend_runtime_dir" -type f \( -name '*.so' -o -name '*.dylib' -o -name 'VantageBackend' -o -name 'Python' \) -print0 |
-        while IFS= read -r -d '' runtime_binary; do
-            codesign --force --sign - --timestamp=none "$runtime_binary"
-            codesign --verify --strict --verbose=2 "$runtime_binary"
-        done
+    "$BOOTSTRAP_PYTHON" "$MACOS_ARTIFACT_SIGNER" \
+        --project-root "$PROJECT_ROOT" \
+        --root "$backend_runtime_dir" \
+        --profile "backend-bundle"
 }
 
 prepare_macos_app_bundle() {
