@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import stat
 import threading
 import time
 from collections import deque
@@ -29,7 +30,7 @@ class DirectorySizeScanner:
         scandir_fn=os.scandir,
         getsize_fn=os.path.getsize,
     ):
-        self.root = Path(root).resolve(strict=False)
+        self._configured_root = Path(os.path.abspath(os.fspath(root)))
         self.max_entries_per_step = max_entries_per_step
         self.max_seconds_per_step = max_seconds_per_step
         self.refresh_interval_seconds = refresh_interval_seconds
@@ -42,7 +43,41 @@ class DirectorySizeScanner:
         self._current_directory = None
         self._current_directory_key = None
         self._closed = False
-        self._reset_scan_locked()
+        resolved_root, root_identity = self._configured_root_state_locked()
+        self._reset_scan_locked(
+            resolved_root=resolved_root,
+            root_identity=root_identity,
+        )
+
+    def _configured_root_state_locked(self):
+        resolved_root = Path(os.path.realpath(self._configured_root))
+        try:
+            root_stat = os.stat(self._configured_root, follow_symlinks=True)
+        except OSError:
+            return resolved_root, None
+        if not stat.S_ISDIR(root_stat.st_mode):
+            return resolved_root, None
+        return resolved_root, (
+            int(root_stat.st_dev),
+            int(root_stat.st_ino),
+            int(stat.S_IFMT(root_stat.st_mode)),
+            int(getattr(root_stat, "st_file_attributes", 0)),
+        )
+
+    def _refresh_configured_root_locked(self):
+        resolved_root, root_identity = self._configured_root_state_locked()
+        root_changed = (
+            os.path.normcase(os.path.abspath(os.fspath(resolved_root)))
+            != os.path.normcase(os.path.abspath(os.fspath(self.root)))
+            or root_identity != self._root_identity
+        )
+        if root_changed:
+            self._reset_scan_locked(
+                resolved_root=resolved_root,
+                root_identity=root_identity,
+            )
+            return False
+        return True
 
     def _close_current_iterator_locked(self):
         iterator = self._current_iterator
@@ -64,8 +99,11 @@ class DirectorySizeScanner:
                 except OSError:
                     pass
 
-    def _reset_scan_locked(self):
+    def _reset_scan_locked(self, *, resolved_root=None, root_identity=None):
         self._close_current_iterator_locked()
+        if resolved_root is not None:
+            self.root = Path(resolved_root)
+            self._root_identity = root_identity
         self._pending_directories = deque([self.root])
         self._visited_directories = set()
         self._processed_entries = set()
@@ -194,8 +232,9 @@ class DirectorySizeScanner:
             if self._closed:
                 raise RuntimeError("directory size scanner is closed")
 
+            root_stable = self._refresh_configured_root_locked()
             now = self._monotonic_clock()
-            if self._complete:
+            if self._complete and root_stable:
                 cache_age = now - self._completed_at
                 if 0 <= cache_age < self.refresh_interval_seconds:
                     return self._snapshot_locked(entries_processed=0)
@@ -204,6 +243,8 @@ class DirectorySizeScanner:
             started_at = now
             entries_processed = 0
             while True:
+                if not self._refresh_configured_root_locked():
+                    entries_processed = 0
                 if (
                     self.max_entries_per_step is not None
                     and entries_processed >= self.max_entries_per_step
@@ -218,9 +259,12 @@ class DirectorySizeScanner:
 
                 entries_processed += 1
                 self._process_entry_locked(entry)
+                if not self._refresh_configured_root_locked():
+                    entries_processed = 0
 
             if self._current_iterator is None and not self._pending_directories:
-                self._complete = True
-                self._completed_at = self._monotonic_clock()
+                if self._refresh_configured_root_locked():
+                    self._complete = True
+                    self._completed_at = self._monotonic_clock()
 
             return self._snapshot_locked(entries_processed)

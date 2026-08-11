@@ -522,3 +522,57 @@ def test_queued_directory_that_disappears_is_skipped(tmp_path):
     assert finished.complete is True
     assert finished.total_size == 0
     assert finished.skipped_entries == 1
+
+
+def test_root_replacement_discards_partial_old_tree_and_scans_new_root(tmp_path):
+    root = tmp_path / "storage"
+    root.mkdir()
+    (root / "old.bin").write_bytes(b"old")
+    scanner = _scanner_type()(
+        root,
+        max_entries_per_step=1,
+        max_seconds_per_step=None,
+    )
+
+    partial = scanner.step()
+    moved_root = tmp_path / "storage-old"
+    root.rename(moved_root)
+    root.mkdir()
+    (root / "new.bin").write_bytes(b"n" * 100)
+    refreshing = scanner.step()
+    refreshed = scanner.step()
+
+    assert partial.complete is False
+    assert refreshing.total_size == 100
+    assert refreshed.complete is True
+    assert refreshed.total_size == 100
+    assert scanner.step().total_size == 100
+
+
+def test_configured_root_link_retarget_restarts_from_new_physical_tree(tmp_path):
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    (first_root / "old.bin").write_bytes(b"old")
+    (second_root / "new.bin").write_bytes(b"new-content")
+    configured_root = tmp_path / "configured"
+    try:
+        configured_root.symlink_to(first_root, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+    scanner = _scanner_type()(
+        configured_root,
+        max_entries_per_step=1,
+        max_seconds_per_step=None,
+    )
+
+    assert scanner.step().complete is False
+    configured_root.unlink()
+    configured_root.symlink_to(second_root, target_is_directory=True)
+    refreshing = scanner.step()
+    refreshed = scanner.step()
+
+    assert refreshing.total_size == len(b"new-content")
+    assert refreshed.complete is True
+    assert refreshed.total_size == len(b"new-content")
