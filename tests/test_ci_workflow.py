@@ -154,6 +154,30 @@ def test_python_workflow_caches_include_shared_core_and_environment_overlay():
         )
 
 
+def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "  macos-runtime-smoke:" in workflow
+    macos_job = workflow[workflow.index("  macos-runtime-smoke:") :]
+
+    for runner, architecture in (("macos-14", "arm64"), ("macos-15-intel", "x64")):
+        assert runner in macos_job
+        assert architecture in macos_job
+
+    assert 'python-version: "3.13"' in macos_job
+    assert "actions/setup-python@v5" in macos_job
+    assert (
+        "cache-dependency-path: |\n"
+        "            requirements-core.txt\n"
+        "            requirements-backend-runtime-gpu.txt"
+    ) in macos_job
+    assert "python -m pip install -r requirements-backend-runtime-gpu.txt" in macos_job
+    assert "python -m pip check" in macos_job
+    assert "cv2.FaceDetectorYN_create" in macos_job
+    assert "detector.detect" in macos_job
+    assert "bash -n RUN.sh RUN_DEV.sh" in macos_job
+
+
 def test_release_metadata_matches_package_version():
     package = json.loads(Path("src/webapp/package.json").read_text(encoding="utf-8"))
     package_lock = json.loads(
