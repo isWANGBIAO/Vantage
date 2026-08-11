@@ -184,10 +184,8 @@ def test_library_byte_change_invalidates_stamp_before_resigning(tmp_path):
         command for command in codesign_commands if "--verify" in command
     ]
     assert len(verify_commands) == 4
-    assert sum(
-        ".vantage-codesign-staging-" in command[-1]
-        for command in verify_commands
-    ) == 2
+    if os.name != "nt":
+        assert all(not Path(command[-1]).is_absolute() for command in verify_commands)
     payload = json.loads(stamp_path.read_text(encoding="utf-8"))
     assert payload == module.build_macos_backend_codesign_state(venv, state_path)
 
@@ -500,10 +498,8 @@ def test_xattr_cleanup_is_scoped_to_each_verified_native_file(tmp_path):
     assert [Path(command[-1]).name for command in xattr_commands] == [
         path.name for path in sorted(libraries, key=lambda path: path.name)
     ]
-    assert all(
-        ".vantage-codesign-staging-" in command[-1]
-        for command in xattr_commands
-    )
+    if os.name != "nt":
+        assert all(not Path(command[-1]).is_absolute() for command in xattr_commands)
     assert all(Path(command[-1]) not in libraries for command in xattr_commands)
     assert all("-r" not in command and "-cr" not in command for command in xattr_commands)
 
@@ -517,14 +513,18 @@ def test_native_hardlink_swap_during_xattr_is_rejected_before_codesign(tmp_path)
     commands: list[list[str]] = []
     swapped = False
 
-    def run(command, **_kwargs):
+    def run(command, **kwargs):
         nonlocal swapped
         normalized = [str(part) for part in command]
         commands.append(normalized)
         if normalized[0] == "xattr" and not swapped:
-            target = Path(normalized[-1])
-            target.unlink()
-            os.link(external_native, target)
+            directory_fd = kwargs.get("working_directory_fd")
+            os.unlink(normalized[-1], dir_fd=directory_fd)
+            os.link(
+                external_native,
+                normalized[-1],
+                dst_dir_fd=directory_fd,
+            )
             swapped = True
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -541,6 +541,111 @@ def test_native_hardlink_swap_during_xattr_is_rejected_before_codesign(tmp_path)
     assert not _codesign_commands(commands)
     assert not stamp_path.exists()
     assert external_native.read_bytes() == b"outside"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX inherited directory fds")
+def test_staged_xattr_is_fd_bound_during_venv_root_swap(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, _libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+    moved_venv = venv.with_name(venv.name + "-moved")
+    external_venv = tmp_path / "external-venv"
+    external_venv.mkdir()
+    observed = {"directory_fd": None, "external_target": None}
+
+    def run(command, **kwargs):
+        normalized = [str(part) for part in command]
+        if normalized[0] == "xattr" and observed["external_target"] is None:
+            staged_matches = list(
+                venv.glob(f".vantage-codesign-staging-*/**/{normalized[-1]}")
+            )
+            assert len(staged_matches) == 1
+            relative_stage = staged_matches[0].relative_to(venv)
+            venv.rename(moved_venv)
+            external_target = external_venv / relative_stage
+            external_target.parent.mkdir(parents=True)
+            external_target.write_bytes(b"external-sentinel")
+            venv.symlink_to(external_venv, target_is_directory=True)
+            directory_fd = kwargs.get("working_directory_fd")
+            observed["directory_fd"] = directory_fd
+            observed["external_target"] = external_target
+            descriptor = os.open(
+                normalized[-1],
+                os.O_WRONLY | os.O_TRUNC,
+                dir_fd=directory_fd,
+            )
+            try:
+                os.write(descriptor, b"private-stage-updated")
+            finally:
+                os.close(descriptor)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises((RuntimeError, ValueError), match="changed|identity|root"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    assert observed["directory_fd"] is not None
+    assert observed["external_target"].read_bytes() == b"external-sentinel"
+    assert not list(moved_venv.glob(".vantage-codesign-staging-*"))
+    assert not (moved_venv / stamp_path.name).exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX inherited directory fds")
+def test_cached_verify_is_fd_bound_during_venv_root_swap(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, libraries = _write_runtime(tmp_path)
+    stamp_path = _write_matching_stamp(module, venv, state_path)
+    moved_venv = venv.with_name(venv.name + "-moved")
+    external_venv = tmp_path / "external-venv"
+    external_venv.mkdir()
+    expected_bytes = sorted(libraries, key=lambda path: path.name)[0].read_bytes()
+    observed = {"directory_fd": None, "read_bytes": None, "external": None}
+
+    def run(command, **kwargs):
+        normalized = [str(part) for part in command]
+        if normalized[0] == "codesign" and observed["external"] is None:
+            source_matches = list(venv.rglob(normalized[-1]))
+            assert len(source_matches) == 1
+            relative_source = source_matches[0].relative_to(venv)
+            venv.rename(moved_venv)
+            external_source = external_venv / relative_source
+            external_source.parent.mkdir(parents=True)
+            external_source.write_bytes(b"external-sentinel")
+            venv.symlink_to(external_venv, target_is_directory=True)
+            directory_fd = kwargs.get("working_directory_fd")
+            observed["directory_fd"] = directory_fd
+            observed["external"] = external_source
+            descriptor = os.open(
+                normalized[-1],
+                os.O_RDONLY,
+                dir_fd=directory_fd,
+            )
+            try:
+                observed["read_bytes"] = os.read(descriptor, 1024 * 1024)
+            finally:
+                os.close(descriptor)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises((RuntimeError, ValueError), match="changed|identity|root"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=run,
+            system_name="Darwin",
+        )
+
+    assert observed["directory_fd"] is not None
+    assert observed["read_bytes"] == expected_bytes
+    assert observed["external"].read_bytes() == b"external-sentinel"
+    assert not (moved_venv / stamp_path.name).exists()
 
 
 @pytest.mark.parametrize(
@@ -763,14 +868,23 @@ def test_native_file_swap_after_sign_is_rejected_before_verification(tmp_path):
     commands: list[list[str]] = []
     swapped = False
 
-    def run(command, **_kwargs):
+    def run(command, **kwargs):
         nonlocal swapped
         normalized = [str(part) for part in command]
         commands.append(normalized)
         if normalized[0] == "codesign" and "--force" in normalized and not swapped:
-            target = Path(normalized[-1])
-            target.unlink()
-            _create_file_link(target, external_native)
+            directory_fd = kwargs.get("working_directory_fd")
+            if directory_fd is None:
+                target = Path(normalized[-1])
+                target.unlink()
+                _create_file_link(target, external_native)
+            else:
+                os.unlink(normalized[-1], dir_fd=directory_fd)
+                os.symlink(
+                    external_native,
+                    normalized[-1],
+                    dir_fd=directory_fd,
+                )
             swapped = True
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -873,13 +987,38 @@ def test_codesign_may_replace_private_staging_inode_before_atomic_install(tmp_pa
     project_root, venv, state_path, libraries = _write_runtime(tmp_path)
     stamp_path = venv / ".macos-native-codesign.sha256"
 
-    def run(command, **_kwargs):
+    def run(command, **kwargs):
         normalized = [str(part) for part in command]
         if normalized[0] == "codesign" and "--force" in normalized:
-            target = Path(normalized[-1])
-            replacement = target.with_suffix(target.suffix + ".replacement")
-            replacement.write_bytes(target.read_bytes() + b"-signed")
-            os.replace(replacement, target)
+            directory_fd = kwargs.get("working_directory_fd")
+            if directory_fd is None:
+                target = Path(normalized[-1])
+                replacement = target.with_suffix(target.suffix + ".replacement")
+                replacement.write_bytes(target.read_bytes() + b"-signed")
+                os.replace(replacement, target)
+            else:
+                source_fd = os.open(normalized[-1], os.O_RDONLY, dir_fd=directory_fd)
+                try:
+                    signed_bytes = os.read(source_fd, 1024 * 1024) + b"-signed"
+                finally:
+                    os.close(source_fd)
+                replacement_name = normalized[-1] + ".replacement"
+                replacement_fd = os.open(
+                    replacement_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=directory_fd,
+                )
+                try:
+                    os.write(replacement_fd, signed_bytes)
+                finally:
+                    os.close(replacement_fd)
+                os.replace(
+                    replacement_name,
+                    normalized[-1],
+                    src_dir_fd=directory_fd,
+                    dst_dir_fd=directory_fd,
+                )
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     outcome = module.sign_macos_backend_runtime(
@@ -906,8 +1045,9 @@ def test_staging_root_replacement_is_preserved_during_safe_cleanup(tmp_path):
         nonlocal replacement_sentinel
         normalized = [str(part) for part in command]
         if normalized[0] == "codesign" and "--force" in normalized:
-            staged_path = Path(normalized[-1])
-            staging_root = staged_path.parents[1]
+            staging_roots = list(venv.glob(".vantage-codesign-staging-*"))
+            assert len(staging_roots) == 1
+            staging_root = staging_roots[0]
             moved_root = staging_root.with_name(staging_root.name + "-moved")
             staging_root.rename(moved_root)
             staging_root.mkdir()

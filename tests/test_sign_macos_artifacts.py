@@ -30,11 +30,11 @@ def _write_frontend_tree(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 
 
 def _successful_runner(commands: list[list[str]], *, on_command=None):
-    def run(command, **_kwargs):
+    def run(command, **kwargs):
         normalized = [str(part) for part in command]
         commands.append(normalized)
         if on_command is not None:
-            on_command(normalized)
+            on_command(normalized, kwargs)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     return run
@@ -67,8 +67,8 @@ def test_frontend_signs_private_copy_then_strictly_verifies_installed_file(tmp_p
     assert len(xattr_commands) == 1
     assert len(sign_commands) == 1
     assert len(verify_commands) == 2
-    assert all(".vantage-codesign-staging-" in command[-1] for command in xattr_commands + sign_commands)
-    assert ".vantage-codesign-staging-" in verify_commands[0][-1]
+    assert all(Path(command[-1]).name == native.name for command in xattr_commands + sign_commands)
+    assert Path(verify_commands[0][-1]).name == native.name
     assert Path(verify_commands[-1][-1]) == native
     assert all("--strict" in command for command in verify_commands)
 
@@ -180,13 +180,21 @@ def test_source_swap_during_codesign_never_mutates_external_hardlink(tmp_path):
     commands: list[list[str]] = []
     swapped = False
 
-    def attack(command: list[str]) -> None:
+    def attack(command: list[str], kwargs) -> None:
         nonlocal swapped
         if command[0] == "codesign" and "--force" in command and not swapped:
             swapped = True
             native.unlink()
             os.link(outside, native)
-            Path(command[-1]).write_bytes(b"signed-private-copy")
+            descriptor = os.open(
+                command[-1],
+                os.O_WRONLY | os.O_TRUNC,
+                dir_fd=kwargs.get("working_directory_fd"),
+            )
+            try:
+                os.write(descriptor, b"signed-private-copy")
+            finally:
+                os.close(descriptor)
 
     with pytest.raises((RuntimeError, ValueError), match="changed|hard link"):
         module.sign_macos_artifacts(
@@ -200,6 +208,64 @@ def test_source_swap_during_codesign_never_mutates_external_hardlink(tmp_path):
 
     assert outside.read_bytes() == b"outside-sentinel"
     assert not stamp.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX inherited directory fds")
+def test_staging_command_is_fd_bound_during_artifact_root_swap(tmp_path):
+    module = _module()
+    project_root, root, _native, stamp = _write_frontend_tree(tmp_path)
+    moved_root = root.with_name("node_modules-moved")
+    external_root = tmp_path / "external-node-modules"
+    external_root.mkdir()
+    observed = {"directory_fd": None, "external_target": None}
+
+    def attack(command, **kwargs):
+        normalized = [str(part) for part in command]
+        if normalized[0] == "xattr" and observed["external_target"] is None:
+            staged_argument = Path(normalized[-1])
+            if staged_argument.is_absolute():
+                relative_stage = staged_argument.relative_to(root)
+            else:
+                staged_matches = list(
+                    root.glob(
+                        f"{module.STAGING_PREFIX}*/**/{staged_argument.name}"
+                    )
+                )
+                assert len(staged_matches) == 1
+                relative_stage = staged_matches[0].relative_to(root)
+            root.rename(moved_root)
+            external_target = external_root / relative_stage
+            external_target.parent.mkdir(parents=True)
+            external_target.write_bytes(b"external-sentinel")
+            root.symlink_to(external_root, target_is_directory=True)
+            directory_fd = kwargs.get("working_directory_fd")
+            observed["directory_fd"] = directory_fd
+            observed["external_target"] = external_target
+            descriptor = os.open(
+                normalized[-1],
+                os.O_WRONLY | os.O_TRUNC,
+                dir_fd=directory_fd,
+            )
+            try:
+                os.write(descriptor, b"private-stage-updated")
+            finally:
+                os.close(descriptor)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises((RuntimeError, ValueError), match="changed|identity|root"):
+        module.sign_macos_artifacts(
+            project_root=project_root,
+            root=root,
+            profile="frontend",
+            stamp_path=stamp,
+            run_command=attack,
+            system_name="Darwin",
+        )
+
+    assert observed["directory_fd"] is not None
+    assert observed["external_target"].read_bytes() == b"external-sentinel"
+    assert not list(moved_root.glob(".vantage-codesign-staging-*"))
+    assert not (moved_root / stamp.name).exists()
 
 
 @pytest.mark.parametrize("failure", ["returncode", "timeout"])
@@ -238,12 +304,52 @@ def test_codesign_failure_or_timeout_never_writes_frontend_stamp(tmp_path, failu
     assert not stamp.exists()
 
 
+def test_cli_failure_is_bounded_redacted_and_has_no_traceback(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    module = _module()
+    project_root, root, _native, stamp = _write_frontend_tree(tmp_path)
+    secret = "NPM_TOKEN=secret ghp_example password=hunter2"
+
+    def fail(**_kwargs):
+        raise RuntimeError(f"failed below {project_root}: {secret} " + "X" * 65536)
+
+    monkeypatch.setattr(module, "sign_macos_artifacts", fail)
+
+    result = module.main(
+        [
+            "--project-root",
+            str(project_root),
+            "--root",
+            str(root),
+            "--profile",
+            "frontend",
+            "--stamp",
+            str(stamp),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    assert str(project_root) not in captured.err
+    assert "NPM_TOKEN=secret" not in captured.err
+    assert "ghp_example" not in captured.err
+    assert "hunter2" not in captured.err
+    assert "<PROJECT_ROOT>" in captured.err
+    assert "output truncated" in captured.err
+    assert len(captured.err.encode("utf-8")) <= 16 * 1024
+
+
 def test_new_native_file_during_signing_invalidates_closure_and_stamp(tmp_path):
     module = _module()
     project_root, root, _native, stamp = _write_frontend_tree(tmp_path)
     added = root / "sample" / "late.node"
 
-    def add_file(command: list[str]) -> None:
+    def add_file(command: list[str], _kwargs) -> None:
         if command[0] == "codesign" and "--force" in command and not added.exists():
             added.write_bytes(MACHO_64_MAGIC + b"late")
 
@@ -377,11 +483,8 @@ def test_backend_bundle_preserves_internal_symlink_and_signs_target_once(tmp_pat
     )
 
     sign_commands = [command for command in commands if "--force" in command]
-    installed_verify = [
-        command
-        for command in commands
-        if "--verify" in command and ".vantage-codesign-staging-" not in command[-1]
-    ]
+    verify_commands = [command for command in commands if "--verify" in command]
+    installed_verify = verify_commands[-1:]
     assert len(sign_commands) == 1
     assert installed_verify == [
         ["codesign", "--verify", "--strict", "--verbose=2", str(target)]
@@ -436,7 +539,7 @@ def test_backend_internal_link_swap_to_external_during_signing_is_rejected(tmp_p
     commands: list[list[str]] = []
     swapped = False
 
-    def swap_link(command: list[str]) -> None:
+    def swap_link(command: list[str], _kwargs) -> None:
         nonlocal swapped
         if command[0] == "codesign" and "--force" in command and not swapped:
             swapped = True

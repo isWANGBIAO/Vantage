@@ -48,6 +48,8 @@ from src.scripts.sign_macos_backend_runtime import (  # noqa: E402
     write_macos_backend_codesign_state,
 )
 from src.utils.subprocess_safety import (  # noqa: E402
+    BoundedTextEmitter,
+    DEFAULT_SUBPROCESS_OUTPUT_LIMIT_BYTES,
     bounded_process_failure_detail,
     run_bounded_subprocess,
 )
@@ -695,9 +697,14 @@ def _run_command(
     run_command,
     path_prefixes: Mapping[str, object],
     allow_failure: bool = False,
+    working_directory_fd: int | None = None,
 ) -> bool:
     try:
-        result = run_bounded_subprocess(command, run_command=run_command)
+        result = run_bounded_subprocess(
+            command,
+            run_command=run_command,
+            working_directory_fd=working_directory_fd,
+        )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"macOS artifact {action} timed out") from exc
     if result.returncode == 0:
@@ -720,53 +727,69 @@ def _sign_staged(
 ) -> _StagedArtifact:
     _assert_source(root, staged.source)
     _assert_staged(root, staging_root, staging_root_identity, staged)
-    _run_command(
-        ["xattr", "-c", str(staged.path)],
-        action="extended attribute cleanup",
-        run_command=run_command,
-        path_prefixes=path_prefixes,
-    )
-    _assert_staged(root, staging_root, staging_root_identity, staged)
-    _assert_source(root, staged.source)
-    _run_command(
-        [
-            "codesign",
-            "--force",
-            "--sign",
-            "-",
-            "--timestamp=none",
-            str(staged.path),
-        ],
-        action="signing",
-        run_command=run_command,
-        path_prefixes=path_prefixes,
-    )
-    _assert_source(root, staged.source)
-    signed_identity = _assert_plain_file(
-        staged.path,
-        role="staged native artifact",
-    )
-    signed = _StagedArtifact(
-        source=staged.source,
-        path=staged.path,
-        identity=signed_identity,
-        parent_identity=staged.parent_identity,
-        sha256=_sha256_file(
+    staging_parent_fd: int | None = None
+    try:
+        command_path = str(staged.path)
+        if os.name != "nt":
+            staging_parent_fd = _open_validated_directory(
+                staged.path.parent,
+                staged.parent_identity,
+                role="artifact staging directory",
+            )
+            command_path = staged.path.name
+        _run_command(
+            ["xattr", "-c", command_path],
+            action="extended attribute cleanup",
+            run_command=run_command,
+            path_prefixes=path_prefixes,
+            working_directory_fd=staging_parent_fd,
+        )
+        _assert_staged(root, staging_root, staging_root_identity, staged)
+        _assert_source(root, staged.source)
+        _run_command(
+            [
+                "codesign",
+                "--force",
+                "--sign",
+                "-",
+                "--timestamp=none",
+                command_path,
+            ],
+            action="signing",
+            run_command=run_command,
+            path_prefixes=path_prefixes,
+            working_directory_fd=staging_parent_fd,
+        )
+        _assert_source(root, staged.source)
+        signed_identity = _assert_plain_file(
             staged.path,
-            expected_identity=signed_identity,
             role="staged native artifact",
-        ),
-    )
-    _assert_staged(root, staging_root, staging_root_identity, signed)
-    _run_command(
-        ["codesign", "--verify", "--strict", "--verbose=2", str(signed.path)],
-        action="staged verification",
-        run_command=run_command,
-        path_prefixes=path_prefixes,
-    )
-    _assert_staged(root, staging_root, staging_root_identity, signed)
-    _assert_source(root, signed.source)
-    return signed
+        )
+        signed = _StagedArtifact(
+            source=staged.source,
+            path=staged.path,
+            identity=signed_identity,
+            parent_identity=staged.parent_identity,
+            sha256=_sha256_file(
+                staged.path,
+                expected_identity=signed_identity,
+                role="staged native artifact",
+            ),
+        )
+        _assert_staged(root, staging_root, staging_root_identity, signed)
+        _run_command(
+            ["codesign", "--verify", "--strict", "--verbose=2", command_path],
+            action="staged verification",
+            run_command=run_command,
+            path_prefixes=path_prefixes,
+            working_directory_fd=staging_parent_fd,
+        )
+        _assert_staged(root, staging_root, staging_root_identity, signed)
+        _assert_source(root, signed.source)
+        return signed
+    finally:
+        if staging_parent_fd is not None:
+            os.close(staging_parent_fd)
 
 
 def _replace_staged(
@@ -1101,13 +1124,33 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    outcome = sign_macos_artifacts(
-        project_root=args.project_root,
-        root=args.root,
-        profile=args.profile,
-        stamp_path=args.stamp,
-        force=args.force,
-    )
+    path_prefixes = {
+        "<PROJECT_ROOT>": _absolute_path(args.project_root),
+        "<ARTIFACT_ROOT>": _absolute_path(args.root),
+        "<USER_HOME>": Path.home(),
+    }
+    error_prefix = "macOS artifact signing failed"
+    try:
+        outcome = sign_macos_artifacts(
+            project_root=args.project_root,
+            root=args.root,
+            profile=args.profile,
+            stamp_path=args.stamp,
+            force=args.force,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        emitter = BoundedTextEmitter(
+            limit_bytes=(
+                DEFAULT_SUBPROCESS_OUTPUT_LIMIT_BYTES
+                - len(error_prefix.encode("utf-8"))
+                - len(": \n".encode("utf-8"))
+            ),
+            path_prefixes=path_prefixes,
+        )
+        detail = emitter.filter(str(exc)).strip()
+        suffix = f": {detail}" if detail else ""
+        print(f"{error_prefix}{suffix}", file=sys.stderr)
+        return 1
     if outcome.skipped:
         print("macOS artifact signing skipped on this platform")
     elif outcome.reused:

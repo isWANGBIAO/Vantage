@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
@@ -1348,9 +1349,14 @@ def _run_codesign_command(
     action: str,
     run_command,
     path_prefixes: Mapping[str, object],
+    working_directory_fd: int | None = None,
 ) -> bool:
     try:
-        result = run_bounded_subprocess(command, run_command=run_command)
+        result = run_bounded_subprocess(
+            command,
+            run_command=run_command,
+            working_directory_fd=working_directory_fd,
+        )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"macOS backend native library {action} timed out"
@@ -1369,6 +1375,28 @@ def _run_codesign_command(
     )
 
 
+@contextmanager
+def _directory_bound_command_path(
+    path: Path,
+    parent_identity: _PathIdentity,
+    *,
+    role: str,
+):
+    if os.name == "nt":
+        yield str(path), None
+        return
+
+    parent_descriptor = _open_validated_directory(
+        path.parent,
+        parent_identity,
+        role=role,
+    )
+    try:
+        yield path.name, parent_descriptor
+    finally:
+        os.close(parent_descriptor)
+
+
 def _verify_native_libraries(
     venv: Path,
     snapshot: _SigningSnapshot,
@@ -1380,19 +1408,25 @@ def _verify_native_libraries(
     for library in snapshot.libraries:
         _assert_snapshot_roots(venv, snapshot)
         _assert_native_library(venv, library)
-        if not _run_codesign_command(
-            [
-                "codesign",
-                "--verify",
-                "--strict",
-                "--verbose=2",
-                str(library.path),
-            ],
-            action=action,
-            run_command=run_command,
-            path_prefixes=path_prefixes,
-        ):
-            return False
+        with _directory_bound_command_path(
+            library.path,
+            library.parent_identity,
+            role="native library parent",
+        ) as (command_path, parent_descriptor):
+            if not _run_codesign_command(
+                [
+                    "codesign",
+                    "--verify",
+                    "--strict",
+                    "--verbose=2",
+                    command_path,
+                ],
+                action=action,
+                run_command=run_command,
+                path_prefixes=path_prefixes,
+                working_directory_fd=parent_descriptor,
+            ):
+                return False
         _assert_snapshot_roots(venv, snapshot)
         _assert_native_library(venv, library)
     return True
@@ -1562,75 +1596,83 @@ def _sign_macos_backend_runtime_locked(
                     staging_root_identity,
                     staged,
                 )
-                try:
-                    xattr_result = run_bounded_subprocess(
-                        ["xattr", "-c", str(staged.path)],
-                        run_command=run_command,
+                with _directory_bound_command_path(
+                    staged.path,
+                    staged.parent_identity,
+                    role="codesign staging directory",
+                ) as (command_path, staging_parent_descriptor):
+                    try:
+                        xattr_result = run_bounded_subprocess(
+                            ["xattr", "-c", command_path],
+                            run_command=run_command,
+                            working_directory_fd=staging_parent_descriptor,
+                        )
+                    except subprocess.TimeoutExpired as exc:
+                        raise RuntimeError(
+                            "macOS backend extended attribute cleanup timed out"
+                        ) from exc
+                    if xattr_result.returncode != 0:
+                        detail = bounded_process_failure_detail(
+                            xattr_result,
+                            path_prefixes=path_prefixes,
+                        )
+                        suffix = f": {detail}" if detail else ""
+                        raise RuntimeError(
+                            "macOS backend extended attribute cleanup failed"
+                            f"{suffix}"
+                        )
+                    _assert_staged_library(
+                        venv,
+                        staging_root,
+                        staging_root_identity,
+                        staged,
                     )
-                except subprocess.TimeoutExpired as exc:
-                    raise RuntimeError(
-                        "macOS backend extended attribute cleanup timed out"
-                    ) from exc
-                if xattr_result.returncode != 0:
-                    detail = bounded_process_failure_detail(
-                        xattr_result,
-                        path_prefixes=path_prefixes,
-                    )
-                    suffix = f": {detail}" if detail else ""
-                    raise RuntimeError(
-                        "macOS backend extended attribute cleanup failed"
-                        f"{suffix}"
-                    )
-                _assert_staged_library(
-                    venv,
-                    staging_root,
-                    staging_root_identity,
-                    staged,
-                )
-                _assert_native_library(venv, staged.source)
+                    _assert_native_library(venv, staged.source)
 
-                _run_codesign_command(
-                    [
-                        "codesign",
-                        "--force",
-                        "--sign",
-                        "-",
-                        "--timestamp=none",
-                        str(staged.path),
-                    ],
-                    action="sign staged library",
-                    run_command=run_command,
-                    path_prefixes=path_prefixes,
-                )
-                _assert_snapshot_roots(venv, snapshot)
-                _assert_native_library(venv, staged.source)
-                signed_staged = _StagedNativeLibrary(
-                    source=staged.source,
-                    path=staged.path,
-                    identity=_assert_plain_file(
-                        staged.path,
-                        role="staged native library",
-                    ),
-                    parent_identity=staged.parent_identity,
-                )
-                _assert_staged_library(
-                    venv,
-                    staging_root,
-                    staging_root_identity,
-                    signed_staged,
-                )
-                _run_codesign_command(
-                    [
-                        "codesign",
-                        "--verify",
-                        "--strict",
-                        "--verbose=2",
-                        str(signed_staged.path),
-                    ],
-                    action="verify staged library",
-                    run_command=run_command,
-                    path_prefixes=path_prefixes,
-                )
+                    _run_codesign_command(
+                        [
+                            "codesign",
+                            "--force",
+                            "--sign",
+                            "-",
+                            "--timestamp=none",
+                            command_path,
+                        ],
+                        action="sign staged library",
+                        run_command=run_command,
+                        path_prefixes=path_prefixes,
+                        working_directory_fd=staging_parent_descriptor,
+                    )
+                    _assert_snapshot_roots(venv, snapshot)
+                    _assert_native_library(venv, staged.source)
+                    signed_staged = _StagedNativeLibrary(
+                        source=staged.source,
+                        path=staged.path,
+                        identity=_assert_plain_file(
+                            staged.path,
+                            role="staged native library",
+                        ),
+                        parent_identity=staged.parent_identity,
+                    )
+                    _assert_staged_library(
+                        venv,
+                        staging_root,
+                        staging_root_identity,
+                        signed_staged,
+                    )
+                    _run_codesign_command(
+                        [
+                            "codesign",
+                            "--verify",
+                            "--strict",
+                            "--verbose=2",
+                            command_path,
+                        ],
+                        action="verify staged library",
+                        run_command=run_command,
+                        path_prefixes=path_prefixes,
+                        working_directory_fd=staging_parent_descriptor,
+                    )
                 _assert_staged_library(
                     venv,
                     staging_root,

@@ -151,6 +151,42 @@ def test_pipe_drain_timeout_terminates_descendant_after_parent_exits(tmp_path):
     assert b"descendant-ready" in captured
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX inherited directory fds")
+def test_working_directory_fd_survives_canonical_ancestor_replacement(tmp_path):
+    module = _module()
+    root = tmp_path / "root"
+    stage = root / "stage"
+    stage.mkdir(parents=True)
+    private_target = stage / "native.so"
+    private_target.write_bytes(b"private")
+    directory_fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY)
+    moved_root = tmp_path / "root-moved"
+    external_root = tmp_path / "external"
+    external_stage = external_root / "stage"
+    external_stage.mkdir(parents=True)
+    external_target = external_stage / private_target.name
+    external_target.write_bytes(b"external-sentinel")
+    root.rename(moved_root)
+    root.symlink_to(external_root, target_is_directory=True)
+
+    try:
+        result = module.run_bounded_subprocess(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; Path('native.so').write_bytes(b'updated')",
+            ],
+            timeout_seconds=2,
+            working_directory_fd=directory_fd,
+        )
+    finally:
+        os.close(directory_fd)
+
+    assert result.returncode == 0
+    assert (moved_root / "stage" / "native.so").read_bytes() == b"updated"
+    assert external_target.read_bytes() == b"external-sentinel"
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows Job Object handoff")
 def test_windows_tree_ownership_failure_does_not_start_target(tmp_path, monkeypatch):
     module = _module()

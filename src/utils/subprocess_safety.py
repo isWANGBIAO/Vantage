@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -31,6 +32,18 @@ child = subprocess.Popen(
     stdin=subprocess.DEVNULL,
 )
 raise SystemExit(child.wait())
+"""
+_POSIX_FCHDIR_EXEC_SOURCE = """
+import os
+import sys
+
+directory_fd = int(sys.argv[1])
+command = sys.argv[2:]
+if not command:
+    raise SystemExit(127)
+os.fchdir(directory_fd)
+os.close(directory_fd)
+os.execvp(command[0], command)
 """
 
 
@@ -271,6 +284,7 @@ def _spawn_isolated_process(
     *,
     cwd=None,
     env=None,
+    working_directory_fd: int | None = None,
 ) -> tuple[subprocess.Popen, _WindowsKillOnCloseJob | None]:
     popen_kwargs = {
         "stdout": subprocess.PIPE,
@@ -278,11 +292,23 @@ def _spawn_isolated_process(
         **_isolated_process_kwargs(),
     }
     if os.name != "nt":
+        spawn_command = list(command)
+        pass_fds: tuple[int, ...] = ()
+        if working_directory_fd is not None:
+            spawn_command = [
+                sys.executable,
+                "-c",
+                _POSIX_FCHDIR_EXEC_SOURCE,
+                str(working_directory_fd),
+                *spawn_command,
+            ]
+            pass_fds = (working_directory_fd,)
         process = subprocess.Popen(
-            list(command),
+            spawn_command,
             cwd=cwd,
             env=env,
             stdin=subprocess.DEVNULL,
+            pass_fds=pass_fds,
             **popen_kwargs,
         )
         return process, None
@@ -330,11 +356,13 @@ def _run_real_bounded_subprocess(
     output_limit_bytes: int,
     cwd=None,
     env=None,
+    working_directory_fd: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     process, windows_job = _spawn_isolated_process(
         command,
         cwd=cwd,
         env=env,
+        working_directory_fd=working_directory_fd,
     )
     assert process.stdout is not None
     assert process.stderr is not None
@@ -400,11 +428,20 @@ def run_bounded_subprocess(
     output_limit_bytes: int = DEFAULT_SUBPROCESS_OUTPUT_LIMIT_BYTES,
     cwd=None,
     env=None,
+    working_directory_fd: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     if timeout_seconds <= 0:
         raise ValueError("subprocess timeout must be positive")
     if output_limit_bytes <= len(_TRUNCATION_MARKER):
         raise ValueError("subprocess output limit is too small")
+    if working_directory_fd is not None:
+        if os.name == "nt":
+            raise ValueError("working_directory_fd is only supported on POSIX")
+        if cwd is not None:
+            raise ValueError("cwd and working_directory_fd are mutually exclusive")
+        descriptor_stat = os.fstat(working_directory_fd)
+        if not stat.S_ISDIR(descriptor_stat.st_mode):
+            raise ValueError("working_directory_fd must reference a directory")
     normalized_command = [str(part) for part in command]
     if run_command is None or run_command is subprocess.run:
         return _run_real_bounded_subprocess(
@@ -413,6 +450,7 @@ def run_bounded_subprocess(
             output_limit_bytes=output_limit_bytes,
             cwd=cwd,
             env=env,
+            working_directory_fd=working_directory_fd,
         )
 
     kwargs = {
@@ -425,6 +463,8 @@ def run_bounded_subprocess(
         kwargs["cwd"] = cwd
     if env is not None:
         kwargs["env"] = env
+    if working_directory_fd is not None:
+        kwargs["working_directory_fd"] = working_directory_fd
     result = run_command(normalized_command, **kwargs)
     return subprocess.CompletedProcess(
         args=normalized_command,
