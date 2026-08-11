@@ -27,7 +27,7 @@ set "SERVER_LATEST_POINTER=%PROJECT_ROOT%logs\server.latest.log"
 echo [0/4] Cleaning residual processes...
 set "CLEANUP_PYTHON=%BOOTSTRAP_PYTHON%"
 if exist "%BACKEND_RUNTIME_PYTHON%" set "CLEANUP_PYTHON=%BACKEND_RUNTIME_PYTHON%"
-"%CLEANUP_PYTHON%" src\scripts\cleanup_vantage_python_processes.py --include-desktop >nul 2>&1
+"%BOOTSTRAP_PYTHON%" "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT%" -- "%CLEANUP_PYTHON%" src\scripts\cleanup_vantage_python_processes.py --include-desktop >nul 2>&1
 echo       Cleanup complete
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 2"
 
@@ -77,10 +77,10 @@ popd
 
 if exist "%FRONTEND_ROOT%\dist\index.html" (
     echo       Starting production Electron app in background...
-    "%BACKEND_RUNTIME_PYTHON%" src\scripts\run_frontend_background.py production
+    "%BOOTSTRAP_PYTHON%" src\scripts\run_frontend_background.py production
 ) else (
     echo       Starting development Electron app in background...
-    "%BACKEND_RUNTIME_PYTHON%" src\scripts\run_frontend_background.py development
+    "%BOOTSTRAP_PYTHON%" src\scripts\run_frontend_background.py development
 )
 if errorlevel 1 exit /b 1
 

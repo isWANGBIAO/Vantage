@@ -266,7 +266,8 @@ RUN_START_SECONDS="$(date +%s)"
 
 step_start "[0/8] Cleaning residual source processes..."
 BACKEND_CLEANUP_PYTHON="$(select_backend_cleanup_python)"
-"$BACKEND_CLEANUP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
+"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_LOCK_RUNNER" --project-root "$PROJECT_ROOT" -- \
+    "$BACKEND_CLEANUP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
 pkill -f "${INSTALLED_APP}/Contents" >/dev/null 2>&1 || true
 terminate_installed_vantage_apps
 step_done "Source cleanup complete"

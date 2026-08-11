@@ -44,6 +44,9 @@ from src.core.backend_runtime_lock import (
     backend_runtime_lock,
     backend_runtime_lock_is_held,
 )
+from src.core.backend_runtime_packaging import (
+    remove_conflicting_packaging_environment_libraries,
+)
 from src.utils.subprocess_safety import (
     bounded_process_failure_detail,
     run_bounded_subprocess,
@@ -661,6 +664,29 @@ def _synchronize_backend_runtime_environment_locked(
         opencv_check=opencv_check,
     )
     if reuse_error is None and reusable_state is not None:
+        try:
+            removed_packaging_dlls = (
+                remove_conflicting_packaging_environment_libraries(resolved_root)
+            )
+        except BaseException:
+            (safe_venv / BACKEND_ENVIRONMENT_STATE_NAME).unlink(missing_ok=True)
+            raise
+        if removed_packaging_dlls:
+            reuse_error, reusable_state = _reuse_validation_error(
+                venv=safe_venv,
+                target_python=target_python,
+                requirements_sha256=requirements_sha256,
+                creator_python_identity=expected_python_identity,
+                creator_platform_identity=expected_platform_identity,
+                core_requirements=resolved_core,
+                force=False,
+                run_command=run_command,
+                probe_environment=probe_environment,
+                pip_check=pip_check,
+                import_check=import_check,
+                opencv_check=opencv_check,
+            )
+    if reuse_error is None and reusable_state is not None:
         return BackendEnvironmentSyncOutcome(
             reused=True,
             reason="validated environment state and installed closure match",
@@ -714,6 +740,7 @@ def _synchronize_backend_runtime_environment_locked(
             path_prefixes=subprocess_path_prefixes,
         )
 
+        remove_conflicting_packaging_environment_libraries(resolved_root)
         probe = probe_environment(target_python, run_command)
         if probe.get("python") != expected_python_identity:
             raise RuntimeError("rebuilt target Python identity does not match creator")

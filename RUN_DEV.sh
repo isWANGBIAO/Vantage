@@ -23,12 +23,11 @@ BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.s
 LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.13.5/bin/python3.13"
 FRONTEND_ROOT="${PROJECT_ROOT}/src/webapp"
 FRONTEND_NATIVE_CODESIGN_STAMP="${FRONTEND_ROOT}/node_modules/.macos-native-codesign.sha256"
-PYTHON_BIN="${PYTHON_BIN:-$BACKEND_RUNTIME_PYTHON}"
 BACKEND_STATUS_URL="${BACKEND_STATUS_URL:-http://127.0.0.1:8000/api/status}"
 BACKEND_WAIT_TIMEOUT="${BACKEND_WAIT_TIMEOUT:-60}"
 SERVER_LATEST_POINTER="${PROJECT_ROOT}/logs/server.latest.log"
 export BACKEND_STATUS_URL BACKEND_WAIT_TIMEOUT SERVER_LATEST_POINTER
-export PROJECT_ROOT PYTHON_BIN
+export PROJECT_ROOT
 
 python_supports_backend_venv() {
     local candidate="$1"
@@ -137,7 +136,8 @@ codesign_macos_frontend_binaries() {
 
 echo "[0/4] Cleaning residual processes..."
 BACKEND_CLEANUP_PYTHON="$(select_backend_cleanup_python)"
-"$BACKEND_CLEANUP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
+"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_LOCK_RUNNER" --project-root "$PROJECT_ROOT" -- \
+    "$BACKEND_CLEANUP_PYTHON" src/scripts/cleanup_vantage_python_processes.py --include-desktop >/dev/null 2>&1 || true
 echo "      Cleanup complete"
 sleep 2
 
@@ -166,7 +166,7 @@ fi
 
 echo "[2/4] Starting backend..."
 mkdir -p "${PROJECT_ROOT}/logs"
-"$BOOTSTRAP_PYTHON" - "$BACKEND_RUNTIME_LOCK_RUNNER" "$PROJECT_ROOT" "$PYTHON_BIN" <<'PY'
+"$BOOTSTRAP_PYTHON" - "$BACKEND_RUNTIME_LOCK_RUNNER" "$PROJECT_ROOT" "$BACKEND_RUNTIME_PYTHON" <<'PY'
 import os
 import subprocess
 import sys

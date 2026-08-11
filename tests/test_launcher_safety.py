@@ -248,6 +248,52 @@ def test_target_backend_runtime_consumers_use_the_shared_lock_supervisor():
     assert '"$PYTHON_BIN" src/scripts/run_frontend_background.py' not in run_dev_sh
 
 
+def test_launcher_cleanup_and_target_runtime_commands_own_shared_leases():
+    run_dev_bat = Path("RUN_DEV.bat").read_text(encoding="utf-8")
+    run_sh = Path("RUN.sh").read_text(encoding="utf-8")
+    run_dev_sh = Path("RUN_DEV.sh").read_text(encoding="utf-8")
+
+    assert (
+        '"%BOOTSTRAP_PYTHON%" "%BACKEND_RUNTIME_LOCK_RUNNER%" '
+        '--project-root "%PROJECT_ROOT%" -- "%CLEANUP_PYTHON%" '
+        'src\\scripts\\cleanup_vantage_python_processes.py --include-desktop'
+        in run_dev_bat
+    )
+    assert (
+        '"%BACKEND_RUNTIME_PYTHON%" src\\scripts\\run_frontend_background.py'
+        not in run_dev_bat
+    )
+    assert (
+        '"%BOOTSTRAP_PYTHON%" src\\scripts\\run_frontend_background.py'
+        in run_dev_bat
+    )
+
+    for launcher in (run_sh, run_dev_sh):
+        cleanup_command = (
+            '"$BACKEND_CLEANUP_PYTHON" '
+            'src/scripts/cleanup_vantage_python_processes.py --include-desktop'
+        )
+        assert launcher.count(cleanup_command) == 1
+        assert (
+            '"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_LOCK_RUNNER" '
+            '--project-root "$PROJECT_ROOT" -- \\\n'
+            '    "$BACKEND_CLEANUP_PYTHON" '
+            'src/scripts/cleanup_vantage_python_processes.py --include-desktop'
+            in launcher
+        )
+
+
+def test_macos_development_server_cannot_override_the_fixed_runtime_python():
+    run_dev_sh = Path("RUN_DEV.sh").read_text(encoding="utf-8")
+
+    assert "PYTHON_BIN" not in run_dev_sh
+    assert (
+        '"$BOOTSTRAP_PYTHON" - "$BACKEND_RUNTIME_LOCK_RUNNER" '
+        '"$PROJECT_ROOT" "$BACKEND_RUNTIME_PYTHON"'
+        in run_dev_sh
+    )
+
+
 def test_direct_backend_runtime_consumers_own_a_real_shared_os_lock():
     for source_path in (
         Path("src/scripts/build_backend_runtime.py"),

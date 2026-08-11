@@ -276,6 +276,12 @@ def test_remove_conflicting_packaging_environment_libraries_deletes_site_package
     assert unrelated.exists()
 
 
+def test_shared_backend_build_never_mutates_the_packaging_venv():
+    source = Path("src/scripts/build_backend_runtime.py").read_text(encoding="utf-8")
+
+    assert "remove_conflicting_packaging_environment_libraries" not in source
+
+
 def test_build_backend_runtime_manifest_records_relative_outputs(tmp_path):
     _create_required_runtime_resources(tmp_path)
     layout = resolve_backend_runtime_layout(tmp_path)

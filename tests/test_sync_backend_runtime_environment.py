@@ -228,6 +228,113 @@ def test_clean_environment_is_reused_without_mutation(tmp_path):
     assert load_backend_environment_state(venv) == outcome.state
 
 
+def test_conflicting_packaging_dll_cleanup_waits_for_exclusive_lock_and_preserves_state(
+    tmp_path,
+):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+    conflicting_dll = (
+        venv / "Lib" / "site-packages" / "somepkg" / "VCRUNTIME140.dll"
+    )
+    unrelated_dll = conflicting_dll.with_name("extension.dll")
+    conflicting_dll.parent.mkdir(parents=True, exist_ok=True)
+    conflicting_dll.write_bytes(b"conflicting-runtime")
+    unrelated_dll.write_bytes(b"package-extension")
+    state_path = venv / BACKEND_ENVIRONMENT_STATE_NAME
+    original_state = load_backend_environment_state(venv)
+
+    holder_source = """
+from pathlib import Path
+import sys
+import time
+from src.core.backend_runtime_lock import backend_runtime_lock
+
+with backend_runtime_lock(Path(sys.argv[1]), mode="shared", timeout_seconds=2):
+    print("locked", flush=True)
+    time.sleep(10)
+"""
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path.cwd())
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_source, str(tmp_path)],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert holder.stdout is not None
+    assert holder.stdout.readline().strip() == "locked"
+
+    sync_kwargs = {
+        "project_root": tmp_path,
+        "venv": venv,
+        "core_requirements": core,
+        "requirements": overlay,
+        "opencv_normalizer": normalizer,
+        "creator_python": "bootstrap-python",
+        "creator_python_identity": PYTHON_IDENTITY,
+        "creator_platform_identity": PLATFORM_IDENTITY,
+        "run_command": _successful_runner(venv, []),
+        "probe_environment": lambda _python, _run: _probe_payload(),
+        "pip_check": lambda _python, _run: True,
+        "import_check": lambda _python, _run: True,
+        "opencv_check": lambda _python, _core, _run: True,
+    }
+    try:
+        with pytest.raises(TimeoutError, match="backend runtime lock"):
+            synchronize_backend_runtime_environment(
+                **sync_kwargs,
+                lock_timeout_seconds=0.2,
+            )
+        assert conflicting_dll.exists()
+        assert state_path.exists()
+    finally:
+        holder.terminate()
+        holder.wait(timeout=5)
+
+    outcome = synchronize_backend_runtime_environment(
+        **sync_kwargs,
+        lock_timeout_seconds=1,
+    )
+
+    assert outcome.reused is True
+    assert not conflicting_dll.exists()
+    assert unrelated_dll.exists()
+    assert load_backend_environment_state(venv) == original_state == outcome.state
+
+
+def test_reuse_cleanup_failure_invalidates_environment_state(tmp_path, monkeypatch):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+    state_path = venv / BACKEND_ENVIRONMENT_STATE_NAME
+
+    def fail_cleanup(_project_root):
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(
+        "src.scripts.sync_backend_runtime_environment."
+        "remove_conflicting_packaging_environment_libraries",
+        fail_cleanup,
+    )
+
+    with pytest.raises(OSError, match="cleanup failed"):
+        synchronize_backend_runtime_environment(
+            project_root=tmp_path,
+            venv=venv,
+            core_requirements=core,
+            requirements=overlay,
+            opencv_normalizer=normalizer,
+            creator_python="bootstrap-python",
+            creator_python_identity=PYTHON_IDENTITY,
+            creator_platform_identity=PLATFORM_IDENTITY,
+            run_command=_successful_runner(venv, []),
+            probe_environment=lambda _python, _run: _probe_payload(),
+            pip_check=lambda _python, _run: True,
+            import_check=lambda _python, _run: True,
+            opencv_check=lambda _python, _core, _run: True,
+        )
+
+    assert not state_path.exists()
+
+
 @pytest.mark.parametrize(
     "scenario",
     [
