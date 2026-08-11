@@ -98,6 +98,30 @@ def test_frontend_skips_javascript_esbuild_wrapper_but_signs_macho_binary(tmp_pa
     assert all(Path(command[-1]) != wrapper for command in commands)
 
 
+def test_frontend_skips_foreign_platform_optional_native_packages(tmp_path):
+    module = _module()
+    project_root, root, native, stamp = _write_frontend_tree(tmp_path)
+    foreign = (
+        root
+        / "@electron-internal"
+        / "extract-zip"
+        / "index.linux-arm64-musl.node"
+    )
+    foreign.parent.mkdir(parents=True)
+    foreign.write_bytes(b"ELF-not-Mach-O")
+
+    outcome = module.sign_macos_artifacts(
+        project_root=project_root,
+        root=root,
+        profile="frontend",
+        stamp_path=stamp,
+        run_command=_successful_runner([]),
+        system_name="Darwin",
+    )
+
+    assert outcome.artifact_count == 1
+
+
 def test_frontend_rejects_corrupted_native_candidate_instead_of_shrinking_closure(
     tmp_path,
 ):

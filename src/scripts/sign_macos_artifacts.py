@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import secrets
 import stat
 import subprocess
@@ -183,6 +184,16 @@ def _matches_frontend(relative_path: str) -> bool:
     )
 
 
+_FOREIGN_FRONTEND_PLATFORM_RE = re.compile(
+    r"(?:^|[._/-])(aix|android|freebsd|haiku|linux|netbsd|openbsd|sunos|win32|windows)(?:[._/-]|$)",
+    flags=re.IGNORECASE,
+)
+
+
+def _is_foreign_frontend_platform_path(relative_path: str) -> bool:
+    return bool(_FOREIGN_FRONTEND_PLATFORM_RE.search(relative_path))
+
+
 def _matches_profile(relative_path: str, profile: str) -> bool:
     if profile == "frontend":
         return _matches_frontend(relative_path)
@@ -278,6 +289,8 @@ def _candidate_paths(
         for name in file_names:
             path = directory_path / name
             relative_path = path.relative_to(root).as_posix()
+            if profile == "frontend" and _is_foreign_frontend_platform_path(relative_path):
+                continue
             identity = _path_identity(path)
             if _identity_is_link(identity):
                 if profile == "backend-bundle":
