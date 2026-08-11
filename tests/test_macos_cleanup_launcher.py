@@ -1,6 +1,9 @@
+import os
 import subprocess
 from pathlib import Path
 import time
+
+import pytest
 
 
 def _bash_function(launcher_path: Path, function_name: str) -> str:
@@ -28,6 +31,7 @@ def test_macos_cleanup_prefers_existing_runtime_python_under_lifecycle_lock_befo
         ]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX shell process semantics")
 def test_macos_cleanup_python_selector_falls_back_only_when_runtime_is_unusable():
     for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
         function_source = _bash_function(
@@ -69,6 +73,7 @@ rm -f "$BOOTSTRAP_PYTHON"
         ]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX shell process semantics")
 def test_bootstrap_probe_rejects_and_terminates_early_parent_descendant(tmp_path):
     sentinel = tmp_path / "descendant-survived.txt"
     candidate = tmp_path / "early-parent-python"

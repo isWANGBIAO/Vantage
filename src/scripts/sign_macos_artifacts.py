@@ -299,7 +299,8 @@ def _candidate_paths(
                 continue
             if profile == "frontend" and not _is_macho_file(path):
                 raise ValueError(
-                    "macOS frontend native artifact is not a valid Mach-O file"
+                    "macOS frontend native artifact is not a valid Mach-O file: "
+                    f"{relative_path}"
                 )
             candidates.append(path)
 
