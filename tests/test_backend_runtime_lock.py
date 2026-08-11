@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 
+import psutil
 import pytest
 
 
@@ -245,7 +246,11 @@ def test_lease_owner_wait_error_stops_target_before_releasing_lease():
         process.alive = False
 
     with pytest.raises(OSError, match="simulated wait failure"):
-        _wait_for_guarded_target(target, terminate_tree=terminate_tree)
+        _wait_for_guarded_target(
+            target,
+            terminate_tree=terminate_tree,
+            confirm_tree=lambda _process_group_id: None,
+        )
 
     assert terminated == [target]
     assert target.wait_calls == 2
@@ -463,6 +468,98 @@ done.write_text("done", encoding="utf-8")
     assert done_path.read_text(encoding="utf-8") == "done"
     with lock_module.backend_runtime_lock(tmp_path, timeout_seconds=2):
         assert lock_module.backend_runtime_lock_is_held(tmp_path)
+
+
+def test_normal_target_exit_stops_descendants_before_exclusive_sync(tmp_path):
+    lock_module = _lock_module()
+    descendant_pid_path = tmp_path / "normal-exit-descendant.pid"
+    allow_target_exit_path = tmp_path / "allow-normal-target-exit"
+    descendant_source = """
+import os
+from pathlib import Path
+import sys
+import time
+
+Path(sys.argv[1]).write_text(str(os.getpid()), encoding="utf-8")
+time.sleep(30)
+"""
+    target_source = """
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+pid_path = Path(sys.argv[1])
+descendant_source = sys.argv[2]
+allow_exit = Path(sys.argv[3])
+subprocess.Popen([sys.executable, "-c", descendant_source, str(pid_path)])
+deadline = time.monotonic() + 5
+while not pid_path.exists() and time.monotonic() < deadline:
+    time.sleep(0.02)
+if not pid_path.exists():
+    raise SystemExit(3)
+while not allow_exit.exists():
+    time.sleep(0.02)
+raise SystemExit(0)
+"""
+    supervisor = subprocess.Popen(
+        [
+            sys.executable,
+            "src/scripts/run_with_backend_runtime_lock.py",
+            "--project-root",
+            str(tmp_path),
+            "--",
+            sys.executable,
+            "-c",
+            target_source,
+            str(descendant_pid_path),
+            descendant_source,
+            str(allow_target_exit_path),
+        ],
+        env=_subprocess_environment(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    descendant = None
+    descendant_created_at = None
+    try:
+        deadline = time.monotonic() + 5
+        while not descendant_pid_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert descendant_pid_path.exists()
+        descendant = psutil.Process(
+            int(descendant_pid_path.read_text(encoding="utf-8"))
+        )
+        descendant_created_at = descendant.create_time()
+        allow_target_exit_path.write_text("exit", encoding="utf-8")
+        assert supervisor.wait(timeout=10) == 0
+
+        with lock_module.backend_runtime_lock(tmp_path, timeout_seconds=2):
+            try:
+                survivor = psutil.Process(descendant.pid)
+                descendant_is_alive = (
+                    survivor.create_time() == descendant_created_at
+                    and survivor.is_running()
+                    and survivor.status() != psutil.STATUS_ZOMBIE
+                )
+            except psutil.NoSuchProcess:
+                descendant_is_alive = False
+            assert not descendant_is_alive, (
+                "exclusive synchronization entered while a normal-exit target "
+                "descendant was still alive"
+            )
+    finally:
+        if supervisor.poll() is None:
+            supervisor.kill()
+            supervisor.wait(timeout=5)
+        if descendant is not None:
+            try:
+                survivor = psutil.Process(descendant.pid)
+                if survivor.create_time() == descendant_created_at:
+                    survivor.kill()
+                    survivor.wait(timeout=5)
+            except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                pass
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX flock semantics")

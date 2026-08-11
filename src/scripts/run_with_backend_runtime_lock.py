@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import time
 from typing import Any
 
 
@@ -25,7 +26,10 @@ from src.core.backend_runtime_lock import (
     DEFAULT_BACKEND_RUNTIME_LOCK_TIMEOUT_SECONDS,
     backend_runtime_lock,
 )
-from src.utils.subprocess_safety import terminate_process_tree
+from src.utils.subprocess_safety import (
+    bind_current_process_to_windows_kill_on_close_job,
+    terminate_process_tree,
+)
 
 
 _INTERNAL_LEASE_OWNER_FLAG = "--internal-lease-owner"
@@ -124,7 +128,7 @@ def _inherited_pipe_descriptor(
     return msvcrt.open_osfhandle(handle, flags | int(getattr(os, "O_BINARY", 0)))
 
 
-def _notify_supervisor_ready(args: argparse.Namespace) -> None:
+def _notify_supervisor_ready(args: argparse.Namespace) -> int:
     descriptor = _inherited_pipe_descriptor(
         descriptor=args.internal_ready_fd,
         handle=args.internal_ready_handle,
@@ -132,14 +136,41 @@ def _notify_supervisor_ready(args: argparse.Namespace) -> None:
         label="ready-signal",
     )
     try:
+        os.write(descriptor, b"1")
+    except OSError:
+        # The outer supervisor may have died. Its acknowledgement channel is
+        # not the lease: keep owning the real file lock and launch safely.
+        pass
+    return descriptor
+
+
+def _notify_supervisor_result(descriptor: int, returncode: int) -> None:
+    try:
         try:
-            os.write(descriptor, b"1")
+            os.write(descriptor, f"{int(returncode)}\n".encode("ascii"))
         except OSError:
-            # The outer supervisor may have died. Its acknowledgement channel is
-            # not the lease: keep owning the real file lock and launch safely.
+            # The outer launcher may have died. Tree cleanup and the real lease
+            # remain owned by this process and must still complete.
             pass
     finally:
         os.close(descriptor)
+
+
+def _read_lease_owner_result(descriptor: int) -> int | None:
+    payload = bytearray()
+    while len(payload) <= 32:
+        chunk = os.read(descriptor, 32 - len(payload) + 1)
+        if not chunk:
+            break
+        payload.extend(chunk)
+        if b"\n" in chunk:
+            break
+    if not payload.endswith(b"\n") or len(payload) > 32:
+        return None
+    try:
+        return int(payload[:-1].decode("ascii"))
+    except ValueError:
+        return None
 
 
 def _wait_for_supervisor_continue(args: argparse.Namespace) -> None:
@@ -291,21 +322,71 @@ def _guarded_target_popen_kwargs(platform_name: str = os.name) -> dict[str, Any]
     return {"start_new_session": True}
 
 
+def _confirm_posix_process_group_stopped(
+    process_group_id: int,
+    *,
+    timeout_seconds: float = _LEASE_OWNER_STOP_TIMEOUT_SECONDS,
+) -> None:
+    if os.name == "nt":
+        return
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            os.killpg(process_group_id, 0)
+        except ProcessLookupError:
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError("timed out stopping guarded backend target process group")
+        time.sleep(0.02)
+
+
+def _stop_guarded_target_tree(
+    process: subprocess.Popen[Any],
+    *,
+    terminate_tree=terminate_process_tree,
+    confirm_tree=_confirm_posix_process_group_stopped,
+) -> None:
+    terminate_tree(process)
+    try:
+        process.wait(timeout=_LEASE_OWNER_STOP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=_LEASE_OWNER_STOP_TIMEOUT_SECONDS)
+    if os.name != "nt":
+        confirm_tree(process.pid)
+
+
 def _wait_for_guarded_target(
     process: subprocess.Popen[Any],
     *,
     terminate_tree=terminate_process_tree,
+    confirm_tree=_confirm_posix_process_group_stopped,
 ) -> int:
     try:
-        return process.wait()
+        returncode = process.wait()
     except BaseException:
         try:
-            if process.poll() is None:
-                terminate_tree(process)
-            process.wait(timeout=_LEASE_OWNER_STOP_TIMEOUT_SECONDS)
+            _stop_guarded_target_tree(
+                process,
+                terminate_tree=terminate_tree,
+                confirm_tree=confirm_tree,
+            )
         except (OSError, subprocess.SubprocessError):
             pass
         raise
+    _stop_guarded_target_tree(
+        process,
+        terminate_tree=terminate_tree,
+        confirm_tree=confirm_tree,
+    )
+    return returncode
+
+
+def _terminate_windows_owner_job(windows_job) -> None:
+    windows_job.terminate()
+    windows_job.close()
+    raise RuntimeError("Windows backend target Job did not terminate its owner")
 
 
 def _run_as_lease_owner(args: argparse.Namespace, command: list[str]) -> int:
@@ -314,50 +395,88 @@ def _run_as_lease_owner(args: argparse.Namespace, command: list[str]) -> int:
         timeout_seconds=args.timeout_seconds,
         mode="shared",
     ):
-        _notify_supervisor_ready(args)
-        _wait_for_supervisor_continue(args)
-        process = subprocess.Popen(
-            command,
-            env=_clean_environment(),
-            **_guarded_target_popen_kwargs(),
-        )
-        return _wait_for_guarded_target(process)
+        windows_job = bind_current_process_to_windows_kill_on_close_job()
+        result_descriptor = _notify_supervisor_ready(args)
+        result_was_sent = False
+        try:
+            _wait_for_supervisor_continue(args)
+            process = subprocess.Popen(
+                command,
+                env=_clean_environment(),
+                **_guarded_target_popen_kwargs(),
+            )
+            if windows_job is None:
+                returncode = _wait_for_guarded_target(process)
+                _notify_supervisor_result(result_descriptor, returncode)
+                result_was_sent = True
+                return returncode
+
+            try:
+                returncode = process.wait()
+            except BaseException:
+                _notify_supervisor_result(result_descriptor, 1)
+                result_was_sent = True
+                _terminate_windows_owner_job(windows_job)
+                raise
+            _notify_supervisor_result(result_descriptor, returncode)
+            result_was_sent = True
+            _terminate_windows_owner_job(windows_job)
+        except BaseException:
+            if not result_was_sent:
+                _notify_supervisor_result(result_descriptor, 1)
+            if windows_job is not None:
+                _terminate_windows_owner_job(windows_job)
+            raise
 
 
 def _run_as_supervisor(args: argparse.Namespace, command: list[str]) -> int:
     readiness_timeout = args.timeout_seconds + _LEASE_OWNER_STARTUP_GRACE_SECONDS
     if not math.isfinite(readiness_timeout) or readiness_timeout < 0:
         raise ValueError("backend runtime lock timeout must be finite and non-negative")
-    with backend_runtime_lock(
-        args.project_root,
-        timeout_seconds=args.timeout_seconds,
-        mode="shared",
-    ):
-        process, ready_descriptor, continue_descriptor = _spawn_lease_owner(
-            project_root=args.project_root,
+    ready_descriptor: int | None = None
+    try:
+        with backend_runtime_lock(
+            args.project_root,
             timeout_seconds=args.timeout_seconds,
-            command=command,
-        )
-        try:
-            owner_is_ready = _wait_for_lease_owner_ready(
-                process,
-                ready_descriptor,
-                timeout_seconds=readiness_timeout,
+            mode="shared",
+        ):
+            process, ready_descriptor, continue_descriptor = _spawn_lease_owner(
+                project_root=args.project_root,
+                timeout_seconds=args.timeout_seconds,
+                command=command,
             )
-            if owner_is_ready:
-                os.write(continue_descriptor, b"1")
-        finally:
-            os.close(ready_descriptor)
-            os.close(continue_descriptor)
-        if not owner_is_ready:
-            return_code = process.wait()
+            try:
+                owner_is_ready = _wait_for_lease_owner_ready(
+                    process,
+                    ready_descriptor,
+                    timeout_seconds=readiness_timeout,
+                )
+                if owner_is_ready:
+                    os.write(continue_descriptor, b"1")
+            finally:
+                os.close(continue_descriptor)
+            if not owner_is_ready:
+                os.close(ready_descriptor)
+                ready_descriptor = None
+                return_code = process.wait()
+                print(
+                    "Backend runtime lease owner exited before acquiring its shared lock.",
+                    file=sys.stderr,
+                )
+                return return_code or 1
+
+        target_returncode = _read_lease_owner_result(ready_descriptor)
+        owner_returncode = process.wait()
+        if target_returncode is None:
             print(
-                "Backend runtime lease owner exited before acquiring its shared lock.",
+                "Backend runtime lease owner exited without a valid target result.",
                 file=sys.stderr,
             )
-            return return_code or 1
-
-    return process.wait()
+            return owner_returncode or 1
+        return target_returncode
+    finally:
+        if ready_descriptor is not None:
+            os.close(ready_descriptor)
 
 
 def main(argv: list[str] | None = None) -> int:
