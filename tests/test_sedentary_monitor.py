@@ -274,6 +274,28 @@ def test_run_task_does_not_log_reset_after_stale_gap_clears_focus(
     assert monitor.focus_elapsed_seconds == 0.0
 
 
+def test_run_task_does_not_log_reset_after_clock_rollback_and_absence(
+    tmp_path,
+    capsys,
+):
+    monitor = _make_monitor(tmp_path)
+    _record(monitor, True, 100.0)
+    monitor.last_monitor_heartbeat = 100.0
+
+    with (
+        patch("src.manager.manager_main.get_location", return_value=(None, None)),
+        patch("src.manager.manager_main.take_photo", return_value=(False, None)),
+        patch("src.manager.manager_main.time.time", side_effect=[90.0, 90.0]),
+    ):
+        assert monitor.run_task() == monitor.ABSENT
+
+    output = capsys.readouterr().out
+    assert "User left for >2mins. Resetting sedentary timer." not in output
+    assert monitor.continuous_sit_start is None
+    assert monitor.focus_elapsed_seconds == 0.0
+    assert monitor.away_elapsed_seconds == 0.0
+
+
 def test_stale_cutoff_that_completes_away_grace_clears_only_focus_session(
     tmp_path,
 ):

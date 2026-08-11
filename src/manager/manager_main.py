@@ -48,6 +48,7 @@ class Monitor:
                 json.dump({}, f)
 
         self._state_lock = threading.RLock()
+        self._confirmed_absence_generation = 0
         self.continuous_sit_start = None
         self.focus_elapsed_seconds = 0.0
         self.away_elapsed_seconds = 0.0
@@ -132,7 +133,10 @@ class Monitor:
             self.last_trusted_observation_status == self.ABSENT
             and self.away_elapsed_seconds >= self.grace_period
         ):
+            had_focus_session = self.continuous_sit_start is not None
             self._reset_focus_session_locked()
+            if had_focus_session:
+                self._confirmed_absence_generation += 1
 
     def _pause_for_stale_gap_locked(self, stale_cutoff):
         if self.active_timer is not None:
@@ -769,7 +773,9 @@ class Monitor:
                         f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
                         f"Monitor gap {int(monitor_gap)}s exceeded timeout. Pausing timers."
                     )
-            had_active_session = self.continuous_sit_start is not None
+            confirmed_absence_generation = (
+                self._confirmed_absence_generation
+            )
             if self.active_timer is not None:
                 self._pause_active_timer_locked(cycle_started_at)
             self.last_monitor_heartbeat = cycle_started_at
@@ -814,6 +820,10 @@ class Monitor:
                 observed_at=current_time,
             )
             observation_recorded = True
+            confirmed_absence_transition = (
+                self._confirmed_absence_generation
+                > confirmed_absence_generation
+            )
 
             if observation_status == self.PRESENT:
                 sit_duration = self.focus_elapsed_seconds
@@ -846,7 +856,7 @@ class Monitor:
                     self.paths["screenshot"] = screenshot_path
                 print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Done. (Sedentary: {int(sit_duration / 60)} mins)")
             elif observation_status == self.ABSENT:
-                if had_active_session and self.continuous_sit_start is None:
+                if confirmed_absence_transition:
                     print(f"Time {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} User left for >2mins. Resetting sedentary timer.")
                 elif self.last_missing_time is not None:
                     missing_duration = self.away_elapsed_seconds

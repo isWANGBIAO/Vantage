@@ -138,6 +138,49 @@ def test_location_outcome_logs_transitions_and_hourly_summary_without_coordinate
     assert "121.4737" not in output
 
 
+@pytest.mark.parametrize(
+    "invalid_reading",
+    [9.0, float("nan"), float("inf"), RuntimeError("clock failed")],
+    ids=("rollback", "nan", "infinity", "exception"),
+)
+def test_location_outcome_limiter_fails_open_and_rebaselines_after_bad_clock(
+    invalid_reading,
+):
+    readings = iter([10.0, 11.0, invalid_reading, 20.0])
+
+    def clock():
+        reading = next(readings)
+        if isinstance(reading, Exception):
+            raise reading
+        return reading
+
+    limiter = get_location.LocationOutcomeLogLimiter(monotonic_clock=clock)
+
+    assert limiter.consume("wi_fi", "rejected", "accuracy_too_low") == 0
+    assert limiter.consume("wi_fi", "rejected", "accuracy_too_low") is None
+    try:
+        invalid_result = limiter.consume(
+            "wi_fi", "rejected", "accuracy_too_low"
+        )
+    except Exception as exc:
+        pytest.fail(f"limiter leaked a clock failure: {exc}")
+    assert invalid_result == 0
+    assert limiter.consume("wi_fi", "rejected", "accuracy_too_low") == 0
+
+
+def test_location_outcome_limiter_summary_excludes_current_event():
+    clock = [0.0]
+    limiter = get_location.LocationOutcomeLogLimiter(
+        monotonic_clock=lambda: clock[0]
+    )
+
+    assert limiter.consume("winrt", "unknown", "timeout") == 0
+    clock[0] = 1.0
+    assert limiter.consume("winrt", "unknown", "timeout") is None
+    clock[0] = 3600.0
+    assert limiter.consume("winrt", "unknown", "timeout") == 1
+
+
 def test_get_location_uses_configured_static_coordinates(monkeypatch):
     monkeypatch.setenv("VANTAGE_STATIC_LATITUDE", "12.5")
     monkeypatch.setenv("VANTAGE_STATIC_LONGITUDE", "34.75")

@@ -1,4 +1,5 @@
 import asyncio
+import math
 import os
 import sys
 import threading
@@ -68,10 +69,30 @@ class LocationOutcomeLogLimiter:
         self._last_logged_at = None
         self._suppressed_repeats = 0
 
+    def _reset_locked(self):
+        self._last_key = None
+        self._last_logged_at = None
+        self._suppressed_repeats = 0
+
     def consume(self, source, status, reason):
         key = (source, status, reason)
-        now = self._monotonic_clock()
         with self._lock:
+            try:
+                now = self._monotonic_clock()
+                clock_is_valid = (
+                    not isinstance(now, bool)
+                    and math.isfinite(now)
+                    and (
+                        self._last_logged_at is None
+                        or now >= self._last_logged_at
+                    )
+                )
+            except Exception:
+                clock_is_valid = False
+            if not clock_is_valid:
+                self._reset_locked()
+                return 0
+
             if key != self._last_key:
                 self._last_key = key
                 self._last_logged_at = now
