@@ -1,7 +1,9 @@
+import asyncio
 import tempfile
 import unittest
 import builtins
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from src import server
@@ -10,6 +12,47 @@ from src import server
 class StorageStatsTests(unittest.TestCase):
     def test_storage_budget_warning_is_limited_to_at_most_once_per_hour(self):
         self.assertGreaterEqual(server.STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS, 3600.0)
+
+    def test_sys_stats_preserves_cached_storage_total_and_partial_marker(self):
+        original_state = (
+            server.state.photos_size,
+            server.state.screenshots_size,
+            server.state.legacy_size,
+            server.state.storage_scan_truncated,
+        )
+        try:
+            server.state.photos_size = 1 * 1024**2
+            server.state.screenshots_size = 2 * 1024**2
+            server.state.legacy_size = 3 * 1024**2
+            server.state.storage_scan_truncated = True
+            with (
+                patch.object(server.psutil, "cpu_percent", return_value=12.5),
+                patch.object(
+                    server.psutil,
+                    "virtual_memory",
+                    return_value=SimpleNamespace(
+                        used=4 * 1024**3,
+                        total=8 * 1024**3,
+                        percent=50.0,
+                    ),
+                ),
+                patch.object(
+                    server.shutil,
+                    "disk_usage",
+                    return_value=(10 * 1024**3, 4 * 1024**3, 6 * 1024**3),
+                ),
+            ):
+                result = asyncio.run(server.get_sys_stats())
+        finally:
+            (
+                server.state.photos_size,
+                server.state.screenshots_size,
+                server.state.legacy_size,
+                server.state.storage_scan_truncated,
+            ) = original_state
+
+        self.assertEqual(result["storage_used_mb"], 6.0)
+        self.assertTrue(result["storage_scan_truncated"])
 
     def test_safe_directory_size_skips_files_that_disappear(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -66,6 +109,157 @@ class StorageStatsTests(unittest.TestCase):
             message for message in messages if "Storage size scan budget reached" in message
         ]
         self.assertEqual(len(budget_messages), 1)
+
+    def test_update_storage_stats_resumes_partial_scans_until_exact(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            photos = tmp / "photos"
+            screenshots = tmp / "screenshots"
+            photos.mkdir()
+            screenshots.mkdir()
+            (photos / "a.bin").write_bytes(b"a")
+            (photos / "b.bin").write_bytes(b"bc")
+            (screenshots / "screen.bin").write_bytes(b"shot")
+            snapshots = []
+            original_state = (
+                server.state.is_running,
+                server.state.photos_path,
+                server.state.screenshots_path,
+                server.state.photos_size,
+                server.state.screenshots_size,
+                server.state.storage_scan_truncated,
+            )
+
+            def sleep_fn(seconds):
+                snapshots.append(
+                    (
+                        server.state.photos_size,
+                        server.state.screenshots_size,
+                        server.state.storage_scan_truncated,
+                        seconds,
+                    )
+                )
+                if len(snapshots) == 2:
+                    server.state.is_running = False
+
+            try:
+                server.state.is_running = True
+                server.state.photos_path = str(photos)
+                server.state.screenshots_path = str(screenshots)
+                server.update_storage_stats(
+                    max_entries_per_step=1,
+                    max_seconds_per_step=None,
+                    monotonic_clock=lambda: 0.0,
+                    sleep_fn=sleep_fn,
+                )
+            finally:
+                (
+                    server.state.is_running,
+                    server.state.photos_path,
+                    server.state.screenshots_path,
+                    server.state.photos_size,
+                    server.state.screenshots_size,
+                    server.state.storage_scan_truncated,
+                ) = original_state
+
+        self.assertEqual(snapshots, [(1, 4, True, 60), (3, 4, False, 60)])
+
+    def test_update_storage_stats_restarts_scanner_when_path_changes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            first = tmp / "first"
+            second = tmp / "second"
+            first.mkdir()
+            second.mkdir()
+            (first / "first.bin").write_bytes(b"a")
+            (second / "second.bin").write_bytes(b"bc")
+            observed_sizes = []
+            original_state = (
+                server.state.is_running,
+                server.state.photos_path,
+                server.state.screenshots_path,
+                server.state.photos_size,
+                server.state.screenshots_size,
+                server.state.storage_scan_truncated,
+            )
+
+            def sleep_fn(_seconds):
+                observed_sizes.append(server.state.photos_size)
+                if len(observed_sizes) == 1:
+                    server.state.photos_path = str(second)
+                else:
+                    server.state.is_running = False
+
+            try:
+                server.state.is_running = True
+                server.state.photos_path = str(first)
+                server.state.screenshots_path = None
+                server.update_storage_stats(
+                    max_entries_per_step=10,
+                    max_seconds_per_step=None,
+                    monotonic_clock=lambda: 0.0,
+                    sleep_fn=sleep_fn,
+                )
+            finally:
+                (
+                    server.state.is_running,
+                    server.state.photos_path,
+                    server.state.screenshots_path,
+                    server.state.photos_size,
+                    server.state.screenshots_size,
+                    server.state.storage_scan_truncated,
+                ) = original_state
+
+        self.assertEqual(observed_sizes, [1, 2])
+
+    def test_update_storage_stats_does_not_probe_completed_path_before_refresh(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            photos = Path(tmpdir) / "photos"
+            photos.mkdir()
+            (photos / "photo.bin").write_bytes(b"photo")
+            exists_counts = []
+            exists_calls = []
+            real_exists = server.os.path.exists
+            original_state = (
+                server.state.is_running,
+                server.state.photos_path,
+                server.state.screenshots_path,
+                server.state.photos_size,
+                server.state.screenshots_size,
+                server.state.storage_scan_truncated,
+            )
+
+            def tracked_exists(path):
+                exists_calls.append(path)
+                return real_exists(path)
+
+            def sleep_fn(_seconds):
+                exists_counts.append(len(exists_calls))
+                if len(exists_counts) == 2:
+                    server.state.is_running = False
+
+            try:
+                server.state.is_running = True
+                server.state.photos_path = str(photos)
+                server.state.screenshots_path = None
+                with patch.object(server.os.path, "exists", side_effect=tracked_exists):
+                    server.update_storage_stats(
+                        max_entries_per_step=10,
+                        max_seconds_per_step=None,
+                        monotonic_clock=lambda: 0.0,
+                        sleep_fn=sleep_fn,
+                    )
+            finally:
+                (
+                    server.state.is_running,
+                    server.state.photos_path,
+                    server.state.screenshots_path,
+                    server.state.photos_size,
+                    server.state.screenshots_size,
+                    server.state.storage_scan_truncated,
+                ) = original_state
+
+        self.assertEqual(exists_counts[1], exists_counts[0])
 
     def test_find_latest_file_recursive_marks_truncated_when_entry_budget_is_hit(self):
         with tempfile.TemporaryDirectory() as tmpdir:

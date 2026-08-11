@@ -73,6 +73,7 @@ from src.manager.manager_main import Monitor
 from src.manager.get_location import get_location, get_trusted_location_sample_async
 from src.manager.take_photo.take_a_photo import PresencePhotoSaveCoordinator
 from src.services.llm_client import LLMClient
+from src.services.directory_size_scanner import DirectorySizeScanner
 from src.services.model_call_recorder import (
     get_session_usage_summary,
     get_usage_dashboard_snapshot,
@@ -150,6 +151,8 @@ ACTION_PLAN_PROVIDER_READY_REQUEST_TIMEOUT_SECONDS = 3
 STORAGE_SCAN_MAX_SECONDS = 3.0
 STORAGE_SCAN_MAX_ENTRIES = 20000
 STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS = 3600.0
+STORAGE_SCAN_REFRESH_INTERVAL_SECONDS = 15 * 60
+STORAGE_STATS_UPDATE_INTERVAL_SECONDS = 60
 LATEST_MEDIA_SCAN_MAX_SECONDS = 3.0
 LATEST_MEDIA_SCAN_MAX_ENTRIES = 30000
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
@@ -1217,26 +1220,60 @@ def update_legacy_storage_stats():
     except Exception as e:
         print(f"Legacy storage scan error: {e}")
 
-def update_storage_stats():
+def update_storage_stats(
+    *,
+    max_entries_per_step=STORAGE_SCAN_MAX_ENTRIES,
+    max_seconds_per_step=STORAGE_SCAN_MAX_SECONDS,
+    refresh_interval_seconds=STORAGE_SCAN_REFRESH_INTERVAL_SECONDS,
+    monotonic_clock=None,
+    sleep_fn=None,
+    scanner_factory=DirectorySizeScanner,
+):
     """Background thread to periodically update photos/screenshots storage size cache."""
+    active_clock = monotonic_clock or time.monotonic
+    active_sleep = sleep_fn or time.sleep
+    scanners = {"photos": None, "screenshots": None}
+    scanner_paths = {"photos": None, "screenshots": None}
+
     while state.is_running:
         try:
             scan_truncated = False
-            photos_size = 0
-            if state.photos_path and os.path.exists(state.photos_path):
-                photos_size = _safe_directory_size(state.photos_path)
-                scan_truncated = scan_truncated or bool(getattr(_safe_directory_size, "last_truncated", False))
-            state.photos_size = photos_size
+            sizes = {}
+            for key, configured_path in (
+                ("photos", state.photos_path),
+                ("screenshots", state.screenshots_path),
+            ):
+                normalized_path = (
+                    os.path.abspath(os.fspath(configured_path))
+                    if configured_path
+                    else None
+                )
+                if not normalized_path:
+                    scanners[key] = None
+                    scanner_paths[key] = None
+                    sizes[key] = 0
+                    continue
 
-            screenshots_size = 0
-            if state.screenshots_path and os.path.exists(state.screenshots_path):
-                screenshots_size = _safe_directory_size(state.screenshots_path)
-                scan_truncated = scan_truncated or bool(getattr(_safe_directory_size, "last_truncated", False))
-            state.screenshots_size = screenshots_size
+                if scanner_paths[key] != normalized_path:
+                    scanners[key] = scanner_factory(
+                        normalized_path,
+                        max_entries_per_step=max_entries_per_step,
+                        max_seconds_per_step=max_seconds_per_step,
+                        refresh_interval_seconds=refresh_interval_seconds,
+                        monotonic_clock=active_clock,
+                    )
+                    scanner_paths[key] = normalized_path
+
+                snapshot = scanners[key].step()
+                sizes[key] = snapshot.total_size
+                scan_truncated = scan_truncated or not snapshot.complete
+
+            state.photos_size = sizes["photos"]
+            state.screenshots_size = sizes["screenshots"]
             state.storage_scan_truncated = scan_truncated
         except Exception as e:
             print(f"Storage stats update error: {e}")
-        time.sleep(60)  # Update every 60 seconds
+        active_sleep(STORAGE_STATS_UPDATE_INTERVAL_SECONDS)
 
 # Balance Sheet helpers
 def _normalize_cell_value(value):
