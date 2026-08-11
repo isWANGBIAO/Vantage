@@ -1,5 +1,7 @@
 import importlib.util
 import os
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -67,6 +69,79 @@ def test_resolve_runtime_context_uses_config_runtime_contract(tmp_path):
     assert context["project_root"] == project_root
     assert context["log_dir"] == runtime_paths["log_dir"]
     assert context["env"] == runtime_env
+
+
+def test_build_log_path_prefixes_labels_known_roots_without_private_values(tmp_path):
+    launcher = _load_launcher_module()
+    home = tmp_path / "Users" / "Alice"
+    project_root = home / "repo"
+    runtime_paths = {
+        "data_dir": home / "AppData" / "Local" / "Vantage",
+        "config_dir": home / "AppData" / "Local" / "Vantage" / "config",
+        "history_dir": home / "AppData" / "Local" / "Vantage" / "history",
+        "log_dir": home / "AppData" / "Local" / "Vantage" / "logs",
+        "plot_dir": home / "AppData" / "Local" / "Vantage" / "plot_outputs",
+        "cache_dir": home / "AppData" / "Local" / "Vantage" / "cache",
+        "runtime_dir": home / "AppData" / "Local" / "Vantage" / "runtime",
+        "migration_dir": home / "AppData" / "Local" / "Vantage" / "migration",
+    }
+
+    prefixes = launcher._build_log_path_prefixes(
+        project_root=project_root,
+        runtime_paths=runtime_paths,
+        executable=project_root / ".venv" / "Scripts" / "python.exe",
+        user_home=home,
+    )
+
+    assert prefixes["<USER_HOME>"] == str(home)
+    assert prefixes["<PROJECT_ROOT>"] == str(project_root)
+    assert prefixes["<LOG_DIR>"] == str(runtime_paths["log_dir"])
+    assert prefixes["<EXECUTABLE_DIR>"] == str(
+        project_root / ".venv" / "Scripts"
+    )
+    assert all("Alice" not in label for label in prefixes)
+
+
+def test_redirect_standard_streams_sanitizes_stdout_and_stderr_before_persistence(
+    tmp_path,
+):
+    log_path = tmp_path / "server.log"
+    private_root = tmp_path / "Users" / "Alice" / "repo"
+    private_file = private_root / "src" / "server.py"
+    script = "\n".join(
+        (
+            "import sys",
+            "from pathlib import Path",
+            "from src.scripts.run_server_background import _redirect_standard_streams",
+            "log_path = Path(sys.argv[1])",
+            "private_root = sys.argv[2]",
+            "private_file = sys.argv[3]",
+            "_redirect_standard_streams(",
+            "    log_path,",
+            "    path_prefixes={'<PROJECT_ROOT>': private_root},",
+            ")",
+            "print(f'loading {private_file}')",
+            "sys.stderr.write(f'failed {private_file} api_key=1234567890abcdef\\n')",
+            "sys.stdout.flush()",
+            "sys.stderr.flush()",
+        )
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(log_path), str(private_root), str(private_file)],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    persisted = log_path.read_text(encoding="utf-8")
+    assert "Alice" not in persisted
+    assert "1234567890abcdef" not in persisted
+    assert persisted.count("<PROJECT_ROOT>") == 2
+    assert "src" in persisted
+    assert "server.py" in persisted
 
 
 def test_ensure_project_root_on_sys_path_returns_repo_root():

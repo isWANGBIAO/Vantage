@@ -23,6 +23,7 @@ PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
 from src.core.config import Config
 from src.core.runtime_library_bootstrap import apply_runtime_library_dirs
+from src.utils.sensitive_data import RedactingTextStream
 
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
@@ -32,12 +33,18 @@ PACKAGED_RUNTIME_REQUIRED_IMPORTS = (
 )
 
 
-def _redirect_standard_streams(log_path: Path):
+def _redirect_standard_streams(log_path: Path, *, path_prefixes=None):
     log_file = open(log_path, "a", encoding="utf-8", buffering=1)
     os.dup2(log_file.fileno(), 1)
     os.dup2(log_file.fileno(), 2)
-    sys.stdout = open(1, "w", encoding="utf-8", buffering=1, closefd=False)
-    sys.stderr = open(2, "w", encoding="utf-8", buffering=1, closefd=False)
+    sys.stdout = RedactingTextStream(
+        open(1, "w", encoding="utf-8", buffering=1, closefd=False),
+        path_prefixes=path_prefixes,
+    )
+    sys.stderr = RedactingTextStream(
+        open(2, "w", encoding="utf-8", buffering=1, closefd=False),
+        path_prefixes=path_prefixes,
+    )
     return log_file
 
 
@@ -53,12 +60,54 @@ def _prepare_server_runtime_log(logs_dir: Path, launched_at: datetime):
     return log_path, latest_pointer
 
 
+def _build_log_path_prefixes(
+    *,
+    project_root: Path,
+    runtime_paths: dict,
+    executable: str | Path | None = None,
+    user_home: str | Path | None = None,
+):
+    prefixes = {}
+
+    def add(label, value):
+        if value is None:
+            return
+        try:
+            value_text = os.fspath(value)
+        except TypeError:
+            return
+        if value_text:
+            prefixes[label] = value_text
+
+    add("<PROJECT_ROOT>", project_root)
+    for runtime_key, label in (
+        ("config_dir", "<CONFIG_DIR>"),
+        ("history_dir", "<HISTORY_DIR>"),
+        ("log_dir", "<LOG_DIR>"),
+        ("plot_dir", "<PLOT_DIR>"),
+        ("cache_dir", "<CACHE_DIR>"),
+        ("runtime_dir", "<RUNTIME_DIR>"),
+        ("migration_dir", "<MIGRATION_DIR>"),
+        ("data_dir", "<DATA_DIR>"),
+    ):
+        add(label, runtime_paths.get(runtime_key))
+    resolved_executable = Path(executable or sys.executable)
+    add("<EXECUTABLE_DIR>", resolved_executable.parent)
+    add("<USER_HOME>", user_home or Path.home())
+    return prefixes
+
+
 def _resolve_runtime_context():
     runtime_paths = Config.get_runtime_paths()
+    project_root = Config.get_project_root()
     return {
-        "project_root": Config.get_project_root(),
+        "project_root": project_root,
         "log_dir": runtime_paths["log_dir"],
         "env": Config.build_runtime_environment(),
+        "path_prefixes": _build_log_path_prefixes(
+            project_root=project_root,
+            runtime_paths=runtime_paths,
+        ),
     }
 
 
@@ -151,7 +200,10 @@ def _main_without_backend_runtime_lock():
 
     os.environ.update(runtime_context["env"])
     os.chdir(project_root)
-    _redirect_standard_streams(log_path)
+    _redirect_standard_streams(
+        log_path,
+        path_prefixes=runtime_context["path_prefixes"],
+    )
     _run_server_entrypoint(project_root)
 
 
