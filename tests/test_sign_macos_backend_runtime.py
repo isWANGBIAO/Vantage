@@ -314,7 +314,7 @@ def test_atomic_stamp_replace_failure_removes_temporary_and_valid_stamp(tmp_path
     stamp_path = _write_matching_stamp(module, venv, state_path)
     libraries[0].write_bytes(b"changed")
 
-    def fail_replace(_source, _target):
+    def fail_replace(_source, _target, **_kwargs):
         raise PermissionError("replace denied")
 
     with pytest.raises(PermissionError, match="replace denied"):
@@ -665,8 +665,8 @@ def test_runtime_mutation_during_stamp_replace_is_detected_and_stamp_removed(tmp
     project_root, venv, state_path, libraries = _write_runtime(tmp_path)
     stamp_path = venv / ".macos-native-codesign.sha256"
 
-    def replace_then_mutate(source, target):
-        os.replace(source, target)
+    def replace_then_mutate(source, target, **kwargs):
+        os.replace(source, target, **kwargs)
         libraries[0].write_bytes(b"changed-after-verify")
 
     with pytest.raises(RuntimeError, match="closure|identity|content|changed"):
@@ -681,6 +681,46 @@ def test_runtime_mutation_during_stamp_replace_is_detected_and_stamp_removed(tmp
         )
 
     assert not stamp_path.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX dirfd replacement")
+def test_runtime_root_swap_during_stamp_replace_cannot_touch_external_stamp(tmp_path):
+    module = _signing_module()
+    project_root, venv, state_path, _libraries = _write_runtime(tmp_path)
+    stamp_path = venv / ".macos-native-codesign.sha256"
+    moved_venv = tmp_path / "moved-runtime"
+    external = tmp_path / "external-runtime"
+    external.mkdir()
+    external_stamp = external / stamp_path.name
+    external_stamp.write_bytes(b"DO-NOT-TOUCH")
+    real_replace = os.replace
+    swapped = False
+
+    def swap_root_then_replace(source, target, **kwargs):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            venv.rename(moved_venv)
+            venv.symlink_to(external, target_is_directory=True)
+            if not kwargs:
+                (external / Path(source).name).write_bytes(b"attacker-temp")
+        return real_replace(source, target, **kwargs)
+
+    with pytest.raises((RuntimeError, ValueError), match="root|link|identity"):
+        module.sign_macos_backend_runtime(
+            project_root=project_root,
+            venv=venv,
+            state_path=state_path,
+            stamp_path=stamp_path,
+            run_command=_successful_runner([]),
+            replace_file=swap_root_then_replace,
+            system_name="Darwin",
+        )
+
+    assert swapped is True
+    assert external_stamp.read_bytes() == b"DO-NOT-TOUCH"
+    assert not list(moved_venv.glob(".vantage-codesign-staging-*"))
+    assert not (moved_venv / stamp_path.name).exists()
 
 
 def test_native_file_swap_after_scan_is_rejected_before_codesign(tmp_path):

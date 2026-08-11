@@ -506,6 +506,8 @@ def _cleanup_private_staging_root(
     venv_identity: _PathIdentity,
     staging_root: Path,
     staging_root_identity: _PathIdentity,
+    *,
+    venv_descriptor: int | None = None,
 ) -> None:
     try:
         if staging_root.parent != venv:
@@ -528,11 +530,13 @@ def _cleanup_private_staging_root(
             shutil.rmtree(staging_root)
             return
 
-        venv_descriptor = _open_validated_directory(
-            venv,
-            venv_identity,
-            role="runtime root",
-        )
+        owned_venv_descriptor = venv_descriptor is None
+        if venv_descriptor is None:
+            venv_descriptor = _open_validated_directory(
+                venv,
+                venv_identity,
+                role="runtime root",
+            )
         staging_descriptor: int | None = None
         try:
             staging_descriptor = os.open(
@@ -546,13 +550,20 @@ def _cleanup_private_staging_root(
             ):
                 return
             _remove_directory_contents_by_fd(staging_descriptor)
-            current_identity = _path_identity(staging_root)
+            current_identity = _identity_from_stat(
+                os.stat(
+                    staging_root.name,
+                    dir_fd=venv_descriptor,
+                    follow_symlinks=False,
+                )
+            )
             if _same_directory_identity(current_identity, staging_root_identity):
                 os.rmdir(staging_root.name, dir_fd=venv_descriptor)
         finally:
             if staging_descriptor is not None:
                 os.close(staging_descriptor)
-            os.close(venv_descriptor)
+            if owned_venv_descriptor:
+                os.close(venv_descriptor)
     except (OSError, RuntimeError, ValueError):
         return
 
@@ -560,8 +571,11 @@ def _cleanup_private_staging_root(
 def _create_private_staging_root(
     venv: Path,
     snapshot: _SigningSnapshot,
+    *,
+    venv_descriptor: int | None = None,
 ) -> tuple[Path, _PathIdentity]:
     _assert_snapshot_roots(venv, snapshot)
+    provided_venv_descriptor = venv_descriptor
     staging_root: Path | None = None
     identity: _PathIdentity | None = None
     try:
@@ -574,11 +588,13 @@ def _create_private_staging_root(
                 role="codesign staging root",
             )
         else:
-            venv_descriptor = _open_validated_directory(
-                venv,
-                snapshot.venv_identity,
-                role="runtime root",
-            )
+            owned_venv_descriptor = venv_descriptor is None
+            if venv_descriptor is None:
+                venv_descriptor = _open_validated_directory(
+                    venv,
+                    snapshot.venv_identity,
+                    role="runtime root",
+                )
             staging_descriptor: int | None = None
             try:
                 for _attempt in range(128):
@@ -623,7 +639,8 @@ def _create_private_staging_root(
             finally:
                 if staging_descriptor is not None:
                     os.close(staging_descriptor)
-                os.close(venv_descriptor)
+                if owned_venv_descriptor:
+                    os.close(venv_descriptor)
 
         if staging_root is None or identity is None:
             raise RuntimeError("macOS backend codesign staging root is unavailable")
@@ -646,6 +663,7 @@ def _create_private_staging_root(
                 snapshot.venv_identity,
                 staging_root,
                 identity,
+                venv_descriptor=provided_venv_descriptor,
             )
         raise
 
@@ -967,18 +985,144 @@ def write_macos_backend_codesign_state(
     stamp_path: str | Path,
     state: Mapping[str, object],
     *,
-    replace_file: Callable[[str | Path, str | Path], object] = os.replace,
+    replace_file: Callable[..., object] = os.replace,
+    parent_identity: _PathIdentity | None = None,
+    parent_descriptor: int | None = None,
 ) -> Path:
     resolved_stamp_path = Path(stamp_path)
-    resolved_stamp_path.parent.mkdir(parents=True, exist_ok=True)
-    if os.path.lexists(resolved_stamp_path):
-        _assert_plain_file(resolved_stamp_path, role="signature stamp")
+    stamp_parent = resolved_stamp_path.parent
+    if parent_identity is None:
+        stamp_parent.mkdir(parents=True, exist_ok=True)
+        parent_identity = _assert_plain_directory(
+            stamp_parent,
+            role="signature stamp parent",
+        )
     payload = json.dumps(
         dict(state),
         indent=2,
         sort_keys=True,
         ensure_ascii=True,
     ) + "\n"
+
+    if os.name != "nt":
+        owned_parent_descriptor = parent_descriptor is None
+        if parent_descriptor is None:
+            parent_descriptor = _open_validated_directory(
+                stamp_parent,
+                parent_identity,
+                role="signature stamp parent",
+            )
+        temporary_name: str | None = None
+        temporary_identity: _PathIdentity | None = None
+        temporary_descriptor: int | None = None
+        try:
+            _assert_stamp_parent(
+                stamp_parent,
+                parent_identity,
+                parent_descriptor,
+            )
+            _stamp_entry_identity(
+                resolved_stamp_path,
+                parent_identity=parent_identity,
+                parent_descriptor=parent_descriptor,
+            )
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            flags |= int(getattr(os, "O_CLOEXEC", 0))
+            flags |= int(getattr(os, "O_NOFOLLOW", 0))
+            for _attempt in range(128):
+                candidate = (
+                    f".{resolved_stamp_path.name}.{secrets.token_hex(12)}.tmp"
+                )
+                try:
+                    temporary_descriptor = os.open(
+                        candidate,
+                        flags,
+                        0o600,
+                        dir_fd=parent_descriptor,
+                    )
+                except FileExistsError:
+                    continue
+                temporary_name = candidate
+                break
+            else:
+                raise RuntimeError(
+                    "macOS backend could not allocate a private signature stamp"
+                )
+
+            temporary_identity = _identity_from_stat(
+                os.fstat(temporary_descriptor)
+            )
+            if (
+                not stat.S_ISREG(temporary_identity.file_type)
+                or temporary_identity.link_count != 1
+            ):
+                raise RuntimeError(
+                    "macOS backend temporary signature stamp is not a private file"
+                )
+            encoded_payload = payload.encode("utf-8")
+            remaining = memoryview(encoded_payload)
+            while remaining:
+                written = os.write(temporary_descriptor, remaining)
+                if written <= 0:
+                    raise OSError("failed to write macOS backend signature stamp")
+                remaining = remaining[written:]
+            os.fsync(temporary_descriptor)
+            if _identity_from_stat(os.fstat(temporary_descriptor)) != temporary_identity:
+                raise RuntimeError(
+                    "macOS backend temporary signature stamp identity changed"
+                )
+            os.close(temporary_descriptor)
+            temporary_descriptor = None
+
+            _assert_stamp_parent(
+                stamp_parent,
+                parent_identity,
+                parent_descriptor,
+            )
+            replace_file(
+                temporary_name,
+                resolved_stamp_path.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+            temporary_name = None
+            written_identity = _stamp_entry_identity(
+                resolved_stamp_path,
+                parent_identity=parent_identity,
+                parent_descriptor=parent_descriptor,
+            )
+            if written_identity != temporary_identity:
+                raise RuntimeError(
+                    "macOS backend signature stamp identity changed during replace"
+                )
+            _assert_stamp_parent(
+                stamp_parent,
+                parent_identity,
+                parent_descriptor,
+            )
+            return resolved_stamp_path
+        finally:
+            if temporary_descriptor is not None:
+                os.close(temporary_descriptor)
+            if temporary_name is not None and temporary_identity is not None:
+                try:
+                    current_identity = _identity_from_stat(
+                        os.stat(
+                            temporary_name,
+                            dir_fd=parent_descriptor,
+                            follow_symlinks=False,
+                        )
+                    )
+                    if current_identity == temporary_identity:
+                        os.unlink(temporary_name, dir_fd=parent_descriptor)
+                except FileNotFoundError:
+                    pass
+            if owned_parent_descriptor:
+                os.close(parent_descriptor)
+
+    _assert_stamp_parent(stamp_parent, parent_identity, None)
+    if os.path.lexists(resolved_stamp_path):
+        _assert_plain_file(resolved_stamp_path, role="signature stamp")
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -1013,40 +1157,158 @@ def write_macos_backend_codesign_state(
         replace_file(temporary_path, resolved_stamp_path)
         temporary_path = None
         _assert_plain_file(resolved_stamp_path, role="signature stamp")
+        _assert_stamp_parent(stamp_parent, parent_identity, None)
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
     return resolved_stamp_path
 
 
+def _assert_stamp_parent(
+    parent: Path,
+    expected_identity: _PathIdentity,
+    parent_descriptor: int | None,
+) -> None:
+    if parent_descriptor is not None and not _same_directory_identity(
+        _identity_from_stat(os.fstat(parent_descriptor)),
+        expected_identity,
+    ):
+        raise RuntimeError("macOS backend signature stamp parent identity changed")
+    _assert_plain_directory(
+        parent,
+        role="signature stamp parent",
+        expected_identity=expected_identity,
+    )
+
+
+def _stamp_entry_identity(
+    stamp_path: Path,
+    *,
+    parent_identity: _PathIdentity,
+    parent_descriptor: int | None,
+    require_canonical_parent: bool = True,
+) -> _PathIdentity | None:
+    if require_canonical_parent:
+        _assert_stamp_parent(stamp_path.parent, parent_identity, parent_descriptor)
+    elif parent_descriptor is None:
+        _assert_stamp_parent(stamp_path.parent, parent_identity, None)
+    elif not _same_directory_identity(
+        _identity_from_stat(os.fstat(parent_descriptor)),
+        parent_identity,
+    ):
+        raise RuntimeError("macOS backend signature stamp parent identity changed")
+    if parent_descriptor is None:
+        if not os.path.lexists(stamp_path):
+            return None
+        return _assert_plain_file(stamp_path, role="signature stamp")
+    try:
+        identity = _identity_from_stat(
+            os.stat(
+                stamp_path.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        )
+    except FileNotFoundError:
+        return None
+    if _identity_is_link(identity):
+        raise ValueError(
+            "macOS backend signature stamp must not be a link or reparse point"
+        )
+    if not stat.S_ISREG(identity.file_type):
+        raise ValueError("macOS backend signature stamp must be a regular file")
+    if identity.link_count != 1:
+        raise ValueError("macOS backend signature stamp must not be a hard link")
+    if require_canonical_parent:
+        _assert_stamp_parent(stamp_path.parent, parent_identity, parent_descriptor)
+    return identity
+
+
+def _unlink_codesign_stamp(
+    stamp_path: Path,
+    *,
+    parent_identity: _PathIdentity,
+    parent_descriptor: int | None,
+    suppress_errors: bool = False,
+) -> bool:
+    try:
+        identity = _stamp_entry_identity(
+            stamp_path,
+            parent_identity=parent_identity,
+            parent_descriptor=parent_descriptor,
+            require_canonical_parent=not suppress_errors,
+        )
+        if identity is None:
+            return False
+        if parent_descriptor is None:
+            stamp_path.unlink()
+        else:
+            os.unlink(stamp_path.name, dir_fd=parent_descriptor)
+        if not suppress_errors:
+            _assert_stamp_parent(
+                stamp_path.parent,
+                parent_identity,
+                parent_descriptor,
+            )
+        return True
+    except (OSError, RuntimeError, ValueError):
+        if suppress_errors:
+            return False
+        raise
+
+
 def _load_codesign_state(
     stamp_path: Path,
     *,
     expected_identity: _PathIdentity | None = None,
+    parent_identity: _PathIdentity | None = None,
+    parent_descriptor: int | None = None,
 ) -> dict[str, object] | None:
-    if not os.path.lexists(stamp_path):
-        return None
-    try:
-        identity = _assert_plain_file(
-            stamp_path,
-            role="signature stamp",
-            expected_identity=expected_identity,
+    if parent_identity is None:
+        parent_identity = _assert_plain_directory(
+            stamp_path.parent,
+            role="signature stamp parent",
         )
-        with stamp_path.open("r", encoding="utf-8") as handle:
+    try:
+        identity = _stamp_entry_identity(
+            stamp_path,
+            parent_identity=parent_identity,
+            parent_descriptor=parent_descriptor,
+        )
+        if identity is None:
+            return None
+        if expected_identity is not None and identity != expected_identity:
+            raise RuntimeError("macOS backend signature stamp identity changed")
+        if parent_descriptor is None:
+            handle = stamp_path.open("r", encoding="utf-8")
+        else:
+            flags = os.O_RDONLY | int(getattr(os, "O_CLOEXEC", 0))
+            flags |= int(getattr(os, "O_NOFOLLOW", 0))
+            descriptor = os.open(
+                stamp_path.name,
+                flags,
+                dir_fd=parent_descriptor,
+            )
+            handle = os.fdopen(descriptor, "r", encoding="utf-8")
+        with handle:
             if _identity_from_stat(os.fstat(handle.fileno())) != identity:
                 raise RuntimeError(
                     "macOS backend signature stamp identity changed before reading"
                 )
-            text = handle.read()
+            text = handle.read(1024 * 1024 + 1)
+            if len(text) > 1024 * 1024:
+                return None
             if _identity_from_stat(os.fstat(handle.fileno())) != identity:
                 raise RuntimeError(
                     "macOS backend signature stamp identity changed while reading"
                 )
-        _assert_plain_file(
+        current_identity = _stamp_entry_identity(
             stamp_path,
-            role="signature stamp",
-            expected_identity=identity,
+            parent_identity=parent_identity,
+            parent_descriptor=parent_descriptor,
         )
+        if current_identity != identity:
+            raise RuntimeError("macOS backend signature stamp identity changed")
         payload = json.loads(text)
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
@@ -1059,16 +1321,22 @@ def _assert_stamp_unchanged(
     *,
     expected_identity: _PathIdentity,
     expected_state: Mapping[str, object],
+    parent_identity: _PathIdentity,
+    parent_descriptor: int | None,
 ) -> None:
-    _assert_plain_file(
+    current_identity = _stamp_entry_identity(
         stamp_path,
-        role="signature stamp",
-        expected_identity=expected_identity,
+        parent_identity=parent_identity,
+        parent_descriptor=parent_descriptor,
     )
-    _assert_resolved_containment(stamp_path, venv, role="signature stamp")
+    if current_identity != expected_identity:
+        raise RuntimeError("macOS backend signature stamp identity changed")
+    _assert_resolved_containment(venv, venv, role="runtime root")
     current_state = _load_codesign_state(
         stamp_path,
         expected_identity=expected_identity,
+        parent_identity=parent_identity,
+        parent_descriptor=parent_descriptor,
     )
     if current_state != dict(expected_state):
         raise RuntimeError("macOS backend signature stamp changed during verification")
@@ -1160,9 +1428,11 @@ def _sign_macos_backend_runtime_locked(
     state_path: Path,
     stamp_path: Path,
     run_command,
-    replace_file: Callable[[str | Path, str | Path], object],
+    replace_file: Callable[..., object],
     force: bool,
 ) -> MacOSBackendSigningOutcome:
+    venv_descriptor: int | None = None
+    venv_identity: _PathIdentity | None = None
     try:
         path_prefixes = {
             "<BACKEND_RUNTIME>": venv,
@@ -1170,18 +1440,26 @@ def _sign_macos_backend_runtime_locked(
             "<USER_HOME>": Path.home(),
         }
         snapshot = _build_signing_snapshot(venv, state_path)
+        venv_identity = snapshot.venv_identity
+        if os.name != "nt":
+            venv_descriptor = _open_validated_directory(
+                venv,
+                venv_identity,
+                role="runtime root",
+            )
         expected_state = _codesign_state_from_snapshot(venv, state_path, snapshot)
         libraries = snapshot.libraries
         stamp_identity: _PathIdentity | None = None
-        if os.path.lexists(stamp_path):
-            stamp_identity = _assert_plain_file(
-                stamp_path,
-                role="signature stamp",
-            )
-            _assert_resolved_containment(stamp_path, venv, role="signature stamp")
+        stamp_identity = _stamp_entry_identity(
+            stamp_path,
+            parent_identity=venv_identity,
+            parent_descriptor=venv_descriptor,
+        )
         stored_state = _load_codesign_state(
             stamp_path,
             expected_identity=stamp_identity,
+            parent_identity=venv_identity,
+            parent_descriptor=venv_descriptor,
         )
         if not force and stored_state == expected_state:
             if stamp_identity is None:
@@ -1198,6 +1476,8 @@ def _sign_macos_backend_runtime_locked(
                     stamp_path,
                     expected_identity=stamp_identity,
                     expected_state=expected_state,
+                    parent_identity=venv_identity,
+                    parent_descriptor=venv_descriptor,
                 )
                 verified_snapshot, verified_state = _stable_rescan(
                     venv,
@@ -1211,13 +1491,19 @@ def _sign_macos_backend_runtime_locked(
                     stamp_path,
                     expected_identity=stamp_identity,
                     expected_state=verified_state,
+                    parent_identity=venv_identity,
+                    parent_descriptor=venv_descriptor,
                 )
                 return MacOSBackendSigningOutcome(
                     reused=True,
                     library_count=len(verified_snapshot.libraries),
                 )
 
-        stamp_path.unlink(missing_ok=True)
+        _unlink_codesign_stamp(
+            stamp_path,
+            parent_identity=venv_identity,
+            parent_descriptor=venv_descriptor,
+        )
         staging_root: Path | None = None
         staging_root_identity: _PathIdentity | None = None
         try:
@@ -1238,6 +1524,7 @@ def _sign_macos_backend_runtime_locked(
             staging_root, staging_root_identity = _create_private_staging_root(
                 venv,
                 snapshot,
+                venv_descriptor=venv_descriptor,
             )
             expected_hashes = {
                 str(entry["path"]): str(entry["sha256"])
@@ -1413,16 +1700,16 @@ def _sign_macos_backend_runtime_locked(
                 stamp_path,
                 verified_state,
                 replace_file=replace_file,
+                parent_identity=venv_identity,
+                parent_descriptor=venv_descriptor,
             )
-            written_stamp_identity = _assert_plain_file(
+            written_stamp_identity = _stamp_entry_identity(
                 stamp_path,
-                role="signature stamp",
+                parent_identity=venv_identity,
+                parent_descriptor=venv_descriptor,
             )
-            _assert_resolved_containment(
-                stamp_path,
-                venv,
-                role="signature stamp",
-            )
+            if written_stamp_identity is None:
+                raise RuntimeError("macOS backend signature stamp is unavailable")
             final_snapshot, final_state = _stable_rescan(
                 venv,
                 state_path,
@@ -1435,6 +1722,8 @@ def _sign_macos_backend_runtime_locked(
                 stamp_path,
                 expected_identity=written_stamp_identity,
                 expected_state=final_state,
+                parent_identity=venv_identity,
+                parent_descriptor=venv_descriptor,
             )
             return MacOSBackendSigningOutcome(
                 reused=False,
@@ -1447,10 +1736,20 @@ def _sign_macos_backend_runtime_locked(
                     snapshot.venv_identity,
                     staging_root,
                     staging_root_identity,
+                    venv_descriptor=venv_descriptor,
                 )
     except BaseException:
-        stamp_path.unlink(missing_ok=True)
+        if venv_identity is not None:
+            _unlink_codesign_stamp(
+                stamp_path,
+                parent_identity=venv_identity,
+                parent_descriptor=venv_descriptor,
+                suppress_errors=True,
+            )
         raise
+    finally:
+        if venv_descriptor is not None:
+            os.close(venv_descriptor)
 
 
 def sign_macos_backend_runtime(
@@ -1460,7 +1759,7 @@ def sign_macos_backend_runtime(
     state_path: str | Path,
     stamp_path: str | Path,
     run_command=subprocess.run,
-    replace_file: Callable[[str | Path, str | Path], object] = os.replace,
+    replace_file: Callable[..., object] = os.replace,
     system_name: str | None = None,
     force: bool = False,
     lock_timeout_seconds: float = DEFAULT_BACKEND_RUNTIME_LOCK_TIMEOUT_SECONDS,
