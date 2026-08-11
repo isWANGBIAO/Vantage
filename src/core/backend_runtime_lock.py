@@ -68,70 +68,60 @@ class BackendRuntimeFileLock:
         self._handle = None
         self._reader_slot: int | None = None
 
-    def _try_lock_range(self, offset: int, length: int) -> bool:
+    def _try_windows_lock_range(self, offset: int, length: int) -> bool:
         assert self._handle is not None
-        if os.name == "nt":
-            import msvcrt
-
-            try:
-                self._handle.seek(offset)
-                msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, length)
-            except OSError as exc:
-                if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
-                    return False
-                raise
-            return True
-
-        import fcntl
+        import msvcrt
 
         try:
-            fcntl.lockf(
-                self._handle.fileno(),
-                fcntl.LOCK_EX | fcntl.LOCK_NB,
-                length,
-                offset,
-                os.SEEK_SET,
-            )
+            self._handle.seek(offset)
+            msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, length)
         except OSError as exc:
-            if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
-                raise
-            return False
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                return False
+            raise
         return True
 
-    def _unlock_range(self, offset: int, length: int) -> None:
+    def _unlock_windows_range(self, offset: int, length: int) -> None:
         assert self._handle is not None
-        if os.name == "nt":
-            import msvcrt
+        import msvcrt
 
-            self._handle.seek(offset)
-            msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, length)
-            return
+        self._handle.seek(offset)
+        msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, length)
 
+    def _try_posix_flock(self) -> bool:
+        assert self._handle is not None
         import fcntl
 
-        fcntl.lockf(
-            self._handle.fileno(),
-            fcntl.LOCK_UN,
-            length,
-            offset,
-            os.SEEK_SET,
-        )
+        operation = fcntl.LOCK_EX if self.mode == "exclusive" else fcntl.LOCK_SH
+        try:
+            fcntl.flock(
+                self._handle.fileno(),
+                operation | fcntl.LOCK_NB,
+            )
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                return False
+            raise
+        return True
 
     def _try_lock(self) -> bool:
+        if os.name != "nt":
+            return self._try_posix_flock()
+
         total_bytes = BACKEND_RUNTIME_LOCK_READER_SLOTS + 1
         if self.mode == "exclusive":
-            return self._try_lock_range(0, total_bytes)
+            return self._try_windows_lock_range(0, total_bytes)
 
-        if not self._try_lock_range(0, 1):
+        if not self._try_windows_lock_range(0, 1):
             return False
         try:
             for slot in range(1, total_bytes):
-                if self._try_lock_range(slot, 1):
+                if self._try_windows_lock_range(slot, 1):
                     self._reader_slot = slot
                     return True
             return False
         finally:
-            self._unlock_range(0, 1)
+            self._unlock_windows_range(0, 1)
 
     def acquire(self) -> None:
         if self._handle is not None:
@@ -169,13 +159,20 @@ class BackendRuntimeFileLock:
         self._handle = None
         try:
             self._handle = handle
-            if self.mode == "shared":
+            if os.name != "nt":
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            elif self.mode == "shared":
                 if self._reader_slot is None:
                     raise RuntimeError("backend runtime shared lock has no reader slot")
-                self._unlock_range(self._reader_slot, 1)
+                self._unlock_windows_range(self._reader_slot, 1)
                 self._reader_slot = None
             else:
-                self._unlock_range(0, BACKEND_RUNTIME_LOCK_READER_SLOTS + 1)
+                self._unlock_windows_range(
+                    0,
+                    BACKEND_RUNTIME_LOCK_READER_SLOTS + 1,
+                )
         finally:
             self._handle = None
             handle.close()

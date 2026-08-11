@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -246,6 +247,60 @@ done.write_text("done", encoding="utf-8")
 
     with lock_module.backend_runtime_lock(tmp_path, timeout_seconds=2):
         assert lock_module.backend_runtime_lock_is_held(tmp_path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX flock semantics")
+def test_closing_second_in_process_shared_fd_keeps_external_writer_blocked(tmp_path):
+    lock_module = _lock_module()
+    primary = lock_module.BackendRuntimeFileLock(
+        lock_module.backend_runtime_lock_path(tmp_path),
+        mode="shared",
+        timeout_seconds=1,
+    )
+    transient_acquired = threading.Event()
+    release_transient = threading.Event()
+
+    def hold_transient_fd() -> None:
+        with lock_module.BackendRuntimeFileLock(
+            lock_module.backend_runtime_lock_path(tmp_path),
+            mode="shared",
+            timeout_seconds=1,
+        ):
+            transient_acquired.set()
+            assert release_transient.wait(timeout=2)
+
+    primary.acquire()
+    thread = threading.Thread(target=hold_transient_fd)
+    thread.start()
+    assert transient_acquired.wait(timeout=2)
+    release_transient.set()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+    contender_source = """
+from pathlib import Path
+import sys
+from src.core.backend_runtime_lock import backend_runtime_lock
+
+try:
+    with backend_runtime_lock(Path(sys.argv[1]), timeout_seconds=0.2):
+        raise SystemExit(0)
+except TimeoutError:
+    raise SystemExit(23)
+"""
+    try:
+        contender = subprocess.run(
+            [sys.executable, "-c", contender_source, str(tmp_path)],
+            env=_subprocess_environment(),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    finally:
+        primary.release()
+
+    assert contender.returncode == 23, contender.stderr
 
 
 def test_lock_and_retained_quarantine_artifacts_are_gitignored():
