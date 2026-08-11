@@ -376,6 +376,89 @@ def test_sync_refuses_to_run_from_the_target_venv(tmp_path):
         )
 
 
+def test_sync_refuses_raw_target_venv_launch_path_even_when_symlink_resolves_outside(
+    tmp_path,
+):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+    target_python = backend_runtime_python_path(venv)
+    outside_python = tmp_path / "system-python" / target_python.name
+    outside_python.parent.mkdir()
+    outside_python.write_text("system python", encoding="utf-8")
+    target_python.unlink()
+    target_python.symlink_to(outside_python)
+    state_path = venv / BACKEND_ENVIRONMENT_STATE_NAME
+
+    with pytest.raises(ValueError, match="outside the target backend runtime venv"):
+        synchronize_backend_runtime_environment(
+            project_root=tmp_path,
+            venv=venv,
+            core_requirements=core,
+            requirements=overlay,
+            opencv_normalizer=normalizer,
+            force=True,
+            creator_python=target_python,
+            creator_python_identity=PYTHON_IDENTITY,
+            creator_platform_identity=PLATFORM_IDENTITY,
+            run_command=lambda *_args, **_kwargs: pytest.fail(
+                "target venv must be rejected before mutation"
+            ),
+        )
+
+    assert state_path.exists()
+
+
+def test_sync_refuses_launch_path_whose_resolved_target_is_in_target_venv(tmp_path):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+    target_python = backend_runtime_python_path(venv)
+    outside_link = tmp_path / "system-python-link.exe"
+    outside_link.symlink_to(target_python)
+    state_path = venv / BACKEND_ENVIRONMENT_STATE_NAME
+
+    with pytest.raises(ValueError, match="outside the target backend runtime venv"):
+        synchronize_backend_runtime_environment(
+            project_root=tmp_path,
+            venv=venv,
+            core_requirements=core,
+            requirements=overlay,
+            opencv_normalizer=normalizer,
+            force=True,
+            creator_python=outside_link,
+            creator_python_identity=PYTHON_IDENTITY,
+            creator_platform_identity=PLATFORM_IDENTITY,
+            run_command=lambda *_args, **_kwargs: pytest.fail(
+                "target venv must be rejected before mutation"
+            ),
+        )
+
+    assert state_path.exists()
+
+
+def test_sync_refuses_creator_prefix_inside_target_venv(tmp_path):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+    outside_python = tmp_path / "system-python.exe"
+    outside_python.write_text("system python", encoding="utf-8")
+    state_path = venv / BACKEND_ENVIRONMENT_STATE_NAME
+
+    with pytest.raises(ValueError, match="outside the target backend runtime venv"):
+        synchronize_backend_runtime_environment(
+            project_root=tmp_path,
+            venv=venv,
+            core_requirements=core,
+            requirements=overlay,
+            opencv_normalizer=normalizer,
+            force=True,
+            creator_python=outside_python,
+            creator_prefix=venv,
+            creator_python_identity=PYTHON_IDENTITY,
+            creator_platform_identity=PLATFORM_IDENTITY,
+            run_command=lambda *_args, **_kwargs: pytest.fail(
+                "target venv must be rejected before mutation"
+            ),
+        )
+
+    assert state_path.exists()
+
+
 def test_safe_remove_allows_only_the_fixed_project_runtime_venv(tmp_path):
     expected = tmp_path / ".venv-backend-runtime-gpu"
     expected.mkdir()

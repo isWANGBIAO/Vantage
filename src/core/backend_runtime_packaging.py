@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -67,7 +66,6 @@ CONFLICTING_RUNTIME_DLL_NAMES = (
 )
 
 BACKEND_RUNTIME_VENV_NAME = ".venv-backend-runtime-gpu"
-DIRTY_PACKAGING_ENV_BYPASS = "VANTAGE_ALLOW_DIRTY_PACKAGING_ENV"
 
 PYINSTALLER_EXCLUDES = (
     "Cython",
@@ -203,10 +201,6 @@ def validate_packaging_python_environment(
     python_identity: dict[str, str] | None = None,
     platform_identity: dict[str, str] | None = None,
 ) -> str | None:
-    resolved_environ = environ if environ is not None else os.environ
-    if resolved_environ.get(DIRTY_PACKAGING_ENV_BYPASS) == "1":
-        return None
-
     expected_venv = Path(project_root).resolve() / BACKEND_RUNTIME_VENV_NAME
     resolved_executable = Path(executable or sys.executable).resolve()
     resolved_prefix = Path(prefix or sys.prefix).resolve()
@@ -218,8 +212,8 @@ def validate_packaging_python_environment(
         )
     ):
         return (
-            "Backend runtime must be built with the clean packaging venv: "
-            f"{expected_venv}. Set {DIRTY_PACKAGING_ENV_BYPASS}=1 only for emergency local debugging."
+            "Backend runtime must be built with the validated packaging venv: "
+            f"{expected_venv}. Environment state and closure validation cannot be bypassed."
         )
 
     try:

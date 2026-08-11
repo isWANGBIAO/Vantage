@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 
@@ -170,6 +171,73 @@ def test_macos_backend_environment_sync_precedes_state_based_resigning():
         assert "BACKEND_RUNTIME_STATE" in launcher
         assert 'shasum -a 256 "$BACKEND_RUNTIME_STATE"' in launcher
         assert "requirements_hash" not in launcher
+
+
+def _macos_backend_codesign_function(launcher_path: Path) -> str:
+    launcher = launcher_path.read_text(encoding="utf-8")
+    start = launcher.index("codesign_macos_native_libraries() {")
+    end = launcher.index("\n}\n", start) + len("\n}\n")
+    return launcher[start:end]
+
+
+def test_macos_backend_codesign_does_not_suppress_native_signing_failures():
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        function_source = _macos_backend_codesign_function(launcher_path)
+
+        assert 'codesign --force --sign - "$native_library"' in function_source
+        assert (
+            'codesign --force --sign - "$native_library" >/dev/null 2>&1 || true'
+            not in function_source
+        )
+        assert 'rm -f "$BACKEND_RUNTIME_CODESIGN_STAMP"' in function_source
+        assert "return 1" in function_source
+
+
+def test_macos_backend_codesign_failure_returns_nonzero_without_writing_stamp():
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        function_source = _macos_backend_codesign_function(launcher_path)
+        harness = f"""
+set -u
+root="$(mktemp -d)"
+BACKEND_RUNTIME_VENV="$root/venv"
+BACKEND_RUNTIME_STATE="$root/state.json"
+BACKEND_RUNTIME_CODESIGN_STAMP="$BACKEND_RUNTIME_VENV/.macos-native-codesign.sha256"
+VANTAGE_FORCE_MACOS_CODESIGN=1
+mkdir -p "$BACKEND_RUNTIME_VENV/lib"
+: > "$BACKEND_RUNTIME_STATE"
+shasum() {{ printf 'state-hash  %s\\n' "$BACKEND_RUNTIME_STATE"; }}
+uname() {{ printf 'Darwin\\n'; }}
+xattr() {{ return 0; }}
+find() {{ printf '%s\\0' "$BACKEND_RUNTIME_VENV/lib/failing-native.so"; }}
+codesign() {{ return 23; }}
+{function_source}
+set +e
+codesign_macos_native_libraries
+status=$?
+set -e
+if [[ -f "$BACKEND_RUNTIME_CODESIGN_STAMP" ]]; then
+    stamp_written=1
+else
+    stamp_written=0
+fi
+printf 'stamp_written=%s\\n' "$stamp_written"
+rm -rf "$root"
+if [[ "$stamp_written" == "1" ]]; then
+    exit 99
+fi
+exit "$status"
+"""
+
+        result = subprocess.run(
+            ["bash", "-s"],
+            input=harness.encode("utf-8"),
+            capture_output=True,
+            check=False,
+        )
+
+        assert result.returncode not in (0, 99), launcher_path
+        stdout = result.stdout.decode("utf-8", errors="replace")
+        assert "stamp_written=0" in stdout, launcher_path
 
 
 def test_run_bat_restores_source_build_info_after_packaging():

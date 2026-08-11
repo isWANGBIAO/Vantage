@@ -119,17 +119,25 @@ runs an incremental requirements install. Before a rebuild the CLI invalidates
 the JSON state, legacy SHA stamp, and macOS native-signature stamp, then permits
 recursive deletion only when the resolved target is the real
 `.venv-backend-runtime-gpu` directory directly under the supplied project root.
+The synchronizer must itself run outside that venv: the unresolved launcher
+path, resolved interpreter target, and creating interpreter prefix are all
+checked before any state invalidation or command execution, so a POSIX venv
+Python symlink cannot make the process delete its own active environment.
 Failed creation, installation, normalization, validation, or atomic replacement
 therefore cannot leave a reusable state. On macOS, successful synchronization
 is followed by the existing ad-hoc signing pass, keyed to the new environment
-state rather than the retired requirements-only hash.
+state rather than the retired requirements-only hash. A native-library signing
+failure removes the signature stamp and aborts the launcher; it cannot be
+recorded as successfully signed.
 
 The packaged-runtime fingerprint includes the verified distribution closure.
 Consequently, manually changing the venv cannot reuse an older PyInstaller
 bundle even if source files and requirements text are unchanged. Packaging
 validation also rejects a venv whose state is absent or inconsistent. The
 fingerprint schema is version 2, and the environment sync CLI is explicitly
-excluded from the shipped backend application as build-only code.
+excluded from the shipped backend application as build-only code. There is no
+environment-variable bypass for the fixed venv, state, or installed-closure
+checks.
 
 ## macOS CI
 

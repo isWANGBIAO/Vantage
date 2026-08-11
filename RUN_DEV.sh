@@ -97,10 +97,13 @@ codesign_macos_native_libraries() {
     fi
 
     echo "      Ad-hoc signing macOS native Python libraries..."
-    find "${BACKEND_RUNTIME_VENV}/lib" -type f \( -name '*.so' -o -name '*.dylib' \) -print0 |
-        while IFS= read -r -d '' native_library; do
-            codesign --force --sign - "$native_library" >/dev/null 2>&1 || true
-        done
+    while IFS= read -r -d '' native_library; do
+        if ! codesign --force --sign - "$native_library" >/dev/null 2>&1; then
+            rm -f "$BACKEND_RUNTIME_CODESIGN_STAMP"
+            echo "      macOS native Python library signing failed" >&2
+            return 1
+        fi
+    done < <(find "${BACKEND_RUNTIME_VENV}/lib" -type f \( -name '*.so' -o -name '*.dylib' \) -print0)
     printf '%s\n' "$environment_state_hash" > "$BACKEND_RUNTIME_CODESIGN_STAMP"
 }
 

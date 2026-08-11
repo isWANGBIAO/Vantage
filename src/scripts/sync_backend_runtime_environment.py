@@ -137,6 +137,19 @@ def _path_is_within(path: Path, parent: Path) -> bool:
     return True
 
 
+def _path_is_lexically_within(path: Path, parent: Path) -> bool:
+    try:
+        common_path = os.path.commonpath(
+            [
+                os.path.abspath(os.fspath(path)),
+                os.path.abspath(os.fspath(parent)),
+            ]
+        )
+    except ValueError:
+        return False
+    return os.path.normcase(common_path) == _normalized_path_text(parent)
+
+
 def validate_backend_runtime_venv_path(
     project_root: str | Path,
     venv: str | Path,
@@ -359,6 +372,7 @@ def synchronize_backend_runtime_environment(
     opencv_normalizer: str | Path,
     force: bool = False,
     creator_python: str | Path | None = None,
+    creator_prefix: str | Path | None = None,
     creator_python_identity: Mapping[str, object] | None = None,
     creator_platform_identity: Mapping[str, object] | None = None,
     run_command=subprocess.run,
@@ -378,13 +392,23 @@ def synchronize_backend_runtime_environment(
     if missing:
         raise FileNotFoundError("missing backend environment input: " + ", ".join(missing))
 
-    creator_python_path = Path(creator_python or sys.executable).resolve()
-    if _path_is_within(creator_python_path, safe_venv):
+    raw_creator_python_path = Path(
+        os.path.abspath(os.fspath(creator_python or sys.executable))
+    )
+    resolved_creator_python_path = raw_creator_python_path.resolve()
+    raw_creator_prefix = Path(os.path.abspath(os.fspath(creator_prefix or sys.prefix)))
+    resolved_creator_prefix = raw_creator_prefix.resolve()
+    if (
+        _path_is_lexically_within(raw_creator_python_path, safe_venv)
+        or _path_is_within(resolved_creator_python_path, safe_venv)
+        or _path_is_lexically_within(raw_creator_prefix, safe_venv)
+        or _path_is_within(resolved_creator_prefix, safe_venv)
+    ):
         raise ValueError(
             "backend environment synchronization must run from a Python "
             "outside the target backend runtime venv"
         )
-    resolved_creator_python = str(creator_python_path)
+    resolved_creator_python = str(resolved_creator_python_path)
     expected_python_identity = dict(
         creator_python_identity or current_python_identity()
     )

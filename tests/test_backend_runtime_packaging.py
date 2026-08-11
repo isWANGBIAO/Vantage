@@ -320,6 +320,16 @@ def test_validate_packaging_environment_requires_clean_runtime_venv(tmp_path):
         platform_identity=current_platform_identity(),
     )
     assert "environment state" in missing_state_error
+    missing_state_with_legacy_bypass = validate_packaging_python_environment(
+        tmp_path,
+        executable=clean_python,
+        prefix=clean_prefix,
+        environ={"VANTAGE_ALLOW_DIRTY_PACKAGING_ENV": "1"},
+        distribution_closure=closure,
+        python_identity=current_python_identity(),
+        platform_identity=current_platform_identity(),
+    )
+    assert "environment state" in missing_state_with_legacy_bypass
 
     valid_state = build_backend_environment_state(
         tmp_path / "requirements-core.txt",
@@ -353,6 +363,16 @@ def test_validate_packaging_environment_requires_clean_runtime_venv(tmp_path):
         platform_identity=current_platform_identity(),
     )
     assert "distribution closure" in inconsistent_state_error
+    inconsistent_state_with_legacy_bypass = validate_packaging_python_environment(
+        tmp_path,
+        executable=clean_python,
+        prefix=clean_prefix,
+        environ={"VANTAGE_ALLOW_DIRTY_PACKAGING_ENV": "1"},
+        distribution_closure=[*closure, "scipy==1.15.3"],
+        python_identity=current_python_identity(),
+        platform_identity=current_platform_identity(),
+    )
+    assert "distribution closure" in inconsistent_state_with_legacy_bypass
     assert (
         validate_packaging_python_environment(
             tmp_path,
@@ -365,17 +385,19 @@ def test_validate_packaging_environment_requires_clean_runtime_venv(tmp_path):
         )
         is None
     )
-    assert "clean packaging venv" in validate_packaging_python_environment(
+    assert "validated packaging venv" in validate_packaging_python_environment(
         tmp_path,
         executable=dirty_python,
         prefix=tmp_path / "global",
         environ={},
     )
-    assert validate_packaging_python_environment(
+    bypassed_path_error = validate_packaging_python_environment(
         tmp_path,
         executable=dirty_python,
+        prefix=tmp_path / "global",
         environ={"VANTAGE_ALLOW_DIRTY_PACKAGING_ENV": "1"},
-    ) is None
+    )
+    assert "must be built with the validated packaging venv" in bypassed_path_error
 
 
 def test_build_project_activity_snapshot_parses_recent_git_log(tmp_path):
