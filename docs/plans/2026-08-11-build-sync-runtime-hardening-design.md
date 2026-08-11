@@ -100,12 +100,16 @@ fail closed.
 Each schema-3 ticket has an independent guardian as its live owner. The
 guardian executes dependency commands itself and retains the ticket until the
 complete command tree has exited. If the original synchronizer exits or
-crashes, the guardian first terminates and confirms the command tree (`taskkill
-/T /F` on Windows, an isolated process group with TERM/KILL on POSIX), then
-releases the ticket. Its request file records only a fixed safe environment
-mode; it never serializes the caller's environment, working directory, npm
-path, credentials, or other secrets. Private command state lives under that
-ticket and is removed on normal release or confirmed stale-ticket recovery.
+crashes, the guardian first terminates and confirms the command tree, then
+releases the ticket. Windows commands run inside a `KILL_ON_JOB_CLOSE` Job that
+is established before npm starts and is terminated before a result is returned;
+POSIX commands use an isolated process group with TERM/KILL and liveness
+confirmation. The same cleanup runs when the npm parent exits normally, so a
+detached postinstall descendant cannot outlive state publication. Its request
+file records only a fixed safe environment mode; it never serializes the
+caller's environment, working directory, npm path, credentials, or other
+secrets. Private command state lives under that ticket and is removed on normal
+release or confirmed stale-ticket recovery.
 Waiting is bounded to 300 seconds and diagnostics are path-free. This protocol
 covers cooperative contenders and original-owner crashes; deliberate same-user
 filesystem tampering or force-killing the actual guardian remains inside the
@@ -238,7 +242,12 @@ path.
 The bootstrap launcher first acquires a shared lease, then starts an independent
 bootstrap lease-owner. The owner acquires its own real shared lease, sends
 READY, and waits for launcher GO (or launcher-death EOF) before it starts the
-target-venv command; it keeps that lease until the command exits. The launcher's
+target-venv command; it keeps that lease until the complete target tree exits.
+On Windows the owner binds itself to a `KILL_ON_JOB_CLOSE` Job before target
+launch; on POSIX the target owns an isolated process group. Normal target exit,
+wait failure, and handled interruption all terminate and confirm the remaining
+descendants before the owner reports the target result or releases its shared
+lease. The launcher's
 lease overlaps this two-phase handshake, so terminating the launcher cannot
 expose an already-started target to destructive synchronization. If it
 terminates before the owner acquires its lease, the target has not started and
@@ -248,10 +257,8 @@ the target before GO. POSIX passes only the two pipe descriptors with
 `pass_fds`; Windows passes only the two explicitly listed pipe handles and does
 not rely on inherited `LockFileEx` ownership. Both processes strip the legacy
 `VANTAGE_BACKEND_RUNTIME_LOCK_HELD` marker and never treat environment text as
-proof of ownership. The owner starts the target in an isolated process group;
-if its target wait fails or the owner receives a handled interruption, it
-terminates that process tree before releasing the lease. Process exit releases
-the OS lease, so a residual lock file is not an occupied lock. The handoff
+proof of ownership. Process exit releases the OS lease, so a residual lock file
+is not an occupied lock. The handoff
 contract covers loss of the outer launcher; forcibly terminating the
 lease-owner itself releases its OS lease, so any such administrative action
 must also terminate the guarded target process tree. The synchronizer

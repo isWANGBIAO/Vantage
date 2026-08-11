@@ -67,12 +67,14 @@ forces a clean resync without following symbolic links.
 
 Serialize the full operation with a persistent lock-directory Lamport ticket.
 An independent schema-3 guardian owns each live ticket and launches every npm
-command. Parent loss must make the guardian terminate and confirm the whole
-Windows task tree or POSIX process group before releasing the ticket. Pass only
-a fixed inherited/fallback-mirror mode to the guardian; never serialize the
-caller's environment, cwd, executable path, or credentials. Remove only the
-current ticket's private state after normal release or confirmed dead-guardian
-recovery, and fail closed on identity or publication-window races.
+command. Windows commands must enter a kill-on-close Job before npm is released;
+POSIX commands use an isolated process group. Parent loss and normal npm parent
+exit must both terminate and confirm the complete tree before returning a result
+or releasing the ticket. Pass only a fixed inherited/fallback-mirror mode to the
+guardian; never serialize the caller's environment, cwd, executable path, or
+credentials. Remove only the current ticket's private state after normal
+release or confirmed dead-guardian recovery, and fail closed on identity or
+publication-window races.
 
 Replace duplicated install branches with this CLI. Preserve the existing
 Electron binary verification. In Bash launchers, dependency sync must remove
@@ -182,8 +184,10 @@ killing an already-started target. POSIX passes the two pipe descriptors
 explicitly; Windows uses an explicit handle list and never assumes that an
 inherited handle inherits byte-range lock ownership. Direct build, verify,
 packaging, and source-server entrypoints also acquire shared OS leases themselves.
-The owner isolates the target process group and terminates that tree before
-releasing its lease on any handled wait/interruption failure.
+The owner establishes a Windows kill-on-close Job before target launch or a
+POSIX isolated process group. Normal target exit and handled wait/interruption
+failure both terminate and confirm all descendants before returning the target
+status or releasing the lease.
 Synchronization and signing take the exclusive lease. The legacy inherited
 environment marker is cleared and never accepted as ownership proof. A helper
 error aborts before packaging.
@@ -420,7 +424,7 @@ git commit -m "perf: resume bounded storage scans" -m "Continue directory-size t
 - Modify: `tests/test_sensitive_data.py`
 - Modify: `tests/test_run_server_background.py`
 - Modify: `tests/test_run_frontend_background.py`
-- Modify: `tests/test_face_analysis_report.py`
+- Modify: `tests/test_face_report_endpoint.py`
 - Modify: `src/webapp/src/utils/boundedLogger.cjs`
 - Modify: `src/webapp/src/utils/boundedLogger.test.js`
 - Modify: `src/webapp/main.cjs`
@@ -464,14 +468,14 @@ notification failure must remove the target and pipe-inheriting descendants.
 **Step 4: Verify GREEN**
 
 ```powershell
-python -m pytest tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_run_frontend_background.py tests/test_face_analysis_report.py -q
+python -m pytest tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_run_frontend_background.py tests/test_face_report_endpoint.py -q
 npm --prefix src/webapp test -- --run
 ```
 
 **Step 5: Commit**
 
 ```powershell
-git add src/utils/sensitive_data.py src/scripts/run_server_background.py src/scripts/run_frontend_background.py src/server.py tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_run_frontend_background.py tests/test_face_analysis_report.py src/webapp/src/utils/boundedLogger.cjs src/webapp/src/utils/boundedLogger.test.js src/webapp/main.cjs src/webapp/main.test.js
+git add src/utils/sensitive_data.py src/scripts/run_server_background.py src/scripts/run_frontend_background.py src/server.py tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_run_frontend_background.py tests/test_face_report_endpoint.py src/webapp/src/utils/boundedLogger.cjs src/webapp/src/utils/boundedLogger.test.js src/webapp/main.cjs src/webapp/main.test.js
 git commit -m "fix: redact local paths from persisted logs" -m "Replace explicit user-data, project, and executable prefixes before backend and Electron logs are persisted while preserving basenames, diagnostics, log rotation, and existing secret redaction."
 ```
 
@@ -526,7 +530,7 @@ git commit -m "test: exercise YuNet with a CC0 face fixture" -m "Add a documente
 **Step 1: Run focused integration suites**
 
 ```powershell
-python -m pytest tests/test_sync_backend_runtime_environment.py tests/test_backend_runtime_packaging.py tests/test_backend_runtime_lock.py tests/test_sign_macos_backend_runtime.py tests/test_packaging_builds_orchestrator.py tests/test_subprocess_safety.py tests/test_launch_locked_backend_background.py tests/test_launcher_safety.py tests/test_backend_requirements.py tests/test_ci_workflow.py tests/test_screenshot_capture.py tests/test_sedentary_monitor.py tests/test_get_location_save_image.py tests/test_directory_size_scanner.py tests/test_storage_stats.py tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_run_frontend_background.py tests/test_face_analysis_report.py tests/test_person_detection_real_model.py -q
+python -m pytest tests/test_sync_backend_runtime_environment.py tests/test_backend_runtime_packaging.py tests/test_backend_runtime_lock.py tests/test_sign_macos_backend_runtime.py tests/test_packaging_builds_orchestrator.py tests/test_subprocess_safety.py tests/test_launch_locked_backend_background.py tests/test_launcher_safety.py tests/test_backend_requirements.py tests/test_ci_workflow.py tests/test_screenshot_capture.py tests/test_sedentary_monitor.py tests/test_get_location_save_image.py tests/test_directory_size_scanner.py tests/test_storage_stats.py tests/test_sensitive_data.py tests/test_run_server_background.py tests/test_run_frontend_background.py tests/test_face_report_endpoint.py tests/test_person_detection_real_model.py -q
 ```
 
 **Step 2: Run full source validation**
