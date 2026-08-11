@@ -87,6 +87,18 @@ cannot be reused. The Electron binary check remains after dependency sync. On
 macOS, a frontend rebuild invalidates the native codesign stamp so native
 modules are signed again.
 
+The CLI holds one cross-process Node lock from before the first state or
+lockfile read until after the final atomic state replacement. The same lease
+therefore serializes state validation, native-signature-stamp invalidation,
+`npm ci`, `npm ls`, physical closure scanning, and state publication across all
+launchers. Exclusive creation records only a process id, random owner token,
+and timestamp; an IPC child lease removes the lock when its parent exits or
+crashes. A subsequent process quarantines a dead owner's residue before
+continuing. Lock files are checked by physical identity and reject links,
+non-regular files, and hard links. Waiting is bounded to 300 seconds by default
+and fails closed with path-free diagnostics; transient lease and quarantine
+files are ignored by Git.
+
 `RUN.bat`, `RUN.sh`, `RUN_DEV.bat`, `RUN_DEV.sh`, and the release-installer
 builder invoke `scripts/sync-dependencies.cjs` with an explicit
 `--webapp-root`. `START_WEBAPP.bat` is only a compatibility alias that delegates

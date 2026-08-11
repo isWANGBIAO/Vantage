@@ -3,9 +3,17 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+const { performance } = require('node:perf_hooks');
 
 const STATE_FILE_NAME = '.vantage-package-lock-state.json';
+const DEPENDENCY_SYNC_LOCK_FILE_NAME = '.vantage-frontend-dependency-sync.lock';
+const DEFAULT_DEPENDENCY_SYNC_LOCK_TIMEOUT_MILLISECONDS = 300_000;
+const DEPENDENCY_SYNC_LOCK_POLL_MILLISECONDS = 50;
+const DEPENDENCY_SYNC_LOCK_INITIALIZATION_GRACE_MILLISECONDS = 2_000;
+const DEPENDENCY_SYNC_LOCK_HELPER_START_TIMEOUT_MILLISECONDS = 5_000;
+const DEPENDENCY_SYNC_LOCK_HELPER_ARGUMENT = '--dependency-sync-lock-helper';
+const LOCK_SLEEP_ARRAY = new Int32Array(new SharedArrayBuffer(4));
 const STATE_FIELDS = Object.freeze([
   'packageLockSha256',
   'nodeVersion',
@@ -13,6 +21,402 @@ const STATE_FIELDS = Object.freeze([
   'platform',
   'arch',
 ]);
+
+function dependencySyncLockPath(webappRoot) {
+  return path.join(
+    path.resolve(webappRoot),
+    DEPENDENCY_SYNC_LOCK_FILE_NAME,
+  );
+}
+
+function sanitizedDependencyLockError(error) {
+  if (
+    error instanceof Error
+    && (
+      error.message.startsWith('Frontend dependency synchronization lock')
+      || error.message === (
+        'Timed out waiting for frontend dependency synchronization lock.'
+      )
+    )
+  ) {
+    return error;
+  }
+  const errorCode = typeof error?.code === 'string' ? ` (${error.code})` : '';
+  return new Error(
+    `Frontend dependency synchronization lock operation failed${errorCode}.`,
+  );
+}
+
+function sleepSynchronously(milliseconds) {
+  Atomics.wait(LOCK_SLEEP_ARRAY, 0, 0, milliseconds);
+}
+
+function sameFileIdentity(left, right) {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.mode === right.mode;
+}
+
+function validateLockFileStats(stats) {
+  if (!stats.isFile() || stats.isSymbolicLink()) {
+    throw new Error('Frontend dependency synchronization lock is unsafe.');
+  }
+  if (stats.nlink !== 1) {
+    throw new Error('Frontend dependency synchronization lock is unsafe.');
+  }
+}
+
+function readLockSnapshot(lockPath) {
+  let initialStats;
+  try {
+    initialStats = fs.lstatSync(lockPath);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { kind: 'missing' };
+    }
+    throw error;
+  }
+  validateLockFileStats(initialStats);
+
+  let descriptor;
+  try {
+    descriptor = fs.openSync(lockPath, 'r');
+    const openedStats = fs.fstatSync(descriptor);
+    validateLockFileStats(openedStats);
+    if (!sameFileIdentity(initialStats, openedStats)) {
+      throw new Error('Frontend dependency synchronization lock changed.');
+    }
+    const contents = fs.readFileSync(descriptor, 'utf8');
+    const finalStats = fs.lstatSync(lockPath);
+    validateLockFileStats(finalStats);
+    if (!sameFileIdentity(openedStats, finalStats)) {
+      throw new Error('Frontend dependency synchronization lock changed.');
+    }
+
+    let owner = null;
+    try {
+      const candidate = JSON.parse(contents);
+      if (
+        candidate.schemaVersion === 1
+        && Number.isSafeInteger(candidate.pid)
+        && candidate.pid > 0
+        && typeof candidate.token === 'string'
+        && candidate.token.length > 0
+        && candidate.token.length <= 128
+        && Number.isFinite(candidate.createdAtMilliseconds)
+      ) {
+        owner = candidate;
+      }
+    } catch {
+      owner = null;
+    }
+    return {
+      kind: owner === null ? 'initializing' : 'owned',
+      owner,
+      stats: finalStats,
+    };
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { kind: 'missing' };
+    }
+    throw error;
+  } finally {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+  }
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+function quarantineStaleLock(lockPath, snapshot) {
+  const quarantinePath = `${lockPath}.stale-${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+  try {
+    fs.renameSync(lockPath, quarantinePath);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    const quarantinedStats = fs.lstatSync(quarantinePath);
+    if (!sameFileIdentity(snapshot.stats, quarantinedStats)) {
+      try {
+        fs.renameSync(quarantinePath, lockPath);
+      } catch {
+        // Preserve the unexpected replacement for manual recovery.
+      }
+      throw new Error('Frontend dependency synchronization lock changed.');
+    }
+    fs.rmSync(quarantinePath, { force: true });
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+}
+
+function removeOwnedLock(lockPath, token) {
+  let snapshot;
+  try {
+    snapshot = readLockSnapshot(lockPath);
+  } catch {
+    return;
+  }
+  if (snapshot.kind !== 'owned' || snapshot.owner.token !== token) {
+    return;
+  }
+  quarantineStaleLock(lockPath, snapshot);
+}
+
+function runDependencySyncLockHelper() {
+  const lockPath = process.env.VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_PATH;
+  const token = process.env.VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_TOKEN;
+  const readyPath = process.env.VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_READY_PATH;
+  const parentPid = Number(
+    process.env.VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_PARENT_PID,
+  );
+  if (
+    !lockPath
+    || !token
+    || !readyPath
+    || !Number.isSafeInteger(parentPid)
+    || parentPid <= 0
+    || !process.connected
+  ) {
+    process.exit(2);
+  }
+
+  let cleaned = false;
+  function cleanup(exitCode = 0) {
+    if (cleaned) {
+      return;
+    }
+    cleaned = true;
+    removeOwnedLock(lockPath, token);
+    fs.rmSync(readyPath, { force: true });
+    process.exit(exitCode);
+  }
+
+  try {
+    const snapshot = readLockSnapshot(lockPath);
+    if (
+      snapshot.kind !== 'owned'
+      || snapshot.owner.pid !== parentPid
+      || snapshot.owner.token !== token
+    ) {
+      cleanup(2);
+      return;
+    }
+    fs.writeFileSync(readyPath, `${token}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+  } catch {
+    cleanup(2);
+    return;
+  }
+
+  process.once('disconnect', () => cleanup(0));
+  process.once('SIGTERM', () => cleanup(0));
+  process.once('SIGINT', () => cleanup(0));
+  const parentWatcher = setInterval(() => {
+    if (!processIsAlive(parentPid)) {
+      cleanup(0);
+    }
+  }, 250);
+  parentWatcher.unref();
+}
+
+function createOwnedLock(lockPath, token) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(lockPath, 'wx', 0o600);
+    const owner = {
+      schemaVersion: 1,
+      pid: process.pid,
+      token,
+      createdAtMilliseconds: Date.now(),
+    };
+    fs.writeFileSync(descriptor, `${JSON.stringify(owner)}\n`, 'utf8');
+    fs.fsyncSync(descriptor);
+    const openedStats = fs.fstatSync(descriptor);
+    const pathStats = fs.lstatSync(lockPath);
+    validateLockFileStats(openedStats);
+    validateLockFileStats(pathStats);
+    if (!sameFileIdentity(openedStats, pathStats)) {
+      throw new Error('Frontend dependency synchronization lock changed.');
+    }
+    return { descriptor, stats: openedStats };
+  } catch (error) {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+    throw error;
+  }
+}
+
+function startDependencySyncLockHelper({ lockPath, token, deadline }) {
+  const readyPath = `${lockPath}.${token}.ready`;
+  const helper = spawn(
+    process.execPath,
+    [__filename, DEPENDENCY_SYNC_LOCK_HELPER_ARGUMENT],
+    {
+      env: {
+        ...process.env,
+        VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_PATH: lockPath,
+        VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_TOKEN: token,
+        VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_READY_PATH: readyPath,
+        VANTAGE_INTERNAL_FRONTEND_SYNC_LOCK_PARENT_PID: String(process.pid),
+      },
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      windowsHide: true,
+    },
+  );
+  helper.on('error', () => {
+    // Synchronous acquisition observes helper failure through its readiness lease.
+  });
+  const helperStartDeadline = Math.min(
+    deadline,
+    performance.now() + DEPENDENCY_SYNC_LOCK_HELPER_START_TIMEOUT_MILLISECONDS,
+  );
+
+  while (true) {
+    try {
+      if (fs.readFileSync(readyPath, 'utf8').trim() === token) {
+        return { helper, readyPath };
+      }
+      throw new Error('Frontend dependency synchronization lock helper failed.');
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        helper.kill();
+        throw error;
+      }
+    }
+    if (!processIsAlive(helper.pid)) {
+      helper.kill();
+      throw new Error('Frontend dependency synchronization lock helper failed.');
+    }
+    const remaining = helperStartDeadline - performance.now();
+    if (remaining <= 0) {
+      helper.kill();
+      throw new Error(
+        'Timed out waiting for frontend dependency synchronization lock.',
+      );
+    }
+    sleepSynchronously(Math.min(
+      DEPENDENCY_SYNC_LOCK_POLL_MILLISECONDS,
+      remaining,
+    ));
+  }
+}
+
+function acquireDependencySyncLockRaw({
+  webappRoot,
+  timeoutMilliseconds = DEFAULT_DEPENDENCY_SYNC_LOCK_TIMEOUT_MILLISECONDS,
+}) {
+  if (!Number.isFinite(timeoutMilliseconds) || timeoutMilliseconds < 0) {
+    throw new Error('Frontend dependency synchronization lock timeout is invalid.');
+  }
+  const lockPath = dependencySyncLockPath(webappRoot);
+  const deadline = performance.now() + timeoutMilliseconds;
+
+  while (true) {
+    const token = crypto.randomBytes(16).toString('hex');
+    let ownedLock;
+    try {
+      ownedLock = createOwnedLock(lockPath, token);
+    } catch (error) {
+      if (error.code !== 'EEXIST') {
+        throw error;
+      }
+    }
+
+    if (ownedLock) {
+      let helperState;
+      try {
+        helperState = startDependencySyncLockHelper({
+          lockPath,
+          token,
+          deadline,
+        });
+      } catch (error) {
+        fs.closeSync(ownedLock.descriptor);
+        removeOwnedLock(lockPath, token);
+        throw error;
+      }
+      let released = false;
+      return {
+        path: lockPath,
+        release() {
+          if (released) {
+            return;
+          }
+          released = true;
+          fs.closeSync(ownedLock.descriptor);
+          removeOwnedLock(lockPath, token);
+          fs.rmSync(helperState.readyPath, { force: true });
+          if (helperState.helper.connected) {
+            helperState.helper.disconnect();
+          }
+          helperState.helper.unref();
+        },
+      };
+    }
+
+    const snapshot = readLockSnapshot(lockPath);
+    if (snapshot.kind === 'missing') {
+      continue;
+    }
+    const lockIsActive = snapshot.kind === 'owned'
+      && processIsAlive(snapshot.owner.pid);
+    const initializingLockIsRecent = snapshot.kind === 'initializing'
+      && Date.now() - snapshot.stats.mtimeMs
+        < DEPENDENCY_SYNC_LOCK_INITIALIZATION_GRACE_MILLISECONDS;
+    if (!lockIsActive && !initializingLockIsRecent) {
+      quarantineStaleLock(lockPath, snapshot);
+      continue;
+    }
+
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) {
+      throw new Error(
+        'Timed out waiting for frontend dependency synchronization lock.',
+      );
+    }
+    sleepSynchronously(Math.min(
+      DEPENDENCY_SYNC_LOCK_POLL_MILLISECONDS,
+      remaining,
+    ));
+  }
+}
+
+function acquireDependencySyncLock(options) {
+  try {
+    const lock = acquireDependencySyncLockRaw(options);
+    return {
+      release() {
+        try {
+          lock.release();
+        } catch (error) {
+          throw sanitizedDependencyLockError(error);
+        }
+      },
+    };
+  } catch (error) {
+    throw sanitizedDependencyLockError(error);
+  }
+}
 
 function currentRuntime() {
   return {
@@ -286,7 +690,7 @@ function runNpmCiWithFallback({
   }
 }
 
-function synchronizeDependencies({
+function synchronizeDependenciesUnlocked({
   webappRoot,
   runtime = currentRuntime(),
   env = process.env,
@@ -348,11 +752,28 @@ function synchronizeDependencies({
   return { synchronized: true, state: synchronizedState };
 }
 
+function synchronizeDependencies(options) {
+  const {
+    webappRoot,
+    lockTimeoutMilliseconds = DEFAULT_DEPENDENCY_SYNC_LOCK_TIMEOUT_MILLISECONDS,
+  } = options;
+  const lock = acquireDependencySyncLock({
+    webappRoot,
+    timeoutMilliseconds: lockTimeoutMilliseconds,
+  });
+  try {
+    return synchronizeDependenciesUnlocked(options);
+  } finally {
+    lock.release();
+  }
+}
+
 function parseArguments(argv) {
   const parsed = {
     webappRoot: path.resolve(__dirname, '..'),
     invalidateStampPath: null,
     force: undefined,
+    lockTimeoutMilliseconds: DEFAULT_DEPENDENCY_SYNC_LOCK_TIMEOUT_MILLISECONDS,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -363,6 +784,12 @@ function parseArguments(argv) {
       parsed.invalidateStampPath = path.resolve(argv[++index]);
     } else if (argument === '--force') {
       parsed.force = true;
+    } else if (argument === '--lock-timeout-seconds') {
+      const timeoutSeconds = Number(argv[++index]);
+      if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 0) {
+        throw new Error('Frontend dependency synchronization lock timeout is invalid.');
+      }
+      parsed.lockTimeoutMilliseconds = timeoutSeconds * 1000;
     } else {
       throw new Error(`Unknown argument: ${argument}`);
     }
@@ -382,17 +809,25 @@ function main(argv = process.argv.slice(2)) {
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (error) {
-    console.error(`Frontend dependency synchronization failed: ${error.message}`);
-    process.exitCode = 1;
+  if (process.argv[2] === DEPENDENCY_SYNC_LOCK_HELPER_ARGUMENT) {
+    runDependencySyncLockHelper();
+  } else {
+    try {
+      main();
+    } catch (error) {
+      console.error(`Frontend dependency synchronization failed: ${error.message}`);
+      process.exitCode = 1;
+    }
   }
 }
 
 module.exports = {
+  DEFAULT_DEPENDENCY_SYNC_LOCK_TIMEOUT_MILLISECONDS,
+  DEPENDENCY_SYNC_LOCK_FILE_NAME,
   STATE_FILE_NAME,
+  acquireDependencySyncLock,
   buildDesiredState,
+  dependencySyncLockPath,
   main,
   parseArguments,
   resolveNpmExecution,

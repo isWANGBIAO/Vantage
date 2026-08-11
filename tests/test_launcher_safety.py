@@ -161,6 +161,36 @@ def test_persistent_launchers_share_validated_frontend_dependency_sync():
     )
 
 
+def test_shared_frontend_sync_cli_owns_the_complete_cross_process_lock_scope():
+    sync_script = Path("src/webapp/scripts/sync-dependencies.cjs").read_text(
+        encoding="utf-8"
+    )
+
+    _assert_fragments_in_order(
+        sync_script[
+            sync_script.index("function synchronizeDependencies(options)") :
+        ],
+        (
+            "acquireDependencySyncLock({",
+            "return synchronizeDependenciesUnlocked(options);",
+            "finally {",
+            "lock.release();",
+        ),
+    )
+    assert "--dependency-sync-lock-helper" in sync_script
+    assert "--lock-timeout-seconds" in sync_script
+
+    for launcher_path in (
+        Path("RUN.bat"),
+        Path("RUN.sh"),
+        Path("RUN_DEV.bat"),
+        Path("RUN_DEV.sh"),
+        Path("scripts/build-release-installer.ps1"),
+    ):
+        launcher = launcher_path.read_text(encoding="utf-8")
+        assert "sync-dependencies.cjs" in launcher
+
+
 def test_macos_frontend_sync_invalidates_native_stamp_before_resigning():
     for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
         launcher = launcher_path.read_text(encoding="utf-8")

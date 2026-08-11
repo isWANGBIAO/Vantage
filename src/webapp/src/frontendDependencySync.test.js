@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -15,16 +16,23 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const {
+  DEPENDENCY_SYNC_LOCK_FILE_NAME,
   STATE_FILE_NAME,
   buildDesiredState,
+  dependencySyncLockPath,
   resolveNpmExecution,
   scanInstalledPackages,
   synchronizeDependencies,
   writeStateAtomically,
 } = require('../scripts/sync-dependencies.cjs');
+
+const SYNC_SCRIPT_PATH = fileURLToPath(
+  new URL('../scripts/sync-dependencies.cjs', import.meta.url),
+);
 
 const TEST_RUNTIME = {
   nodeVersion: '24.18.0',
@@ -80,6 +88,127 @@ function withFixture(run) {
   } finally {
     rmSync(webappRoot, { recursive: true, force: true });
   }
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+async function waitFor(predicate, message, timeoutMilliseconds = 5000) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await sleep(20);
+  }
+  assert.fail(message);
+}
+
+function readEventLines(eventsPath) {
+  if (!existsSync(eventsPath)) {
+    return [];
+  }
+  return readFileSync(eventsPath, 'utf8').trim().split(/\r?\n/u).filter(Boolean);
+}
+
+function writeSyncWorker(webappRoot) {
+  const workerPath = path.join(webappRoot, 'sync-worker.cjs');
+  writeFileSync(
+    workerPath,
+    `'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const { synchronizeDependencies } = require(${JSON.stringify(SYNC_SCRIPT_PATH)});
+const webappRoot = process.env.WEBAPP_ROOT;
+const eventsPath = process.env.EVENTS_PATH;
+const releasePath = process.env.RELEASE_PATH;
+const workerId = process.env.WORKER_ID;
+const waitArray = new Int32Array(new SharedArrayBuffer(4));
+
+function sleepSync(milliseconds) {
+  Atomics.wait(waitArray, 0, 0, milliseconds);
+}
+
+try {
+  synchronizeDependencies({
+    webappRoot,
+    env: {},
+    lockTimeoutMilliseconds: Number(process.env.LOCK_TIMEOUT_MS || 5000),
+    invalidateStampPath: process.env.SIGN_STAMP_PATH,
+    logger: { warn() {} },
+    runCommand(_command, args) {
+      if (args[0] === 'ci') {
+        fs.appendFileSync(eventsPath, workerId + ':ci:start\\n', 'utf8');
+        if (workerId === 'holder') {
+          while (!fs.existsSync(releasePath)) {
+            sleepSync(10);
+          }
+        }
+        const packageDirectory = path.join(webappRoot, 'node_modules', 'fixture');
+        fs.mkdirSync(packageDirectory, { recursive: true });
+        fs.writeFileSync(
+          path.join(packageDirectory, 'package.json'),
+          '{"name":"fixture","version":"1.0.0"}\\n',
+          'utf8',
+        );
+        fs.appendFileSync(eventsPath, workerId + ':ci:end\\n', 'utf8');
+      }
+    },
+  });
+  process.exitCode = 0;
+} catch (error) {
+  process.stderr.write(error.message + '\\n');
+  process.exitCode = 1;
+}
+`,
+    'utf8',
+  );
+  return workerPath;
+}
+
+function spawnSyncWorker({
+  workerPath,
+  webappRoot,
+  workerId,
+  eventsPath,
+  releasePath,
+  signStampPath,
+  lockTimeoutMilliseconds = 5000,
+}) {
+  const child = spawn(process.execPath, [workerPath], {
+    cwd: webappRoot,
+    env: {
+      ...process.env,
+      WEBAPP_ROOT: webappRoot,
+      WORKER_ID: workerId,
+      EVENTS_PATH: eventsPath,
+      RELEASE_PATH: releasePath,
+      SIGN_STAMP_PATH: signStampPath,
+      LOCK_TIMEOUT_MS: String(lockTimeoutMilliseconds),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  const completion = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      resolve({ code, signal, stdout, stderr });
+    });
+  });
+  return { child, completion };
 }
 
 test('desired state includes the lock hash and complete Node platform identity', () => {
@@ -605,4 +734,204 @@ test('dependency mutation invalidates the macOS native codesign stamp first', ()
       },
     });
   });
+});
+
+test('two real processes serialize the complete dependency synchronization transaction', async () => {
+  const webappRoot = createWebappFixture();
+  const workerPath = writeSyncWorker(webappRoot);
+  const eventsPath = path.join(webappRoot, 'events.log');
+  const releasePath = path.join(webappRoot, 'release-holder');
+  const signStampPath = path.join(webappRoot, 'native-sign-stamp');
+  writeFileSync(signStampPath, 'stale\n', 'utf8');
+  const holder = spawnSyncWorker({
+    workerPath,
+    webappRoot,
+    workerId: 'holder',
+    eventsPath,
+    releasePath,
+    signStampPath,
+  });
+  let follower;
+
+  try {
+    await waitFor(
+      () => readEventLines(eventsPath).includes('holder:ci:start'),
+      'the holder process never entered npm ci',
+    );
+    follower = spawnSyncWorker({
+      workerPath,
+      webappRoot,
+      workerId: 'follower',
+      eventsPath,
+      releasePath,
+      signStampPath,
+    });
+
+    await sleep(400);
+    assert.deepEqual(readEventLines(eventsPath), ['holder:ci:start']);
+
+    writeFileSync(releasePath, 'release\n', 'utf8');
+    const [holderResult, followerResult] = await Promise.all([
+      holder.completion,
+      follower.completion,
+    ]);
+    assert.equal(holderResult.code, 0, holderResult.stderr);
+    assert.equal(followerResult.code, 0, followerResult.stderr);
+    assert.deepEqual(readEventLines(eventsPath), [
+      'holder:ci:start',
+      'holder:ci:end',
+    ]);
+    assert.equal(existsSync(signStampPath), false);
+    assert.equal(existsSync(statePathFor(webappRoot)), true);
+  } finally {
+    writeFileSync(releasePath, 'release\n', 'utf8');
+    holder.child.kill('SIGKILL');
+    follower?.child.kill('SIGKILL');
+    await Promise.allSettled([
+      holder.completion,
+      ...(follower ? [follower.completion] : []),
+    ]);
+    rmSync(webappRoot, { recursive: true, force: true });
+  }
+});
+
+test('dependency synchronization lock timeout fails closed without exposing the root path', async () => {
+  const webappRoot = createWebappFixture();
+  const workerPath = writeSyncWorker(webappRoot);
+  const eventsPath = path.join(webappRoot, 'events.log');
+  const releasePath = path.join(webappRoot, 'release-holder');
+  const signStampPath = path.join(webappRoot, 'native-sign-stamp');
+  const holder = spawnSyncWorker({
+    workerPath,
+    webappRoot,
+    workerId: 'holder',
+    eventsPath,
+    releasePath,
+    signStampPath,
+  });
+  let contender;
+
+  try {
+    await waitFor(
+      () => readEventLines(eventsPath).includes('holder:ci:start'),
+      'the holder process never entered npm ci',
+    );
+    contender = spawnSyncWorker({
+      workerPath,
+      webappRoot,
+      workerId: 'contender',
+      eventsPath,
+      releasePath,
+      signStampPath,
+      lockTimeoutMilliseconds: 150,
+    });
+    const contenderResult = await contender.completion;
+
+    assert.equal(contenderResult.code, 1, contenderResult.stderr);
+    assert.match(
+      contenderResult.stderr,
+      /timed out waiting for frontend dependency synchronization lock/iu,
+    );
+    assert.equal(contenderResult.stderr.includes(webappRoot), false);
+    assert.deepEqual(readEventLines(eventsPath), ['holder:ci:start']);
+  } finally {
+    writeFileSync(releasePath, 'release\n', 'utf8');
+    holder.child.kill('SIGKILL');
+    contender?.child.kill('SIGKILL');
+    await Promise.allSettled([
+      holder.completion,
+      ...(contender ? [contender.completion] : []),
+    ]);
+    rmSync(webappRoot, { recursive: true, force: true });
+  }
+});
+
+test('a crashed owner releases the lock and does not strand the next synchronizer', async () => {
+  const webappRoot = createWebappFixture();
+  const workerPath = writeSyncWorker(webappRoot);
+  const eventsPath = path.join(webappRoot, 'events.log');
+  const releasePath = path.join(webappRoot, 'release-holder');
+  const signStampPath = path.join(webappRoot, 'native-sign-stamp');
+  const lockPath = dependencySyncLockPath(webappRoot);
+  const holder = spawnSyncWorker({
+    workerPath,
+    webappRoot,
+    workerId: 'holder',
+    eventsPath,
+    releasePath,
+    signStampPath,
+  });
+  let recovery;
+
+  try {
+    assert.equal(
+      DEPENDENCY_SYNC_LOCK_FILE_NAME,
+      '.vantage-frontend-dependency-sync.lock',
+    );
+    await waitFor(
+      () => readEventLines(eventsPath).includes('holder:ci:start'),
+      'the holder process never entered npm ci',
+    );
+    assert.equal(existsSync(lockPath), true);
+    holder.child.kill('SIGKILL');
+    await holder.completion;
+
+    recovery = spawnSyncWorker({
+      workerPath,
+      webappRoot,
+      workerId: 'recovery',
+      eventsPath,
+      releasePath,
+      signStampPath,
+      lockTimeoutMilliseconds: 3000,
+    });
+    const recoveryResult = await recovery.completion;
+    assert.equal(recoveryResult.code, 0, recoveryResult.stderr);
+    assert.equal(existsSync(lockPath), false);
+    assert.ok(readEventLines(eventsPath).includes('recovery:ci:end'));
+  } finally {
+    writeFileSync(releasePath, 'release\n', 'utf8');
+    holder.child.kill('SIGKILL');
+    recovery?.child.kill('SIGKILL');
+    await Promise.allSettled([
+      holder.completion,
+      ...(recovery ? [recovery.completion] : []),
+    ]);
+    rmSync(webappRoot, { recursive: true, force: true });
+  }
+});
+
+test('an orphaned lock file is reclaimed instead of blocking synchronization', () => {
+  withFixture((webappRoot) => {
+    const lockPath = dependencySyncLockPath(webappRoot);
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        pid: 2147483647,
+        token: 'orphaned-owner',
+        createdAtMilliseconds: 1,
+      })}\n`,
+      { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+    );
+
+    const result = synchronizeDependencies({
+      webappRoot,
+      runtime: TEST_RUNTIME,
+      env: {},
+      lockTimeoutMilliseconds: 500,
+      runCommand() {},
+    });
+
+    assert.equal(result.synchronized, true);
+    assert.equal(existsSync(lockPath), false);
+  });
+});
+
+test('transient dependency lock artifacts cannot dirty the public worktree', () => {
+  const webappRoot = fileURLToPath(new URL('..', import.meta.url));
+  const ignoreRules = readFileSync(path.join(webappRoot, '.gitignore'), 'utf8')
+    .split(/\r?\n/u);
+
+  assert.ok(ignoreRules.includes(`${DEPENDENCY_SYNC_LOCK_FILE_NAME}*`));
 });
