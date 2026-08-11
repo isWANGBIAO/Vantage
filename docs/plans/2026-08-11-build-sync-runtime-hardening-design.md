@@ -70,13 +70,20 @@ all four persistent entrypoints. Its state includes:
 
 - SHA-256 of `package-lock.json`;
 - operating system and architecture;
-- Node version and module ABI.
+- Node version and module ABI;
+- the stable, sorted physical `node_modules` closure as relative package path,
+  package name, and exact version.
 
 When state is absent, mismatched, forced, or `npm ls --depth=0` reports an
 invalid direct dependency, the CLI removes the old state, runs `npm ci` with
 the existing Electron mirror retry, validates the direct dependency tree, and
-atomically writes the new state. A failed install or validation leaves no state
-to be reused. The Electron binary check remains after dependency sync. On
+scans the resulting physical package closure before atomically writing the new
+state. A matching identity still runs `npm ls` and then compares the complete
+current closure with the saved one, so semver-compatible version drift and
+missing or extra nested packages force a clean sync. Scoped and nested packages
+are included; symbolic links are not followed, preventing traversal loops. Old
+state without a closure and failed install, validation, or scanning attempts
+cannot be reused. The Electron binary check remains after dependency sync. On
 macOS, a frontend rebuild invalidates the native codesign stamp so native
 modules are signed again.
 

@@ -8,10 +8,12 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import process from 'node:process';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -19,6 +21,7 @@ const {
   STATE_FILE_NAME,
   buildDesiredState,
   resolveNpmExecution,
+  scanInstalledPackages,
   synchronizeDependencies,
   writeStateAtomically,
 } = require('../scripts/sync-dependencies.cjs');
@@ -42,8 +45,30 @@ function statePathFor(webappRoot) {
   return path.join(webappRoot, 'node_modules', STATE_FILE_NAME);
 }
 
+function writePackage(webappRoot, relativePackagePath, name, version) {
+  const packageDirectory = path.join(
+    webappRoot,
+    'node_modules',
+    ...relativePackagePath.split('/'),
+  );
+  mkdirSync(packageDirectory, { recursive: true });
+  writeFileSync(
+    path.join(packageDirectory, 'package.json'),
+    `${JSON.stringify({ name, version })}\n`,
+    'utf8',
+  );
+  return packageDirectory;
+}
+
+function buildStampedState(webappRoot, runtime = TEST_RUNTIME) {
+  return {
+    ...buildDesiredState({ webappRoot, runtime }),
+    installedPackages: scanInstalledPackages({ webappRoot }),
+  };
+}
+
 function writeDesiredState(webappRoot, runtime = TEST_RUNTIME) {
-  const state = buildDesiredState({ webappRoot, runtime });
+  const state = buildStampedState(webappRoot, runtime);
   writeFileSync(statePathFor(webappRoot), `${JSON.stringify(state)}\n`, 'utf8');
   return state;
 }
@@ -91,6 +116,216 @@ test('Windows executes npm through its JavaScript CLI instead of spawning npm.cm
       'ls',
       '--depth=0',
     ],
+  });
+});
+
+test('installed package scan is stable across scoped and nested physical packages', () => {
+  withFixture((webappRoot) => {
+    writePackage(webappRoot, 'zeta', 'zeta', '3.0.0');
+    writePackage(webappRoot, '@scope/parent', '@scope/parent', '2.0.0');
+    writePackage(
+      webappRoot,
+      '@scope/parent/node_modules/alpha',
+      'alpha',
+      '1.0.0',
+    );
+
+    assert.deepEqual(scanInstalledPackages({ webappRoot }), [
+      {
+        path: '@scope/parent',
+        name: '@scope/parent',
+        version: '2.0.0',
+      },
+      {
+        path: '@scope/parent/node_modules/alpha',
+        name: 'alpha',
+        version: '1.0.0',
+      },
+      { path: 'zeta', name: 'zeta', version: '3.0.0' },
+    ]);
+  });
+});
+
+test('installed package scan does not follow a nested symlink loop', (context) => {
+  withFixture((webappRoot) => {
+    const packageDirectory = writePackage(
+      webappRoot,
+      'loop-package',
+      'loop-package',
+      '1.0.0',
+    );
+    const nestedModules = path.join(packageDirectory, 'node_modules');
+    mkdirSync(nestedModules, { recursive: true });
+    try {
+      symlinkSync(
+        path.join(webappRoot, 'node_modules'),
+        path.join(nestedModules, 'loop'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch (error) {
+      context.skip(`symlink creation unavailable: ${error.code}`);
+      return;
+    }
+
+    assert.deepEqual(scanInstalledPackages({ webappRoot }), [
+      {
+        path: 'loop-package',
+        name: 'loop-package',
+        version: '1.0.0',
+      },
+    ]);
+  });
+});
+
+test('exact installed version drift forces npm ci even when npm ls succeeds', () => {
+  withFixture((webappRoot) => {
+    writeFileSync(
+      path.join(webappRoot, 'package-lock.json'),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          '': { dependencies: { direct: '^1.0.0' } },
+          'node_modules/direct': { version: '1.0.1' },
+        },
+      }),
+      'utf8',
+    );
+    writePackage(webappRoot, 'direct', 'direct', '1.0.1');
+    writeDesiredState(webappRoot);
+    writePackage(webappRoot, 'direct', 'direct', '1.0.2');
+    const calls = [];
+
+    const result = synchronizeDependencies({
+      webappRoot,
+      runtime: TEST_RUNTIME,
+      env: {},
+      logger: SILENT_LOGGER,
+      runCommand(command, args) {
+        calls.push([command, args]);
+        if (args[0] === 'ci') {
+          writePackage(webappRoot, 'direct', 'direct', '1.0.1');
+        }
+      },
+    });
+
+    assert.equal(result.synchronized, true);
+    assert.deepEqual(calls.map(([, args]) => args), [
+      ['ls', '--depth=0'],
+      ['ci'],
+      ['ls', '--depth=0'],
+    ]);
+    assert.deepEqual(
+      JSON.parse(readFileSync(statePathFor(webappRoot), 'utf8')).installedPackages,
+      [{ path: 'direct', name: 'direct', version: '1.0.1' }],
+    );
+  });
+});
+
+test('a missing installed package forces npm ci after npm ls succeeds', () => {
+  withFixture((webappRoot) => {
+    writePackage(webappRoot, 'parent', 'parent', '2.0.0');
+    const nestedDirectory = writePackage(
+      webappRoot,
+      'parent/node_modules/nested',
+      'nested',
+      '1.0.1',
+    );
+    writeDesiredState(webappRoot);
+    rmSync(nestedDirectory, { recursive: true, force: true });
+    const calls = [];
+
+    const result = synchronizeDependencies({
+      webappRoot,
+      runtime: TEST_RUNTIME,
+      env: {},
+      logger: SILENT_LOGGER,
+      runCommand(command, args) {
+        calls.push([command, args]);
+        if (args[0] === 'ci') {
+          writePackage(
+            webappRoot,
+            'parent/node_modules/nested',
+            'nested',
+            '1.0.1',
+          );
+        }
+      },
+    });
+
+    assert.equal(result.synchronized, true);
+    assert.deepEqual(calls.map(([, args]) => args), [
+      ['ls', '--depth=0'],
+      ['ci'],
+      ['ls', '--depth=0'],
+    ]);
+  });
+});
+
+test('an extra nested installed package forces npm ci after npm ls succeeds', () => {
+  withFixture((webappRoot) => {
+    writePackage(webappRoot, '@scope/parent', '@scope/parent', '2.0.0');
+    writeDesiredState(webappRoot);
+    const extraDirectory = writePackage(
+      webappRoot,
+      '@scope/parent/node_modules/extra',
+      'extra',
+      '9.0.0',
+    );
+    const calls = [];
+
+    const result = synchronizeDependencies({
+      webappRoot,
+      runtime: TEST_RUNTIME,
+      env: {},
+      logger: SILENT_LOGGER,
+      runCommand(command, args) {
+        calls.push([command, args]);
+        if (args[0] === 'ci') {
+          rmSync(extraDirectory, { recursive: true, force: true });
+        }
+      },
+    });
+
+    assert.equal(result.synchronized, true);
+    assert.deepEqual(calls.map(([, args]) => args), [
+      ['ls', '--depth=0'],
+      ['ci'],
+      ['ls', '--depth=0'],
+    ]);
+  });
+});
+
+test('legacy state without an installed package closure is never reused', () => {
+  withFixture((webappRoot) => {
+    const legacyState = buildDesiredState({
+      webappRoot,
+      runtime: TEST_RUNTIME,
+    });
+    writeFileSync(
+      statePathFor(webappRoot),
+      `${JSON.stringify(legacyState)}\n`,
+      'utf8',
+    );
+    const calls = [];
+
+    const result = synchronizeDependencies({
+      webappRoot,
+      runtime: TEST_RUNTIME,
+      env: {},
+      runCommand(command, args) {
+        calls.push([command, args]);
+      },
+    });
+
+    assert.equal(result.synchronized, true);
+    assert.deepEqual(calls.map(([, args]) => args), [
+      ['ci'],
+      ['ls', '--depth=0'],
+    ]);
+    assert.deepEqual(
+      JSON.parse(readFileSync(statePathFor(webappRoot), 'utf8')).installedPackages,
+      [],
+    );
   });
 });
 
@@ -143,7 +378,7 @@ test('stale package lock runs npm ci before validating and replacing state', () 
     ]);
     assert.deepEqual(
       JSON.parse(readFileSync(statePathFor(webappRoot), 'utf8')),
-      buildDesiredState({ webappRoot, runtime: TEST_RUNTIME }),
+      buildStampedState(webappRoot, TEST_RUNTIME),
     );
   });
 });

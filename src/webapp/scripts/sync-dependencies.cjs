@@ -39,6 +39,135 @@ function buildDesiredState({ webappRoot, runtime = currentRuntime() }) {
   };
 }
 
+function compareText(left, right) {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
+}
+
+function isPhysicalDirectory(entry, absolutePath, fileSystem) {
+  if (entry.isSymbolicLink()) {
+    return false;
+  }
+  if (entry.isDirectory()) {
+    return true;
+  }
+  try {
+    const stats = fileSystem.lstatSync(absolutePath);
+    return stats.isDirectory() && !stats.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function scanInstalledPackages({ webappRoot, fileSystem = fs }) {
+  const rootNodeModules = path.join(path.resolve(webappRoot), 'node_modules');
+  if (!fileSystem.existsSync(rootNodeModules)) {
+    return [];
+  }
+
+  const installedPackages = [];
+  const pendingNodeModules = [{
+    absolutePath: rootNodeModules,
+    relativePrefix: '',
+  }];
+  const visitedNodeModules = new Set();
+
+  function recordPackage(packageDirectory, relativePackagePath) {
+    let metadata;
+    try {
+      metadata = JSON.parse(
+        fileSystem.readFileSync(
+          path.join(packageDirectory, 'package.json'),
+          'utf8',
+        ),
+      );
+    } catch {
+      throw new Error(
+        `Invalid installed package metadata: ${relativePackagePath}`,
+      );
+    }
+    if (
+      typeof metadata.name !== 'string'
+      || metadata.name.length === 0
+      || typeof metadata.version !== 'string'
+      || metadata.version.length === 0
+    ) {
+      throw new Error(
+        `Incomplete installed package metadata: ${relativePackagePath}`,
+      );
+    }
+
+    installedPackages.push({
+      path: relativePackagePath,
+      name: metadata.name,
+      version: metadata.version,
+    });
+    pendingNodeModules.push({
+      absolutePath: path.join(packageDirectory, 'node_modules'),
+      relativePrefix: `${relativePackagePath}/node_modules`,
+    });
+  }
+
+  while (pendingNodeModules.length > 0) {
+    const current = pendingNodeModules.pop();
+    if (!fileSystem.existsSync(current.absolutePath)) {
+      continue;
+    }
+    const currentStats = fileSystem.lstatSync(current.absolutePath);
+    if (!currentStats.isDirectory() || currentStats.isSymbolicLink()) {
+      continue;
+    }
+
+    const canonicalPath = fileSystem.realpathSync(current.absolutePath);
+    if (visitedNodeModules.has(canonicalPath)) {
+      continue;
+    }
+    visitedNodeModules.add(canonicalPath);
+
+    const entries = fileSystem
+      .readdirSync(current.absolutePath, { withFileTypes: true })
+      .sort((left, right) => compareText(left.name, right.name));
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) {
+        continue;
+      }
+      const entryPath = path.join(current.absolutePath, entry.name);
+      if (!isPhysicalDirectory(entry, entryPath, fileSystem)) {
+        continue;
+      }
+
+      if (entry.name.startsWith('@')) {
+        const scopedEntries = fileSystem
+          .readdirSync(entryPath, { withFileTypes: true })
+          .sort((left, right) => compareText(left.name, right.name));
+        for (const scopedEntry of scopedEntries) {
+          const scopedPath = path.join(entryPath, scopedEntry.name);
+          if (!isPhysicalDirectory(scopedEntry, scopedPath, fileSystem)) {
+            continue;
+          }
+          const relativePackagePath = current.relativePrefix
+            ? `${current.relativePrefix}/${entry.name}/${scopedEntry.name}`
+            : `${entry.name}/${scopedEntry.name}`;
+          recordPackage(scopedPath, relativePackagePath);
+        }
+        continue;
+      }
+
+      const relativePackagePath = current.relativePrefix
+        ? `${current.relativePrefix}/${entry.name}`
+        : entry.name;
+      recordPackage(entryPath, relativePackagePath);
+    }
+  }
+
+  return installedPackages.sort((left, right) => compareText(left.path, right.path));
+}
+
 function readState(statePath) {
   try {
     return JSON.parse(fs.readFileSync(statePath, 'utf8'));
@@ -49,7 +178,18 @@ function readState(statePath) {
 
 function stateMatches(actual, desired) {
   return actual !== null
+    && Array.isArray(actual.installedPackages)
     && STATE_FIELDS.every((field) => actual[field] === desired[field]);
+}
+
+function installedPackagesMatch(actual, expected) {
+  return Array.isArray(actual)
+    && actual.length === expected.length
+    && actual.every((entry, index) => (
+      entry.path === expected[index].path
+      && entry.name === expected[index].name
+      && entry.version === expected[index].version
+    ));
 }
 
 function writeStateAtomically(
@@ -168,10 +308,20 @@ function synchronizeDependencies({
   const npmCommand = 'npm';
   const commandOptions = { cwd: resolvedWebappRoot, env };
 
-  if (!force && stateMatches(readState(statePath), desiredState)) {
+  const savedState = readState(statePath);
+  if (!force && stateMatches(savedState, desiredState)) {
     try {
       runCommand(npmCommand, ['ls', '--depth=0'], commandOptions);
-      return { synchronized: false, state: desiredState };
+      const installedPackages = scanInstalledPackages({
+        webappRoot: resolvedWebappRoot,
+      });
+      if (installedPackagesMatch(savedState.installedPackages, installedPackages)) {
+        return {
+          synchronized: false,
+          state: { ...desiredState, installedPackages },
+        };
+      }
+      logger.warn('Frontend dependency closure changed; running a clean sync.');
     } catch {
       logger.warn('Frontend dependency validation failed; running a clean sync.');
     }
@@ -190,8 +340,12 @@ function synchronizeDependencies({
     logger,
   });
   runCommand(npmCommand, ['ls', '--depth=0'], commandOptions);
-  writeStateAtomically(statePath, desiredState);
-  return { synchronized: true, state: desiredState };
+  const installedPackages = scanInstalledPackages({
+    webappRoot: resolvedWebappRoot,
+  });
+  const synchronizedState = { ...desiredState, installedPackages };
+  writeStateAtomically(statePath, synchronizedState);
+  return { synchronized: true, state: synchronizedState };
 }
 
 function parseArguments(argv) {
@@ -242,6 +396,7 @@ module.exports = {
   main,
   parseArguments,
   resolveNpmExecution,
+  scanInstalledPackages,
   stateMatches,
   synchronizeDependencies,
   writeStateAtomically,

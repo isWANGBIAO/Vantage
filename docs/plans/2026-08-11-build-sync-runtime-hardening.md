@@ -27,7 +27,9 @@
 Test that the desired state contains the lock SHA-256, Node version/module ABI,
 platform, and architecture. Test a clean matching state skip, a stale lock
 running `npm ci`, `npm ls --depth=0` invalidating an otherwise matching state,
-failure leaving no stamp, and atomic stamp creation only after validation.
+exact installed-version drift plus missing/extra scoped and nested packages,
+legacy state without a closure, failure leaving no stamp, and atomic stamp
+creation only after validation.
 Static launcher tests must require all four persistent entrypoints to call the
 same CLI and must forbid the old `node_modules`-existence shortcut.
 
@@ -50,7 +52,9 @@ Export pure helpers plus a CLI. Use only Node built-ins. Write state under
 `VANTAGE_FORCE_FRONTEND_DEPS=1`, delete the state first, run `npm ci`, retry once
 with `VANTAGE_ELECTRON_MIRROR_FALLBACK` only when no explicit mirror exists,
 run `npm ls --depth=0`, and atomically replace the state. On a valid fast path,
-still run `npm ls --depth=0`; a failure forces a clean resync.
+still run `npm ls --depth=0`, then compare a stable physical package closure of
+relative path, name, and exact version; validation failure or any closure drift
+forces a clean resync without following symbolic links.
 
 Replace duplicated install branches with this CLI. Preserve the existing
 Electron binary verification. In Bash launchers, dependency sync must remove
