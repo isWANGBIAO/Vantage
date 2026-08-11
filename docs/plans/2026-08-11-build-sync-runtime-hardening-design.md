@@ -151,12 +151,41 @@ native closure again after the atomic stamp replacement. A concurrent add,
 delete, replacement, byte mutation, or link swap therefore removes the stamp
 and aborts instead of certifying a mixed snapshot.
 
+All mutating backend-signing commands operate on private same-filesystem copies.
+On POSIX, the signer keeps validated parent-directory descriptors open and the
+bounded child first changes directory through the inherited descriptor before
+executing `xattr` or `codesign` with a relative basename. Cached and installed
+verification use the same descriptor-bound path. Renaming an ancestor or
+replacing the canonical path therefore cannot redirect a command or signature
+stamp operation to a different tree; stamp read, write, replace, and cleanup
+are likewise relative to the held runtime-root descriptor.
+
+A second stdlib-only signer owns launcher-time frontend natives and the staged
+PyInstaller backend bundle. Its profiles accept only their exact tracked roots.
+Frontend candidates must have a Mach-O/fat header; the known
+`esbuild/bin/esbuild` JavaScript wrapper is excluded explicitly, while an
+unexpected non-Mach-O native candidate fails closed. The PyInstaller profile
+preserves internal bundle symlinks, rejects escaping links, and signs each
+resolved native entity once. Both profiles use private staging, stable closure
+rescans, strict installed verification, and the same descriptor-bound command
+execution. Only the frontend profile writes a reusable state stamp, and only
+after a final closure and payload recheck.
+
 All environment probes, pip commands, packaging workers, and codesign calls
 have explicit timeouts and bounded fixed-size output capture. Timed-out process
 groups/trees are terminated rather than leaving pipe-inheriting descendants
 alive. Error summaries redact Bearer/Basic authorization, URL credentials,
 common token forms, and known project, worker, and user paths before they can
 reach persisted logs.
+
+The macOS bootstrap-Python probe runs in its own shell process group with no
+temporary output file; an early-exiting parent with live descendants is rejected
+and the complete group is terminated. Electron's `afterPack` hook routes
+`plutil`, `ditto`, `xattr`, and `codesign` through a stdlib bounded-command
+bridge. Attribute cleanup walks with `lstat`, skips symlinks, rejects hard
+links, and batches by both path count and argument bytes. The hook strictly
+verifies the final copied application after attribute cleanup and deletes the
+unverified output application on any failure.
 
 The complete venv lifecycle is serialized by a sibling
 `.vantage-backend-runtime.lock`. POSIX uses `flock(LOCK_SH/LOCK_EX)` so each
@@ -213,7 +242,8 @@ CI uses GitHub's `macos-14` (arm64) and `macos-15-intel` (x64) runners. Both
 architectures run the shared clean environment synchronizer, `pip check`, YuNet
 prewarm, real native-library signing, cached-signature verification, and a
 state-tamper refresh check. They also exercise the real POSIX shared/exclusive
-lock semantics, with the test dependency pin included in the cache key.
+lock semantics and synchronize, sign, and cache-verify the real frontend native
+dependency closure, with the test dependency pin included in the cache key.
 `RUN.sh` ad-hoc signs and strictly verifies every packaged backend native
 binary; signing or verification failure aborts packaging. CI syntax-checks both
 macOS launchers but does not notarize or publish a macOS release.

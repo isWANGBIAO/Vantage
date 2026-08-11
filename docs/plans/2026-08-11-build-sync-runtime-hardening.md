@@ -89,12 +89,16 @@ git commit -m "fix: synchronize persistent frontend dependencies" -m "Key fronte
 - Create: `src/scripts/sync_backend_runtime_environment.py`
 - Create: `src/scripts/run_with_backend_runtime_lock.py`
 - Create: `src/scripts/sign_macos_backend_runtime.py`
+- Create: `src/scripts/sign_macos_artifacts.py`
+- Create: `src/scripts/run_bounded_command.py`
 - Create: `src/scripts/launch_locked_backend_background.py`
 - Create: `src/utils/subprocess_safety.py`
 - Create: `tests/test_sync_backend_runtime_environment.py`
 - Create: `tests/test_backend_runtime_lock.py`
 - Create: `tests/test_macos_cleanup_launcher.py`
 - Create: `tests/test_sign_macos_backend_runtime.py`
+- Create: `tests/test_sign_macos_artifacts.py`
+- Create: `tests/test_run_bounded_command.py`
 - Create: `tests/test_launch_locked_backend_background.py`
 - Create: `tests/test_subprocess_safety.py`
 - Modify: `RUN.bat`
@@ -106,6 +110,9 @@ git commit -m "fix: synchronize persistent frontend dependencies" -m "Key fronte
 - Modify: `src/core/backend_runtime_packaging.py`
 - Modify: `src/scripts/build_backend_runtime.py`
 - Modify: `src/scripts/run_packaging_builds.py`
+- Modify: `src/webapp/scripts/sign-mac-ad-hoc.cjs`
+- Modify: `src/webapp/package.test.js`
+- Modify: `src/utils/sensitive_data.py`
 - Modify: `tests/test_packaging_builds_orchestrator.py`
 - Modify: `tests/test_backend_runtime_packaging.py`
 - Modify: `tests/test_launcher_safety.py`
@@ -170,6 +177,23 @@ post-sign closure is atomically recorded. Any signing, verification, or atomic
 replacement failure leaves no valid stamp. The launchers retain no independent
 backend signing implementation.
 
+Route launcher-time frontend natives and the staged PyInstaller backend bundle
+through a second shared stdlib signer. It must use exact profile roots, private
+staging copies, stable closure rescans, strict installed verification, and
+descriptor-bound relative command paths. Frontend candidates must be real
+Mach-O/fat binaries; exclude only the known esbuild JavaScript wrapper and fail
+closed for unexpected non-Mach-O native candidates. Preserve PyInstaller's
+internal bundle symlinks, reject escaping links, and sign each resolved native
+entity once. Bind every stamp operation and failure cleanup to the already-open
+validated root descriptor.
+
+Replace the shell bootstrap probe's temporary output file and parent-only kill
+with an isolated process group. Add a bounded-command bridge for Electron's
+macOS `afterPack` hook, and route `plutil`, `ditto`, `xattr`, and `codesign`
+through it. Clean attributes only on `lstat`-validated non-link, single-link
+paths in bounded batches; strictly verify the final copied app, and remove the
+output app on any failure.
+
 This is a shared exact top-level-pin plus clean-resolver contract, not a single
 all-platform transitive hash lock. Simultaneously forging both the dedicated
 venv and its matching state remains inside the trusted local build-host
@@ -192,7 +216,7 @@ lifecycle supervisor; `START_WEBAPP.bat` delegates to it entirely.
 **Step 4: Verify GREEN and migrate the real dirty environment**
 
 ```powershell
-python -m pytest tests/test_sync_backend_runtime_environment.py tests/test_backend_runtime_packaging.py tests/test_backend_runtime_lock.py tests/test_sign_macos_backend_runtime.py tests/test_packaging_builds_orchestrator.py tests/test_subprocess_safety.py tests/test_launch_locked_backend_background.py tests/test_launcher_safety.py tests/test_backend_requirements.py -q
+python -m pytest tests/test_sync_backend_runtime_environment.py tests/test_backend_runtime_packaging.py tests/test_backend_runtime_lock.py tests/test_sign_macos_backend_runtime.py tests/test_sign_macos_artifacts.py tests/test_run_bounded_command.py tests/test_packaging_builds_orchestrator.py tests/test_subprocess_safety.py tests/test_launch_locked_backend_background.py tests/test_launcher_safety.py tests/test_backend_requirements.py -q
 python src/scripts/sync_backend_runtime_environment.py --project-root . --venv .venv-backend-runtime-gpu --core-requirements requirements-core.txt --requirements requirements-backend-runtime-gpu.txt --opencv-normalizer src/scripts/normalize_opencv_installation.py
 .\.venv-backend-runtime-gpu\Scripts\python.exe -m pip check
 .\.venv-backend-runtime-gpu\Scripts\python.exe -m pip list --format=json
@@ -206,7 +230,7 @@ reuse path.
 **Step 5: Commit**
 
 ```powershell
-git add RUN.bat RUN.sh RUN_DEV.sh scripts/build-release-installer.ps1 src/core/backend_environment_state.py src/core/backend_runtime_packaging.py src/scripts/build_backend_runtime.py src/scripts/sync_backend_runtime_environment.py tests/test_sync_backend_runtime_environment.py tests/test_backend_runtime_packaging.py tests/test_launcher_safety.py docs/plans/2026-08-11-build-sync-runtime-hardening-design.md
+git add RUN.bat RUN.sh RUN_DEV.bat RUN_DEV.sh START_WEBAPP.bat scripts/build-release-installer.ps1 src/core/backend_environment_state.py src/core/backend_runtime_lock.py src/core/backend_runtime_packaging.py src/scripts/build_backend_runtime.py src/scripts/launch_locked_backend_background.py src/scripts/run_bounded_command.py src/scripts/run_packaging_builds.py src/scripts/run_with_backend_runtime_lock.py src/scripts/sign_macos_artifacts.py src/scripts/sign_macos_backend_runtime.py src/scripts/sync_backend_runtime_environment.py src/utils/subprocess_safety.py src/webapp/package.test.js src/webapp/scripts/sign-mac-ad-hoc.cjs tests/test_backend_runtime_lock.py tests/test_backend_runtime_packaging.py tests/test_launch_locked_backend_background.py tests/test_launcher_safety.py tests/test_macos_cleanup_launcher.py tests/test_packaging_builds_orchestrator.py tests/test_run_bounded_command.py tests/test_sign_macos_artifacts.py tests/test_sign_macos_backend_runtime.py tests/test_subprocess_safety.py tests/test_sync_backend_runtime_environment.py docs/plans/2026-08-11-build-sync-runtime-hardening-design.md
 git commit -m "fix: rebuild unclean backend packaging environments" -m "Replace incremental stamp trust with a clean dedicated-venv rebuild on any requirements, Python, platform, pip-check, or installed-closure mismatch and include the verified distribution snapshot in packaged-runtime cache identity."
 ```
 
@@ -222,7 +246,8 @@ git commit -m "fix: rebuild unclean backend packaging environments" -m "Replace 
 Require a `macos-14` arm64 and `macos-15-intel` matrix. Require Python 3.13,
 shared clean runtime synchronization, `pip check`, OpenCV/NumPy/YuNet
 constructor probe, model prewarm, real native-library signing plus cached
-verification/state-tamper refresh, and `bash -n RUN.sh RUN_DEV.sh`.
+verification/state-tamper refresh, real frontend dependency synchronization
+plus native-signature cache verification, and `bash -n RUN.sh RUN_DEV.sh`.
 
 **Step 2: Verify RED**
 
@@ -236,9 +261,10 @@ Expected: no macOS job exists.
 
 Use official GitHub-hosted labels and `actions/setup-python@v5` pip caching
 keyed by both runtime requirements files. Assert each runner's actual machine
-architecture, run the shared environment and signer CLIs, and make `RUN.sh`
-strictly sign and verify each packaged backend native binary. Do not add
-signing secrets, notarize, or publish artifacts.
+architecture; run the shared environment, frontend synchronization, and both
+signer CLIs; verify the frontend cache path; and make `RUN.sh` strictly sign and
+verify each packaged backend native binary. Do not add signing secrets,
+notarize, or publish artifacts.
 
 Run the real POSIX shared/exclusive lock suite on both architectures and include
 the CI requirements file in the cache key so the tested `pytest` pin cannot
