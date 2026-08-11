@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -17,6 +18,27 @@ from src.utils.sensitive_data import redact_sensitive_text
 DEFAULT_SUBPROCESS_TIMEOUT_SECONDS = 300.0
 DEFAULT_SUBPROCESS_OUTPUT_LIMIT_BYTES = 16 * 1024
 _TRUNCATION_MARKER = b"\n...[output truncated]...\n"
+_REDACTION_LOOKAHEAD_BYTES = 64 * 1024
+_TRUNCATED_SECRET_PATTERNS = (
+    (
+        re.compile(r"(?i)\b((?:https?|ftp)://)[^/\s:@]+:[^/@\s]*\Z"),
+        r"\1[REDACTED_USERINFO]@",
+    ),
+    (
+        re.compile(r'(?i)("api[_-]?key"\s*:\s*")[^"]*\Z'),
+        r"\1[REDACTED_API_KEY]",
+    ),
+    (
+        re.compile(
+            r'(?i)("[_-]?(?:[a-z0-9]+[_-])*[a-z0-9]*token"\s*:\s*")[^"]*\Z'
+        ),
+        r"\1[REDACTED_TOKEN]",
+    ),
+    (
+        re.compile(r'(?i)("(?:password|client[_-]?secret)"\s*:\s*")[^"]*\Z'),
+        r"\1[REDACTED_SECRET]",
+    ),
+)
 _PIPE_DRAIN_JOIN_SECONDS = 2.0
 _PROCESS_TREE_TERMINATION_SECONDS = 5.0
 _WINDOWS_SUPERVISOR_SOURCE = """
@@ -111,6 +133,51 @@ class _BoundedBytes:
         return bytes(self.prefix) + _TRUNCATION_MARKER + bytes(self.suffix)
 
 
+@dataclass
+class _RedactedBoundedBytes:
+    limit: int
+    path_prefixes: Mapping[str, object] | None = None
+    total: int = 0
+    raw_prefix: bytearray = field(default_factory=bytearray)
+
+    @property
+    def raw_limit(self) -> int:
+        longest_path = max(
+            (
+                len(os.fsencode(os.fspath(prefix)))
+                for prefix in (self.path_prefixes or {}).values()
+                if isinstance(prefix, (str, bytes, os.PathLike))
+            ),
+            default=0,
+        )
+        return self.limit + max(_REDACTION_LOOKAHEAD_BYTES, longest_path + 256)
+
+    def append(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        self.total += len(chunk)
+        remaining = self.raw_limit - len(self.raw_prefix)
+        if remaining > 0:
+            self.raw_prefix.extend(chunk[:remaining])
+
+    def value(self) -> bytes:
+        raw_truncated = self.total > len(self.raw_prefix)
+        sanitized = redact_sensitive_text(
+            bytes(self.raw_prefix).decode("utf-8", errors="replace"),
+            path_prefixes=self.path_prefixes,
+        )
+        if raw_truncated:
+            for pattern, replacement in _TRUNCATED_SECRET_PATTERNS:
+                sanitized = pattern.sub(replacement, sanitized)
+        encoded = sanitized.encode("utf-8", errors="replace")
+        if raw_truncated:
+            content_limit = max(0, self.limit - len(_TRUNCATION_MARKER))
+            return encoded[:content_limit] + _TRUNCATION_MARKER
+        capture = _BoundedBytes(limit=self.limit)
+        capture.append(encoded)
+        return capture.value()
+
+
 def _decode_output(value) -> str:
     if value is None:
         return ""
@@ -121,13 +188,22 @@ def _decode_output(value) -> str:
     return str(value)
 
 
-def _bounded_text(value, limit_bytes: int) -> str:
+def _bounded_text(
+    value,
+    limit_bytes: int,
+    *,
+    path_prefixes: Mapping[str, object] | None = None,
+) -> str:
+    sanitized = redact_sensitive_text(
+        _decode_output(value),
+        path_prefixes=path_prefixes,
+    )
     capture = _BoundedBytes(limit=max(1, int(limit_bytes)))
-    capture.append(_decode_output(value).encode("utf-8", errors="replace"))
+    capture.append(sanitized.encode("utf-8", errors="replace"))
     return capture.value().decode("utf-8", errors="replace")
 
 
-def _drain_pipe(pipe, capture: _BoundedBytes) -> None:
+def _drain_pipe(pipe, capture: _RedactedBoundedBytes) -> None:
     try:
         while True:
             chunk = pipe.read(8192)
@@ -357,6 +433,7 @@ def _run_real_bounded_subprocess(
     cwd=None,
     env=None,
     working_directory_fd: int | None = None,
+    path_prefixes: Mapping[str, object] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     process, windows_job = _spawn_isolated_process(
         command,
@@ -366,8 +443,14 @@ def _run_real_bounded_subprocess(
     )
     assert process.stdout is not None
     assert process.stderr is not None
-    stdout_capture = _BoundedBytes(limit=output_limit_bytes)
-    stderr_capture = _BoundedBytes(limit=output_limit_bytes)
+    stdout_capture = _RedactedBoundedBytes(
+        limit=output_limit_bytes,
+        path_prefixes=path_prefixes,
+    )
+    stderr_capture = _RedactedBoundedBytes(
+        limit=output_limit_bytes,
+        path_prefixes=path_prefixes,
+    )
     stdout_thread = threading.Thread(
         target=_drain_pipe,
         args=(process.stdout, stdout_capture),
@@ -429,6 +512,7 @@ def run_bounded_subprocess(
     cwd=None,
     env=None,
     working_directory_fd: int | None = None,
+    path_prefixes: Mapping[str, object] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     if timeout_seconds <= 0:
         raise ValueError("subprocess timeout must be positive")
@@ -451,6 +535,7 @@ def run_bounded_subprocess(
             cwd=cwd,
             env=env,
             working_directory_fd=working_directory_fd,
+            path_prefixes=path_prefixes,
         )
 
     kwargs = {
@@ -465,12 +550,36 @@ def run_bounded_subprocess(
         kwargs["env"] = env
     if working_directory_fd is not None:
         kwargs["working_directory_fd"] = working_directory_fd
-    result = run_command(normalized_command, **kwargs)
+    try:
+        result = run_command(normalized_command, **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        raise subprocess.TimeoutExpired(
+            exc.cmd,
+            exc.timeout,
+            output=_bounded_text(
+                exc.output,
+                output_limit_bytes,
+                path_prefixes=path_prefixes,
+            ),
+            stderr=_bounded_text(
+                exc.stderr,
+                output_limit_bytes,
+                path_prefixes=path_prefixes,
+            ),
+        ) from None
     return subprocess.CompletedProcess(
         args=normalized_command,
         returncode=int(result.returncode),
-        stdout=_bounded_text(getattr(result, "stdout", ""), output_limit_bytes),
-        stderr=_bounded_text(getattr(result, "stderr", ""), output_limit_bytes),
+        stdout=_bounded_text(
+            getattr(result, "stdout", ""),
+            output_limit_bytes,
+            path_prefixes=path_prefixes,
+        ),
+        stderr=_bounded_text(
+            getattr(result, "stderr", ""),
+            output_limit_bytes,
+            path_prefixes=path_prefixes,
+        ),
     )
 
 

@@ -104,13 +104,14 @@ def _run_command(
     timeout_seconds: float = PACKAGING_SUBPROCESS_TIMEOUT_SECONDS,
     output_limit_bytes: int = PACKAGING_SUBPROCESS_OUTPUT_LIMIT_BYTES,
 ) -> int:
+    path_prefixes = {
+        "<PROJECT_ROOT>": PROJECT_ROOT,
+        "<WORKER_CWD>": cwd,
+        "<USER_HOME>": Path.home(),
+    }
     emitter = BoundedTextEmitter(
         limit_bytes=output_limit_bytes,
-        path_prefixes={
-            "<PROJECT_ROOT>": PROJECT_ROOT,
-            "<WORKER_CWD>": cwd,
-            "<USER_HOME>": Path.home(),
-        },
+        path_prefixes=path_prefixes,
     )
 
     def emit(value: str) -> None:
@@ -125,6 +126,7 @@ def _run_command(
             timeout_seconds=timeout_seconds,
             output_limit_bytes=output_limit_bytes,
             cwd=str(cwd),
+            path_prefixes=path_prefixes,
         )
     except subprocess.TimeoutExpired as exc:
         for captured in (exc.output, exc.stderr):

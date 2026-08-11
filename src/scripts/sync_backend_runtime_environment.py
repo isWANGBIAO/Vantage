@@ -406,7 +406,11 @@ def _run_checked(
     path_prefixes: Mapping[str, object],
 ) -> None:
     try:
-        result = run_bounded_subprocess(command, run_command=run_command)
+        result = run_bounded_subprocess(
+            command,
+            run_command=run_command,
+            path_prefixes=path_prefixes,
+        )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("backend environment command timed out") from exc
     if result.returncode == 0:
@@ -437,6 +441,7 @@ def probe_backend_environment(python_executable: Path, run_command=subprocess.ru
         result = run_bounded_subprocess(
             [str(python_executable), "-c", _ENVIRONMENT_PROBE],
             run_command=run_command,
+            path_prefixes=_target_python_path_prefixes(python_executable),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("backend environment metadata probe timed out") from exc

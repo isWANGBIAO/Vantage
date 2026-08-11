@@ -1356,6 +1356,7 @@ def _run_codesign_command(
             command,
             run_command=run_command,
             working_directory_fd=working_directory_fd,
+            path_prefixes=path_prefixes,
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
@@ -1606,6 +1607,7 @@ def _sign_macos_backend_runtime_locked(
                             ["xattr", "-c", command_path],
                             run_command=run_command,
                             working_directory_fd=staging_parent_descriptor,
+                            path_prefixes=path_prefixes,
                         )
                     except subprocess.TimeoutExpired as exc:
                         raise RuntimeError(

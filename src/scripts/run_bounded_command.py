@@ -31,6 +31,7 @@ def run_bounded_command(
     output_limit_bytes: int = DEFAULT_SUBPROCESS_OUTPUT_LIMIT_BYTES,
     cwd: os.PathLike[str] | str | None = None,
     env: Mapping[str, str] | None = None,
+    path_prefixes: Mapping[str, object] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a command with bounded output and ownership of its process tree."""
     if not command:
@@ -41,6 +42,7 @@ def run_bounded_command(
         output_limit_bytes=output_limit_bytes,
         cwd=cwd,
         env=env,
+        path_prefixes=path_prefixes,
     )
 
 
@@ -104,6 +106,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             command,
             timeout_seconds=args.timeout_seconds,
             output_limit_bytes=args.output_limit_bytes,
+            path_prefixes=path_prefixes,
         )
     except subprocess.TimeoutExpired as exc:
         detail = _bounded_redacted_text(

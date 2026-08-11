@@ -69,6 +69,144 @@ def test_real_subprocess_capture_is_bounded_while_both_pipes_are_drained():
     assert "output truncated" in result.stderr
 
 
+@pytest.mark.parametrize(
+    ("credential_prefix", "secret_tail"),
+    [
+        ("Authorization: Bearer ", "BEARER_SECRET_TAIL"),
+        ("Authorization: Basic ", "BASIC_SECRET_TAIL"),
+        ("NPM_TOKEN=", "NPM_SECRET_TAIL"),
+    ],
+)
+def test_fake_subprocess_output_is_redacted_before_truncation_splits_credential(
+    credential_prefix,
+    secret_tail,
+):
+    module = _module()
+    output_limit = 96
+    prefix_limit = (output_limit - len(module._TRUNCATION_MARKER)) // 2
+    secret = "s" * 80 + secret_tail
+    payload = (
+        "p" * max(0, prefix_limit - len(credential_prefix) // 2)
+        + credential_prefix
+        + secret
+    )
+
+    def fail(command, **_kwargs):
+        return subprocess.CompletedProcess(command, 1, "", payload)
+
+    result = module.run_bounded_subprocess(
+        ["probe"],
+        run_command=fail,
+        output_limit_bytes=output_limit,
+    )
+
+    assert secret_tail not in result.stderr
+    assert "[REDACTED_" in result.stderr
+    assert len(result.stderr.encode("utf-8")) <= output_limit
+
+
+def test_real_subprocess_output_is_redacted_before_truncation_splits_bearer():
+    module = _module()
+    output_limit = 96
+    prefix_limit = (output_limit - len(module._TRUNCATION_MARKER)) // 2
+    secret_tail = "REAL_BEARER_SECRET_TAIL"
+    secret = "s" * 80 + secret_tail
+    credential_prefix = "Authorization: Bearer "
+    payload = (
+        "p" * max(0, prefix_limit - len(credential_prefix) // 2)
+        + credential_prefix
+        + secret
+    )
+
+    result = module.run_bounded_subprocess(
+        [
+            sys.executable,
+            "-c",
+            f"import sys; sys.stderr.write({payload!r})",
+        ],
+        timeout_seconds=5,
+        output_limit_bytes=output_limit,
+    )
+
+    assert secret_tail not in result.stderr
+    assert "[REDACTED_TOKEN]" in result.stderr
+    assert len(result.stderr.encode("utf-8")) <= output_limit
+
+
+@pytest.mark.parametrize(
+    ("credential_prefix", "credential_suffix", "secret_marker", "replacement"),
+    [
+        (
+            "https://alice:",
+            "@example.test/private",
+            "URL_PASSWORD_LEAK",
+            "[REDACTED_USERINFO]",
+        ),
+        (
+            '{"NPM_TOKEN":"',
+            '"}',
+            "JSON_TOKEN_LEAK",
+            "[REDACTED_TOKEN]",
+        ),
+        (
+            '{"password":"',
+            '"}',
+            "JSON_PASSWORD_LEAK",
+            "[REDACTED_SECRET]",
+        ),
+    ],
+)
+def test_real_subprocess_truncation_redacts_incomplete_credential(
+    credential_prefix,
+    credential_suffix,
+    secret_marker,
+    replacement,
+):
+    module = _module()
+    output_limit = 96
+    password_padding = module._REDACTION_LOOKAHEAD_BYTES + 1024
+
+    result = module.run_bounded_subprocess(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                f"sys.stderr.write({(credential_prefix + secret_marker)!r} + "
+                f"'s' * {password_padding} + {credential_suffix!r})"
+            ),
+        ],
+        timeout_seconds=5,
+        output_limit_bytes=output_limit,
+    )
+
+    assert secret_marker not in result.stderr
+    assert replacement in result.stderr
+    assert len(result.stderr.encode("utf-8")) <= output_limit
+
+
+def test_timeout_output_is_redacted_and_bounded_before_propagation():
+    module = _module()
+    output_limit = 96
+    secret_tail = "TIMEOUT_BEARER_SECRET_TAIL"
+    payload = "Authorization: Bearer " + "s" * 200 + secret_tail
+
+    def time_out(command, **_kwargs):
+        raise subprocess.TimeoutExpired(command, 1, stderr=payload)
+
+    with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+        module.run_bounded_subprocess(
+            ["probe"],
+            run_command=time_out,
+            output_limit_bytes=output_limit,
+        )
+
+    captured = module._decode_output(exc_info.value.stderr)
+    assert secret_tail not in captured
+    assert "[REDACTED_TOKEN]" in captured
+    assert len(captured.encode("utf-8")) <= output_limit
+
+
 def test_real_subprocess_timeout_is_enforced_without_waiting_for_child_exit():
     module = _module()
     started = time.monotonic()

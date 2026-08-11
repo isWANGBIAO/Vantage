@@ -383,6 +383,10 @@ def build_project_activity_snapshot(
             run_command=run_command,
             timeout_seconds=30,
             cwd=resolved_root,
+            path_prefixes={
+                "<PROJECT_ROOT>": resolved_root,
+                "<USER_HOME>": Path.home(),
+            },
         )
     except subprocess.TimeoutExpired:
         proc = subprocess.CompletedProcess(git_cmd, 124, stdout="", stderr="")
