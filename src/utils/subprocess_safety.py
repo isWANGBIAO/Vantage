@@ -320,6 +320,22 @@ def _assign_windows_kill_on_close_job(
     return job
 
 
+def bind_current_process_to_windows_kill_on_close_job(
+) -> _WindowsKillOnCloseJob | None:
+    """Bind this process, and therefore future children, to an owned Job."""
+    if os.name != "nt":
+        return None
+
+    class _CurrentProcessHandle:
+        # GetCurrentProcess returns the stable pseudo handle represented by -1.
+        _handle = -1
+
+    job = _assign_windows_kill_on_close_job(_CurrentProcessHandle())
+    if job is None:
+        raise RuntimeError("unable to establish Windows subprocess tree ownership")
+    return job
+
+
 def terminate_process_tree(
     process: subprocess.Popen,
     *,

@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import psutil
+import pytest
 
 
 def _load_launcher_module():
@@ -21,6 +23,229 @@ def _load_launcher_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def _wait_for_path(path: Path, *, timeout_seconds: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert path.exists(), f"timed out waiting for {path.name}"
+
+
+def _process_identity(pid: int) -> tuple[int, float]:
+    process = psutil.Process(pid)
+    return process.pid, process.create_time()
+
+
+def _identity_is_running(identity: tuple[int, float]) -> bool:
+    pid, created_at = identity
+    try:
+        process = psutil.Process(pid)
+        return (
+            process.create_time() == created_at
+            and process.is_running()
+            and process.status() != psutil.STATUS_ZOMBIE
+        )
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
+
+
+def _wait_for_identities_to_stop(
+    identities: list[tuple[int, float]],
+    *,
+    timeout_seconds: float = 5.0,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while (
+        any(_identity_is_running(identity) for identity in identities)
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.02)
+    survivors = [
+        pid
+        for pid, created_at in identities
+        if _identity_is_running((pid, created_at))
+    ]
+    assert survivors == [], f"frontend lifecycle processes survived: {survivors}"
+
+
+def _terminate_identities(identities: list[tuple[int, float]]) -> None:
+    for identity in reversed(identities):
+        if not _identity_is_running(identity):
+            continue
+        pid, _created_at = identity
+        try:
+            process = psutil.Process(pid)
+            process.kill()
+            process.wait(timeout=3)
+        except (psutil.NoSuchProcess, psutil.TimeoutExpired, psutil.AccessDenied):
+            pass
+
+
+def _write_frontend_tree_fixture(tmp_path: Path) -> Path:
+    target_script = tmp_path / "frontend-target.py"
+    target_script.write_text(
+        "\n".join(
+            (
+                "import os",
+                "from pathlib import Path",
+                "import subprocess",
+                "import sys",
+                "import time",
+                "target_pid_path = Path(sys.argv[1])",
+                "grandchild_pid_path = Path(sys.argv[2])",
+                "grandchild_source = (",
+                "    \"import os; from pathlib import Path; import sys; import time; \"",
+                "    \"Path(sys.argv[1]).write_text(str(os.getpid()), encoding='utf-8'); \"",
+                "    \"print('pipe-grandchild-ready', flush=True); time.sleep(60)\"",
+                ")",
+                "grandchild = subprocess.Popen(",
+                "    [sys.executable, '-c', grandchild_source, str(grandchild_pid_path)],",
+                "    stdin=subprocess.DEVNULL,",
+                ")",
+                "target_pid_path.write_text(str(os.getpid()), encoding='utf-8')",
+                "print('target-ready', flush=True)",
+                "time.sleep(60)",
+            )
+        ),
+        encoding="utf-8",
+    )
+    return target_script
+
+
+def _spawn_frontend_supervisor_fixture(
+    tmp_path: Path,
+    *,
+    notify_behavior: str,
+) -> tuple[subprocess.Popen, dict[str, Path]]:
+    launcher_path = Path("src/scripts/run_frontend_background.py").resolve()
+    target_script = _write_frontend_tree_fixture(tmp_path)
+    paths = {
+        "target_pid": tmp_path / "target.pid",
+        "grandchild_pid": tmp_path / "grandchild.pid",
+        "notify_entered": tmp_path / "notify-entered",
+        "returncode": tmp_path / "supervisor.returncode",
+    }
+    worker_path = tmp_path / "frontend-supervisor-fixture.py"
+    worker_path.write_text(
+        "\n".join(
+            (
+                "import importlib.util",
+                "import os",
+                "from datetime import datetime",
+                "from pathlib import Path",
+                "import sys",
+                "import time",
+                "launcher_path = Path(sys.argv[1])",
+                "root = Path(sys.argv[2])",
+                "target_script = Path(sys.argv[3])",
+                "target_pid_path = Path(sys.argv[4])",
+                "grandchild_pid_path = Path(sys.argv[5])",
+                "notify_path = Path(sys.argv[6])",
+                "returncode_path = Path(sys.argv[7])",
+                "notify_behavior = sys.argv[8]",
+                "spec = importlib.util.spec_from_file_location('frontend_fixture', launcher_path)",
+                "launcher = importlib.util.module_from_spec(spec)",
+                "assert spec.loader is not None",
+                "spec.loader.exec_module(launcher)",
+                "runtime_logs = launcher._prepare_frontend_runtime_logs(",
+                "    root / 'logs', 'production', datetime.now()",
+                ")",
+                "def notify_ready():",
+                "    notify_path.write_text('entered', encoding='utf-8')",
+                "    if notify_behavior == 'block':",
+                "        while True:",
+                "            time.sleep(1)",
+                "    if notify_behavior == 'error':",
+                "        time.sleep(0.5)",
+                "        raise RuntimeError('injected notify failure')",
+                "returncode = launcher._run_frontend_supervisor(",
+                "    mode='production',",
+                "    command=[",
+                "        sys.executable, str(target_script),",
+                "        str(target_pid_path), str(grandchild_pid_path),",
+                "    ],",
+                "    env=dict(os.environ),",
+                "    webapp_dir=root,",
+                "    runtime_logs=runtime_logs,",
+                "    path_prefixes={'<PROJECT_ROOT>': root},",
+                "    launched_at=datetime.now(),",
+                "    notify_ready=notify_ready,",
+                ")",
+                "returncode_path.write_text(str(returncode), encoding='utf-8')",
+                "raise SystemExit(returncode)",
+            )
+        ),
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(worker_path),
+            str(launcher_path),
+            str(tmp_path),
+            str(target_script),
+            str(paths["target_pid"]),
+            str(paths["grandchild_pid"]),
+            str(paths["notify_entered"]),
+            str(paths["returncode"]),
+            notify_behavior,
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=(
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if os.name == "nt"
+            else 0
+        ),
+        start_new_session=os.name != "nt",
+        close_fds=True,
+    )
+    return process, paths
+
+
+def _capture_frontend_tree(
+    supervisor: subprocess.Popen,
+    paths: dict[str, Path],
+) -> tuple[list[tuple[int, float]], int, int, int]:
+    supervisor_identity = _process_identity(supervisor.pid)
+    for name in ("target_pid", "grandchild_pid", "notify_entered"):
+        _wait_for_path(paths[name])
+    target_pid = int(paths["target_pid"].read_text(encoding="utf-8"))
+    grandchild_pid = int(paths["grandchild_pid"].read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 1
+    owner_pid = None
+    descendants = []
+    while owner_pid is None and time.monotonic() < deadline:
+        try:
+            descendants = psutil.Process(supervisor.pid).children(recursive=True)
+        except psutil.NoSuchProcess:
+            descendants = []
+        candidates = []
+        for child in descendants:
+            try:
+                if "--own-target" in child.cmdline():
+                    candidates.append(child.pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if candidates:
+            owner_pid = candidates[0]
+            break
+        time.sleep(0.02)
+    try:
+        descendants = psutil.Process(supervisor.pid).children(recursive=True)
+    except psutil.NoSuchProcess:
+        descendants = []
+    discovered_pids = {
+        target_pid,
+        grandchild_pid,
+        *(child.pid for child in descendants),
+    }
+    identities = [supervisor_identity]
+    identities.extend(_process_identity(pid) for pid in sorted(discovered_pids))
+    return identities, owner_pid or -1, target_pid, grandchild_pid
 
 
 def test_build_frontend_command_uses_expected_npm_scripts():
@@ -278,3 +503,89 @@ def test_frontend_ready_timeout_terminates_supervisor_and_pipe_descendants(tmp_p
     while psutil.pid_exists(child_pid) and time.monotonic() < deadline:
         time.sleep(0.02)
     assert not psutil.pid_exists(child_pid)
+
+
+def test_ready_supervisor_kill_stops_owner_target_and_pipe_grandchild(tmp_path):
+    supervisor, paths = _spawn_frontend_supervisor_fixture(
+        tmp_path,
+        notify_behavior="ready",
+    )
+    identities = []
+    try:
+        identities, owner_pid, target_pid, grandchild_pid = _capture_frontend_tree(
+            supervisor,
+            paths,
+        )
+
+        supervisor.kill()
+        supervisor.wait(timeout=5)
+        _wait_for_identities_to_stop(identities)
+
+        assert owner_pid not in (-1, target_pid, grandchild_pid)
+        assert len(identities) >= 4
+    finally:
+        _terminate_identities(identities)
+
+
+def test_supervisor_kill_while_notify_blocks_stops_the_owned_process_tree(tmp_path):
+    supervisor, paths = _spawn_frontend_supervisor_fixture(
+        tmp_path,
+        notify_behavior="block",
+    )
+    identities = []
+    try:
+        identities, owner_pid, target_pid, grandchild_pid = _capture_frontend_tree(
+            supervisor,
+            paths,
+        )
+
+        supervisor.kill()
+        supervisor.wait(timeout=5)
+        _wait_for_identities_to_stop(identities)
+
+        assert owner_pid not in (-1, target_pid, grandchild_pid)
+        assert len(identities) >= 4
+    finally:
+        _terminate_identities(identities)
+
+
+def test_notify_failure_stops_owner_target_and_pipe_grandchild(tmp_path):
+    supervisor, paths = _spawn_frontend_supervisor_fixture(
+        tmp_path,
+        notify_behavior="error",
+    )
+    identities = []
+    try:
+        identities, owner_pid, target_pid, grandchild_pid = _capture_frontend_tree(
+            supervisor,
+            paths,
+        )
+
+        assert supervisor.wait(timeout=10) == 1
+        _wait_for_identities_to_stop(identities)
+
+        assert paths["returncode"].read_text(encoding="utf-8") == "1"
+        assert owner_pid not in (-1, target_pid, grandchild_pid)
+        assert len(identities) >= 4
+    finally:
+        _terminate_identities(identities)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signal-owned process groups")
+def test_posix_owner_sigterm_stops_target_and_pipe_grandchild(tmp_path):
+    supervisor, paths = _spawn_frontend_supervisor_fixture(
+        tmp_path,
+        notify_behavior="ready",
+    )
+    identities = []
+    try:
+        identities, owner_pid, target_pid, grandchild_pid = _capture_frontend_tree(
+            supervisor,
+            paths,
+        )
+        assert owner_pid not in (-1, target_pid, grandchild_pid)
+
+        os.kill(owner_pid, signal.SIGTERM)
+        _wait_for_identities_to_stop(identities)
+    finally:
+        _terminate_identities(identities)
