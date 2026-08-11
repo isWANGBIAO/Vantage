@@ -167,15 +167,43 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert 'python-version: "3.13"' in macos_job
     assert "actions/setup-python@v5" in macos_job
     assert (
+        "- uses: actions/checkout@v4\n"
+        "        with:\n"
+        "          lfs: false"
+    ) in macos_job
+    assert (
         "cache-dependency-path: |\n"
         "            requirements-core.txt\n"
         "            requirements-backend-runtime-gpu.txt"
     ) in macos_job
-    assert "python -m pip install -r requirements-backend-runtime-gpu.txt" in macos_job
-    assert "python -m pip check" in macos_job
+    assert "python -m venv .venv-runtime-smoke" in macos_job
+    assert (
+        ".venv-runtime-smoke/bin/python -m pip install "
+        "-r requirements-backend-runtime-gpu.txt"
+    ) in macos_job
+    assert ".venv-runtime-smoke/bin/python -m pip check" in macos_job
+    assert ".venv-runtime-smoke/bin/python -c" in macos_job
+    assert "import cv2, numpy as np" in macos_job
     assert "cv2.FaceDetectorYN_create" in macos_job
+    assert "src/models/face_detection_yunet_2023mar.onnx" in macos_job
     assert "detector.detect" in macos_job
     assert "bash -n RUN.sh RUN_DEV.sh" in macos_job
+    assert not re.findall(
+        r"^\s+(?:run:\s*)?python (?:-m pip (?:install|check)\b|-c\b)",
+        macos_job,
+        flags=re.MULTILINE,
+    ), "macOS runtime install, validation, and probe must use the isolated venv"
+
+    forbidden_steps = (
+        "codesign",
+        "signing",
+        "notarize",
+        "upload-artifact",
+        "publish",
+        "release",
+    )
+    normalized_job = macos_job.lower()
+    assert not [step for step in forbidden_steps if step in normalized_job]
 
 
 def test_release_metadata_matches_package_version():
