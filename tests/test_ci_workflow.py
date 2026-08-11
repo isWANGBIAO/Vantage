@@ -174,6 +174,7 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert (
         "cache-dependency-path: |\n"
         "            requirements-core.txt\n"
+        "            requirements-ci.txt\n"
         "            requirements-backend-runtime-gpu.txt"
     ) in macos_job
     assert "sync_backend_runtime_environment.py" in macos_job
@@ -200,6 +201,13 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert "tamper" in macos_job.lower()
     assert "signature refresh" in macos_job.lower()
     assert "uname -m" in macos_job
+    assert "python -m venv .venv-lock-test" in macos_job
+    assert "grep -E '^pytest==[^[:space:]]+$' requirements-ci.txt" in macos_job
+    assert '.venv-lock-test/bin/python -m pip install "$pytest_requirement"' in macos_job
+    assert (
+        ".venv-lock-test/bin/python -m pytest "
+        "tests/test_backend_runtime_lock.py -q"
+    ) in macos_job
 
     forbidden_steps = (
         "notarize",

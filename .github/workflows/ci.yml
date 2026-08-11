@@ -88,9 +88,17 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements-core.txt
+            requirements-ci.txt
             requirements-backend-runtime-gpu.txt
       - name: Check runner architecture
         run: test "$(uname -m)" = "${{ matrix.uname }}"
+      - name: Exercise POSIX backend runtime lock semantics
+        run: |
+          python -m venv .venv-lock-test
+          pytest_requirement="$(grep -E '^pytest==[^[:space:]]+$' requirements-ci.txt)"
+          test -n "$pytest_requirement"
+          .venv-lock-test/bin/python -m pip install "$pytest_requirement"
+          .venv-lock-test/bin/python -m pytest tests/test_backend_runtime_lock.py -q
       - name: Synchronize packaged runtime dependencies in the dedicated environment
         run: |
           python src/scripts/sync_backend_runtime_environment.py \

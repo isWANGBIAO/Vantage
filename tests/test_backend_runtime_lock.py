@@ -303,6 +303,61 @@ except TimeoutError:
     assert contender.returncode == 23, contender.stderr
 
 
+def test_lock_file_symlink_is_rejected_before_external_target_is_extended(tmp_path):
+    lock_module = _lock_module()
+    external = tmp_path / "outside-lock-target.bin"
+    external.write_bytes(b"outside")
+    lock_path = lock_module.backend_runtime_lock_path(tmp_path)
+    try:
+        lock_path.symlink_to(external)
+    except OSError as exc:
+        pytest.skip(f"file symlink creation is unavailable: {exc}")
+
+    with pytest.raises((OSError, ValueError), match="link|reparse|safe"):
+        with lock_module.backend_runtime_lock(tmp_path, timeout_seconds=0.2):
+            pytest.fail("linked lock file must never be acquired")
+
+    assert external.read_bytes() == b"outside"
+
+
+def test_lock_file_hardlink_is_rejected_before_external_target_is_extended(tmp_path):
+    lock_module = _lock_module()
+    external = tmp_path / "outside-lock-target.bin"
+    external.write_bytes(b"outside")
+    lock_path = lock_module.backend_runtime_lock_path(tmp_path)
+    os.link(external, lock_path)
+
+    with pytest.raises(ValueError, match="hard link|link count"):
+        with lock_module.backend_runtime_lock(tmp_path, timeout_seconds=0.2):
+            pytest.fail("hard-linked lock file must never be acquired")
+
+    assert external.read_bytes() == b"outside"
+
+
+def test_lock_file_swap_after_lstat_is_rejected_before_external_write(tmp_path):
+    lock_module = _lock_module()
+    lock_path = lock_module.backend_runtime_lock_path(tmp_path)
+    lock_path.write_bytes(b"local")
+    external = tmp_path / "outside-race-target.bin"
+    external.write_bytes(b"outside")
+
+    def swap_to_hardlink(stage: str, path: Path) -> None:
+        if stage != "after_initial_lstat":
+            return
+        path.unlink()
+        os.link(external, path)
+
+    lock = lock_module.BackendRuntimeFileLock(
+        lock_path,
+        timeout_seconds=0.2,
+        race_hook=swap_to_hardlink,
+    )
+    with pytest.raises((RuntimeError, ValueError), match="identity|hard link|link count"):
+        lock.acquire()
+
+    assert external.read_bytes() == b"outside"
+
+
 def test_lock_and_retained_quarantine_artifacts_are_gitignored():
     gitignore = Path(".gitignore").read_text(encoding="utf-8")
 

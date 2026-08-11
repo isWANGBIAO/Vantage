@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 import errno
 import os
 from pathlib import Path
+import stat
 import threading
 import time
-from typing import Iterator, Literal
+from typing import Callable, Iterator, Literal
 
 
 BACKEND_RUNTIME_LOCK_NAME = ".vantage-backend-runtime.lock"
@@ -17,6 +19,43 @@ BACKEND_RUNTIME_LOCK_READER_SLOTS = 64
 BackendRuntimeLockMode = Literal["exclusive", "shared"]
 
 _thread_state = threading.local()
+
+
+@dataclass(frozen=True)
+class _LockFileIdentity:
+    device: int
+    inode: int
+    file_type: int
+    file_attributes: int
+    link_count: int
+
+
+def _identity_from_stat(path_stat) -> _LockFileIdentity:
+    return _LockFileIdentity(
+        device=int(path_stat.st_dev),
+        inode=int(path_stat.st_ino),
+        file_type=stat.S_IFMT(path_stat.st_mode),
+        file_attributes=int(getattr(path_stat, "st_file_attributes", 0)),
+        link_count=int(path_stat.st_nlink),
+    )
+
+
+def _lock_file_identity(path: Path) -> _LockFileIdentity:
+    return _identity_from_stat(path.lstat())
+
+
+def _identity_is_reparse(identity: _LockFileIdentity) -> bool:
+    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    return bool(identity.file_attributes & reparse_flag)
+
+
+def _validate_lock_file_identity(identity: _LockFileIdentity) -> None:
+    if stat.S_ISLNK(identity.file_type) or _identity_is_reparse(identity):
+        raise ValueError("backend runtime lock file must not be a link or reparse point")
+    if not stat.S_ISREG(identity.file_type):
+        raise ValueError("backend runtime lock file must be a regular file")
+    if identity.link_count != 1:
+        raise ValueError("backend runtime lock file link count indicates a hard link")
 
 
 def backend_runtime_lock_path(project_root: str | Path) -> Path:
@@ -52,6 +91,7 @@ class BackendRuntimeFileLock:
         poll_interval_seconds: float = DEFAULT_BACKEND_RUNTIME_LOCK_POLL_SECONDS,
         monotonic=time.monotonic,
         sleep=time.sleep,
+        race_hook: Callable[[str, Path], object] | None = None,
     ) -> None:
         if timeout_seconds < 0:
             raise ValueError("backend runtime lock timeout must be non-negative")
@@ -65,8 +105,53 @@ class BackendRuntimeFileLock:
         self.poll_interval_seconds = float(poll_interval_seconds)
         self._monotonic = monotonic
         self._sleep = sleep
+        self._race_hook = race_hook
         self._handle = None
         self._reader_slot: int | None = None
+        self._lock_file_identity: _LockFileIdentity | None = None
+
+    def _open_safe_lock_file(self):
+        try:
+            initial_identity = _lock_file_identity(self.path)
+        except FileNotFoundError:
+            initial_identity = None
+        if initial_identity is not None:
+            _validate_lock_file_identity(initial_identity)
+        if self._race_hook is not None:
+            self._race_hook("after_initial_lstat", self.path)
+
+        flags = os.O_RDWR | os.O_CREAT
+        flags |= int(getattr(os, "O_BINARY", 0))
+        flags |= int(getattr(os, "O_CLOEXEC", 0))
+        flags |= int(getattr(os, "O_NOINHERIT", 0))
+        flags |= int(getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(self.path, flags, 0o600)
+        try:
+            if self._race_hook is not None:
+                self._race_hook("after_open_before_validation", self.path)
+            opened_identity = _identity_from_stat(os.fstat(descriptor))
+            path_identity = _lock_file_identity(self.path)
+            _validate_lock_file_identity(opened_identity)
+            _validate_lock_file_identity(path_identity)
+            if opened_identity != path_identity:
+                raise RuntimeError("backend runtime lock file identity changed while opening")
+            if initial_identity is not None and opened_identity != initial_identity:
+                raise RuntimeError("backend runtime lock file identity changed before opening")
+            return os.fdopen(descriptor, "r+b"), opened_identity
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def _validate_open_lock_file(self, handle) -> None:
+        expected_identity = self._lock_file_identity
+        if expected_identity is None:
+            raise RuntimeError("backend runtime lock file identity is unavailable")
+        opened_identity = _identity_from_stat(os.fstat(handle.fileno()))
+        path_identity = _lock_file_identity(self.path)
+        _validate_lock_file_identity(opened_identity)
+        _validate_lock_file_identity(path_identity)
+        if opened_identity != expected_identity or path_identity != expected_identity:
+            raise RuntimeError("backend runtime lock file identity changed")
 
     def _try_windows_lock_range(self, offset: int, length: int) -> bool:
         assert self._handle is not None
@@ -127,28 +212,33 @@ class BackendRuntimeFileLock:
         if self._handle is not None:
             raise RuntimeError("backend runtime lock is already acquired")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self.path.open("a+b")
+        handle, lock_file_identity = self._open_safe_lock_file()
+        self._lock_file_identity = lock_file_identity
         try:
             required_bytes = BACKEND_RUNTIME_LOCK_READER_SLOTS + 1
             handle.seek(0, os.SEEK_END)
             current_bytes = handle.tell()
             if current_bytes < required_bytes:
+                if self._race_hook is not None:
+                    self._race_hook("before_extend", self.path)
+                self._validate_open_lock_file(handle)
                 handle.write(b"\0" * (required_bytes - current_bytes))
                 handle.flush()
                 os.fsync(handle.fileno())
+                self._validate_open_lock_file(handle)
             self._handle = handle
             deadline = self._monotonic() + self.timeout_seconds
             while True:
                 if self._try_lock():
+                    self._validate_open_lock_file(handle)
                     return
                 remaining = deadline - self._monotonic()
                 if remaining <= 0:
-                    raise TimeoutError(
-                        f"timed out waiting for backend runtime lock: {self.path}"
-                    )
+                    raise TimeoutError("timed out waiting for backend runtime lock")
                 self._sleep(min(self.poll_interval_seconds, remaining))
         except BaseException:
             self._handle = None
+            self._lock_file_identity = None
             handle.close()
             raise
 
@@ -175,6 +265,7 @@ class BackendRuntimeFileLock:
                 )
         finally:
             self._handle = None
+            self._lock_file_identity = None
             handle.close()
 
     def __enter__(self) -> BackendRuntimeFileLock:
