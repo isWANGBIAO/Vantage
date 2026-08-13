@@ -65,8 +65,12 @@ export function prepareBuildVersion({
   const packageJson = readJson(packagePath);
 
   const normalizedMode = String(mode || 'bump').toLowerCase();
-  const shouldBump = normalizedMode === 'auto' ? !gitClean : normalizedMode !== 'sync';
   const existingBuildInfo = existsSync(buildInfoPath) ? readJson(buildInfoPath) : null;
+  const alreadyPreparedForCommit = existingBuildInfo?.version === packageJson.version
+    && String(existingBuildInfo?.build_commit || '').replace(/\+dirty$/, '') === commit;
+  const shouldBump = normalizedMode === 'auto'
+    ? !gitClean && !alreadyPreparedForCommit
+    : normalizedMode !== 'sync';
   const buildCommit = formatBuildCommit(commit, gitClean);
 
   if (!shouldBump) {

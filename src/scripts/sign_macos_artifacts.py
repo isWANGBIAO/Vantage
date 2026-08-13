@@ -769,6 +769,34 @@ def _sign_staged(
         )
         _assert_staged(root, staging_root, staging_root_identity, staged)
         _assert_source(root, staged.source)
+        # PyInstaller can leave a framework binary with a stale resource envelope.
+        # `codesign --force` does not reliably discard that envelope on newer macOS,
+        # so remove the old signature before applying the ad-hoc signature.
+        _run_command(
+            ["codesign", "--remove-signature", command_path],
+            action="signature cleanup",
+            run_command=run_command,
+            path_prefixes=path_prefixes,
+            allow_failure=True,
+            working_directory_fd=staging_parent_fd,
+        )
+        _assert_source(root, staged.source)
+        cleaned_identity = _assert_plain_file(
+            staged.path,
+            role="staged native artifact",
+        )
+        staged = _StagedArtifact(
+            source=staged.source,
+            path=staged.path,
+            identity=cleaned_identity,
+            parent_identity=staged.parent_identity,
+            sha256=_sha256_file(
+                staged.path,
+                expected_identity=cleaned_identity,
+                role="staged native artifact",
+            ),
+        )
+        _assert_staged(root, staging_root, staging_root_identity, staged)
         _run_command(
             [
                 "codesign",
@@ -908,6 +936,43 @@ def _verify_snapshot(
             if artifact_parent_fd is not None:
                 os.close(artifact_parent_fd)
     return True
+
+
+def _resign_framework_binaries_in_place(
+    root: Path,
+    snapshot: _ArtifactSnapshot,
+    *,
+    run_command,
+    path_prefixes: Mapping[str, object],
+) -> None:
+    """Sign framework executables in their final bundle context."""
+    for artifact in snapshot.artifacts:
+        if artifact.path.name != "Python" or ".framework" not in artifact.relative_path:
+            continue
+        _assert_source(root, artifact)
+        parent_fd = _open_validated_directory(
+            artifact.path.parent,
+            artifact.parent_identity,
+            role="artifact parent",
+        )
+        try:
+            _run_command(
+                ["codesign", "--remove-signature", artifact.path.name],
+                action="framework signature cleanup",
+                run_command=run_command,
+                path_prefixes=path_prefixes,
+                allow_failure=True,
+                working_directory_fd=parent_fd,
+            )
+            _run_command(
+                ["codesign", "--force", "--sign", "-", "--timestamp=none", artifact.path.name],
+                action="framework signing",
+                run_command=run_command,
+                path_prefixes=path_prefixes,
+                working_directory_fd=parent_fd,
+            )
+        finally:
+            os.close(parent_fd)
 
 
 def _assert_final_snapshot(
@@ -1075,6 +1140,19 @@ def sign_macos_artifacts(
                 ignored_root=staging_root,
             )
             _assert_final_snapshot(snapshot, signed, installed)
+            if profile == "backend-bundle":
+                _resign_framework_binaries_in_place(
+                    resolved_root,
+                    installed,
+                    run_command=run_command,
+                    path_prefixes=path_prefixes,
+                )
+                installed = _build_snapshot(
+                    resolved_root,
+                    profile,
+                    anchor_path,
+                    ignored_root=staging_root,
+                )
             _verify_snapshot(
                 resolved_root,
                 installed,
