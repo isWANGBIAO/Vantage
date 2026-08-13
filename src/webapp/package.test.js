@@ -330,6 +330,32 @@ test('build version script auto mode bumps when tracked changes are present', as
   assert.equal(JSON.parse(readFileSync(buildInfoPath, 'utf8')).build_commit, 'dirty123+dirty');
 });
 
+test('build version script auto mode does not bump twice for the same dirty commit', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-version-auto-repeat-'));
+  writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: '1.0.69' }));
+  writeFileSync(path.join(root, 'package-lock.json'), JSON.stringify({
+    version: '1.0.69',
+    packages: { '': { version: '1.0.69' } },
+  }));
+  writeFileSync(path.join(root, 'build-info.json'), JSON.stringify({
+    version: '1.0.69',
+    build_date: '2026-08-13T00:00:00.000Z',
+    build_commit: 'abc1234+dirty',
+  }));
+
+  const { prepareBuildVersion } = await import('./scripts/prepare-build-version.mjs');
+  const result = prepareBuildVersion({
+    webappRoot: root,
+    mode: 'auto',
+    commit: 'abc1234',
+    gitClean: false,
+    now: new Date('2026-08-14T00:00:00.000Z'),
+  });
+
+  assert.equal(result.version, '1.0.69');
+  assert.equal(result.bumped, false);
+});
+
 test('RUN.bat prepares build version in auto mode but does not commit automatically', () => {
   assert.ok(runBatSource.includes('prepare-build-version.mjs --mode auto'));
   assert.equal(/git\s+commit/i.test(runBatSource), false);
