@@ -181,6 +181,28 @@ function hasRecordedUsage(stats) {
   return usageValues.some((value) => Number(value) > 0);
 }
 
+function hasCompleteActionPlanAggregateUsage(stats) {
+  if (!hasRecordedUsage(stats) || stats?.usage_complete === false) {
+    return false;
+  }
+  if (stats?.usage_complete === true || !Array.isArray(stats?.requests)) {
+    return true;
+  }
+
+  const requestsBySection = new Map(
+    stats.requests
+      .filter((request) => request?.section === 'analysis' || request?.section === 'plan')
+      .map((request) => [request.section, request]),
+  );
+  if (requestsBySection.size === 0) {
+    return true;
+  }
+
+  return ['analysis', 'plan'].every((section) => (
+    hasRecordedUsage(requestsBySection.get(section))
+  ));
+}
+
 function normalizeUnrecordedUsageStats(stats) {
   if (!stats || hasRecordedUsage(stats)) {
     return stats;
@@ -235,7 +257,7 @@ export function formatThinkingTitleWithDuration(title, durationSeconds, reasonin
 }
 
 export function formatActionPlanTokenBreakdown(stats) {
-  if (!hasRecordedUsage(stats)) {
+  if (!hasCompleteActionPlanAggregateUsage(stats)) {
     return '-';
   }
 
@@ -252,7 +274,7 @@ export function formatActionPlanTokenBreakdown(stats) {
 }
 
 export function formatActionPlanSpeed(stats) {
-  if (!hasRecordedUsage(stats)) {
+  if (!hasCompleteActionPlanAggregateUsage(stats)) {
     return '-';
   }
 
@@ -261,7 +283,7 @@ export function formatActionPlanSpeed(stats) {
 }
 
 export function formatActionPlanCacheBreakdown(stats) {
-  if (!hasRecordedUsage(stats)) {
+  if (!hasCompleteActionPlanAggregateUsage(stats)) {
     return null;
   }
 

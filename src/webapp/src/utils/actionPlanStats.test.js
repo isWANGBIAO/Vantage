@@ -313,6 +313,38 @@ test('formatActionPlanSpeed does not render a fake zero for incomplete aggregate
   }), '2.50 tokens/s');
 });
 
+test('aggregate formatters hide partial usage from legacy saved Action Plans', () => {
+  const legacyPartialStats = {
+    prompt_tokens: 10,
+    completion_tokens: 5,
+    total_tokens: 15,
+    prompt_cache_hit_tokens: 4,
+    prompt_cache_miss_tokens: 6,
+    prompt_cache_hit_rate: 40,
+    speed: '2.50 tokens/s',
+    requests: [
+      {
+        section: 'analysis',
+        usage_recorded: true,
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+      },
+      {
+        section: 'plan',
+        usage_recorded: false,
+        prompt_tokens: null,
+        completion_tokens: null,
+        total_tokens: null,
+      },
+    ],
+  };
+
+  assert.equal(formatActionPlanTokenBreakdown(legacyPartialStats), '-');
+  assert.equal(formatActionPlanSpeed(legacyPartialStats), '-');
+  assert.equal(formatActionPlanCacheBreakdown(legacyPartialStats), null);
+});
+
 test('formatActionPlanCacheBreakdown does not turn a null cache rate into 0 percent', () => {
   assert.equal(
     formatActionPlanCacheBreakdown({
