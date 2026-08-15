@@ -179,6 +179,9 @@ class ActionPlanRequestStatsTests(unittest.TestCase):
                 "first_token_latency": 14.5,
                 "completed_at": "2026-05-04T10:59:27+08:00",
                 "model": "gpt-5.5",
+                "stream_completed": True,
+                "stream_terminal_event": "done",
+                "finish_reason": "stop",
             },
         )
 
@@ -190,6 +193,46 @@ class ActionPlanRequestStatsTests(unittest.TestCase):
         self.assertIsNone(stats["completion_tokens_per_second"])
         self.assertEqual(stats["duration"], 266.0)
         self.assertEqual(stats["first_token_latency"], 14.5)
+        self.assertTrue(stats["stream_completed"])
+        self.assertEqual(stats["stream_terminal_event"], "done")
+        self.assertEqual(stats["finish_reason"], "stop")
+
+    def test_zero_only_usage_is_marked_unrecorded(self):
+        stats = run_prompt.build_action_plan_request_stats(
+            "analysis",
+            {
+                "content": "complete reply",
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
+                "duration": 12.0,
+                "stream_completed": True,
+            },
+        )
+
+        self.assertFalse(stats["usage_recorded"])
+        self.assertIsNone(stats["prompt_tokens"])
+        self.assertIsNone(stats["completion_tokens"])
+        self.assertIsNone(stats["total_tokens"])
+
+    def test_top_level_reasoning_tokens_are_normalized(self):
+        stats = run_prompt.build_action_plan_request_stats(
+            "analysis",
+            {
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 5,
+                    "total_tokens": 17,
+                    "reasoning_tokens": 7,
+                },
+                "duration": 2.0,
+            },
+        )
+
+        self.assertTrue(stats["usage_recorded"])
+        self.assertEqual(stats["completion_reasoning_tokens"], 7)
 
     def test_prompt_context_limit_warning_is_recorded_for_large_requests(self):
         stats = run_prompt.build_action_plan_request_stats(
@@ -312,6 +355,71 @@ class RunPromptTests(unittest.TestCase):
             )
 
         self.assertEqual(client.call_count, 2)
+
+    def test_run_action_plan_round_preserves_missing_usage_as_unavailable(self):
+        client = _CapturingLLMClient(
+            [
+                {
+                    "content": "complete analysis",
+                    "usage": {},
+                    "duration": 2.0,
+                    "first_token_latency": 0.7,
+                    "completed_at": "2026-08-16T09:00:00+08:00",
+                    "stream_completed": True,
+                    "stream_terminal_event": "done",
+                    "finish_reason": "stop",
+                },
+            ]
+        )
+
+        result, content = run_prompt.run_action_plan_round(
+            client=client,
+            messages=[{"role": "user", "content": "analysis"}],
+            section="analysis",
+            model_override="DeepSeek-V4-Flash-0731",
+            provider_route="custom",
+            service_tier=None,
+            emit_start_before_first_attempt=False,
+            max_empty_content_retries=1,
+            metadata={},
+        )
+
+        self.assertEqual(content, "complete analysis")
+        self.assertEqual(result["usage"], {})
+        self.assertEqual(result["attempts"], 1)
+        self.assertTrue(result["stream_completed"])
+
+    def test_run_action_plan_round_treats_zero_only_usage_as_unavailable(self):
+        client = _CapturingLLMClient(
+            [
+                {
+                    "content": "complete analysis",
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                    "duration": 2.0,
+                    "stream_completed": True,
+                    "stream_terminal_event": "done",
+                    "finish_reason": "stop",
+                },
+            ]
+        )
+
+        result, _ = run_prompt.run_action_plan_round(
+            client=client,
+            messages=[{"role": "user", "content": "analysis"}],
+            section="analysis",
+            model_override="DeepSeek-V4-Flash-0731",
+            provider_route="custom",
+            service_tier=None,
+            emit_start_before_first_attempt=False,
+            max_empty_content_retries=1,
+            metadata={},
+        )
+
+        self.assertEqual(result["usage"], {})
 
     def test_transcribe_mode_exits_nonzero_when_audio_service_fails(self):
         stdout = io.StringIO()

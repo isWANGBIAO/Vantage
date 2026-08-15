@@ -108,6 +108,35 @@ def get_action_plan_round_content(result):
     return (result.get("content") or "").strip()
 
 
+def _usage_has_recorded_counts(usage):
+    if not isinstance(usage, dict):
+        return False
+
+    values = [
+        usage.get("prompt_tokens"),
+        usage.get("completion_tokens"),
+        usage.get("total_tokens"),
+        usage.get("prompt_cache_hit_tokens"),
+        usage.get("prompt_cache_miss_tokens"),
+        usage.get("completion_reasoning_tokens"),
+        usage.get("reasoning_tokens"),
+    ]
+    prompt_details = usage.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict):
+        values.append(prompt_details.get("cached_tokens"))
+    completion_details = usage.get("completion_tokens_details")
+    if isinstance(completion_details, dict):
+        values.append(completion_details.get("reasoning_tokens"))
+
+    for value in values:
+        try:
+            if float(value or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def _sum_usage_totals(*usage_payloads):
     totals = {
         "prompt_tokens": 0,
@@ -129,6 +158,8 @@ def _sum_usage_totals(*usage_payloads):
         if normalized_cache_miss is None and normalized_cache_hit is not None:
             normalized_cache_miss = max(int(usage.get("prompt_tokens", 0) or 0) - int(normalized_cache_hit or 0), 0)
         normalized_reasoning = usage.get("completion_reasoning_tokens")
+        if normalized_reasoning is None:
+            normalized_reasoning = usage.get("reasoning_tokens")
         if normalized_reasoning is None:
             completion_details = usage.get("completion_tokens_details")
             if isinstance(completion_details, dict):
@@ -213,17 +244,7 @@ def build_action_plan_request_stats(section, result):
     payload = dict(result or {})
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     duration = float(payload.get("duration", 0) or 0)
-    usage_recorded = any(
-        usage.get(key) is not None
-        for key in (
-            "prompt_tokens",
-            "completion_tokens",
-            "total_tokens",
-            "prompt_cache_hit_tokens",
-            "prompt_cache_miss_tokens",
-            "completion_reasoning_tokens",
-        )
-    ) or isinstance(usage.get("prompt_tokens_details"), dict) or isinstance(usage.get("completion_tokens_details"), dict)
+    usage_recorded = _usage_has_recorded_counts(usage)
     prompt_tokens = int(usage.get("prompt_tokens", 0) or 0) if usage_recorded else None
     completion_tokens = int(usage.get("completion_tokens", 0) or 0) if usage_recorded else None
     total_tokens = int(usage.get("total_tokens", 0) or 0) if usage_recorded else None
@@ -236,6 +257,8 @@ def build_action_plan_request_stats(section, result):
     if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None:
         prompt_cache_miss_tokens = max(int(prompt_tokens or 0) - int(prompt_cache_hit_tokens or 0), 0)
     completion_reasoning_tokens = usage.get("completion_reasoning_tokens")
+    if completion_reasoning_tokens is None:
+        completion_reasoning_tokens = usage.get("reasoning_tokens")
     if completion_reasoning_tokens is None:
         completion_details = usage.get("completion_tokens_details")
         if isinstance(completion_details, dict):
@@ -274,6 +297,9 @@ def build_action_plan_request_stats(section, result):
         "reasoning_effort": payload.get("reasoning_effort") or "medium",
         "service_tier": payload.get("service_tier"),
         "attempts": int(payload.get("attempts", 1) or 1),
+        "stream_completed": payload.get("stream_completed"),
+        "stream_terminal_event": payload.get("stream_terminal_event"),
+        "finish_reason": payload.get("finish_reason"),
     }
     stats.update(_build_prompt_context_limit_metadata(prompt_tokens=prompt_tokens))
     return stats
@@ -326,6 +352,7 @@ def run_action_plan_round(
         "completion_tokens": 0,
         "total_tokens": 0,
     }
+    usage_recorded = False
     total_duration = 0.0
     last_result = {}
 
@@ -363,12 +390,15 @@ def run_action_plan_round(
             )
             raise
         last_result = dict(result or {})
-        total_usage = _sum_usage_totals(total_usage, last_result.get("usage"))
+        attempt_usage = last_result.get("usage")
+        if _usage_has_recorded_counts(attempt_usage):
+            usage_recorded = True
+        total_usage = _sum_usage_totals(total_usage, attempt_usage)
         total_duration += float(last_result.get("duration", 0) or 0)
 
         content = get_action_plan_round_content(last_result)
         if content:
-            last_result["usage"] = total_usage
+            last_result["usage"] = total_usage if usage_recorded else {}
             last_result["duration"] = total_duration
             last_result["attempts"] = attempt
             return last_result, content
@@ -381,7 +411,7 @@ def run_action_plan_round(
                 total_attempts,
             )
 
-    last_result["usage"] = total_usage
+    last_result["usage"] = total_usage if usage_recorded else {}
     last_result["duration"] = total_duration
     last_result["attempts"] = total_attempts
     logging.error(
