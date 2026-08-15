@@ -1257,6 +1257,7 @@ class LLMClientTests(unittest.TestCase):
             b'data: {"id":"chunk-1","choices":[{"delta":{"content":"A"}}],"usage":null,"system_fingerprint":"fp-stream"}',
             b'data: {"id":"chunk-2","choices":[{"delta":{},"finish_reason":"stop"}],"usage":null}',
             b'data: {"id":"chunk-3","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":1}}}',
+            b'data: {"id":"chunk-4","choices":[],"usage":null}',
             b'data: [DONE]',
         ]
         recorder = Mock()
@@ -1310,6 +1311,43 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(completed_kwargs["content"], "A")
         self.assertIsNotNone(completed_kwargs["first_token_latency"])
         self.assertIsNotNone(result["first_token_latency"])
+
+    def test_streaming_chat_accepts_stop_finish_reason_without_done_sentinel(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.iter_lines.return_value = [
+            b'data: {"id":"chunk-1","choices":[{"delta":{"content":"complete"}}]}',
+            b'data: {"id":"chunk-2","choices":[{"delta":{},"finish_reason":"stop"}]}',
+        ]
+        recorder = Mock()
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(
+                llm_client.requests,
+                "get",
+                return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
+            ),
+            patch.object(llm_client.requests, "post", return_value=fake_response),
+            patch.object(llm_client, "SessionRecorder", return_value=recorder),
+        ):
+            client = llm_client.LLMClient()
+            result = client.chat(
+                [{"role": "user", "content": "ping"}],
+                stream=True,
+                print_callback=lambda *_: None,
+                source="chat",
+                entrypoint="src/scripts/run_prompt.py",
+            )
+
+        self.assertEqual(result["content"], "complete")
+        self.assertTrue(result["stream_completed"])
+        self.assertEqual(result["stream_terminal_event"], "finish_reason")
+        self.assertEqual(result["finish_reason"], "stop")
+        recorder.record_request_completed.assert_called_once()
+        recorder.record_request_failed.assert_not_called()
 
     def test_streaming_chat_marks_stream_without_terminal_event_as_failed(self):
         fake_response = Mock()

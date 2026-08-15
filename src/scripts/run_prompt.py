@@ -305,6 +305,37 @@ def build_action_plan_request_stats(section, result):
     return stats
 
 
+def normalize_action_plan_aggregate_usage(stats, request_stats):
+    """Hide aggregate token metrics unless both Action Plan rounds reported usage."""
+    normalized = dict(stats or {})
+    requests_by_section = {
+        request.get("section"): request
+        for request in (request_stats or [])
+        if isinstance(request, dict)
+    }
+    usage_complete = all(
+        bool(requests_by_section.get(section, {}).get("usage_recorded"))
+        for section in ("analysis", "plan")
+    )
+    normalized["usage_recorded"] = usage_complete
+    normalized["usage_complete"] = usage_complete
+
+    if not usage_complete:
+        for field in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "prompt_cache_hit_tokens",
+            "prompt_cache_miss_tokens",
+            "prompt_cache_hit_rate",
+            "completion_reasoning_tokens",
+            "speed",
+        ):
+            normalized[field] = None
+
+    return normalized
+
+
 def _first_non_null(*values):
     for value in values:
         normalized = _as_float_or_none(value)
@@ -939,7 +970,7 @@ def main():
                         summary_cache_miss_tokens = None
                     summary_cache_total = int(summary_cache_hit_tokens or 0) + int(summary_cache_miss_tokens or 0)
 
-                    stats_output = {
+                    stats_output = normalize_action_plan_aggregate_usage({
                         "turns": len(context_mgr.messages),
                         "prompt_tokens": summary_prompt_tokens,
                         "completion_tokens": summary_completion_tokens,
@@ -964,7 +995,7 @@ def main():
                             request_stats[1].get("first_token_latency"),
                         ),
                         "requests": request_stats,
-                    }
+                    }, request_stats)
                     stats_output.update(_build_prompt_context_limit_summary(request_stats))
                     metadata = build_generation_metadata(result, result_round_2)
                     stats_output.update(metadata)

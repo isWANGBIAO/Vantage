@@ -20,6 +20,7 @@ import {
 import {
   computeDisplayedDurationSeconds,
   formatActionPlanCacheBreakdown,
+  formatActionPlanSpeed,
   formatActionPlanTokenBreakdown,
   formatCompactTokenValue,
   formatSecondsValue,
@@ -926,7 +927,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
           {stats && (
             <div className="action-plan-stats">
               <span>{t('common.first_token', { value: formatDurationChipValue(stats.first_token_latency) })}</span>
-              <span>{t('common.speed', { value: stats.speed })}</span>
+              <span>{t('common.speed', { value: formatActionPlanSpeed(stats) })}</span>
               <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
               <span>{t('common.tokens_detail', { value: formatActionPlanTokenBreakdown(stats) })}</span>
               {cacheBreakdown ? <span>{t('common.cache_session', { value: cacheBreakdown })}</span> : null}

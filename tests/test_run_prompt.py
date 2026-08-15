@@ -169,6 +169,64 @@ class _CapturingLLMClient:
 
 
 class ActionPlanRequestStatsTests(unittest.TestCase):
+    def test_aggregate_usage_is_unavailable_when_both_rounds_have_no_usage(self):
+        stats = run_prompt.normalize_action_plan_aggregate_usage(
+            {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "prompt_cache_hit_tokens": 0,
+                "prompt_cache_miss_tokens": 0,
+                "prompt_cache_hit_rate": None,
+                "completion_reasoning_tokens": 0,
+                "speed": "0.00 tokens/s",
+                "total_duration": 12.5,
+            },
+            [
+                {"section": "analysis", "usage_recorded": False},
+                {"section": "plan", "usage_recorded": False},
+            ],
+        )
+
+        self.assertFalse(stats["usage_recorded"])
+        self.assertFalse(stats["usage_complete"])
+        self.assertIsNone(stats["prompt_tokens"])
+        self.assertIsNone(stats["completion_tokens"])
+        self.assertIsNone(stats["total_tokens"])
+        self.assertIsNone(stats["prompt_cache_hit_tokens"])
+        self.assertIsNone(stats["prompt_cache_miss_tokens"])
+        self.assertIsNone(stats["completion_reasoning_tokens"])
+        self.assertIsNone(stats["speed"])
+        self.assertEqual(stats["total_duration"], 12.5)
+
+    def test_aggregate_usage_is_unavailable_when_only_one_round_has_usage(self):
+        stats = run_prompt.normalize_action_plan_aggregate_usage(
+            {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "prompt_cache_hit_tokens": 4,
+                "prompt_cache_miss_tokens": 6,
+                "prompt_cache_hit_rate": 40.0,
+                "completion_reasoning_tokens": 3,
+                "speed": "2.50 tokens/s",
+                "total_duration": 6.0,
+            },
+            [
+                {"section": "analysis", "usage_recorded": True},
+                {"section": "plan", "usage_recorded": False},
+            ],
+        )
+
+        self.assertFalse(stats["usage_recorded"])
+        self.assertFalse(stats["usage_complete"])
+        self.assertIsNone(stats["prompt_tokens"])
+        self.assertIsNone(stats["completion_tokens"])
+        self.assertIsNone(stats["total_tokens"])
+        self.assertIsNone(stats["prompt_cache_hit_rate"])
+        self.assertIsNone(stats["completion_reasoning_tokens"])
+        self.assertIsNone(stats["speed"])
+
     def test_missing_usage_is_marked_unrecorded_instead_of_zero(self):
         stats = run_prompt.build_action_plan_request_stats(
             "analysis",
@@ -807,6 +865,8 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(saved_payload["meta"]["reasoning_effort"], "medium")
         self.assertIn("generated_at", saved_payload["meta"])
         self.assertEqual(saved_payload["meta"]["stats"]["total_tokens"], 43)
+        self.assertTrue(saved_payload["meta"]["stats"]["usage_recorded"])
+        self.assertTrue(saved_payload["meta"]["stats"]["usage_complete"])
 
     def test_analysis_mode_does_not_warn_on_combined_prompt_tokens_when_each_request_fits(self):
         fake_client = _HighButPerRequestSafeLLMClient()

@@ -6,6 +6,7 @@ import * as actionPlanStats from './actionPlanStats.js';
 import {
   computeDisplayedDurationSeconds,
   formatActionPlanCacheBreakdown,
+  formatActionPlanSpeed,
   formatActionPlanTokenBreakdown,
   formatThinkingTitleWithDuration,
   formatPoweredByLabel,
@@ -296,6 +297,20 @@ test('formatActionPlanTokenBreakdown and cache breakdown do not render fake zero
 
   assert.equal(formatActionPlanTokenBreakdown(stats), '-');
   assert.equal(formatActionPlanCacheBreakdown(stats), null);
+});
+
+test('formatActionPlanSpeed does not render a fake zero for incomplete aggregate usage', () => {
+  assert.equal(formatActionPlanSpeed({
+    usage_recorded: false,
+    usage_complete: false,
+    speed: null,
+  }), '-');
+  assert.equal(formatActionPlanSpeed({
+    usage_recorded: true,
+    usage_complete: true,
+    completion_tokens: 5,
+    speed: '2.50 tokens/s',
+  }), '2.50 tokens/s');
 });
 
 test('formatActionPlanCacheBreakdown does not turn a null cache rate into 0 percent', () => {

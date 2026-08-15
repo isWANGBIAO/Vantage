@@ -251,6 +251,15 @@ export function formatActionPlanTokenBreakdown(stats) {
   return `${totalText} (P ${formatCompactTokenValue(promptTokens)} / C ${formatCompactTokenValue(completionTokens)})`;
 }
 
+export function formatActionPlanSpeed(stats) {
+  if (!hasRecordedUsage(stats)) {
+    return '-';
+  }
+
+  const speed = String(stats?.speed ?? '').trim();
+  return speed || '-';
+}
+
 export function formatActionPlanCacheBreakdown(stats) {
   if (!hasRecordedUsage(stats)) {
     return null;
