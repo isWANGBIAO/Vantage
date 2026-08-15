@@ -771,6 +771,82 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(used_request["thinking"], {"type": "enabled"})
         self.assertEqual(result["reasoning_effort"], "max")
 
+    def test_chat_uses_versioned_deepseek_v4_server_sampling_defaults(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done", "reasoning_content": "thought"}}],
+            "usage": {},
+        }
+        deepseek_provider = {
+            "route": "custom",
+            "name": "wintop",
+            "type": "openai-compatible",
+            "base_url": "http://wintop.example/v1",
+            "api_key": "custom-key",
+            "model": "DeepSeek-V4-Flash-0731",
+            "models": ["DeepSeek-V4-Flash-0731"],
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_provider_chain_config", return_value=[deepseek_provider], create=True),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            result = client.chat([{"role": "user", "content": "ping"}], stream=False)
+
+        used_request = mock_post.call_args.kwargs["json"]
+        self.assertEqual(used_request["model"], "DeepSeek-V4-Flash-0731")
+        self.assertEqual(used_request["reasoning_effort"], "high")
+        self.assertEqual(used_request["thinking"], {"type": "enabled"})
+        self.assertNotIn("temperature", used_request)
+        self.assertNotIn("top_p", used_request)
+        self.assertNotIn("frequency_penalty", used_request)
+        self.assertEqual(result["reasoning_effort"], "high")
+
+    def test_versioned_deepseek_v4_matching_is_exact(self):
+        client = llm_client.LLMClient.__new__(llm_client.LLMClient)
+        custom_provider = {"route": "custom", "name": "wintop"}
+
+        self.assertTrue(
+            client._is_deepseek_v4_model(custom_provider, "DeepSeek-V4-Flash-0731")
+        )
+        self.assertTrue(
+            client._is_deepseek_v4_model(
+                custom_provider,
+                "deepseek-ai/DeepSeek-V4-Flash-0731",
+            )
+        )
+        self.assertFalse(
+            client._is_deepseek_v4_model(custom_provider, "DeepSeek-V4-Flash-07310")
+        )
+
+    def test_chat_keeps_generic_sampling_for_non_target_models(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
+            patch.object(llm_client.requests, "get", return_value=self._models_response(["gpt-5.2"])),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            client.chat([{"role": "user", "content": "ping"}], stream=False)
+
+        used_request = mock_post.call_args.kwargs["json"]
+        self.assertEqual(used_request["temperature"], 0.6)
+        self.assertEqual(used_request["top_p"], 0.7)
+        self.assertEqual(used_request["frequency_penalty"], 0.5)
+
     def test_chat_does_not_send_default_output_token_limit(self):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None

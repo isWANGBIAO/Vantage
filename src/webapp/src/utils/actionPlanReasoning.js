@@ -21,10 +21,10 @@ const VALID_REASONING_EFFORTS = new Set(
 
 export function isDeepSeekV4Model(model) {
   const normalizedModel = String(model || '').trim().toLowerCase();
-  return normalizedModel === 'deepseek-v4-pro'
-    || normalizedModel === 'deepseek-v4-flash'
-    || normalizedModel.endsWith('/deepseek-v4-pro')
-    || normalizedModel.endsWith('/deepseek-v4-flash');
+  const modelBasename = normalizedModel.split('/').at(-1);
+  return modelBasename === 'deepseek-v4-pro'
+    || modelBasename === 'deepseek-v4-flash'
+    || modelBasename === 'deepseek-v4-flash-0731';
 }
 
 export function getReasoningOptionsForModel(model) {

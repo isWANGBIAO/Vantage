@@ -77,6 +77,21 @@ test('buildActionPlanGenerationPayload maps reasoning for DeepSeek V4 models', (
   );
 });
 
+test('buildActionPlanGenerationPayload recognizes versioned DeepSeek V4 Flash', () => {
+  assert.deepEqual(
+    buildActionPlanGenerationPayload('medium', {
+      model: 'DeepSeek-V4-Flash-0731',
+      providerRoute: 'custom',
+    }),
+    {
+      reasoning_effort: 'high',
+      replace_today: false,
+      model: 'DeepSeek-V4-Flash-0731',
+      provider_route: 'custom',
+    },
+  );
+});
+
 test('buildActionPlanGenerationPayload can request provider readiness wait for startup auto generation', () => {
   assert.deepEqual(
     buildActionPlanGenerationPayload('xhigh', {

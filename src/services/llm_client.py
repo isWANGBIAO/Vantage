@@ -265,12 +265,16 @@ class LLMClient:
 
     def _is_deepseek_v4_model(self, provider, model):
         normalized_model = str(model or "").strip().lower()
+        model_basename = normalized_model.rsplit("/", 1)[-1]
         provider_name = str((provider or {}).get("name") or "").strip().lower()
         provider_route = str((provider or {}).get("route") or "").strip().lower()
         return (
-            normalized_model in {"deepseek-v4-pro", "deepseek-v4-flash"}
-            or normalized_model.endswith("/deepseek-v4-pro")
-            or normalized_model.endswith("/deepseek-v4-flash")
+            model_basename
+            in {
+                "deepseek-v4-pro",
+                "deepseek-v4-flash",
+                "deepseek-v4-flash-0731",
+            }
             or (
                 "deepseek" in provider_name
                 and normalized_model.startswith("deepseek-v4")
@@ -280,6 +284,10 @@ class LLMClient:
                 and normalized_model.startswith("deepseek-v4")
             )
         )
+
+    def _uses_server_default_sampling_params(self, model):
+        normalized_model = str(model or "").strip().lower()
+        return normalized_model.rsplit("/", 1)[-1] == "deepseek-v4-flash-0731"
 
     def _normalize_reasoning_effort_for_model(self, provider, model, reasoning_effort):
         normalized_effort = str(reasoning_effort or "").strip().lower()
@@ -320,6 +328,10 @@ class LLMClient:
 
         if self._is_deepseek_v4_model(provider, model):
             adapted_payload = dict(payload)
+            if self._uses_server_default_sampling_params(model):
+                adapted_payload.pop("temperature", None)
+                adapted_payload.pop("top_p", None)
+                adapted_payload.pop("frequency_penalty", None)
             adapted_payload["reasoning_effort"] = self._normalize_reasoning_effort_for_model(
                 provider,
                 model,

@@ -5,6 +5,7 @@ import {
   ACTION_PLAN_REASONING_OPTIONS,
   ACTION_PLAN_REASONING_STORAGE_KEY,
   getReasoningOptionsForModel,
+  isDeepSeekV4Model,
   loadStoredActionPlanReasoningEffort,
   normalizeActionPlanReasoningEffort,
   normalizeReasoningEffortForModel,
@@ -86,4 +87,22 @@ test('normalizeReasoningEffortForModel maps GPT and DeepSeek values safely', () 
   assert.equal(normalizeReasoningEffortForModel('medium', 'deepseek-v4-pro'), 'high');
   assert.equal(normalizeReasoningEffortForModel('max', 'gpt-5.5'), 'xhigh');
   assert.equal(normalizeReasoningEffortForModel('low', 'gpt-5.5'), 'low');
+});
+
+test('versioned DeepSeek V4 Flash models use the DeepSeek reasoning contract', () => {
+  assert.equal(isDeepSeekV4Model('DeepSeek-V4-Flash-0731'), true);
+  assert.equal(isDeepSeekV4Model('deepseek-ai/DeepSeek-V4-Flash-0731'), true);
+  assert.equal(isDeepSeekV4Model('DeepSeek-V4-Flash-07310'), false);
+  assert.deepEqual(
+    getReasoningOptionsForModel('DeepSeek-V4-Flash-0731').map((option) => option.value),
+    ['high', 'max'],
+  );
+  assert.equal(
+    normalizeReasoningEffortForModel('medium', 'DeepSeek-V4-Flash-0731'),
+    'high',
+  );
+  assert.equal(
+    normalizeReasoningEffortForModel('xhigh', 'DeepSeek-V4-Flash-0731'),
+    'max',
+  );
 });
