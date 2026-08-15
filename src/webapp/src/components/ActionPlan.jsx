@@ -26,8 +26,8 @@ import {
   formatThinkingTitleWithDuration,
   formatPoweredByLabel,
   getActionPlanPromptContextWarning,
+  getActionPlanRoundNotice,
   getActionPlanRoundStats,
-  isActionPlanRoundPossiblyIncomplete,
   isFallbackExecution,
 } from '../utils/actionPlanStats';
 import {
@@ -111,6 +111,24 @@ function renderMarkdownOrText(contentState, t) {
       {contentState.markdownContent}
     </ReactMarkdown>
   );
+}
+
+function renderActionPlanRoundNotice(notice, t) {
+  if (notice === 'incomplete') {
+    return (
+      <div className="action-plan-warning">
+        {t('action_plan.render.incomplete')}
+      </div>
+    );
+  }
+  if (notice === 'usage_unavailable') {
+    return (
+      <div className="action-plan-info">
+        {t('action_plan.render.usage_unavailable')}
+      </div>
+    );
+  }
+  return null;
 }
 
 function buildAnalysisFullInput(systemPrompt, analysisPrompt) {
@@ -835,12 +853,12 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const cacheBreakdown = formatActionPlanCacheBreakdown(stats);
   const analysisRoundStats = getActionPlanRoundStats(stats, 'analysis');
   const planRoundStats = getActionPlanRoundStats(stats, 'plan');
-  const analysisPossiblyIncomplete = isActionPlanRoundPossiblyIncomplete(
+  const analysisRoundNotice = getActionPlanRoundNotice(
     stats,
     'analysis',
     analysisContent,
   );
-  const planPossiblyIncomplete = isActionPlanRoundPossiblyIncomplete(
+  const planRoundNotice = getActionPlanRoundNotice(
     stats,
     'plan',
     planContent,
@@ -1118,11 +1136,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             }}
           >
             {analysisThinking && <ThinkingBlock text={analysisThinking} title={analysisThinkingTitle} />}
-            {analysisPossiblyIncomplete && (
-              <div className="action-plan-warning">
-                {t('action_plan.render.incomplete')}
-              </div>
-            )}
+            {renderActionPlanRoundNotice(analysisRoundNotice, t)}
             {renderMarkdownOrText(analysisRender, t)}
             <div ref={analysisEndRef} />
           </div>
@@ -1177,11 +1191,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             }}
           >
             {planThinking && <ThinkingBlock text={planThinking} title={planThinkingTitle} />}
-            {planPossiblyIncomplete && (
-              <div className="action-plan-warning">
-                {t('action_plan.render.incomplete')}
-              </div>
-            )}
+            {renderActionPlanRoundNotice(planRoundNotice, t)}
             {renderMarkdownOrText(planRender, t)}
             <div ref={planEndRef} />
           </div>

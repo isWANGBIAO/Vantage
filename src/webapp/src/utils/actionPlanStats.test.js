@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import * as actionPlanStats from './actionPlanStats.js';
+
 import {
   computeDisplayedDurationSeconds,
   formatActionPlanCacheBreakdown,
@@ -10,7 +12,6 @@ import {
   formatReasoningEffortLabel,
   getActionPlanPromptContextWarning,
   getActionPlanRoundStats,
-  isActionPlanRoundPossiblyIncomplete,
   isFallbackExecution,
 } from './actionPlanStats.js';
 
@@ -178,6 +179,7 @@ test('getActionPlanRoundStats treats completed calls without usage as unrecorded
       {
         section: 'analysis',
         duration: 266.0,
+        usage_recorded: true,
         prompt_tokens: 0,
         completion_tokens: 0,
         total_tokens: 0,
@@ -198,24 +200,76 @@ test('getActionPlanRoundStats treats completed calls without usage as unrecorded
   assert.equal(roundStats.completion_tokens_per_second, null);
 });
 
-test('isActionPlanRoundPossiblyIncomplete flags streamed content with no recorded usage', () => {
-  const stats = {
-    requests: [
-      {
-        section: 'analysis',
-        duration: 189.1,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-      },
-    ],
-  };
+test('getActionPlanRoundNotice separates incomplete streams from unavailable usage', () => {
+  assert.equal(typeof actionPlanStats.getActionPlanRoundNotice, 'function');
+  const getNotice = actionPlanStats.getActionPlanRoundNotice;
 
-  assert.equal(isActionPlanRoundPossiblyIncomplete(stats, 'analysis', 'partial body'), true);
-  assert.equal(isActionPlanRoundPossiblyIncomplete(stats, 'analysis', ''), false);
-  assert.equal(isActionPlanRoundPossiblyIncomplete({
-    requests: [{ section: 'analysis', duration: 10, total_tokens: 42 }],
-  }, 'analysis', 'complete body'), false);
+  assert.equal(getNotice({
+    requests: [{
+      section: 'analysis',
+      duration: 12,
+      stream_completed: false,
+      usage_recorded: false,
+      prompt_tokens: null,
+      completion_tokens: null,
+      total_tokens: null,
+    }],
+  }, 'analysis', 'partial body'), 'incomplete');
+
+  assert.equal(getNotice({
+    requests: [{
+      section: 'analysis',
+      duration: 12,
+      stream_completed: true,
+      stream_terminal_event: 'done',
+      finish_reason: 'stop',
+      usage_recorded: false,
+      prompt_tokens: null,
+      completion_tokens: null,
+      total_tokens: null,
+    }],
+  }, 'analysis', 'complete body'), 'usage_unavailable');
+
+  assert.equal(getNotice({
+    requests: [{
+      section: 'analysis',
+      duration: 12,
+      usage_recorded: true,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+    }],
+  }, 'analysis', 'legacy complete body'), 'usage_unavailable');
+
+  assert.equal(getNotice({
+    requests: [{
+      section: 'analysis',
+      duration: 12,
+      stream_completed: true,
+      finish_reason: 'stop',
+      usage_recorded: true,
+      prompt_tokens: 8,
+      completion_tokens: 2,
+      total_tokens: 10,
+    }],
+  }, 'analysis', 'complete body'), null);
+
+  assert.equal(getNotice({
+    requests: [{
+      section: 'analysis',
+      duration: 12,
+      stream_completed: true,
+      finish_reason: 'length',
+      usage_recorded: true,
+      prompt_tokens: 8,
+      completion_tokens: 2,
+      total_tokens: 10,
+    }],
+  }, 'analysis', 'truncated body'), 'incomplete');
+
+  assert.equal(getNotice({
+    requests: [{ section: 'analysis', duration: 12, stream_completed: false }],
+  }, 'analysis', ''), null);
 });
 
 test('formatActionPlanTokenBreakdown includes total, prompt, and completion tokens', () => {

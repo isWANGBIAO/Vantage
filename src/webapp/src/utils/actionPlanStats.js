@@ -14,6 +14,8 @@ const REASONING_EFFORT_LABELS = {
   max: 'Max',
 };
 
+const NORMAL_STREAM_FINISH_REASONS = new Set(['stop', 'tool_calls', 'function_call']);
+
 export function formatPoweredByLabel(stats) {
   if (!stats?.model) {
     return null;
@@ -167,33 +169,16 @@ function hasRecordedUsage(stats) {
   if (stats.usage_recorded === false) {
     return false;
   }
-  if (stats.usage_recorded === true) {
-    return true;
-  }
 
-  const cacheValues = [stats.prompt_cache_hit_tokens, stats.prompt_cache_miss_tokens];
-  if (cacheValues.some((value) => Number(value) > 0)) {
-    return true;
-  }
-
-  const tokenValues = [
+  const usageValues = [
     stats.prompt_tokens,
     stats.completion_tokens,
     stats.total_tokens,
+    stats.prompt_cache_hit_tokens,
+    stats.prompt_cache_miss_tokens,
+    stats.completion_reasoning_tokens,
   ];
-  if (tokenValues.some((value) => Number(value) > 0)) {
-    return true;
-  }
-  if (tokenValues.every((value) => value === null || value === undefined)) {
-    return false;
-  }
-
-  const duration = Number(stats.duration ?? stats.total_duration);
-  if (Number.isFinite(duration) && duration > 0 && tokenValues.every((value) => Number(value || 0) === 0)) {
-    return false;
-  }
-
-  return tokenValues.some((value) => value !== null && value !== undefined);
+  return usageValues.some((value) => Number(value) > 0);
 }
 
 function normalizeUnrecordedUsageStats(stats) {
@@ -290,30 +275,36 @@ export function formatActionPlanCacheBreakdown(stats) {
   return `H ${formatCompactTokenValue(hitValue)} / M ${formatCompactTokenValue(missValue)}${shouldShowRate ? rateText : ''}`;
 }
 
-export function isActionPlanRoundPossiblyIncomplete(stats, section, content) {
+export function getActionPlanRoundNotice(stats, section, content) {
   if (!content || !Array.isArray(stats?.requests)) {
-    return false;
+    return null;
   }
 
   const request = stats.requests.find((item) => item?.section === section);
   if (!request) {
-    return false;
+    return null;
+  }
+
+  const finishReason = String(request.finish_reason || '').trim().toLowerCase();
+  const hasAbnormalFinishReason = Boolean(
+    finishReason && !NORMAL_STREAM_FINISH_REASONS.has(finishReason),
+  );
+  if (request.stream_completed === false || hasAbnormalFinishReason) {
+    return 'incomplete';
   }
 
   const duration = Number(request.duration || 0);
-  if (!Number.isFinite(duration) || duration <= 0) {
-    return false;
+  const hasCompletedRequestEvidence = request.stream_completed === true
+    || (Number.isFinite(duration) && duration > 0);
+  if (hasCompletedRequestEvidence && !hasRecordedUsage(request)) {
+    return 'usage_unavailable';
   }
 
-  const tokenValues = [
-    request.prompt_tokens,
-    request.completion_tokens,
-    request.total_tokens,
-  ];
-  const hasTokenFields = tokenValues.some((value) => value !== null && value !== undefined);
-  const allTokenFieldsZero = tokenValues.every((value) => Number(value || 0) === 0);
+  return null;
+}
 
-  return hasTokenFields && allTokenFieldsZero;
+export function isActionPlanRoundPossiblyIncomplete(stats, section, content) {
+  return getActionPlanRoundNotice(stats, section, content) === 'incomplete';
 }
 
 export function getActionPlanRoundStats(stats, section) {

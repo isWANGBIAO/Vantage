@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const actionPlanSource = readFileSync(new URL('./ActionPlan.jsx', import.meta.url), 'utf8');
+const appCssSource = readFileSync(new URL('../App.css', import.meta.url), 'utf8');
 
 test('ActionPlan refreshes chat context base after a new plan is generated', () => {
   assert.ok(actionPlanSource.includes("fetchBackendJson('/api/chat/context'"));
@@ -52,9 +53,13 @@ test('ActionPlan renders per-round first token, generated time, duration, token,
   assert.equal(actionPlanSource.includes('historical_total_tokens'), false);
 });
 
-test('ActionPlan warns when a loaded round looks like an incomplete stream save', () => {
-  assert.ok(actionPlanSource.includes('isActionPlanRoundPossiblyIncomplete'));
+test('ActionPlan separates incomplete streams from unavailable usage notices', () => {
+  assert.ok(actionPlanSource.includes('getActionPlanRoundNotice'));
   assert.ok(actionPlanSource.includes("t('action_plan.render.incomplete')"));
+  assert.ok(actionPlanSource.includes("t('action_plan.render.usage_unavailable')"));
+  assert.ok(actionPlanSource.includes('action-plan-warning'));
+  assert.ok(actionPlanSource.includes('action-plan-info'));
+  assert.ok(appCssSource.includes('.action-plan-info'));
 });
 
 test('ActionPlan warns when prompt size exceeds the proxy context limit', () => {
