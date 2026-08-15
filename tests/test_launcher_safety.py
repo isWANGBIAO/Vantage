@@ -230,6 +230,17 @@ def test_run_bat_primes_custom_nsis_archive_cache():
     assert "Custom NSIS archive cache ready" in run_bat
 
 
+def test_run_bat_loads_file_hash_command_explicitly():
+    run_bat = Path("run.bat").read_text(encoding="utf-8")
+
+    import_index = run_bat.index(
+        "Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop"
+    )
+    hash_index = run_bat.index("Get-FileHash")
+
+    assert import_index < hash_index
+
+
 def test_persistent_launchers_share_backend_environment_sync_cli():
     launchers = {
         Path("RUN.bat"): Path("RUN.bat").read_text(encoding="utf-8"),
