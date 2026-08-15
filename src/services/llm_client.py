@@ -626,6 +626,30 @@ class LLMClient:
             or "unsupported" in text
         )
 
+    def _is_unsupported_stream_options_error(self, error, details):
+        response = getattr(error, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if status_code not in {400, 404, 422}:
+            return False
+
+        text = str(details or "").lower()
+        if "stream_options" not in text:
+            return False
+
+        return any(
+            marker in text
+            for marker in (
+                "unsupported",
+                "unknown",
+                "unrecognized",
+                "unexpected",
+                "not permitted",
+                "not allowed",
+                "extra_forbidden",
+                "extra field",
+            )
+        )
+
     def _is_local_provider(self, provider):
         base_url = str((provider or {}).get("base_url") or "").strip().lower()
         return (
@@ -779,6 +803,7 @@ class LLMClient:
                 )
                 should_try_next_model = False
                 retry_count = 0
+                stream_options_retry_used = False
 
                 while True:
                     try:
@@ -801,6 +826,21 @@ class LLMClient:
                         return response, model, provider["route"]
                     except requests.RequestException as error:
                         details = self._describe_request_error(error)
+                        if (
+                            not stream_options_retry_used
+                            and "stream_options" in provider_payload
+                            and self._is_unsupported_stream_options_error(error, details)
+                        ):
+                            provider_payload = dict(provider_payload)
+                            provider_payload.pop("stream_options", None)
+                            stream_options_retry_used = True
+                            logging.info(
+                                "Retrying LLM route %s with model %s without unsupported stream_options",
+                                provider["route"],
+                                model,
+                            )
+                            continue
+
                         errors.append(f"{provider['route']}[{model}]: {details}")
                         logging.warning(
                             "LLM route %s failed for model %s at %s: %s",
@@ -917,6 +957,8 @@ class LLMClient:
             "frequency_penalty": 0.5,
             "n": 1,
         })
+        if stream:
+            payload["stream_options"] = {"include_usage": True}
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
         if effective_service_tier:
@@ -1162,6 +1204,8 @@ class LLMClient:
         saw_done_event = False
         finish_reasons = []
         native_finish_reasons = []
+        normalized_finish_reason = None
+        stream_terminal_event = None
 
         def mark_first_token():
             nonlocal first_token_latency
@@ -1231,7 +1275,7 @@ class LLMClient:
                             call_id=call_id,
                             chunk=data,
                         )
-                        if "usage" in data:
+                        if isinstance(data.get("usage"), dict):
                             usage_data = data["usage"]
 
                         if "choices" in data and len(data["choices"]) > 0:
@@ -1283,6 +1327,8 @@ class LLMClient:
                     "Streaming response ended without a terminal event "
                     f"(content_chars={len(full_content)}, thinking_chars={len(full_thinking)})"
                 )
+            normalized_finish_reason = observed_finish_reasons[-1] if observed_finish_reasons else None
+            stream_terminal_event = "done" if saw_done_event else "finish_reason"
 
         except Exception as error:
             self._safe_record(
@@ -1326,6 +1372,9 @@ class LLMClient:
             "fallback_used": self._is_fallback_result(requested_model, requested_route, used_model, used_route),
             "reasoning_effort": effective_reasoning_effort,
             "service_tier": effective_service_tier,
+            "stream_completed": True,
+            "stream_terminal_event": stream_terminal_event,
+            "finish_reason": normalized_finish_reason,
         }
         self._safe_record(
             recorder,

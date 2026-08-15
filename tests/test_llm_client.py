@@ -296,6 +296,54 @@ class LLMClientTests(unittest.TestCase):
             ["gpt-5.5", "qwen3vl"],
         )
 
+    def test_retries_without_unsupported_stream_options_on_same_provider(self):
+        client = self._make_client()
+        client.providers = [
+            {
+                "route": "custom",
+                "base_url": "http://127.0.0.1:8317/v1",
+                "model": "gpt-5.5",
+                "models": ["gpt-5.5"],
+                "headers": {},
+            },
+        ]
+        unsupported_error = llm_client.requests.HTTPError("unsupported request field")
+        unsupported_error.response = Mock()
+        unsupported_error.response.status_code = 422
+        unsupported_error.response.text = (
+            '{"detail":[{"loc":["body","stream_options"],'
+            '"msg":"Extra inputs are not permitted","type":"extra_forbidden"}]}'
+        )
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+
+        with patch.object(
+            llm_client.requests,
+            "post",
+            side_effect=[unsupported_error, fake_response],
+        ) as mock_post:
+            response, used_model, used_route = client._post_with_failover(
+                {
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                },
+                stream=True,
+                timeout=12,
+                requested_model="gpt-5.5",
+                requested_provider_route="custom",
+            )
+
+        self.assertIs(response, fake_response)
+        self.assertEqual(used_model, "gpt-5.5")
+        self.assertEqual(used_route, "custom")
+        self.assertEqual(len(mock_post.call_args_list), 2)
+        first_payload = mock_post.call_args_list[0].kwargs["json"]
+        second_payload = mock_post.call_args_list[1].kwargs["json"]
+        self.assertEqual(first_payload["stream_options"], {"include_usage": True})
+        self.assertNotIn("stream_options", second_payload)
+        self.assertEqual(first_payload["model"], second_payload["model"])
+
     def test_retries_local_custom_provider_after_startup_connection_refused(self):
         client = self._make_client()
         client.providers = [
@@ -1206,8 +1254,9 @@ class LLMClientTests(unittest.TestCase):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None
         fake_response.iter_lines.return_value = [
-            b'data: {"id":"chunk-1","choices":[{"delta":{"content":"A"}}],"system_fingerprint":"fp-stream"}',
-            b'data: {"id":"chunk-2","usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":1}}}',
+            b'data: {"id":"chunk-1","choices":[{"delta":{"content":"A"}}],"usage":null,"system_fingerprint":"fp-stream"}',
+            b'data: {"id":"chunk-2","choices":[{"delta":{},"finish_reason":"stop"}],"usage":null}',
+            b'data: {"id":"chunk-3","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":1}}}',
             b'data: [DONE]',
         ]
         recorder = Mock()
@@ -1221,7 +1270,7 @@ class LLMClientTests(unittest.TestCase):
                 "get",
                 return_value=self._models_response(["gpt-5.2", "gpt-5.1", "gpt-5"]),
             ),
-            patch.object(llm_client.requests, "post", return_value=fake_response),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
             patch.object(llm_client, "SessionRecorder", return_value=recorder),
         ):
             client = llm_client.LLMClient()
@@ -1234,13 +1283,25 @@ class LLMClientTests(unittest.TestCase):
             )
 
         self.assertEqual(result["content"], "A")
+        self.assertEqual(result["stream_completed"], True)
+        self.assertEqual(result["stream_terminal_event"], "done")
+        self.assertEqual(result["finish_reason"], "stop")
+        self.assertEqual(
+            mock_post.call_args.kwargs["json"]["stream_options"],
+            {"include_usage": True},
+        )
         recorder.record_request_started.assert_called_once()
         recorder.record_message_snapshot.assert_called_once()
         recorder.record_request_completed.assert_called_once()
         recorder.record_token_count.assert_called_once()
         recorder.record_response_chunk.assert_any_call(
             call_id=recorder.record_request_completed.call_args.kwargs["call_id"],
-            chunk={"id": "chunk-1", "choices": [{"delta": {"content": "A"}}], "system_fingerprint": "fp-stream"},
+            chunk={
+                "id": "chunk-1",
+                "choices": [{"delta": {"content": "A"}}],
+                "usage": None,
+                "system_fingerprint": "fp-stream",
+            },
         )
         completed_kwargs = recorder.record_request_completed.call_args.kwargs
         self.assertEqual(completed_kwargs["usage"]["total_tokens"], 10)
