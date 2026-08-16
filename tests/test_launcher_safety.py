@@ -1,5 +1,9 @@
 from pathlib import Path
+import os
+import re
 import subprocess
+
+import pytest
 
 
 def _assert_fragments_in_order(content, fragments):
@@ -230,15 +234,64 @@ def test_run_bat_primes_custom_nsis_archive_cache():
     assert "Custom NSIS archive cache ready" in run_bat
 
 
-def test_run_bat_loads_file_hash_command_explicitly():
+def test_run_bat_loads_windows_file_hash_command_despite_module_path_pollution(tmp_path):
     run_bat = Path("run.bat").read_text(encoding="utf-8")
-
-    import_index = run_bat.index(
-        "Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop"
+    import_match = re.search(
+        r"(?P<statement>Import-Module .*? -ErrorAction Stop); \$override",
+        run_bat,
     )
-    hash_index = run_bat.index("Get-FileHash")
+    assert import_match is not None
 
-    assert import_index < hash_index
+    powershell = Path(os.environ.get("SystemRoot", "C:\\Windows")) / (
+        "System32/WindowsPowerShell/v1.0/powershell.exe"
+    )
+    if not powershell.exists():
+        pytest.skip("Windows PowerShell is required for the RUN.bat module-path regression")
+
+    fake_module_dir = tmp_path / "Microsoft.PowerShell.Utility"
+    fake_module_dir.mkdir()
+    (fake_module_dir / "Microsoft.PowerShell.Utility.psd1").write_text(
+        "@{\n"
+        "RootModule = 'Microsoft.PowerShell.Utility.psm1'\n"
+        "ModuleVersion = '99.0.0.0'\n"
+        "GUID = '4ae9c35e-4f62-4bb4-90c1-cff44bf10cb4'\n"
+        "FunctionsToExport = @()\n"
+        "CmdletsToExport = @()\n"
+        "AliasesToExport = @()\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (fake_module_dir / "Microsoft.PowerShell.Utility.psm1").write_text(
+        "",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment["PSModulePath"] = os.pathsep.join(
+        [str(tmp_path), environment.get("PSModulePath", "")]
+    )
+    command = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"{import_match.group('statement')}; "
+        "$hashCommand = Get-Command Get-FileHash -ErrorAction SilentlyContinue; "
+        "if (-not $hashCommand) { exit 17 }"
+    )
+    result = subprocess.run(
+        [
+            str(powershell),
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            command,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_persistent_launchers_share_backend_environment_sync_cli():
