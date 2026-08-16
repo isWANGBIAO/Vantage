@@ -6,6 +6,7 @@ import {
   ACTION_PLAN_REASONING_STORAGE_KEY,
   getReasoningOptionsForModel,
   isDeepSeekV4Model,
+  isQwen38Model,
   loadStoredActionPlanReasoningEffort,
   normalizeActionPlanReasoningEffort,
   normalizeReasoningEffortForModel,
@@ -104,5 +105,23 @@ test('versioned DeepSeek V4 Flash models use the DeepSeek reasoning contract', (
   assert.equal(
     normalizeReasoningEffortForModel('xhigh', 'DeepSeek-V4-Flash-0731'),
     'max',
+  );
+});
+
+test('Qwen3.8 exposes only supported reasoning levels and maps high to xhigh', () => {
+  assert.equal(isQwen38Model('Qwen3.8-27B'), true);
+  assert.equal(isQwen38Model('Qwen/Qwen3.8-27B'), true);
+  assert.equal(isQwen38Model('Qwen3.6-27B'), false);
+  assert.deepEqual(
+    getReasoningOptionsForModel('Qwen3.8-27B').map((option) => option.value),
+    ['low', 'medium', 'xhigh'],
+  );
+  assert.equal(
+    normalizeReasoningEffortForModel('high', 'Qwen3.8-27B'),
+    'xhigh',
+  );
+  assert.equal(
+    normalizeReasoningEffortForModel('medium', 'Qwen/Qwen3.8-27B'),
+    'medium',
   );
 });

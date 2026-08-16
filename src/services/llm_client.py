@@ -285,6 +285,10 @@ class LLMClient:
             )
         )
 
+    def _is_qwen38_model(self, provider, model):
+        normalized_model = str(model or "").strip().lower()
+        return normalized_model.rsplit("/", 1)[-1].startswith("qwen3.8-")
+
     def _uses_server_default_sampling_params(self, model):
         normalized_model = str(model or "").strip().lower()
         return normalized_model.rsplit("/", 1)[-1] == "deepseek-v4-flash-0731"
@@ -293,6 +297,12 @@ class LLMClient:
         normalized_effort = str(reasoning_effort or "").strip().lower()
         if self._is_deepseek_v4_model(provider, model):
             return "max" if normalized_effort in {"xhigh", "extra_high", "max"} else "high"
+        if self._is_qwen38_model(provider, model):
+            if normalized_effort in {"high", "xhigh", "extra_high", "max"}:
+                return "xhigh"
+            if normalized_effort in {"low", "medium"}:
+                return normalized_effort
+            return "medium"
         if normalized_effort == "max":
             return "xhigh"
         if normalized_effort in {"low", "medium", "high", "xhigh"}:
@@ -701,10 +711,11 @@ class LLMClient:
         if requested_model:
             matched_model = next(
                 (candidate for candidate in models if self._models_match(candidate, requested_model)),
-                requested_model,
+                None,
             )
-            provider_snapshot["models"] = [matched_model] + [model for model in models if model != matched_model]
-            return provider_snapshot
+            if matched_model:
+                provider_snapshot["models"] = [matched_model] + [model for model in models if model != matched_model]
+                return provider_snapshot
 
         provider_snapshot["models"] = models
         return provider_snapshot

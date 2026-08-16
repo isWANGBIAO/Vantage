@@ -254,6 +254,34 @@ class LLMClientTests(unittest.TestCase):
 
         self.assertEqual([provider["route"] for provider in ordered], ["cloud", "local"])
 
+    def test_requested_provider_ignores_stale_model_removed_from_its_catalog(self):
+        client = self._make_client()
+        client.providers = [
+            {
+                "route": "custom",
+                "base_url": "http://10.32.6.192:30000/v1",
+                "model": "Qwen3.8-27B",
+                "models": ["Qwen3.8-27B"],
+                "headers": {},
+                "model_capabilities": {"Qwen3.8-27B": None},
+            },
+        ]
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+
+        with patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post:
+            _, used_model, used_route = client._post_with_failover(
+                {"messages": [{"role": "user", "content": "ping"}]},
+                stream=False,
+                timeout=12,
+                requested_model="DeepSeek-V4-Flash-0731",
+                requested_provider_route="custom",
+            )
+
+        self.assertEqual(used_model, "Qwen3.8-27B")
+        self.assertEqual(used_route, "custom")
+        self.assertEqual(mock_post.call_args.kwargs["json"]["model"], "Qwen3.8-27B")
+
     def test_fallback_provider_uses_own_model_after_requested_provider_fails(self):
         client = self._make_client()
         client.providers = [
@@ -818,6 +846,39 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(used_request["reasoning_effort"], "max")
         self.assertEqual(used_request["thinking"], {"type": "enabled"})
         self.assertEqual(result["reasoning_effort"], "max")
+
+    def test_chat_maps_qwen38_high_reasoning_to_xhigh(self):
+        client = self._make_client()
+        client.providers = [
+            {
+                "route": "custom",
+                "name": "wintop",
+                "type": "openai-compatible",
+                "base_url": "http://10.32.6.192:30000/v1",
+                "model": "Qwen3.8-27B",
+                "models": ["Qwen3.8-27B"],
+                "headers": {},
+                "model_capabilities": {"Qwen3.8-27B": None},
+            },
+        ]
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+
+        with patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post:
+            result = client.chat(
+                [{"role": "user", "content": "ping"}],
+                stream=False,
+                model="Qwen3.8-27B",
+                provider_route="custom",
+                reasoning_effort="high",
+            )
+
+        self.assertEqual(mock_post.call_args.kwargs["json"]["reasoning_effort"], "xhigh")
+        self.assertEqual(result["reasoning_effort"], "xhigh")
 
     def test_chat_uses_versioned_deepseek_v4_server_sampling_defaults(self):
         fake_response = Mock()
