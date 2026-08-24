@@ -357,6 +357,34 @@ class LLMClient:
             )
             return adapted_payload
 
+        if self._is_qwen38_model(provider, model):
+            adapted_payload = dict(payload)
+            chat_template_kwargs = dict(adapted_payload.get("chat_template_kwargs") or {})
+            thinking_enabled = chat_template_kwargs.get("enable_thinking", True)
+            if thinking_enabled:
+                adapted_payload["temperature"] = 1.0
+                adapted_payload["top_p"] = 0.95
+                adapted_payload["presence_penalty"] = 0.0
+                chat_template_kwargs.setdefault("enable_thinking", True)
+                chat_template_kwargs.setdefault("preserve_thinking", True)
+            else:
+                adapted_payload["temperature"] = 0.7
+                adapted_payload["top_p"] = 0.8
+                adapted_payload["presence_penalty"] = 1.5
+            adapted_payload["top_k"] = 20
+            adapted_payload.pop("frequency_penalty", None)
+            adapted_payload["chat_template_kwargs"] = chat_template_kwargs
+            logging.info(
+                "Adapted Qwen3.8 %s payload on route %s: temperature=%s top_p=%s top_k=%s thinking=%s",
+                "thinking" if thinking_enabled else "instruct",
+                provider.get("route"),
+                adapted_payload["temperature"],
+                adapted_payload["top_p"],
+                adapted_payload["top_k"],
+                chat_template_kwargs.get("enable_thinking", True),
+            )
+            return adapted_payload
+
         if not self._is_siliconflow_deepseek_v32(provider, model):
             return payload
 

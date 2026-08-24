@@ -880,6 +880,35 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(mock_post.call_args.kwargs["json"]["reasoning_effort"], "xhigh")
         self.assertEqual(result["reasoning_effort"], "xhigh")
 
+    def test_qwen38_uses_official_thinking_sampling_defaults(self):
+        client = self._make_client()
+        provider = {
+            "route": "custom",
+            "name": "wintop",
+            "type": "openai-compatible",
+        }
+
+        adapted = client._apply_provider_payload_overrides(
+            {
+                "temperature": 0.6,
+                "top_p": 0.7,
+                "frequency_penalty": 0.5,
+                "reasoning_effort": "xhigh",
+            },
+            provider,
+            "Qwen3.8-27B",
+        )
+
+        self.assertEqual(adapted["temperature"], 1.0)
+        self.assertEqual(adapted["top_p"], 0.95)
+        self.assertEqual(adapted["top_k"], 20)
+        self.assertEqual(adapted["presence_penalty"], 0.0)
+        self.assertNotIn("frequency_penalty", adapted)
+        self.assertEqual(
+            adapted["chat_template_kwargs"],
+            {"enable_thinking": True, "preserve_thinking": True},
+        )
+
     def test_chat_uses_versioned_deepseek_v4_server_sampling_defaults(self):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None
