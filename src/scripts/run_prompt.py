@@ -24,6 +24,7 @@ from src.utils.action_plan_stream import (
     emit_action_plan_stream_event,
 )
 from src.utils.generation_stats import build_generation_metadata
+from src.utils.prompt_budget import estimate_tokens
 
 
 ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT = 1
@@ -237,6 +238,11 @@ def _build_prompt_context_limit_summary(request_stats):
         "prompt_token_limit_exceeded": warning is not None,
         "prompt_context_warning": warning,
     }
+
+
+def estimate_action_plan_prompt_tokens(prompt_text, system_text=""):
+    """Estimate the complete action-plan input, including the system message."""
+    return estimate_tokens(prompt_text) + estimate_tokens(system_text)
 
 
 def build_action_plan_request_stats(section, result):
@@ -784,10 +790,10 @@ def main():
             print("正在生成初始分析报告，请稍候...")
             # === ROUND 1: General Analysis ===
             # Emit initial stats
-            estimated_prompt_tokens = max(len(prompt_text), len(prompt_text) // 4)
+            estimated_prompt_tokens = estimate_action_plan_prompt_tokens(prompt_text, sys_content)
             initial_stats = {
                 "turns": len(analysis_messages), # Estimate
-                "prompt_tokens": len(prompt_text) // 4, # Rough estimate
+                "prompt_tokens": estimated_prompt_tokens,
                 "estimated_prompt_tokens": estimated_prompt_tokens,
                 "completion_tokens": 0,
                 "total_tokens": 0,

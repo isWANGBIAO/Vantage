@@ -312,6 +312,14 @@ class ActionPlanRequestStatsTests(unittest.TestCase):
 
 
 class RunPromptTests(unittest.TestCase):
+    def test_estimate_action_plan_prompt_tokens_counts_tokens_not_characters(self):
+        prompt = "x" * 300
+        system = "y" * 60
+
+        estimated = run_prompt.estimate_action_plan_prompt_tokens(prompt, system)
+
+        self.assertEqual(estimated, 120)
+
     def test_format_chat_message_with_timestamp_prefixes_sent_time(self):
         formatted = run_prompt.format_chat_message_with_timestamp(
             "What time is it?",
