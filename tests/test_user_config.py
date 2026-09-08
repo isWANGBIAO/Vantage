@@ -115,6 +115,37 @@ def test_load_provider_config_persists_json_model_parameter_defaults_and_profile
     ]
 
 
+def test_load_provider_config_preserves_optional_context_budget_metadata(tmp_path):
+    user_config = _load_user_config_module()
+    providers_file = tmp_path / "config" / "providers.json"
+    providers_file.parent.mkdir(parents=True)
+    providers_file.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "selected_provider": "custom",
+                "providers": {
+                    "custom": {
+                        "name": "Custom",
+                        "base_url": "https://example.test/v1",
+                        "api_key": "key",
+                        "model": "custom-model",
+                        "context_window_tokens": 128000,
+                        "max_output_tokens": 16000,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = user_config.load_provider_config(providers_file=providers_file)
+
+    provider = payload["providers"]["custom"]
+    assert provider["context_window_tokens"] == 128000
+    assert provider["max_output_tokens"] == 16000
+
+
 def test_load_provider_config_normalizes_legacy_provider_to_v2(tmp_path):
     user_config = _load_user_config_module()
     providers_file = tmp_path / "config" / "providers.json"

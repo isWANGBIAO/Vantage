@@ -722,12 +722,9 @@ class RunPromptTests(unittest.TestCase):
         _, kwargs = mock_construct_prompt.call_args
         self.assertEqual(kwargs["start_date"], "2025-01-01")
         self.assertNotIn("days", kwargs)
-        self.assertEqual(
-            kwargs["balance_sheet_row_limit_per_sheet"],
-            run_prompt.ACTION_PLAN_DEFAULT_BALANCE_SHEET_ROW_LIMIT_PER_SHEET,
-        )
+        self.assertGreater(kwargs["prompt_token_budget"], 0)
 
-    def test_analysis_mode_uses_compact_prompt_for_sjtu_route(self):
+    def test_analysis_mode_uses_same_token_budget_policy_for_sjtu_route(self):
         fake_client = _FakeLLMClient()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -788,12 +785,9 @@ class RunPromptTests(unittest.TestCase):
                 run_prompt.main()
 
         _, kwargs = mock_construct_prompt.call_args
-        self.assertEqual(kwargs["days"], run_prompt.ACTION_PLAN_SJTU_TIME_SERIES_DAYS)
-        self.assertIsNone(kwargs["start_date"])
-        self.assertEqual(
-            kwargs["balance_sheet_row_limit_per_sheet"],
-            run_prompt.ACTION_PLAN_SJTU_BALANCE_SHEET_ROW_LIMIT_PER_SHEET,
-        )
+        self.assertEqual(kwargs["start_date"], "2025-01-01")
+        self.assertNotIn("days", kwargs)
+        self.assertGreater(kwargs["prompt_token_budget"], 0)
 
     def test_analysis_mode_persists_structured_json_history(self):
         fake_client = _FakeLLMClient()

@@ -18,6 +18,44 @@ def extract_json_block(content, heading):
 
 
 class DataLoaderFuturePlansTests(unittest.TestCase):
+    def test_construct_prompt_truncates_time_rows_by_explicit_token_budget(self):
+        today = datetime.now().date()
+        df = pd.DataFrame(
+            [
+                {"日期": pd.Timestamp(today - timedelta(days=2)), "metric": "old" * 20},
+                {"日期": pd.Timestamp(today - timedelta(days=1)), "metric": "recent" * 20},
+                {"日期": pd.Timestamp(today), "metric": "latest" * 20},
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            prompt_path = temp_path / "Prompt_Personal_Info.md"
+            excel_path = temp_path / "Time.xlsx"
+            prompt_path.write_text("personal info", encoding="utf-8")
+            excel_path.write_text("placeholder", encoding="utf-8")
+
+            with patch.object(DataLoader, "load_excel_data", return_value=df), patch.object(
+                DataLoader, "get_balance_sheet_data_summary", return_value=""
+            ), patch.object(
+                DataLoader, "get_future_planned_rows", return_value="## Future Planned Items\n\n- none\n"
+            ), patch.object(
+                DataLoader,
+                "resolve_data_path",
+                side_effect=lambda filename, **_: temp_path / filename,
+            ):
+                combined = DataLoader.construct_prompt(
+                    prompt_path,
+                    excel_path,
+                    days=90,
+                    prompt_token_budget=80,
+                )
+
+        payload = extract_json_block(combined, "Time Series Data (JSON)")
+        self.assertTrue(payload["truncated"])
+        self.assertLessEqual(payload["estimated_tokens"], 80)
+        self.assertGreater(payload["omitted_row_count"], 0)
+
     def test_get_future_planned_rows_only_includes_future_non_empty_rows(self):
         today = datetime.now().date()
         df = pd.DataFrame(

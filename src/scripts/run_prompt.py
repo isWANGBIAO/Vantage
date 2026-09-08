@@ -30,9 +30,8 @@ ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT = 1
 RUN_PROMPT_ENTRYPOINT = "src/scripts/run_prompt.py"
 ACTION_PLAN_TIME_SERIES_START_DATE = "2025-01-01"
 ACTION_PLAN_PROXY_PROMPT_TOKEN_LIMIT = 250_000
-ACTION_PLAN_DEFAULT_BALANCE_SHEET_ROW_LIMIT_PER_SHEET = 100
-ACTION_PLAN_SJTU_TIME_SERIES_DAYS = 14
-ACTION_PLAN_SJTU_BALANCE_SHEET_ROW_LIMIT_PER_SHEET = 8
+ACTION_PLAN_DEFAULT_OUTPUT_RESERVE_TOKENS = 32_768
+ACTION_PLAN_DEFAULT_PROTOCOL_OVERHEAD_TOKENS = 2_048
 
 
 def _load_session_usage_summary(history_dir, session_id):
@@ -344,20 +343,26 @@ def _first_non_null(*values):
     return None
 
 
-def _uses_sjtu_provider(provider_route):
-    return str(provider_route or "").strip().lower() == "sjtu"
+def _resolve_action_plan_prompt_budget(client, model, provider_route):
+    resolver = getattr(client, "get_prompt_budget", None)
+    if callable(resolver):
+        return resolver(requested_model=model, requested_provider_route=provider_route)
+
+    return {
+        "input_budget_tokens": max(
+            1,
+            ACTION_PLAN_PROXY_PROMPT_TOKEN_LIMIT
+            - ACTION_PLAN_DEFAULT_OUTPUT_RESERVE_TOKENS
+            - ACTION_PLAN_DEFAULT_PROTOCOL_OVERHEAD_TOKENS,
+        ),
+        "source": "fallback_global_ceiling",
+    }
 
 
-def _build_action_plan_prompt_kwargs(provider_route):
-    if _uses_sjtu_provider(provider_route):
-        return {
-            "days": ACTION_PLAN_SJTU_TIME_SERIES_DAYS,
-            "start_date": None,
-            "balance_sheet_row_limit_per_sheet": ACTION_PLAN_SJTU_BALANCE_SHEET_ROW_LIMIT_PER_SHEET,
-        }
+def _build_action_plan_prompt_kwargs(prompt_budget_tokens):
     return {
         "start_date": ACTION_PLAN_TIME_SERIES_START_DATE,
-        "balance_sheet_row_limit_per_sheet": ACTION_PLAN_DEFAULT_BALANCE_SHEET_ROW_LIMIT_PER_SHEET,
+        "prompt_token_budget": prompt_budget_tokens,
     }
 
 
@@ -724,10 +729,15 @@ def main():
                 prompt_path = Path(args.prompt_file)
                 prompt_text = prompt_path.read_text(encoding="utf-8")
             else:
+                prompt_budget = _resolve_action_plan_prompt_budget(
+                    client,
+                    model_override,
+                    provider_route,
+                )
                 prompt_text = DataLoader.construct_prompt(
                     DataLoader.resolve_data_path("Prompt_Personal_Info.md"),
                     DataLoader.resolve_data_path("Time.xlsx"),
-                    **_build_action_plan_prompt_kwargs(provider_route),
+                    **_build_action_plan_prompt_kwargs(prompt_budget["input_budget_tokens"]),
                 )
             prompt_cache_metadata = DataLoader.build_prompt_cache_metadata(prompt_text)
             

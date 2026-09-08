@@ -12,6 +12,7 @@ import requests
 from src.core.config import Config
 from src.core import user_config
 from src.services.model_call_recorder import SessionRecorder
+from src.utils.prompt_budget import resolve_prompt_budget
 from src.utils.sensitive_data import redact_sensitive_text
 
 SYNC_REQUEST_TIMEOUT_SECONDS = 1200
@@ -28,6 +29,8 @@ FAST_SERVICE_TIER_ALIASES = {"priority", "fast"}
 FAST_SERVICE_TIER_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 NORMAL_STREAM_FINISH_REASONS = {"stop", "tool_calls", "function_call"}
 DEFAULT_GLM_MAX_OUTPUT_TOKENS = 32768
+DEFAULT_GLOBAL_PROMPT_TOKEN_CEILING = 250_000
+DEFAULT_PROMPT_PROTOCOL_OVERHEAD_TOKENS = 2_048
 
 
 def _hash_json_payload(value):
@@ -62,6 +65,39 @@ class LLMClient:
         Config.load_env()
         self.model_parameter_config = user_config.get_model_parameter_config()
         self.providers = self._build_provider_chain()
+
+    def get_prompt_budget(
+        self,
+        *,
+        requested_model=None,
+        requested_provider_route=None,
+        global_ceiling_tokens=DEFAULT_GLOBAL_PROMPT_TOKEN_CEILING,
+        protocol_overhead_tokens=DEFAULT_PROMPT_PROTOCOL_OVERHEAD_TOKENS,
+    ):
+        """Resolve one conservative input budget for the complete provider chain."""
+        candidates = self._ordered_providers(requested_model, requested_provider_route)
+        known_contexts = [
+            int(provider["context_window_tokens"])
+            for provider in candidates
+            if provider.get("context_window_tokens")
+        ]
+        known_output_limits = [
+            int(provider["max_output_tokens"])
+            for provider in candidates
+            if provider.get("max_output_tokens")
+        ]
+        context_window = min(known_contexts) if known_contexts else None
+        output_reserve = min(known_output_limits) if known_output_limits else DEFAULT_GLM_MAX_OUTPUT_TOKENS
+        resolved = resolve_prompt_budget(
+            context_window_tokens=context_window,
+            output_reserve_tokens=output_reserve,
+            protocol_overhead_tokens=protocol_overhead_tokens,
+            global_ceiling_tokens=global_ceiling_tokens,
+        )
+        resolved["source"] = "provider_chain" if known_contexts else resolved["source"]
+        resolved["candidate_routes"] = [provider.get("route") for provider in candidates]
+        resolved["candidate_models"] = [provider.get("model") for provider in candidates]
+        return resolved
 
     def _provider_from_env(
         self,
@@ -560,6 +596,8 @@ class LLMClient:
             "models": models,
             "headers": self._build_headers(user_provider["api_key"]),
             "model_capabilities": {model_id: None for model_id in models},
+            "context_window_tokens": user_provider.get("context_window_tokens"),
+            "max_output_tokens": user_provider.get("max_output_tokens"),
         }
         if not provider["model"]:
             discovered_models = self._discover_primary_models(provider)

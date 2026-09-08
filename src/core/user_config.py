@@ -169,6 +169,15 @@ def _coerce_optional_str_value(value) -> str | None:
     return normalized or None
 
 
+def _coerce_optional_positive_int(payload: dict | None, key: str) -> int | None:
+    value = payload.get(key) if isinstance(payload, dict) else None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
 def _contains_removed_provider(value) -> bool:
     return REMOVED_PROVIDER_KEYWORD in str(value or "").lower()
 
@@ -308,7 +317,7 @@ def _sanitize_provider_entry(route: str, entry: dict | None) -> dict:
         model = models[0]
     base_url = _coerce_optional_str(entry, "base_url") or _default_base_url_for_provider(route) or ""
 
-    return {
+    sanitized = {
         "route": route,
         "name": _coerce_optional_str(entry, "name") or route,
         "type": _coerce_provider_type(entry),
@@ -319,6 +328,11 @@ def _sanitize_provider_entry(route: str, entry: dict | None) -> dict:
         "models": _coerce_provider_models(entry, model),
         "last_refreshed_at": _coerce_optional_str(entry, "last_refreshed_at"),
     }
+    for key in ("context_window_tokens", "max_output_tokens"):
+        value = _coerce_optional_positive_int(entry, key)
+        if value is not None:
+            sanitized[key] = value
+    return sanitized
 
 
 def _sanitize_settings(payload: dict | None) -> dict:
@@ -405,6 +419,11 @@ def _build_complete_provider(route: str | None, provider: dict | None) -> dict |
         "models": models,
         "last_refreshed_at": _coerce_optional_str(provider, "last_refreshed_at"),
     }
+    for key in ("context_window_tokens", "max_output_tokens"):
+        value = _coerce_optional_positive_int(provider, key)
+        if value is not None:
+            complete_provider[key] = value
+    return complete_provider
 
 
 def _sanitize_migration_state(payload: dict | None) -> dict:

@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from src.core.config import Config
+from src.utils.prompt_budget import estimate_tokens, select_rows_by_budget
 
 class DataLoader:
     HEALTH_DATA_DIR_NAMES = ("mi_fiteness_data", "zepplift_data")
@@ -556,6 +557,8 @@ class DataLoader:
         days=90,
         start_date=None,
         balance_sheet_row_limit_per_sheet=None,
+        prompt_token_budget=None,
+        tokenizer=None,
     ):
         prompt_file_path = Path(prompt_file_path)
         excel_file_path = Path(excel_file_path)
@@ -739,6 +742,58 @@ class DataLoader:
                  prompt_sections.append(f"{header}\n\n{content}")
 
         prompt_bundle = "\n\n".join(section for section in prompt_sections if section)
+        fixed_sections = [section for section in (balance_sheet_summary, future_planned_rows, prompt_bundle) if section]
+        fixed_tokens = estimate_tokens("\n\n".join(fixed_sections), tokenizer)
+
+        selection_metadata = {
+            "budget_tokens": None,
+            "estimated_tokens": fixed_tokens,
+            "included_row_count": len(payload_rows),
+            "omitted_row_count": 0,
+            "selection_strategy": "date_window_all_rows",
+            "truncated": False,
+        }
+        if prompt_token_budget is not None:
+            remaining_row_budget = max(1, int(prompt_token_budget) - fixed_tokens)
+            latest_date = max((row[0] for row in payload_rows), default="")
+            row_candidates = [
+                {
+                    "date": row[0],
+                    "values": row,
+                    "priority": 0 if row[0] == latest_date else 1,
+                }
+                for row in payload_rows
+            ]
+            selected_candidates, row_metadata = select_rows_by_budget(
+                row_candidates,
+                budget_tokens=remaining_row_budget,
+                tokenizer=tokenizer,
+            )
+            payload_rows = [candidate["values"] for candidate in selected_candidates]
+            selection_metadata = {
+                "budget_tokens": int(prompt_token_budget),
+                "estimated_tokens": fixed_tokens + row_metadata["estimated_tokens"],
+                "included_row_count": len(payload_rows),
+                "omitted_row_count": row_metadata["omitted_row_count"],
+                "selection_strategy": "priority_then_newest_first",
+                "truncated": row_metadata["omitted_row_count"] > 0,
+            }
+            payload_rows.sort(key=lambda row: row[0])
+
+        data_payload["rows"] = payload_rows
+        data_payload.update(
+            {
+                "token_budget": selection_metadata["budget_tokens"],
+                "estimated_tokens": selection_metadata["estimated_tokens"],
+                "included_row_count": selection_metadata["included_row_count"],
+                "omitted_row_count": selection_metadata["omitted_row_count"],
+                "selection_strategy": selection_metadata["selection_strategy"],
+                "truncated": selection_metadata["truncated"],
+            }
+        )
+        data_summary = "## Time Series Data (JSON)\n\n```json\n"
+        data_summary += json.dumps(data_payload, ensure_ascii=False, separators=(",", ":"))
+        data_summary += "\n```"
         data_sections = [data_summary]
         if balance_sheet_summary:
             data_sections.append(balance_sheet_summary)

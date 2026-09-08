@@ -8,6 +8,31 @@ from src.services import llm_client
 
 
 class LLMClientTests(unittest.TestCase):
+    def test_prompt_budget_uses_smallest_known_context_window_across_provider_chain(self):
+        client = object.__new__(llm_client.LLMClient)
+        client.providers = [
+            {
+                "route": "primary",
+                "model": "large-model",
+                "models": ["large-model"],
+                "context_window_tokens": 200_000,
+                "max_output_tokens": 32_000,
+            },
+            {
+                "route": "fallback",
+                "model": "small-model",
+                "models": ["small-model"],
+                "context_window_tokens": 100_000,
+                "max_output_tokens": 16_000,
+            },
+        ]
+
+        resolved = client.get_prompt_budget(requested_provider_route="primary")
+
+        self.assertEqual(resolved["context_window_tokens"], 100_000)
+        self.assertEqual(resolved["source"], "provider_chain")
+        self.assertEqual(resolved["candidate_routes"], ["primary", "fallback"])
+
     def setUp(self):
         self._provider_chain_patch = patch.object(
             llm_client.user_config,
