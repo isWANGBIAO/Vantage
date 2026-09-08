@@ -25,6 +25,40 @@ LOCAL_PROXY_PROVIDER_ROUTES = {
     "local_proxy",
 }
 
+DEFAULT_SAMPLING_DEFAULTS = {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+}
+DEFAULT_MODEL_PROFILES = {
+    "qwen3.6-27b": {
+        "parameters": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "presence_penalty": 0.0},
+        "omit_parameters": ["frequency_penalty"],
+    },
+    "qwen3.8-*": {
+        "parameters": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "presence_penalty": 0.0},
+        "omit_parameters": ["frequency_penalty"],
+        "extra": {"chat_template_kwargs": {"enable_thinking": True, "preserve_thinking": True}},
+    },
+    "deepseek-v4-*": {
+        "omit_parameters": ["temperature", "top_p", "top_k", "presence_penalty", "frequency_penalty"],
+        "extra": {"thinking": {"type": "enabled"}},
+    },
+    "glm-5.3-flash*": {
+        "parameters": {"temperature": 1.0, "top_p": 0.95},
+        "omit_parameters": ["frequency_penalty"],
+        "max_tokens": 32768,
+    },
+    "minimax-m2.7": {
+        "parameters": {"temperature": 1.0, "top_p": 0.95, "top_k": 40},
+        "omit_parameters": ["frequency_penalty"],
+    },
+    "deepseek-reasoner": {
+        "omit_parameters": ["temperature", "top_p", "top_k", "presence_penalty", "frequency_penalty"],
+        "extra": {"thinking": {"type": "enabled"}},
+    },
+}
+
 DEFAULT_SETTINGS = {
     "version": SETTINGS_VERSION,
     "onboarding_completed": False,
@@ -50,6 +84,8 @@ DEFAULT_SETTINGS = {
 DEFAULT_PROVIDER_CONFIG = {
     "version": PROVIDERS_VERSION,
     "selected_provider": None,
+    "sampling_defaults": deepcopy(DEFAULT_SAMPLING_DEFAULTS),
+    "model_profiles": deepcopy(DEFAULT_MODEL_PROFILES),
     "providers": {},
 }
 
@@ -140,6 +176,54 @@ def _contains_removed_provider(value) -> bool:
 def _coerce_dict(payload: dict | None, key: str) -> dict:
     value = payload.get(key) if isinstance(payload, dict) else None
     return deepcopy(value) if isinstance(value, dict) else {}
+
+
+def _sanitize_model_parameters(payload: dict | None) -> tuple[dict, dict]:
+    raw_defaults = _coerce_dict(payload, "sampling_defaults")
+    sampling_defaults = deepcopy(DEFAULT_SAMPLING_DEFAULTS)
+    for key in ("temperature", "top_p", "top_k", "presence_penalty", "repetition_penalty"):
+        value = raw_defaults.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            sampling_defaults[key] = value
+
+    raw_profiles = _coerce_dict(payload, "model_profiles")
+    model_profiles = deepcopy(DEFAULT_MODEL_PROFILES)
+    for pattern, profile in raw_profiles.items():
+        if not isinstance(pattern, str) or not isinstance(profile, dict):
+            continue
+        sanitized_profile = {}
+        parameters = profile.get("parameters")
+        if isinstance(parameters, dict):
+            sanitized_profile["parameters"] = {
+                key: value
+                for key, value in parameters.items()
+                if isinstance(key, str)
+                and isinstance(value, (int, float, bool, str))
+            }
+        omit_parameters = profile.get("omit_parameters")
+        if isinstance(omit_parameters, list):
+            sanitized_profile["omit_parameters"] = [
+                item for item in omit_parameters if isinstance(item, str)
+            ]
+        extra = profile.get("extra")
+        if isinstance(extra, dict):
+            sanitized_profile["extra"] = deepcopy(extra)
+        max_tokens = profile.get("max_tokens")
+        if isinstance(max_tokens, int) and not isinstance(max_tokens, bool):
+            sanitized_profile["max_tokens"] = max(1, max_tokens)
+        if sanitized_profile:
+            normalized_pattern = pattern.strip().lower()
+            merged_profile = deepcopy(model_profiles.get(normalized_pattern, {}))
+            for key, value in sanitized_profile.items():
+                if key == "parameters" and isinstance(merged_profile.get(key), dict):
+                    merged_parameters = dict(merged_profile[key])
+                    merged_parameters.update(value)
+                    merged_profile[key] = merged_parameters
+                else:
+                    merged_profile[key] = value
+            model_profiles[normalized_pattern] = merged_profile
+
+    return sampling_defaults, model_profiles
 
 
 def _coerce_provider_type(payload: dict | None, key: str = "type") -> str:
@@ -262,6 +346,7 @@ def _sanitize_settings(payload: dict | None) -> dict:
 
 
 def _sanitize_provider_config(payload: dict | None) -> dict:
+    sampling_defaults, model_profiles = _sanitize_model_parameters(payload)
     providers = {}
     raw_providers = _coerce_dict(payload, "providers")
     for key, entry in raw_providers.items():
@@ -288,6 +373,8 @@ def _sanitize_provider_config(payload: dict | None) -> dict:
     return {
         "version": PROVIDERS_VERSION,
         "selected_provider": selected_provider,
+        "sampling_defaults": sampling_defaults,
+        "model_profiles": model_profiles,
         "providers": providers,
     }
 
@@ -355,6 +442,16 @@ def load_provider_config(providers_file: str | Path | None = None) -> dict:
 def save_provider_config(payload: dict | None, providers_file: str | Path | None = None) -> dict:
     resolved_providers_file = Path(providers_file) if providers_file else get_providers_file()
     return _write_json_payload(resolved_providers_file, _sanitize_provider_config(payload))
+
+
+def get_model_parameter_config(providers_file: str | Path | None = None) -> dict:
+    """Read model parameters without rewriting the provider file."""
+    resolved_providers_file = Path(providers_file) if providers_file else get_providers_file()
+    sanitized = _sanitize_provider_config(_read_json_payload(resolved_providers_file))
+    return {
+        "sampling_defaults": sanitized["sampling_defaults"],
+        "model_profiles": sanitized["model_profiles"],
+    }
 
 
 def _ordered_provider_routes(provider_config: dict, providers: dict) -> list[str]:

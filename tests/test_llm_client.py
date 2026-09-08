@@ -909,6 +909,32 @@ class LLMClientTests(unittest.TestCase):
             {"enable_thinking": True, "preserve_thinking": True},
         )
 
+    def test_glm53_uses_official_sampling_and_bounded_output_defaults(self):
+        client = self._make_client()
+        provider = {
+            "route": "glm53_local",
+            "name": "wintop GLM-5.3-Flash",
+            "type": "openai-compatible",
+            "base_url": "http://10.32.6.192:8012/v1",
+        }
+
+        adapted = client._apply_provider_payload_overrides(
+            {
+                "temperature": 0.6,
+                "top_p": 0.7,
+                "frequency_penalty": 0.5,
+                "reasoning_effort": "xhigh",
+            },
+            provider,
+            "GLM-5.3-Flash-EXL3-4bpw",
+        )
+
+        self.assertEqual(adapted["temperature"], 1.0)
+        self.assertEqual(adapted["top_p"], 0.95)
+        self.assertNotIn("frequency_penalty", adapted)
+        self.assertEqual(adapted["reasoning_effort"], "high")
+        self.assertEqual(adapted["max_tokens"], 32768)
+
     def test_chat_uses_versioned_deepseek_v4_server_sampling_defaults(self):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None
@@ -962,7 +988,7 @@ class LLMClientTests(unittest.TestCase):
             client._is_deepseek_v4_model(custom_provider, "DeepSeek-V4-Flash-07310")
         )
 
-    def test_chat_keeps_generic_sampling_for_non_target_models(self):
+    def test_chat_uses_generic_json_sampling_for_non_target_models(self):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None
         fake_response.json.return_value = {
@@ -981,9 +1007,32 @@ class LLMClientTests(unittest.TestCase):
             client.chat([{"role": "user", "content": "ping"}], stream=False)
 
         used_request = mock_post.call_args.kwargs["json"]
-        self.assertEqual(used_request["temperature"], 0.6)
-        self.assertEqual(used_request["top_p"], 0.7)
-        self.assertEqual(used_request["frequency_penalty"], 0.5)
+        self.assertEqual(used_request["temperature"], 1.0)
+        self.assertEqual(used_request["top_p"], 0.95)
+        self.assertEqual(used_request["top_k"], 20)
+
+    def test_chat_uses_json_sampling_defaults_for_ordinary_models(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done"}}],
+            "usage": {},
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(llm_client.user_config, "get_provider_chain_config", return_value=[]),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.object(llm_client.requests, "get", return_value=self._models_response(["gpt-5.2"])),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            client.chat([{"role": "user", "content": "ping"}], stream=False)
+
+        used_request = mock_post.call_args.kwargs["json"]
+        self.assertEqual(used_request["temperature"], 1.0)
+        self.assertEqual(used_request["top_p"], 0.95)
+        self.assertEqual(used_request["top_k"], 20)
 
     def test_chat_does_not_send_default_output_token_limit(self):
         fake_response = Mock()
@@ -1333,6 +1382,7 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(completed_kwargs["response"]["system_fingerprint"], "fp-sync")
         self.assertEqual(completed_kwargs["model"], "gpt-5.2")
         self.assertEqual(completed_kwargs["provider_route"], "cliproxyapi_primary")
+        self.assertFalse(completed_kwargs["fallback_used"])
         self.assertIsNone(completed_kwargs["first_token_latency"])
         self.assertIsNone(result["first_token_latency"])
         sent_payload = mock_post.call_args.kwargs["json"]

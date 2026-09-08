@@ -69,10 +69,50 @@ def test_load_provider_config_heals_invalid_fields(tmp_path):
     expected = {
         "version": 2,
         "selected_provider": None,
+        "sampling_defaults": user_config.DEFAULT_SAMPLING_DEFAULTS,
+        "model_profiles": user_config.DEFAULT_MODEL_PROFILES,
         "providers": {},
     }
     assert payload == expected
     assert json.loads(providers_file.read_text(encoding="utf-8")) == expected
+
+
+def test_load_provider_config_persists_json_model_parameter_defaults_and_profiles(tmp_path):
+    user_config = _load_user_config_module()
+    providers_file = tmp_path / "config" / "providers.json"
+
+    payload = user_config.load_provider_config(providers_file=providers_file)
+
+    assert payload["sampling_defaults"] == {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+    }
+    assert payload["model_profiles"]["qwen3.8-*"]["parameters"] == {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "presence_penalty": 0.0,
+    }
+    assert payload["model_profiles"]["deepseek-v4-*"]["omit_parameters"] == [
+        "temperature",
+        "top_p",
+        "top_k",
+        "presence_penalty",
+        "frequency_penalty",
+    ]
+    assert payload["model_profiles"]["minimax-m2.7"]["parameters"] == {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+    }
+    assert payload["model_profiles"]["deepseek-reasoner"]["omit_parameters"] == [
+        "temperature",
+        "top_p",
+        "top_k",
+        "presence_penalty",
+        "frequency_penalty",
+    ]
 
 
 def test_load_provider_config_normalizes_legacy_provider_to_v2(tmp_path):
@@ -102,6 +142,8 @@ def test_load_provider_config_normalizes_legacy_provider_to_v2(tmp_path):
     assert payload == {
         "version": 2,
         "selected_provider": "custom",
+        "sampling_defaults": user_config.DEFAULT_SAMPLING_DEFAULTS,
+        "model_profiles": user_config.DEFAULT_MODEL_PROFILES,
         "providers": {
             "custom": {
                 "route": "custom",

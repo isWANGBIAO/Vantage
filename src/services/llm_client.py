@@ -27,6 +27,7 @@ FAST_SERVICE_TIER_VALUE = "priority"
 FAST_SERVICE_TIER_ALIASES = {"priority", "fast"}
 FAST_SERVICE_TIER_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 NORMAL_STREAM_FINISH_REASONS = {"stop", "tool_calls", "function_call"}
+DEFAULT_GLM_MAX_OUTPUT_TOKENS = 32768
 
 
 def _hash_json_payload(value):
@@ -59,6 +60,7 @@ class StreamIncompleteError(RuntimeError):
 class LLMClient:
     def __init__(self):
         Config.load_env()
+        self.model_parameter_config = user_config.get_model_parameter_config()
         self.providers = self._build_provider_chain()
 
     def _provider_from_env(
@@ -289,6 +291,11 @@ class LLMClient:
         normalized_model = str(model or "").strip().lower()
         return normalized_model.rsplit("/", 1)[-1].startswith("qwen3.8-")
 
+    def _is_glm53_flash_model(self, provider, model):
+        normalized_model = str(model or "").strip().lower()
+        model_basename = normalized_model.rsplit("/", 1)[-1]
+        return model_basename.startswith("glm-5.3-flash")
+
     def _uses_server_default_sampling_params(self, model):
         normalized_model = str(model or "").strip().lower()
         return normalized_model.rsplit("/", 1)[-1] == "deepseek-v4-flash-0731"
@@ -303,6 +310,19 @@ class LLMClient:
             if normalized_effort in {"low", "medium"}:
                 return normalized_effort
             return "medium"
+        if self._is_glm53_flash_model(provider, model):
+            # GLM-5.3 exposes only low/high/max.  The app's generic xhigh
+            # level is intentionally bounded to high so structured calls do
+            # not spend the entire output budget in hidden reasoning.
+            if normalized_effort in {"xhigh", "extra_high"}:
+                return "high"
+            if normalized_effort == "max":
+                return "max"
+            if normalized_effort == "high":
+                return "high"
+            if normalized_effort in {"low", "medium", "minimal", "none"}:
+                return "low"
+            return "max"
         if normalized_effort == "max":
             return "xhigh"
         if normalized_effort in {"low", "medium", "high", "xhigh"}:
@@ -320,9 +340,51 @@ class LLMClient:
         normalized_effort = str(reasoning_effort or "").strip().lower()
         return budgets.get(normalized_effort, budgets["medium"])
 
+    def _model_parameter_profile(self, model):
+        normalized_model = self._normalize_model_alias(model)
+        profiles = self.model_parameter_config.get("model_profiles", {})
+        for pattern, profile in profiles.items():
+            normalized_pattern = str(pattern).strip().lower()
+            if normalized_pattern.endswith("*"):
+                if normalized_model.startswith(normalized_pattern[:-1]):
+                    return profile
+            elif normalized_model == normalized_pattern:
+                return profile
+        return {}
+
+    @staticmethod
+    def _merge_payload_extra(payload, extra):
+        if not isinstance(extra, dict):
+            return payload
+        merged = dict(payload)
+        for key, value in extra.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                nested = dict(merged[key])
+                for nested_key, nested_value in value.items():
+                    nested.setdefault(nested_key, copy.deepcopy(nested_value))
+                merged[key] = nested
+            else:
+                merged[key] = copy.deepcopy(value)
+        return merged
+
     def _apply_provider_payload_overrides(self, payload, provider, model):
         if not isinstance(payload, dict):
             return payload
+
+        profile = self._model_parameter_profile(model)
+        profile_parameters = profile.get("parameters") if isinstance(profile, dict) else None
+        if isinstance(profile_parameters, dict):
+            payload = dict(payload)
+            payload.update(copy.deepcopy(profile_parameters))
+        omit_parameters = profile.get("omit_parameters") if isinstance(profile, dict) else None
+        if isinstance(omit_parameters, list):
+            payload = dict(payload)
+            for parameter in omit_parameters:
+                payload.pop(parameter, None)
+        payload = self._merge_payload_extra(payload, profile.get("extra") if isinstance(profile, dict) else None)
+        if isinstance(profile, dict) and profile.get("max_tokens") and not payload.get("max_tokens"):
+            payload = dict(payload)
+            payload["max_tokens"] = profile["max_tokens"]
 
         reasoning_effort = payload.get("reasoning_effort")
         if reasoning_effort:
@@ -336,52 +398,48 @@ class LLMClient:
                 payload["reasoning_effort"] = effective_effort
                 reasoning_effort = effective_effort
 
+        if self._is_glm53_flash_model(provider, model):
+            adapted_payload = dict(payload)
+            if reasoning_effort:
+                adapted_payload["reasoning_effort"] = self._normalize_reasoning_effort_for_model(
+                    provider,
+                    model,
+                    reasoning_effort,
+                )
+            logging.info(
+                "Adapted GLM-5.3-Flash payload on route %s: temperature=%s top_p=%s reasoning_effort=%s max_tokens=%s",
+                provider.get("route"),
+                adapted_payload["temperature"],
+                adapted_payload["top_p"],
+                adapted_payload.get("reasoning_effort"),
+                adapted_payload["max_tokens"],
+            )
+            return adapted_payload
+
         if self._is_deepseek_v4_model(provider, model):
             adapted_payload = dict(payload)
-            if self._uses_server_default_sampling_params(model):
-                adapted_payload.pop("temperature", None)
-                adapted_payload.pop("top_p", None)
-                adapted_payload.pop("frequency_penalty", None)
             adapted_payload["reasoning_effort"] = self._normalize_reasoning_effort_for_model(
                 provider,
                 model,
                 reasoning_effort,
             )
-            adapted_payload["thinking"] = {"type": "enabled"}
             logging.info(
                 "Adapted DeepSeek V4 thinking payload for model %s on route %s: reasoning_effort=%s thinking=%s",
                 model,
                 provider.get("route"),
                 adapted_payload["reasoning_effort"],
-                adapted_payload["thinking"],
+                adapted_payload.get("thinking"),
             )
             return adapted_payload
 
         if self._is_qwen38_model(provider, model):
             adapted_payload = dict(payload)
-            chat_template_kwargs = dict(adapted_payload.get("chat_template_kwargs") or {})
-            thinking_enabled = chat_template_kwargs.get("enable_thinking", True)
-            if thinking_enabled:
-                adapted_payload["temperature"] = 1.0
-                adapted_payload["top_p"] = 0.95
-                adapted_payload["presence_penalty"] = 0.0
-                chat_template_kwargs.setdefault("enable_thinking", True)
-                chat_template_kwargs.setdefault("preserve_thinking", True)
-            else:
-                adapted_payload["temperature"] = 0.7
-                adapted_payload["top_p"] = 0.8
-                adapted_payload["presence_penalty"] = 1.5
-            adapted_payload["top_k"] = 20
-            adapted_payload.pop("frequency_penalty", None)
-            adapted_payload["chat_template_kwargs"] = chat_template_kwargs
             logging.info(
-                "Adapted Qwen3.8 %s payload on route %s: temperature=%s top_p=%s top_k=%s thinking=%s",
-                "thinking" if thinking_enabled else "instruct",
+                "Adapted Qwen3.8 payload from JSON profile on route %s: temperature=%s top_p=%s top_k=%s",
                 provider.get("route"),
                 adapted_payload["temperature"],
                 adapted_payload["top_p"],
                 adapted_payload["top_k"],
-                chat_template_kwargs.get("enable_thinking", True),
             )
             return adapted_payload
 
@@ -991,11 +1049,9 @@ class LLMClient:
         payload = _drop_active_cache_fields({
             "messages": messages,
             "stream": stream,
-            "temperature": float(Config.get("AI_TEMPERATURE", 0.6)),
-            "top_p": 0.7,
-            "frequency_penalty": 0.5,
             "n": 1,
         })
+        payload.update(copy.deepcopy(self.model_parameter_config.get("sampling_defaults", {})))
         if stream:
             payload["stream_options"] = {"include_usage": True}
         if reasoning_effort:
@@ -1189,6 +1245,9 @@ class LLMClient:
                 call_id=call_id,
                 model=used_model,
                 provider_route=used_route,
+                requested_model=requested_model,
+                requested_provider_route=requested_route,
+                fallback_used=result["fallback_used"],
                 stream=False,
                 reasoning_effort=effective_reasoning_effort,
                 service_tier=effective_service_tier,
@@ -1421,6 +1480,9 @@ class LLMClient:
             call_id=call_id,
             model=used_model,
             provider_route=used_route,
+            requested_model=requested_model,
+            requested_provider_route=requested_route,
+            fallback_used=result["fallback_used"],
             stream=True,
             reasoning_effort=effective_reasoning_effort,
             service_tier=effective_service_tier,

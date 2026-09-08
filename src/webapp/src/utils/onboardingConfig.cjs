@@ -38,6 +38,39 @@ const REMOVED_PROVIDER_KEYWORD = ['gemi', 'ni'].join('');
 const DEFAULT_PROVIDER_CONFIG = {
   version: PROVIDER_CONFIG_VERSION,
   selected_provider: null,
+  sampling_defaults: {
+    temperature: 1.0,
+    top_p: 0.95,
+    top_k: 20,
+  },
+  model_profiles: {
+    'qwen3.6-27b': {
+      parameters: { temperature: 1.0, top_p: 0.95, top_k: 20, presence_penalty: 0.0 },
+      omit_parameters: ['frequency_penalty'],
+    },
+    'qwen3.8-*': {
+      parameters: { temperature: 1.0, top_p: 0.95, top_k: 20, presence_penalty: 0.0 },
+      omit_parameters: ['frequency_penalty'],
+      extra: { chat_template_kwargs: { enable_thinking: true, preserve_thinking: true } },
+    },
+    'deepseek-v4-*': {
+      omit_parameters: ['temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty'],
+      extra: { thinking: { type: 'enabled' } },
+    },
+    'glm-5.3-flash*': {
+      parameters: { temperature: 1.0, top_p: 0.95 },
+      omit_parameters: ['frequency_penalty'],
+      max_tokens: 32768,
+    },
+    'minimax-m2.7': {
+      parameters: { temperature: 1.0, top_p: 0.95, top_k: 40 },
+      omit_parameters: ['frequency_penalty'],
+    },
+    'deepseek-reasoner': {
+      omit_parameters: ['temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty'],
+      extra: { thinking: { type: 'enabled' } },
+    },
+  },
   providers: {},
 };
 
@@ -219,6 +252,31 @@ function sanitizeProviderEntry(route, entry) {
 function sanitizeProviderConfig(payload) {
   const safePayload = payload && typeof payload === 'object' ? payload : {};
   const providers = {};
+  const samplingDefaults = {
+    ...DEFAULT_PROVIDER_CONFIG.sampling_defaults,
+    ...(safePayload.sampling_defaults && typeof safePayload.sampling_defaults === 'object'
+      ? safePayload.sampling_defaults
+      : {}),
+  };
+  const modelProfiles = { ...DEFAULT_PROVIDER_CONFIG.model_profiles };
+  if (safePayload.model_profiles && typeof safePayload.model_profiles === 'object') {
+    for (const [pattern, rawProfile] of Object.entries(safePayload.model_profiles)) {
+      if (!rawProfile || typeof rawProfile !== 'object') continue;
+      const defaultProfile = modelProfiles[pattern] || {};
+      modelProfiles[pattern] = {
+        ...defaultProfile,
+        ...rawProfile,
+        ...(defaultProfile.parameters || rawProfile.parameters
+          ? {
+            parameters: {
+              ...(defaultProfile.parameters || {}),
+              ...(rawProfile.parameters || {}),
+            },
+          }
+          : {}),
+      };
+    }
+  }
 
   if (safePayload.providers && typeof safePayload.providers === 'object') {
     for (const [key, entry] of Object.entries(safePayload.providers)) {
@@ -247,6 +305,8 @@ function sanitizeProviderConfig(payload) {
   return {
     version: PROVIDER_CONFIG_VERSION,
     selected_provider: selectedProvider,
+    sampling_defaults: samplingDefaults,
+    model_profiles: modelProfiles,
     providers,
   };
 }

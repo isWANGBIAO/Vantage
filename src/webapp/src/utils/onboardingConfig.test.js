@@ -286,10 +286,13 @@ test('saveSettingsPayload persists general settings and provider config', () => 
     image_models: ['image-model', 'image-large'],
     image_last_refreshed_at: '2026-05-03T12:01:00+08:00',
   });
-  assert.deepEqual(providers, {
-    version: 2,
-    selected_provider: 'cliproxyapi',
-    providers: {
+  assert.deepEqual(providers.sampling_defaults, {
+    temperature: 1.0,
+    top_p: 0.95,
+    top_k: 20,
+  });
+  assert.equal(providers.model_profiles['qwen3.8-*'].parameters.top_k, 20);
+  assert.deepEqual(providers.providers, {
       cliproxyapi: {
         route: 'cliproxyapi',
         name: 'cliproxyapi',
@@ -301,7 +304,6 @@ test('saveSettingsPayload persists general settings and provider config', () => 
         models: ['gpt-5.4'],
         last_refreshed_at: null,
       },
-    },
   });
 });
 
