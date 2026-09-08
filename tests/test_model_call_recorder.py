@@ -82,6 +82,9 @@ class SessionRecorderTests(unittest.TestCase):
                 call_id="call-1",
                 model="gpt-5.2",
                 provider_route="cliproxyapi_primary",
+                requested_model="gpt-5.5",
+                requested_provider_route="glm53_local",
+                fallback_used=True,
                 stream=False,
                 reasoning_effort="medium",
                 service_tier="priority",
@@ -138,6 +141,9 @@ class SessionRecorderTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(lines[3]["payload"]["content"], "world")
+            self.assertTrue(lines[3]["payload"]["fallback_used"])
+            self.assertEqual(lines[3]["payload"]["requested_model"], "gpt-5.5")
+            self.assertEqual(lines[3]["payload"]["requested_provider_route"], "glm53_local")
             self.assertEqual(lines[3]["payload"]["first_token_latency"], 0.42)
             self.assertEqual(lines[3]["payload"]["usage"]["prompt_cache_hit_tokens"], 4)
             self.assertEqual(lines[3]["payload"]["usage"]["prompt_cache_miss_tokens"], 7)
