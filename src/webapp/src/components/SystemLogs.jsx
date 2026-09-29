@@ -28,21 +28,29 @@ export default function SystemLogs({ isVisible = false }) {
             return undefined;
         }
 
+        const controller = new AbortController();
+        let timer;
         const fetchLogs = async () => {
             try {
-                const data = await fetchBackendJson('/api/system_logs', { retryPolicy: 'poll' });
-                if (data.logs && Array.isArray(data.logs)) {
+                const data = await fetchBackendJson('/api/system_logs', {
+                    retryPolicy: 'poll', signal: controller.signal,
+                });
+                if (!controller.signal.aborted && Array.isArray(data.logs)) {
                     setLogs(data.logs);
                 }
             } catch (e) {
-                console.error("Log fetch error:", e);
+                if (!controller.signal.aborted) console.error("Log fetch error:", e);
+            } finally {
+                if (!controller.signal.aborted) timer = setTimeout(fetchLogs, 2000);
             }
         };
 
         fetchLogs();
-        const interval = setInterval(fetchLogs, 2000);
 
-        return () => clearInterval(interval);
+        return () => {
+            controller.abort();
+            clearTimeout(timer);
+        };
     }, [isVisible, paused]);
 
     const visibleLogs = useMemo(() => {
