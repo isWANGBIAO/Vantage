@@ -115,6 +115,7 @@ const MAIN_PROCESS_COPY = {
 let mainWindow = null;
 let tray = null;
 let bundledBackendProcess = null;
+let backendReadyPromise = Promise.resolve();
 let rendererCameraFramePostInFlight = false;
 let rendererCameraFramePostPending = null;
 
@@ -128,10 +129,11 @@ function getTitleBarOverlayOptions(theme = 'dark') {
     };
 }
 
-function requestBackendJson(method, apiPath, payload) {
+async function requestBackendJson(method, apiPath, payload) {
     if (!apiPath.startsWith('/api/automation/')) {
         return Promise.reject(new Error('Unsupported local backend operation.'));
     }
+    await backendReadyPromise;
     const body = payload === undefined ? null : Buffer.from(JSON.stringify(payload), 'utf8');
     return new Promise((resolve, reject) => {
         const request = http.request({
@@ -935,13 +937,22 @@ if (!gotTheLock) {
         configureMediaPermissionHandler();
 
         const shouldLaunchBundledBackend = runtimePaths.appMode === 'packaged' || app.isPackaged;
+        let backendReady;
+        let backendFailed;
+        if (shouldLaunchBundledBackend) {
+            backendReadyPromise = new Promise((resolve, reject) => {
+                backendReady = resolve;
+                backendFailed = reject;
+            });
+            // Startup failure is also handled by the error dialog below.
+            void backendReadyPromise.catch(() => {});
+        }
         createWindow();
         createTray();
 
         if (shouldLaunchBundledBackend) {
-            await requestMacosCameraAccess();
-
             try {
+                await requestMacosCameraAccess();
                 const backendBootstrap = await ensureBundledBackendReady({
                     isDev: false,
                     runtimePaths,
@@ -951,6 +962,7 @@ if (!gotTheLock) {
                     logger: log,
                 });
                 bundledBackendProcess = backendBootstrap.process;
+                backendReady();
                 log.info(
                     backendBootstrap.started
                         ? `Bundled backend started: ${backendBootstrap.executablePath}`
@@ -967,6 +979,7 @@ if (!gotTheLock) {
                 }
                 await startRendererCameraFrameBridge();
             } catch (error) {
+                backendFailed(error);
                 log.error('Bundled backend startup failed', error);
                 dialog.showErrorBox(
                     getMainProcessCopy().startupErrorTitle,

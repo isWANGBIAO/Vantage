@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
+import { Buffer } from 'node:buffer';
 
 const mainSource = readFileSync(new URL('./main.cjs', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('./src/App.jsx', import.meta.url), 'utf8');
@@ -9,6 +10,31 @@ const settingsSource = readFileSync(new URL('./src/components/Settings.jsx', imp
 const packageJson = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 );
+
+test('startup IPC waits for backend readiness before sending onboarding and settings requests', async () => {
+  let release;
+  const backendReadyPromise = new Promise(resolve => { release = resolve; });
+  const sent = [];
+  const source = mainSource.slice(mainSource.indexOf('function requestBackendJson') - (mainSource.includes('async function requestBackendJson') ? 6 : 0), mainSource.indexOf('function mapPayloadFields'));
+  const requestBackendJson = runInNewContext(`${source}; requestBackendJson`, {
+    backendReadyPromise, Buffer, BACKEND_HOST: '127.0.0.1', BACKEND_PORT: 8000,
+    http: { request(options, callback) {
+      sent.push(options.path);
+      return { setTimeout() {}, on() {}, end() {
+        callback({ statusCode: 200, on(event, listener) {
+          if (event === 'data') listener(Buffer.from('{"ready":true}'));
+          if (event === 'end') listener();
+        } });
+      } };
+    } },
+  });
+  const requests = ['/api/automation/onboarding', '/api/automation/settings'].map(p => requestBackendJson('GET', p));
+  assert.equal(sent.length, 0, 'No connection attempt while packaged backend is starting');
+  release();
+  const responses = await Promise.all(requests);
+  assert.equal(sent.length, 2);
+  assert.ok(responses.every(response => response.ready));
+});
 
 test('Electron main process loads the bounded logger factory but starts with a no-op logger', () => {
   assert.match(
