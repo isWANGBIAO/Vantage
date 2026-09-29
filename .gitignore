@@ -3,6 +3,7 @@
 *.pt
 # 用于忽略一些不需要提交到git的文件
 icon.ico
+!src/webapp/assets/icon.ico
 main.exe
 # 忽略logs/photos/文件夹
 logs/photos/
