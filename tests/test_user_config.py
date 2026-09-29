@@ -30,6 +30,7 @@ def test_load_settings_creates_default_settings_file(tmp_path):
         "theme": "dark",
         "theme_mode": "dark",
         "action_plan_auto_generate": True,
+        "action_plan_check_interval_minutes": 60,
         "voice_provider_mode": "inherit_ai",
         "voice_base_url": "",
         "voice_api_key": "",
@@ -75,6 +76,81 @@ def test_load_provider_config_heals_invalid_fields(tmp_path):
     }
     assert payload == expected
     assert json.loads(providers_file.read_text(encoding="utf-8")) == expected
+
+
+@pytest.mark.parametrize("value", [0, 1, 60, 120, 35_791])
+def test_action_plan_check_interval_persists_and_reloads(tmp_path, value):
+    user_config = _load_user_config_module()
+    settings_file = tmp_path / "settings.json"
+    user_config.save_settings({"action_plan_check_interval_minutes": value}, settings_file)
+    assert user_config.load_settings(settings_file)["action_plan_check_interval_minutes"] == value
+
+
+@pytest.mark.parametrize("value", [-1, 1.5, True, "60", None, 35_792])
+def test_invalid_action_plan_check_interval_uses_default(tmp_path, value):
+    user_config = _load_user_config_module()
+    result = user_config.save_settings({"action_plan_check_interval_minutes": value}, tmp_path / "settings.json")
+    assert result["action_plan_check_interval_minutes"] == 60
+
+
+def test_complete_provider_keeps_the_configured_token_limits(tmp_path):
+    """provider 链必须带上窗口上限，否则预算只能退回全局兜底值。"""
+    user_config = _load_user_config_module()
+    providers_file = tmp_path / "providers.json"
+    user_config.save_provider_config(
+        {
+            "selected_provider": "main",
+            "providers": {
+                "main": {
+                    "route": "main",
+                    "name": "main",
+                    "type": "openai-compatible",
+                    "enabled": True,
+                    "api_key": "key",
+                    "base_url": "https://example.invalid/v1",
+                    "model": "model-a",
+                    "models": ["model-a"],
+                    "context_window_tokens": 131072,
+                    "max_output_tokens": 32768,
+                }
+            },
+        },
+        providers_file,
+    )
+
+    chain = user_config.get_provider_chain_config(providers_file)
+
+    assert len(chain) == 1
+    assert chain[0]["context_window_tokens"] == 131072
+    assert chain[0]["max_output_tokens"] == 32768
+
+
+def test_complete_provider_omits_absent_token_limits(tmp_path):
+    user_config = _load_user_config_module()
+    providers_file = tmp_path / "providers.json"
+    user_config.save_provider_config(
+        {
+            "selected_provider": "main",
+            "providers": {
+                "main": {
+                    "route": "main",
+                    "name": "main",
+                    "type": "openai-compatible",
+                    "enabled": True,
+                    "api_key": "key",
+                    "base_url": "https://example.invalid/v1",
+                    "model": "model-a",
+                    "models": ["model-a"],
+                }
+            },
+        },
+        providers_file,
+    )
+
+    chain = user_config.get_provider_chain_config(providers_file)
+
+    assert "context_window_tokens" not in chain[0]
+    assert "max_output_tokens" not in chain[0]
 
 
 def test_load_provider_config_persists_json_model_parameter_defaults_and_profiles(tmp_path):
@@ -273,6 +349,7 @@ def test_save_settings_normalizes_partial_payload(tmp_path):
         "theme_mode": "dark",
         "action_plan_auto_generate": True,
         "voice_provider_mode": "inherit_ai",
+        "action_plan_check_interval_minutes": 60,
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",
@@ -317,6 +394,7 @@ def test_load_settings_repairs_invalid_display_language(tmp_path):
         "theme_mode": "dark",
         "action_plan_auto_generate": True,
         "voice_provider_mode": "inherit_ai",
+        "action_plan_check_interval_minutes": 60,
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",

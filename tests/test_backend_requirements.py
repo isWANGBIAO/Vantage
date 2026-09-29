@@ -15,6 +15,7 @@ EXPECTED_SHARED_CORE_LINES = {
     "cv2-enumerate-cameras==1.3.3",
     "fastapi==0.141.1",
     "matplotlib==3.11.1",
+    "mcp==2.2.0",
     "mss==10.2.0",
     'numpy==2.2.6; python_version < "3.12"',
     'numpy==2.5.1; python_version >= "3.12"',
@@ -47,6 +48,7 @@ REQUIRED_BACKEND_PACKAGES = {
     "cv2-enumerate-cameras",
     "fastapi",
     "mediapipe",
+    "mcp",
     "piexif",
     "python-multipart",
     "scienceplots",
@@ -61,6 +63,7 @@ REQUIRED_GPU_RUNTIME_PACKAGES = {
     "lap",
     "matplotlib",
     "mss",
+    "mcp",
     "numpy",
     "openai",
     "opencv-contrib-python",
@@ -82,6 +85,7 @@ REQUIRED_CI_PACKAGES = {
     "cv2-enumerate-cameras",
     "fastapi",
     "jieba",
+    "mcp",
     "matplotlib",
     "mss",
     "numpy",
@@ -242,7 +246,7 @@ def test_environment_requirements_include_one_shared_core_without_duplicate_pins
     assert {
         _normalize_requirement_name(line)
         for line in _direct_requirement_lines("requirements-ci.txt")
-    } == {"jieba", "pytest"}
+    } == {"jieba", "pytest", "ruff"}
     assert {
         _normalize_requirement_name(line)
         for line in _direct_requirement_lines("requirements-backend-runtime-gpu.txt")

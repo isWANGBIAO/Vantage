@@ -32,6 +32,57 @@ function resolveGitCommit(webappRoot) {
   }
 }
 
+// The release metadata carries the version in prose, and nothing else keeps it
+// in step with package.json. A dirty tree bumps the patch version on every
+// RUN.bat build, so these files would drift on each build without this sync.
+// Each replacement is anchored on its full previous line, so a file that does
+// not carry the expected line is reported instead of edited blindly.
+export function syncReleaseMetadata({ webappRoot, version, previousVersion, warn = console.warn }) {
+  const root = path.resolve(webappRoot, '..', '..');
+  const targets = [
+    {
+      file: path.join(root, 'README.md'),
+      replacements: [
+        [
+          `git tag -a v${previousVersion} -m "Vantage ${previousVersion}"`,
+          `git tag -a v${version} -m "Vantage ${version}"`,
+        ],
+        [`git push origin v${previousVersion}`, `git push origin v${version}`],
+        [
+          `for example \`v${previousVersion}\` for package version \`${previousVersion}\``,
+          `for example \`v${version}\` for package version \`${version}\``,
+        ],
+      ],
+    },
+    {
+      file: path.join(root, '.github', 'workflows', 'release.yml'),
+      replacements: [[`for example v${previousVersion}`, `for example v${version}`]],
+    },
+  ];
+
+  const synced = [];
+  for (const target of targets) {
+    if (!existsSync(target.file)) {
+      warn(`Release metadata not found, skipped: ${target.file}`);
+      continue;
+    }
+    const original = readFileSync(target.file, 'utf8');
+    let updated = original;
+    for (const [from, to] of target.replacements) {
+      if (!updated.includes(from)) {
+        warn(`Release metadata is out of date and was not updated: ${from}`);
+        continue;
+      }
+      updated = updated.split(from).join(to);
+    }
+    if (updated !== original) {
+      writeFileSync(target.file, updated, 'utf8');
+      synced.push(target.file);
+    }
+  }
+  return synced;
+}
+
 function resolveGitCleanState(webappRoot) {
   try {
     const output = execSync('git status --porcelain --untracked-files=no', {
@@ -58,6 +109,8 @@ export function prepareBuildVersion({
   commit = resolveGitCommit(webappRoot),
   mode = 'bump',
   gitClean = resolveGitCleanState(webappRoot),
+  syncMetadata = true,
+  warn = console.warn,
 } = {}) {
   const packagePath = path.join(webappRoot, 'package.json');
   const lockPath = path.join(webappRoot, 'package-lock.json');
@@ -95,9 +148,11 @@ export function prepareBuildVersion({
       build_date: buildInfo.build_date,
       build_commit: buildInfo.build_commit,
       bumped: false,
+      metadata_synced: [],
     };
   }
 
+  const previousVersion = packageJson.version;
   const nextVersion = bumpPatchVersion(packageJson.version);
   packageJson.version = nextVersion;
   writeJson(packagePath, packageJson);
@@ -111,6 +166,15 @@ export function prepareBuildVersion({
     writeJson(lockPath, lockJson);
   }
 
+  const metadataSynced = syncMetadata
+    ? syncReleaseMetadata({
+      webappRoot,
+      version: nextVersion,
+      previousVersion,
+      warn,
+    })
+    : [];
+
   const buildInfo = {
     version: nextVersion,
     build_date: now.toISOString(),
@@ -123,7 +187,7 @@ export function prepareBuildVersion({
     build_commit: buildInfo.build_commit,
   });
 
-  return buildInfo;
+  return { ...buildInfo, metadata_synced: metadataSynced };
 }
 
 function resolveCliWebappRoot(argv) {
@@ -149,9 +213,14 @@ if (invokedPath && path.basename(invokedPath) === path.basename(modulePath)) {
   const result = prepareBuildVersion({
     webappRoot: resolveCliWebappRoot(cliArgs),
     mode: resolveCliMode(cliArgs),
+    syncMetadata: !cliArgs.includes('--no-sync-metadata'),
   });
+  const syncedCount = result.metadata_synced?.length ?? 0;
   if (result.bumped) {
     console.log(`Prepared Vantage build ${result.version} (${result.build_date}, ${result.build_commit || 'no git commit'})`);
+    if (syncedCount > 0) {
+      console.log(`Synced release metadata to ${result.version} in ${syncedCount} file(s)`);
+    }
   } else {
     console.log(`Build version unchanged at ${result.version}`);
   }

@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.scripts import verify_backend_runtime
@@ -22,6 +23,68 @@ def _write_runtime_log(smoke_data_dir: Path, text: str) -> Path:
 
 
 class VerifyBackendRuntimeTests(unittest.TestCase):
+    def test_packaged_cli_smoke_uses_backend_executable_and_parses_json_stdout(self):
+        executable = Path("runtime/VantageBackend.exe")
+        expected = {"status": "ready"}
+        completed = SimpleNamespace(returncode=0, stdout='{"status":"ready"}\n', stderr="")
+
+        with patch.object(verify_backend_runtime.subprocess, "run", return_value=completed) as run:
+            result = verify_backend_runtime._run_packaged_cli_smoke(
+                executable,
+                cwd=Path("runtime"),
+                env={"VANTAGE_APP_MODE": "packaged"},
+            )
+
+        self.assertEqual(result, expected)
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                str(executable),
+                "--run-cli",
+                "--format",
+                "json",
+                "system",
+                "status",
+                "read",
+            ],
+        )
+        self.assertTrue(run.call_args.kwargs["capture_output"])
+        self.assertEqual(run.call_args.kwargs["cwd"], "runtime")
+
+    def test_packaged_mcp_smoke_uses_stdio_client_and_checks_catalog_operation(self):
+        parameters_seen = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def list_tools(self):
+                return SimpleNamespace(tools=[SimpleNamespace(name="system.status.read")])
+
+            async def call_tool(self, _name, _arguments):
+                return SimpleNamespace(is_error=False, structured_content={"status": "ready"})
+
+        with patch("mcp.Client", side_effect=lambda _parameters: FakeClient()) as client_factory, patch(
+            "mcp.client.stdio.StdioServerParameters",
+            side_effect=lambda **kwargs: parameters_seen.append(kwargs) or kwargs,
+        ):
+            result = verify_backend_runtime._run_packaged_mcp_smoke(
+                Path("runtime/VantageBackend.exe"),
+                cwd=Path("runtime"),
+                env={"VANTAGE_APP_MODE": "packaged"},
+            )
+
+        self.assertEqual(result["tool_count"], 1)
+        self.assertEqual(result["status"], {"status": "ready"})
+        self.assertEqual(parameters_seen[0]["args"], ["--run-cli", "mcp"])
+        self.assertEqual(
+            parameters_seen[0]["command"], str(Path("runtime/VantageBackend.exe"))
+        )
+        client_factory.assert_called_once()
+
     def test_build_smoke_environment_pins_media_paths_into_smoke_data(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)

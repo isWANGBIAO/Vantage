@@ -19,14 +19,6 @@ const { applyLaunchAtLoginSetting } = require('./src/utils/autoLaunch.cjs');
 const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
 const { resolveAppBuildInfo } = require('./src/utils/buildInfo.cjs');
 const { createBoundedLogger } = require('./src/utils/boundedLogger.cjs');
-const {
-    buildSettingsState,
-    getOnboardingState,
-    loadSettings,
-    saveSettingsPayload,
-    saveOnboardingCompletion,
-    sanitizeDisplayLanguage,
-} = require('./src/utils/onboardingConfig.cjs');
 const packageJson = require('./package.json');
 let buildInfo = {};
 try {
@@ -54,6 +46,47 @@ let log = {
 };
 const isDev = runtimePaths.appMode !== 'packaged' && !app.isPackaged && process.env.NODE_ENV !== 'production';
 const shouldManageLoginItem = runtimePaths.appMode === 'packaged' || app.isPackaged;
+const BACKEND_HOST = '127.0.0.1';
+const BACKEND_PORT = 8000;
+const DEFAULT_SETTINGS = {
+    display_language: 'system',
+    theme: 'dark',
+    theme_mode: 'dark',
+    launch_at_login: false,
+};
+const SETTINGS_PAYLOAD_FIELDS = {
+    displayLanguage: 'display_language',
+    theme: 'theme',
+    themeMode: 'theme_mode',
+    launchAtLogin: 'launch_at_login',
+    actionPlanAutoGenerate: 'action_plan_auto_generate',
+    actionPlanCheckIntervalMinutes: 'action_plan_check_interval_minutes',
+    voiceProviderMode: 'voice_provider_mode',
+    voiceBaseUrl: 'voice_base_url',
+    voiceApiKey: 'voice_api_key',
+    voiceModel: 'voice_model',
+    voiceModels: 'voice_models',
+    voiceLastRefreshedAt: 'voice_last_refreshed_at',
+    imageProviderMode: 'image_provider_mode',
+    imageBaseUrl: 'image_base_url',
+    imageApiKey: 'image_api_key',
+    imageModel: 'image_model',
+    imageModels: 'image_models',
+    imageLastRefreshedAt: 'image_last_refreshed_at',
+    providerConfig: 'provider_config',
+};
+const ONBOARDING_PAYLOAD_FIELDS = {
+    displayLanguage: 'display_language',
+    launchAtLogin: 'launch_at_login',
+    selectedProvider: 'selected_provider',
+    baseUrl: 'base_url',
+    apiKey: 'api_key',
+    model: 'model',
+    skipChatSetup: 'skip_chat_setup',
+    importLegacyData: 'import_legacy_data',
+    legacyRoot: 'legacy_root',
+};
+let canonicalSettings = { ...DEFAULT_SETTINGS };
 buildInfo = resolveAppBuildInfo({
     staticBuildInfo: buildInfo,
     projectRoot,
@@ -94,7 +127,188 @@ function getTitleBarOverlayOptions(theme = 'dark') {
     };
 }
 
-function resolveEffectiveThemeForMain(settings = loadSettings(runtimePaths)) {
+function requestBackendJson(method, apiPath, payload) {
+    if (!apiPath.startsWith('/api/automation/')) {
+        return Promise.reject(new Error('Unsupported local backend operation.'));
+    }
+    const body = payload === undefined ? null : Buffer.from(JSON.stringify(payload), 'utf8');
+    return new Promise((resolve, reject) => {
+        const request = http.request({
+            hostname: BACKEND_HOST,
+            port: BACKEND_PORT,
+            path: apiPath,
+            method,
+            headers: body ? {
+                'content-type': 'application/json',
+                'content-length': body.length,
+            } : {},
+        }, (response) => {
+            const chunks = [];
+            let size = 0;
+            response.on('data', (chunk) => {
+                size += chunk.length;
+                if (size > 2 * 1024 * 1024) {
+                    request.destroy(new Error('Vantage backend response was too large.'));
+                    return;
+                }
+                chunks.push(chunk);
+            });
+            response.on('end', () => {
+                if (response.statusCode < 200 || response.statusCode >= 300) {
+                    reject(new Error(`Vantage backend request failed with status ${response.statusCode}.`));
+                    return;
+                }
+                try {
+                    resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+                } catch {
+                    reject(new Error('Vantage backend returned an invalid JSON response.'));
+                }
+            });
+        });
+        request.setTimeout(10000, () => request.destroy(new Error('Vantage backend request timed out.')));
+        request.on('error', (error) => reject(new Error(`Vantage backend request failed: ${error.message}`)));
+        if (body) request.write(body);
+        request.end();
+    });
+}
+
+function mapPayloadFields(payload, fieldMap) {
+    const result = {};
+    const source = payload && typeof payload === 'object' ? payload : {};
+    for (const [sourceKey, targetKey] of Object.entries(fieldMap)) {
+        if (Object.prototype.hasOwnProperty.call(source, sourceKey)) {
+            result[targetKey] = source[sourceKey];
+        }
+    }
+    return result;
+}
+
+function isJsonCompatibleValue(value, seen = new WeakSet()) {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+    if (typeof value === 'number') return Number.isFinite(value);
+    if (typeof value !== 'object' || seen.has(value)) return false;
+
+    const isArray = Array.isArray(value);
+    if (!isArray) {
+        const prototype = Object.getPrototypeOf(value);
+        if (prototype !== Object.prototype && prototype !== null) return false;
+    }
+
+    seen.add(value);
+    const compatible = isArray
+        ? value.every((entry) => isJsonCompatibleValue(entry, seen))
+        : Reflect.ownKeys(value).every((key) => (
+            typeof key === 'string' && isJsonCompatibleValue(value[key], seen)
+        ));
+    seen.delete(value);
+    return compatible;
+}
+
+function isPlainJsonRecord(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return (prototype === Object.prototype || prototype === null) && isJsonCompatibleValue(value);
+}
+
+function toBackendSettingsPayload(payload) {
+    const mapped = mapPayloadFields(payload, SETTINGS_PAYLOAD_FIELDS);
+    const providerConfig = mapped.provider_config;
+    if (providerConfig && typeof providerConfig === 'object') {
+        const providerFields = [
+            'route', 'name', 'type', 'enabled', 'api_key', 'base_url', 'model', 'models', 'last_refreshed_at',
+            'context_window_tokens',
+            'max_output_tokens',
+        ];
+        const normalizedProviderConfig = { ...providerConfig };
+        if (Object.prototype.hasOwnProperty.call(providerConfig, 'providers')) {
+            const providers = providerConfig.providers;
+            if (providers && typeof providers === 'object' && !Array.isArray(providers)) {
+                if (!isPlainJsonRecord(providers)) {
+                    throw new TypeError('Provider map must be a plain JSON object.');
+                }
+                normalizedProviderConfig.providers = Object.fromEntries(
+                    Object.entries(providers).map(([route, entry]) => {
+                        if (!isPlainJsonRecord(entry)) {
+                            throw new TypeError(`Provider entry "${route}" must be a plain JSON object.`);
+                        }
+                        return [route, Object.fromEntries(providerFields
+                            .filter((key) => Object.prototype.hasOwnProperty.call(entry, key))
+                            .map((key) => [key, entry[key]]))];
+                    }),
+                );
+            }
+        }
+        mapped.provider_config = normalizedProviderConfig;
+    }
+    return mapped;
+}
+
+function buildElectronSettingsState(payload) {
+    const settings = payload.settings || {};
+    canonicalSettings = { ...DEFAULT_SETTINGS, ...settings };
+    const provider = payload.provider || {};
+    return {
+        mode: 'electron',
+        settings: {
+            displayLanguage: settings.display_language,
+            theme: settings.theme,
+            themeMode: settings.theme_mode,
+            launchAtLogin: settings.launch_at_login,
+            actionPlanAutoGenerate: settings.action_plan_auto_generate,
+            actionPlanCheckIntervalMinutes: settings.action_plan_check_interval_minutes,
+            voiceProviderMode: settings.voice_provider_mode,
+            voiceBaseUrl: settings.voice_base_url,
+            voiceApiKey: settings.voice_api_key,
+            voiceHasApiKey: Boolean(settings.voice_has_api_key),
+            voiceModel: settings.voice_model,
+            voiceModels: settings.voice_models,
+            voiceLastRefreshedAt: settings.voice_last_refreshed_at,
+            imageProviderMode: settings.image_provider_mode,
+            imageBaseUrl: settings.image_base_url,
+            imageApiKey: settings.image_api_key,
+            imageHasApiKey: Boolean(settings.image_has_api_key),
+            imageModel: settings.image_model,
+            imageModels: settings.image_models,
+            imageLastRefreshedAt: settings.image_last_refreshed_at,
+        },
+        provider: {
+            ...provider,
+            providers: Object.fromEntries(Object.entries(provider.providers || {}).map(([route, entry]) => [
+                route,
+                { ...entry, has_api_key: entry.api_key === '********' },
+            ])),
+        },
+        runtimePaths: {
+            config: payload.runtime_paths?.config_dir,
+            history: payload.runtime_paths?.history_dir,
+            logs: payload.runtime_paths?.log_dir,
+            plots: payload.runtime_paths?.plot_dir,
+            cache: payload.runtime_paths?.cache_dir,
+            runtime: payload.runtime_paths?.runtime_dir,
+            data: payload.runtime_paths?.data_dir,
+        },
+        migration: {
+            completed: payload.migration?.completed === true,
+            sourcePath: payload.migration?.source_path || null,
+            importedAt: payload.migration?.imported_at || null,
+        },
+        app: {
+            version: packageJson.version,
+            buildDate: buildInfo.build_date || null,
+            buildCommit: buildInfo.build_commit || null,
+            mode: runtimePaths.appMode,
+            backendRuntimePath: runtimePaths.runtimeDir,
+            dataDir: runtimePaths.dataDir,
+        },
+        systemLocale: app.getLocale(),
+    };
+}
+
+function sanitizeDisplayLanguage(value) {
+    return value === 'zh-CN' || value === 'en-US' || value === 'system' ? value : 'system';
+}
+
+function resolveEffectiveThemeForMain(settings = canonicalSettings) {
     const themeMode = settings.theme_mode || settings.theme || 'dark';
     if (themeMode === 'auto') {
         return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
@@ -131,8 +345,7 @@ function mapLocaleToSupportedLanguage(locale) {
 }
 
 function getEffectiveDisplayLanguageForMain() {
-    const settings = loadSettings(runtimePaths);
-    const displayLanguage = sanitizeDisplayLanguage(settings.display_language);
+    const displayLanguage = sanitizeDisplayLanguage(canonicalSettings.display_language);
     return displayLanguage === 'system'
         ? mapLocaleToSupportedLanguage(app.getLocale())
         : displayLanguage;
@@ -377,12 +590,6 @@ async function startRendererCameraFrameBridge({ intervalMs = 500 } = {}) {
     });
 }
 
-function persistSettings(nextSettings) {
-    const settingsFile = path.join(runtimePaths.configDir, 'settings.json');
-    fs.mkdirSync(runtimePaths.configDir, { recursive: true });
-    fs.writeFileSync(settingsFile, JSON.stringify(nextSettings, null, 2), 'utf8');
-}
-
 const settingsPathAllowlist = {
     config: () => runtimePaths.configDir,
     history: () => runtimePaths.historyDir,
@@ -404,15 +611,8 @@ function resolveAllowedSettingsPath(pathKey) {
     return allowedPaths.includes(resolvedPath) ? resolvedPath : null;
 }
 
-function getSettingsStatePayload() {
-    return buildSettingsState({
-        runtimePaths,
-        projectRoot,
-        appVersion: packageJson.version,
-        appBuildInfo: buildInfo,
-        appMode: runtimePaths.appMode,
-        systemLocale: app.getLocale(),
-    });
+async function getSettingsStatePayload() {
+    return buildElectronSettingsState(await requestBackendJson('GET', '/api/automation/settings'));
 }
 
 function syncTrayMenu() {
@@ -452,20 +652,17 @@ function syncTrayMenu() {
     tray.setContextMenu(contextMenu);
 }
 
-function syncLaunchAtLoginSetting() {
-    const onboardingState = getOnboardingState({ runtimePaths, projectRoot });
-
+async function syncLaunchAtLoginSetting() {
     if (!shouldManageLoginItem) {
         log.info('Launch-at-login management skipped outside packaged installs');
-        return onboardingState;
+        return null;
     }
 
-    const enabled = applyLaunchAtLoginSetting({
-        app,
-        enabled: onboardingState.launchAtLogin,
-    });
+    const settingsPayload = await requestBackendJson('GET', '/api/automation/settings');
+    const state = buildElectronSettingsState(settingsPayload);
+    const enabled = applyLaunchAtLoginSetting({ app, enabled: state.settings.launchAtLogin });
     log.info(`Launch at login ${enabled ? 'enabled' : 'disabled'} from saved settings`);
-    return onboardingState;
+    return state;
 }
 
 process.on('uncaughtException', (error) => {
@@ -476,7 +673,7 @@ process.on('unhandledRejection', (reason, promise) => {
     log.error(`Unhandled Rejection at: ${promise}, reason: ${reason}`);
 });
 
-ipcMain.handle('onboarding:get-state', async () => getOnboardingState({ runtimePaths, projectRoot }));
+ipcMain.handle('onboarding:get-state', async () => requestBackendJson('GET', '/api/automation/onboarding'));
 
 ipcMain.handle('settings:get-state', async () => getSettingsStatePayload());
 
@@ -511,15 +708,12 @@ ipcMain.on(CAMERA_FRAME_BRIDGE_ERROR_CHANNEL, (event, result = {}) => {
 });
 
 ipcMain.handle('settings:save', async (event, payload) => {
-    const state = saveSettingsPayload({
-        runtimePaths,
-        payload: payload || {},
-        projectRoot,
-        appVersion: packageJson.version,
-        appBuildInfo: buildInfo,
-        appMode: runtimePaths.appMode,
-        systemLocale: app.getLocale(),
-    });
+    const response = await requestBackendJson(
+        'PUT',
+        '/api/automation/settings',
+        toBackendSettingsPayload(payload),
+    );
+    const state = buildElectronSettingsState(response);
 
     if (shouldManageLoginItem) {
         applyLaunchAtLoginSetting({
@@ -566,7 +760,8 @@ ipcMain.handle('onboarding:pick-legacy-root', async () => {
 });
 
 ipcMain.handle('settings:get-display-language-state', async () => {
-    const settings = loadSettings(runtimePaths);
+    const settings = await requestBackendJson('GET', '/api/automation/settings/display-language');
+    canonicalSettings.display_language = settings.display_language;
     return {
         displayLanguage: sanitizeDisplayLanguage(settings.display_language),
         systemLocale: app.getLocale(),
@@ -574,16 +769,17 @@ ipcMain.handle('settings:get-display-language-state', async () => {
 });
 
 ipcMain.handle('settings:set-display-language', async (event, displayLanguage) => {
-    const settings = loadSettings(runtimePaths);
     const nextDisplayLanguage = sanitizeDisplayLanguage(displayLanguage);
-    persistSettings({
-        ...settings,
-        display_language: nextDisplayLanguage,
-    });
+    const settings = await requestBackendJson(
+        'PUT',
+        '/api/automation/settings/display-language',
+        { display_language: nextDisplayLanguage },
+    );
+    canonicalSettings.display_language = settings.display_language;
     syncTrayMenu();
 
     return {
-        displayLanguage: nextDisplayLanguage,
+        displayLanguage: settings.display_language,
         systemLocale: app.getLocale(),
     };
 });
@@ -601,11 +797,12 @@ ipcMain.handle('window:set-title-bar-theme', async (event, theme) => {
 });
 
 ipcMain.handle('onboarding:complete', async (event, submission) => {
-    const result = saveOnboardingCompletion({
-        runtimePaths,
-        submission: submission || {},
-        projectRoot,
-    });
+    const result = await requestBackendJson(
+        'POST',
+        '/api/automation/onboarding/complete',
+        mapPayloadFields(submission, ONBOARDING_PAYLOAD_FIELDS),
+    );
+    canonicalSettings = { ...canonicalSettings, ...(result.settings || {}) };
 
     if (shouldManageLoginItem) {
         applyLaunchAtLoginSetting({
@@ -735,7 +932,6 @@ if (!gotTheLock) {
         log.info('App ready, initializing...');
         Menu.setApplicationMenu(null);
         configureMediaPermissionHandler();
-        syncLaunchAtLoginSetting();
 
         const shouldLaunchBundledBackend = runtimePaths.appMode === 'packaged' || app.isPackaged;
         createWindow();
@@ -759,6 +955,15 @@ if (!gotTheLock) {
                         ? `Bundled backend started: ${backendBootstrap.executablePath}`
                         : `Bundled backend reused: ${backendBootstrap.reason}`,
                 );
+                try {
+                    await syncLaunchAtLoginSetting();
+                    syncTrayMenu();
+                    if (mainWindow && process.platform === 'win32' && typeof mainWindow.setTitleBarOverlay === 'function') {
+                        mainWindow.setTitleBarOverlay(getTitleBarOverlayOptions(resolveEffectiveThemeForMain()));
+                    }
+                } catch (error) {
+                    log.warn(`Failed to load shared settings from backend: ${error.message}`);
+                }
                 await startRendererCameraFrameBridge();
             } catch (error) {
                 log.error('Bundled backend startup failed', error);

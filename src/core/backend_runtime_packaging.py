@@ -37,6 +37,8 @@ BACKEND_RUNTIME_SOURCE_INPUTS = (
     "src/scripts",
     "src/services",
     "src/utils",
+    "src/cli.py",
+    "src/mcp_server.py",
     "src/output_model.py",
     "src/server.py",
 )
@@ -98,9 +100,7 @@ PYINSTALLER_EXCLUDES = (
     "src.AI_Prediction",
     "src.battery_monitor",
     "src.core.backend_runtime_lock",
-    "src.face_analyzer_mediapipe",
     "src.scripts.convert_icon",
-    "src.scripts.debug_single_face",
     "src.scripts.install_requirements",
     "src.scripts.launch_locked_backend_background",
     "src.scripts.normalize_opencv_installation",
@@ -121,9 +121,16 @@ PYINSTALLER_EXCLUDES = (
     "ultralytics",
 )
 
+# Keep MCP imports explicit; collecting mcp.cli pulls an unused optional Typer dependency.
 PYINSTALLER_HIDDEN_IMPORTS = (
     "chinese_calendar",
     "zhdate",
+    "src.cli",
+    "src.mcp_server",
+    "mcp",
+    "mcp.server",
+    "mcp.server.stdio",
+    "mcp.types",
 )
 
 FORBIDDEN_RUNTIME_PACKAGE_NAMES = (

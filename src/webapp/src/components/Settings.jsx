@@ -62,6 +62,7 @@ function createProviderEntry(route, entry = {}) {
   const normalizedRoute = typeof route === 'string' && route.trim() ? route.trim() : 'custom';
   const model = typeof entry.model === 'string' ? entry.model.trim() : '';
   return {
+    ...entry,
     route: normalizedRoute,
     name: typeof entry.name === 'string' && entry.name.trim() ? entry.name.trim() : normalizedRoute,
     type: entry.type === 'openai-compatible' ? entry.type : 'openai-compatible',
@@ -136,6 +137,7 @@ function normalizeProviderConfigForForm(providerConfig) {
   }
 
   return {
+    ...providerConfig,
     version: 2,
     selected_provider: selectedProvider,
     providers,
@@ -165,7 +167,7 @@ function SettingsRow({ label, children }) {
 }
 
 export default function Settings({ currentTheme = 'dark', currentThemeMode = 'dark', onSettingsApplied }) {
-  const { displayLanguage, setDisplayLanguage, t } = useDisplayLanguage();
+  const { displayLanguage, systemLocale, setDisplayLanguage, t } = useDisplayLanguage();
   const [activeSection, setActiveSection] = useState('general');
   const [activeProviderRoute, setActiveProviderRoute] = useState('custom');
   const [providerRouteDraft, setProviderRouteDraft] = useState('custom');
@@ -203,48 +205,54 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     let cancelled = false;
 
     async function loadState() {
-      const [nextState, modelCatalog] = await Promise.all([
-        loadSettingsState(),
-        fetchBackendJson('/api/llm_models', { retryPolicy: 'load' }).catch(() => null),
-      ]);
-      if (cancelled) {
-        return;
-      }
+      try {
+        const [nextState, modelCatalog] = await Promise.all([
+          loadSettingsState(),
+          fetchBackendJson('/api/llm_models', { retryPolicy: 'load' }).catch(() => null),
+        ]);
+        if (cancelled) {
+          return;
+        }
 
-      const providerConfig = normalizeProviderConfigForForm(nextState.provider);
-      const selectedProvider = providerConfig.providers[providerConfig.selected_provider];
-      if (!selectedProvider.model && typeof modelCatalog?.default_model === 'string') {
-        providerConfig.providers[providerConfig.selected_provider] = {
-          ...selectedProvider,
-          model: modelCatalog.default_model,
-          models: normalizeProviderModels({ ...selectedProvider, model: modelCatalog.default_model }),
-        };
+        const providerConfig = normalizeProviderConfigForForm(nextState.provider);
+        const selectedProvider = providerConfig.providers[providerConfig.selected_provider];
+        if (!selectedProvider.model && typeof modelCatalog?.default_model === 'string') {
+          providerConfig.providers[providerConfig.selected_provider] = {
+            ...selectedProvider,
+            model: modelCatalog.default_model,
+            models: normalizeProviderModels({ ...selectedProvider, model: modelCatalog.default_model }),
+          };
+        }
+        setState(nextState);
+        setActiveProviderRoute(providerConfig.selected_provider);
+        setProviderRouteDraft(providerConfig.selected_provider);
+        setForm({
+          displayLanguage: nextState.settings.displayLanguage || displayLanguage,
+          theme: nextState.settings.theme || currentTheme,
+          themeMode: nextState.settings.themeMode || nextState.settings.theme || currentThemeMode,
+          launchAtLogin: Boolean(nextState.settings.launchAtLogin),
+          actionPlanAutoGenerate: nextState.settings.actionPlanAutoGenerate !== false,
+          voiceProviderMode: nextState.settings.voiceProviderMode || 'inherit_ai',
+          voiceBaseUrl: nextState.settings.voiceBaseUrl || '',
+          voiceApiKey: nextState.settings.voiceApiKey || '',
+          voiceModel: nextState.settings.voiceModel || DEFAULT_VOICE_MODEL,
+          voiceModels: normalizeModelList(nextState.settings.voiceModels, nextState.settings.voiceModel || DEFAULT_VOICE_MODEL),
+          voiceLastRefreshedAt: nextState.settings.voiceLastRefreshedAt || null,
+          voiceHasApiKey: Boolean(nextState.settings.voiceHasApiKey),
+          imageProviderMode: nextState.settings.imageProviderMode || 'inherit_ai',
+          imageBaseUrl: nextState.settings.imageBaseUrl || '',
+          imageApiKey: nextState.settings.imageApiKey || '',
+          imageModel: nextState.settings.imageModel || '',
+          imageModels: normalizeModelList(nextState.settings.imageModels, nextState.settings.imageModel || ''),
+          imageLastRefreshedAt: nextState.settings.imageLastRefreshedAt || null,
+          imageHasApiKey: Boolean(nextState.settings.imageHasApiKey),
+          providerConfig,
+        });
+      } catch (error) {
+        if (!cancelled) {
+          setSaveStatus(t('settings.load.failed', { error: error.message || String(error) }));
+        }
       }
-      setState(nextState);
-      setActiveProviderRoute(providerConfig.selected_provider);
-      setProviderRouteDraft(providerConfig.selected_provider);
-      setForm({
-        displayLanguage: nextState.settings.displayLanguage || displayLanguage,
-        theme: nextState.settings.theme || currentTheme,
-        themeMode: nextState.settings.themeMode || nextState.settings.theme || currentThemeMode,
-        launchAtLogin: Boolean(nextState.settings.launchAtLogin),
-        actionPlanAutoGenerate: nextState.settings.actionPlanAutoGenerate !== false,
-        voiceProviderMode: nextState.settings.voiceProviderMode || 'inherit_ai',
-        voiceBaseUrl: nextState.settings.voiceBaseUrl || '',
-        voiceApiKey: nextState.settings.voiceApiKey || '',
-        voiceModel: nextState.settings.voiceModel || DEFAULT_VOICE_MODEL,
-        voiceModels: normalizeModelList(nextState.settings.voiceModels, nextState.settings.voiceModel || DEFAULT_VOICE_MODEL),
-        voiceLastRefreshedAt: nextState.settings.voiceLastRefreshedAt || null,
-        voiceHasApiKey: Boolean(nextState.settings.voiceHasApiKey),
-        imageProviderMode: nextState.settings.imageProviderMode || 'inherit_ai',
-        imageBaseUrl: nextState.settings.imageBaseUrl || '',
-        imageApiKey: nextState.settings.imageApiKey || '',
-        imageModel: nextState.settings.imageModel || '',
-        imageModels: normalizeModelList(nextState.settings.imageModels, nextState.settings.imageModel || ''),
-        imageLastRefreshedAt: nextState.settings.imageLastRefreshedAt || null,
-        imageHasApiKey: Boolean(nextState.settings.imageHasApiKey),
-        providerConfig,
-      });
     }
 
     void loadState();
@@ -252,7 +260,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     return () => {
       cancelled = true;
     };
-  }, [currentTheme, currentThemeMode, displayLanguage]);
+  }, [currentTheme, currentThemeMode, displayLanguage, t]);
 
   const providerRoutes = Object.keys(form.providerConfig.providers);
   const currentProviderRoute = form.providerConfig.providers[activeProviderRoute]
@@ -647,6 +655,9 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           ))}
         </select>
       </SettingsRow>
+      <SettingsRow label={t('settings.general.system_locale')}>
+        <span>{systemLocale}</span>
+      </SettingsRow>
       <SettingsRow label={t('settings.general.theme')}>
         <div className="settings-segmented">
           {THEME_OPTIONS.map((option) => (
@@ -1034,7 +1045,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
             <p className="settings-eyebrow">{t('settings.title')}</p>
             <h2>{t(SECTION_ORDER.find((section) => section.key === activeSection)?.labelKey || 'settings.title')}</h2>
           </div>
-          <button type="button" className="settings-save-button" onClick={handleSave} disabled={saving}>
+          <button type="button" className="settings-save-button" onClick={handleSave} disabled={saving || !state}>
             {saving ? <Check size={18} /> : <Save size={18} />}
             {saving ? t('settings.save.saving') : t('settings.save.button')}
           </button>

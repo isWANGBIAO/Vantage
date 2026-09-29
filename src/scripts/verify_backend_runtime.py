@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import json
 import os
@@ -156,6 +157,80 @@ def _status_matches_runtime_layout(status_payload: dict[str, object], layout: di
     return isinstance(cwd_name, str) and cwd_name == layout["resource_dir"].name
 
 
+def _run_packaged_cli_smoke(
+    executable_path: Path,
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: int = 30,
+) -> dict[str, object]:
+    completed = subprocess.run(
+        [
+            str(executable_path),
+            "--run-cli",
+            "--format",
+            "json",
+            "system",
+            "status",
+            "read",
+        ],
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout_seconds,
+        check=False,
+    )
+    if completed.returncode != 0 or completed.stderr.strip():
+        raise RuntimeError("Packaged CLI status smoke request failed.")
+    try:
+        response = json.loads(completed.stdout)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        raise RuntimeError("Packaged CLI did not return valid JSON on stdout.") from None
+    if not isinstance(response, dict):
+        raise RuntimeError("Packaged CLI returned an unexpected status response.")
+    return response
+
+
+def _run_packaged_mcp_smoke(
+    executable_path: Path,
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: int = 30,
+) -> dict[str, object]:
+    from mcp import Client
+    from mcp.client.stdio import StdioServerParameters
+
+    parameters = StdioServerParameters(
+        command=str(executable_path),
+        args=["--run-cli", "mcp"],
+        cwd=str(cwd),
+        env=env,
+        encoding="utf-8",
+    )
+
+    async def scenario() -> dict[str, object]:
+        async with Client(parameters) as client:
+            listed = await client.list_tools()
+            if "system.status.read" not in {item.name for item in listed.tools}:
+                raise RuntimeError("Packaged MCP catalog omitted the status operation.")
+            result = await client.call_tool("system.status.read", {})
+            if result.is_error:
+                raise RuntimeError("Packaged MCP status tool returned an error.")
+            return {
+                "tool_count": len(listed.tools),
+                "status": result.structured_content,
+            }
+
+    try:
+        return asyncio.run(asyncio.wait_for(scenario(), timeout=timeout_seconds))
+    except Exception:
+        raise RuntimeError("Packaged MCP stdio round-trip failed.") from None
+
+
 def _find_runtime_blockers(log_text: str) -> list[str]:
     return [pattern for pattern in BLOCKING_RUNTIME_PATTERNS if pattern in log_text]
 
@@ -307,6 +382,28 @@ def _main_without_backend_runtime_lock() -> int:
             print(log_tail)
         return 1
 
+    try:
+        _run_packaged_cli_smoke(
+            executable_path,
+            cwd=layout["runtime_dir"],
+            env=env,
+            timeout_seconds=min(args.timeout_seconds, 30),
+        )
+        mcp_status = _run_packaged_mcp_smoke(
+            executable_path,
+            cwd=layout["runtime_dir"],
+            env=env,
+            timeout_seconds=min(args.timeout_seconds, 30),
+        )
+    except Exception as exc:  # noqa: BLE001
+        _terminate_process_tree(process.pid)
+        log_tail = _tail_text_file(smoke_log_path)
+        print(str(exc))
+        if log_tail:
+            print("--- smoke log tail ---")
+            print(log_tail)
+        return 1
+
     (
         runtime_log_path,
         runtime_log_text,
@@ -353,6 +450,11 @@ def _main_without_backend_runtime_lock() -> int:
                 "smoke_log": str(smoke_log_path),
                 "runtime_log": str(runtime_log_path) if runtime_log_path else None,
                 "status": status_payload,
+                "cli_smoke": {"validated": True},
+                "mcp_smoke": {
+                    "validated": True,
+                    "tool_count": mcp_status["tool_count"],
+                },
             },
             indent=2,
             ensure_ascii=True,

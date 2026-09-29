@@ -1,3 +1,7 @@
+import automationLimits from './automationLimits.cjs';
+
+const { MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES } = automationLimits;
+
 const DEFAULT_SETTINGS_STATE = {
   mode: 'browser',
   settings: {
@@ -20,6 +24,7 @@ const DEFAULT_SETTINGS_STATE = {
     imageModels: [],
     imageLastRefreshedAt: null,
     actionPlanAutoGenerate: true,
+    actionPlanCheckIntervalMinutes: 60,
   },
   provider: {
     version: 2,
@@ -139,6 +144,10 @@ function normalizeSettings(payload, mode) {
         typeof safeSettings.actionPlanAutoGenerate === 'boolean'
           ? safeSettings.actionPlanAutoGenerate
           : defaults.settings.actionPlanAutoGenerate,
+      actionPlanCheckIntervalMinutes: Number.isSafeInteger(safeSettings.actionPlanCheckIntervalMinutes)
+        && safeSettings.actionPlanCheckIntervalMinutes >= 0
+        && safeSettings.actionPlanCheckIntervalMinutes <= MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
+        ? safeSettings.actionPlanCheckIntervalMinutes : 60,
     },
     provider:
       safePayload.provider && typeof safePayload.provider === 'object'
@@ -189,18 +198,15 @@ export async function loadSettingsState(electronAPI) {
     return cloneSettingsState(DEFAULT_SETTINGS_STATE);
   }
 
-  try {
-    const payload = await resolvedElectronAPI.getSettingsState();
-    return normalizeSettings(payload, 'electron');
-  } catch (error) {
-    console.warn('Failed to load settings state from Electron bridge.', error);
-    return cloneSettingsState(DEFAULT_SETTINGS_STATE);
-  }
+  const payload = await resolvedElectronAPI.getSettingsState();
+  return normalizeSettings(payload, 'electron');
 }
 
 export async function saveSettingsState(submission, electronAPI) {
   const resolvedElectronAPI = resolveElectronAPI(electronAPI);
   if (!resolvedElectronAPI?.saveSettings) {
+    const current = await loadSettingsState(electronAPI);
+    submission = { ...current.settings, ...submission };
     const normalized = normalizeSettings(
       {
         settings: {
@@ -226,6 +232,7 @@ export async function saveSettingsState(submission, electronAPI) {
             typeof submission?.actionPlanAutoGenerate === 'boolean'
               ? submission.actionPlanAutoGenerate
               : DEFAULT_SETTINGS_STATE.settings.actionPlanAutoGenerate,
+          actionPlanCheckIntervalMinutes: submission?.actionPlanCheckIntervalMinutes,
         },
       },
       'browser',

@@ -32,6 +32,15 @@ function normalizeModelOption(rawOption, catalog) {
     provider_route: providerRoute || null,
     provider_label: providerLabel || null,
     label: rawOption?.label || (providerLabel ? `${model} | ${providerLabel}` : model),
+    reasoning_tiers: Array.isArray(rawOption?.reasoning_tiers)
+      ? rawOption.reasoning_tiers
+      : [],
+    reasoning_aliases: (
+      rawOption?.reasoning_aliases && typeof rawOption.reasoning_aliases === 'object'
+        ? rawOption.reasoning_aliases
+        : {}
+    ),
+    default_reasoning_effort: String(rawOption?.default_reasoning_effort || '').trim() || null,
     is_default: isDefault,
   };
 }

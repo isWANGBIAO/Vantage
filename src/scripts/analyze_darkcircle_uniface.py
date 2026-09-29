@@ -139,7 +139,7 @@ class FaceParser:
                     min_detection_confidence=0.5
                 )
             except Exception as e:
-                raise ImportError(f"MediaPipe fallback failed: {e}")
+                raise ImportError(f"MediaPipe fallback failed: {e}") from e
             return
 
         try:

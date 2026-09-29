@@ -387,6 +387,7 @@ def run_action_plan_round(
     entrypoint=RUN_PROMPT_ENTRYPOINT,
     context_file=None,
     metadata=None,
+    emit=print,
 ):
     total_attempts = max_empty_content_retries + 1
     total_usage = {
@@ -400,13 +401,13 @@ def run_action_plan_round(
 
     for attempt in range(1, total_attempts + 1):
         if emit_start_before_first_attempt or attempt > 1:
-            emit_action_plan_stream_event(section, "start", "")
+            emit_action_plan_stream_event(section, "start", "", emit=emit)
 
         try:
             result = client.chat(
                 messages,
                 stream=True,
-                print_callback=build_action_plan_stream_printer(section),
+                print_callback=build_action_plan_stream_printer(section, emit=emit),
                 model=model_override,
                 provider_route=provider_route,
                 service_tier=service_tier,
@@ -460,6 +461,15 @@ def run_action_plan_round(
         "Action plan %s round returned empty content after %s attempts",
         section,
         total_attempts,
+    )
+    # The subprocess still exits 0 here, so without an explicit marker the
+    # caller cannot tell this apart from a completed generation and would
+    # publish an empty plan over the previous one.
+    emit_action_plan_stream_event(
+        section,
+        "error",
+        f"Action plan {section} round returned no content after {total_attempts} attempt(s).",
+        emit=emit,
     )
     return last_result, ""
 
@@ -1046,9 +1056,28 @@ def main():
                         bool(first_round_content),
                         bool(second_round_content),
                     )
+                    # Second line of defence: the round helper already signals
+                    # its own failure, but the caller must never exit quietly on
+                    # an incomplete plan, because the process exit code is 0 and
+                    # the server treats a silent success as a finished plan.
+                    for failed_section, has_content in (
+                        ("analysis", first_round_content),
+                        ("plan", second_round_content),
+                    ):
+                        if not has_content:
+                            emit_action_plan_stream_event(
+                                failed_section,
+                                "error",
+                                f"Action plan {failed_section} round produced no content.",
+                            )
 
             else:
                 print("Error: Prompt_Action_Plan.md not found. Skipping second round.")
+                emit_action_plan_stream_event(
+                    "plan",
+                    "error",
+                    "Action plan prompt file is missing; the plan round was skipped.",
+                )
             
     except Exception as e:
         logging.error(f"An error occurred: {e}", exc_info=True)

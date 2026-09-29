@@ -92,14 +92,14 @@ if errorlevel 1 (
 )
 call :StepDone "Frontend and backend build step complete"
 
-call :StepStart "[5/8] Verifying backend runtime..."
+call :StepStart "[5/8] Verifying backend runtime, CLI and MCP..."
 python "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT_ARG%" -- "%BACKEND_RUNTIME_PYTHON%" src\scripts\verify_backend_runtime.py --timeout-seconds 60
 if errorlevel 1 (
     call :RestoreBuildInfo
-    echo       Backend runtime verification failed
+    echo       Backend runtime, CLI or MCP verification failed
     exit /b 1
 )
-call :StepDone "Backend runtime verification complete"
+call :StepDone "Backend runtime, CLI and MCP verification complete"
 
 call :StepStart "[6/8] Building Windows installer..."
 call :EnsureCustomNsisArchiveCache
@@ -123,7 +123,9 @@ call :StepDone "Windows installer build complete"
 call :StepStart "[7/8] Preparing silent install..."
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$targets = Get-ChildItem -Path '%STARTUP_FOLDER%' -Filter 'RUN.bat*.lnk' -ErrorAction SilentlyContinue; if ($targets) { $targets | Remove-Item -Force; Write-Host '      Removed startup shortcut residue' } else { Write-Host '      No startup shortcut residue found' }"
 
-for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$installer = Get-ChildItem -Path '%PROJECT_ROOT%src\\webapp\\electron-dist' -Filter 'Vantage Setup *.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($installer) { $installer.FullName }"`) do set "INSTALLER_PATH=%%I"
+rem -File keeps this from walking win-unpacked, which holds the whole unpacked
+rem Electron runtime and thousands of files.
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$installer = Get-ChildItem -Path '%PROJECT_ROOT%src\\webapp\\electron-dist' -File -Filter 'Vantage Setup *.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($installer) { $installer.FullName }"`) do set "INSTALLER_PATH=%%I"
 
 if not defined INSTALLER_PATH (
     echo       Installer package not found in src\webapp\electron-dist
@@ -131,12 +133,24 @@ if not defined INSTALLER_PATH (
 )
 
 echo       Latest installer: %INSTALLER_PATH%
+
+rem Every build leaves a ~174 MB installer behind, so an uncleaned output
+rem directory grows without bound. Keep the newest installer together with its
+rem blockmap and drop the rest. Both are matched by full file name, because the
+rem blockmap's own name ends in ".exe.blockmap".
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$dir = '%PROJECT_ROOT%src\\webapp\\electron-dist'; $keepName = [System.IO.Path]::GetFileName('%INSTALLER_PATH%'); $keepBlockmap = $keepName + '.blockmap'; $stale = Get-ChildItem -Path $dir -File | Where-Object { ($_.Name -like 'Vantage Setup *.exe' -and $_.Name -ne $keepName) -or ($_.Name -like '*.blockmap' -and $_.Name -ne $keepBlockmap) -or $_.Name -like '*.nsis.7z' }; if ($stale) { $freed = ($stale | Measure-Object Length -Sum).Sum; $count = ($stale | Measure-Object).Count; $stale | Remove-Item -Force; Write-Host ('      Removed ' + $count + ' stale installer artifact(s), freed ' + [math]::Round($freed / 1GB, 2) + ' GB') } else { Write-Host '      No stale installer artifacts to remove' }"
+
 taskkill /IM Vantage.exe /F >nul 2>&1
 taskkill /IM VantageBackend.exe /F >nul 2>&1
 call :StepDone "Silent install prepared"
 
 call :StepStart "[8/8] Installing and launching Vantage..."
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$process = Start-Process -FilePath '%INSTALLER_PATH%' -ArgumentList '/S' -Wait -PassThru; exit $process.ExitCode"
+rem The installer needs elevation. Start-Process without -Verb RunAs never asks
+rem for it, so the installer sits waiting for a consent prompt that cannot
+rem appear: zero bytes written, no CPU, forever. Request elevation explicitly
+rem when this shell is not already elevated, and bound the wait so a wedged
+rem installer fails the step instead of hanging the whole build.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$identity = [Security.Principal.WindowsIdentity]::GetCurrent(); $elevated = (New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); $arguments = @{ FilePath = '%INSTALLER_PATH%'; ArgumentList = '/S'; PassThru = $true }; if (-not $elevated) { Write-Host '      Requesting elevation for the installer'; $arguments.Verb = 'RunAs' }; try { $process = Start-Process @arguments } catch { Write-Host ('      Could not start the installer: ' + $_.Exception.Message); exit 1 }; if (-not $process.WaitForExit(600000)) { Write-Host '      Installer still running after 600s; terminating'; $process.Kill(); exit 1 }; exit $process.ExitCode"
 if errorlevel 1 (
     echo       Silent installer failed
     exit /b 1

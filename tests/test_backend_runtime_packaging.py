@@ -117,6 +117,16 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
     assert "--console" in args
     assert "--collect-submodules" in args
     assert "src" in args
+    assert "mcp" not in {
+        args[index + 1]
+        for index, value in enumerate(args)
+        if value == "--collect-submodules"
+    }
+    assert {"src.cli", "src.mcp_server", "mcp", "mcp.server", "mcp.server.stdio", "mcp.types"} <= {
+        args[index + 1]
+        for index, value in enumerate(args)
+        if value == "--hidden-import"
+    }
     assert "--distpath" in args
     assert str(layout["dist_dir"]) in args
     assert "--workpath" in args
@@ -145,8 +155,6 @@ def test_build_pyinstaller_arguments_include_data_files_and_fixed_layout(tmp_pat
         "polars",
         "src.AI_Prediction",
         "src.battery_monitor",
-        "src.face_analyzer_mediapipe",
-        "src.scripts.debug_single_face",
         "src.scripts.install_requirements",
         "src.scripts.launch_locked_backend_background",
         "src.scripts.normalize_opencv_installation",
@@ -603,6 +611,38 @@ def test_backend_runtime_fingerprint_tracks_backend_inputs_not_frontend_assets(t
     )
     assert original["version"] == 5
     assert original["distributions"] == closure
+
+
+def test_backend_runtime_fingerprint_tracks_top_level_cli_and_mcp_modules(tmp_path):
+    _create_required_runtime_resources(tmp_path)
+    cli_file = tmp_path / "src" / "cli.py"
+    mcp_file = tmp_path / "src" / "mcp_server.py"
+    cli_file.write_text("def main(): return 0\n", encoding="utf-8")
+    mcp_file.write_text("def run_stdio(): pass\n", encoding="utf-8")
+    resources = collect_backend_runtime_resources(tmp_path)
+
+    original = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["mcp==2.2.0"],
+    )
+    cli_file.write_text("def main(): return 1\n", encoding="utf-8")
+    changed_cli = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["mcp==2.2.0"],
+    )
+    mcp_file.write_text("def run_stdio(): return None\n", encoding="utf-8")
+    changed_mcp = build_backend_runtime_fingerprint(
+        tmp_path,
+        resources=resources,
+        distribution_closure=["mcp==2.2.0"],
+    )
+
+    tracked = {entry["path"] for entry in original["inputs"]}
+    assert {"src/cli.py", "src/mcp_server.py"} <= tracked
+    assert original["digest"] != changed_cli["digest"]
+    assert changed_cli["digest"] != changed_mcp["digest"]
 
 
 def test_backend_runtime_fingerprint_changes_with_distribution_closure(tmp_path):

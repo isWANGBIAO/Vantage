@@ -1,4 +1,5 @@
 import json
+import threading
 from copy import deepcopy
 from pathlib import Path
 
@@ -12,7 +13,9 @@ SETTINGS_VERSION = 2
 PROVIDERS_VERSION = 2
 PROVIDER_TYPE_OPENAI_COMPATIBLE = "openai-compatible"
 MIGRATION_STATE_VERSION = 1
+USER_CONFIG_LOCK = threading.RLock()
 DEFAULT_VOICE_MODEL = "FunAudioLLM/SenseVoiceSmall"
+MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES = 35_791
 PROVIDER_MODE_INHERIT_AI = "inherit_ai"
 PROVIDER_MODE_CUSTOM = "custom"
 DEFAULT_LOCAL_PROXY_BASE_URL = "http://127.0.0.1:8317/v1"
@@ -30,6 +33,11 @@ DEFAULT_SAMPLING_DEFAULTS = {
     "top_p": 0.95,
     "top_k": 20,
 }
+
+# Reasoning levels offered when a model has no profile of its own. The order is
+# the clamping order: an unsupported level falls back to the nearest lower one.
+DEFAULT_REASONING_TIERS = ["low", "medium", "high", "xhigh"]
+
 DEFAULT_MODEL_PROFILES = {
     "qwen3.6-27b": {
         "parameters": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "presence_penalty": 0.0},
@@ -39,15 +47,23 @@ DEFAULT_MODEL_PROFILES = {
         "parameters": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "presence_penalty": 0.0},
         "omit_parameters": ["frequency_penalty"],
         "extra": {"chat_template_kwargs": {"enable_thinking": True, "preserve_thinking": True}},
+        "reasoning_tiers": ["low", "medium", "xhigh"],
+        "reasoning_aliases": {"high": "xhigh"},
     },
     "deepseek-v4-*": {
         "omit_parameters": ["temperature", "top_p", "top_k", "presence_penalty", "frequency_penalty"],
         "extra": {"thinking": {"type": "enabled"}},
+        "reasoning_tiers": ["high", "max"],
+        "reasoning_aliases": {"xhigh": "max"},
     },
     "glm-5.3-flash*": {
         "parameters": {"temperature": 1.0, "top_p": 0.95},
         "omit_parameters": ["frequency_penalty"],
         "max_tokens": 32768,
+        # GLM-5.3 exposes only low/high/max. "low" leads because that is where
+        # an unknown level previously landed; "medium" is remapped there too.
+        "reasoning_tiers": ["low", "high", "max"],
+        "reasoning_aliases": {"medium": "low"},
     },
     "minimax-m2.7": {
         "parameters": {"temperature": 1.0, "top_p": 0.95, "top_k": 40},
@@ -67,6 +83,7 @@ DEFAULT_SETTINGS = {
     "theme": "dark",
     "theme_mode": "dark",
     "action_plan_auto_generate": True,
+    "action_plan_check_interval_minutes": 60,
     "voice_provider_mode": PROVIDER_MODE_INHERIT_AI,
     "voice_base_url": "",
     "voice_api_key": "",
@@ -187,6 +204,48 @@ def _coerce_dict(payload: dict | None, key: str) -> dict:
     return deepcopy(value) if isinstance(value, dict) else {}
 
 
+def _sanitize_reasoning_aliases(value) -> dict:
+    """Normalize a per-model map of requested level -> offered level.
+
+    This is how a profile declares an intentional remap, for example "the app's
+    high level means xhigh for this model", without touching code.
+    """
+    if not isinstance(value, dict):
+        return {}
+    aliases: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not isinstance(item, str):
+            continue
+        normalized_key = key.strip().lower()
+        normalized_item = item.strip().lower()
+        if normalized_key and normalized_item:
+            aliases[normalized_key] = normalized_item
+        if len(aliases) >= 24:
+            break
+    return aliases
+
+
+def _sanitize_reasoning_tiers(value) -> list[str]:
+    """Normalize a per-model list of allowed reasoning effort levels.
+
+    The order matters: it is the clamping order used when a requested level is
+    not offered by the model, so an intentionally omitted level degrades to a
+    neighbouring one instead of silently passing through.
+    """
+    if not isinstance(value, list):
+        return []
+    tiers: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip().lower()
+        if normalized and normalized not in tiers:
+            tiers.append(normalized)
+        if len(tiers) >= 12:
+            break
+    return tiers
+
+
 def _sanitize_model_parameters(payload: dict | None) -> tuple[dict, dict]:
     raw_defaults = _coerce_dict(payload, "sampling_defaults")
     sampling_defaults = deepcopy(DEFAULT_SAMPLING_DEFAULTS)
@@ -220,6 +279,12 @@ def _sanitize_model_parameters(payload: dict | None) -> tuple[dict, dict]:
         max_tokens = profile.get("max_tokens")
         if isinstance(max_tokens, int) and not isinstance(max_tokens, bool):
             sanitized_profile["max_tokens"] = max(1, max_tokens)
+        reasoning_tiers = _sanitize_reasoning_tiers(profile.get("reasoning_tiers"))
+        if reasoning_tiers:
+            sanitized_profile["reasoning_tiers"] = reasoning_tiers
+        reasoning_aliases = _sanitize_reasoning_aliases(profile.get("reasoning_aliases"))
+        if reasoning_aliases:
+            sanitized_profile["reasoning_aliases"] = reasoning_aliases
         if sanitized_profile:
             normalized_pattern = pattern.strip().lower()
             merged_profile = deepcopy(model_profiles.get(normalized_pattern, {}))
@@ -336,6 +401,14 @@ def _sanitize_provider_entry(route: str, entry: dict | None) -> dict:
 
 
 def _sanitize_settings(payload: dict | None) -> dict:
+    interval = (payload or {}).get("action_plan_check_interval_minutes", 60)
+    if (
+        not isinstance(interval, int)
+        or isinstance(interval, bool)
+        or interval < 0
+        or interval > MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
+    ):
+        interval = 60
     return {
         "version": SETTINGS_VERSION,
         "onboarding_completed": _coerce_bool(payload, "onboarding_completed", False),
@@ -344,6 +417,7 @@ def _sanitize_settings(payload: dict | None) -> dict:
         "theme": _coerce_theme(payload),
         "theme_mode": _coerce_theme_mode(payload),
         "action_plan_auto_generate": _coerce_bool(payload, "action_plan_auto_generate", True),
+        "action_plan_check_interval_minutes": interval,
         "voice_provider_mode": _coerce_special_provider_mode(payload, prefix="voice"),
         "voice_base_url": _coerce_optional_str(payload, "voice_base_url") or "",
         "voice_api_key": _coerce_optional_str(payload, "voice_api_key") or "",
@@ -408,7 +482,7 @@ def _build_complete_provider(route: str | None, provider: dict | None) -> dict |
     models = _coerce_provider_models(provider, model)
     if not model and models:
         model = models[0]
-    return {
+    complete_provider = {
         "route": route,
         "name": _coerce_optional_str(provider, "name") or route,
         "type": _coerce_provider_type(provider),
@@ -419,6 +493,8 @@ def _build_complete_provider(route: str | None, provider: dict | None) -> dict |
         "models": models,
         "last_refreshed_at": _coerce_optional_str(provider, "last_refreshed_at"),
     }
+    # Carried onto the chain entry so the prompt budget can use the real window
+    # instead of falling back to the global ceiling.
     for key in ("context_window_tokens", "max_output_tokens"):
         value = _coerce_optional_positive_int(provider, key)
         if value is not None:
@@ -444,33 +520,38 @@ def _load_sanitized_payload(target_file: str | Path, sanitizer) -> dict:
 
 
 def load_settings(settings_file: str | Path | None = None) -> dict:
-    resolved_settings_file = Path(settings_file) if settings_file else get_settings_file()
-    return _load_sanitized_payload(resolved_settings_file, _sanitize_settings)
+    with USER_CONFIG_LOCK:
+        resolved_settings_file = Path(settings_file) if settings_file else get_settings_file()
+        return _load_sanitized_payload(resolved_settings_file, _sanitize_settings)
 
 
 def save_settings(payload: dict | None, settings_file: str | Path | None = None) -> dict:
-    resolved_settings_file = Path(settings_file) if settings_file else get_settings_file()
-    return _write_json_payload(resolved_settings_file, _sanitize_settings(payload))
+    with USER_CONFIG_LOCK:
+        resolved_settings_file = Path(settings_file) if settings_file else get_settings_file()
+        return _write_json_payload(resolved_settings_file, _sanitize_settings(payload))
 
 
 def load_provider_config(providers_file: str | Path | None = None) -> dict:
-    resolved_providers_file = Path(providers_file) if providers_file else get_providers_file()
-    return _load_sanitized_payload(resolved_providers_file, _sanitize_provider_config)
+    with USER_CONFIG_LOCK:
+        resolved_providers_file = Path(providers_file) if providers_file else get_providers_file()
+        return _load_sanitized_payload(resolved_providers_file, _sanitize_provider_config)
 
 
 def save_provider_config(payload: dict | None, providers_file: str | Path | None = None) -> dict:
-    resolved_providers_file = Path(providers_file) if providers_file else get_providers_file()
-    return _write_json_payload(resolved_providers_file, _sanitize_provider_config(payload))
+    with USER_CONFIG_LOCK:
+        resolved_providers_file = Path(providers_file) if providers_file else get_providers_file()
+        return _write_json_payload(resolved_providers_file, _sanitize_provider_config(payload))
 
 
 def get_model_parameter_config(providers_file: str | Path | None = None) -> dict:
     """Read model parameters without rewriting the provider file."""
-    resolved_providers_file = Path(providers_file) if providers_file else get_providers_file()
-    sanitized = _sanitize_provider_config(_read_json_payload(resolved_providers_file))
-    return {
-        "sampling_defaults": sanitized["sampling_defaults"],
-        "model_profiles": sanitized["model_profiles"],
-    }
+    with USER_CONFIG_LOCK:
+        resolved_providers_file = Path(providers_file) if providers_file else get_providers_file()
+        sanitized = _sanitize_provider_config(_read_json_payload(resolved_providers_file))
+        return {
+            "sampling_defaults": sanitized["sampling_defaults"],
+            "model_profiles": sanitized["model_profiles"],
+        }
 
 
 def _ordered_provider_routes(provider_config: dict, providers: dict) -> list[str]:
@@ -505,7 +586,7 @@ def get_active_provider_config(providers_file: str | Path | None = None) -> dict
     return None
 
 
-def _build_special_provider_config(
+def _build_special_provider_config_unlocked(
     *,
     kind: str,
     settings_file: str | Path | None = None,
@@ -552,6 +633,20 @@ def _build_special_provider_config(
     }
 
 
+def _build_special_provider_config(
+    *,
+    kind: str,
+    settings_file: str | Path | None = None,
+    providers_file: str | Path | None = None,
+) -> dict:
+    with USER_CONFIG_LOCK:
+        return _build_special_provider_config_unlocked(
+            kind=kind,
+            settings_file=settings_file,
+            providers_file=providers_file,
+        )
+
+
 def get_voice_provider_config(
     settings_file: str | Path | None = None,
     providers_file: str | Path | None = None,
@@ -575,14 +670,16 @@ def get_image_provider_config(
 
 
 def load_migration_state(migration_state_file: str | Path | None = None) -> dict:
-    resolved_migration_state_file = (
-        Path(migration_state_file) if migration_state_file else get_migration_state_file()
-    )
-    return _load_sanitized_payload(resolved_migration_state_file, _sanitize_migration_state)
+    with USER_CONFIG_LOCK:
+        resolved_migration_state_file = (
+            Path(migration_state_file) if migration_state_file else get_migration_state_file()
+        )
+        return _load_sanitized_payload(resolved_migration_state_file, _sanitize_migration_state)
 
 
 def save_migration_state(payload: dict | None, migration_state_file: str | Path | None = None) -> dict:
-    resolved_migration_state_file = (
-        Path(migration_state_file) if migration_state_file else get_migration_state_file()
-    )
-    return _write_json_payload(resolved_migration_state_file, _sanitize_migration_state(payload))
+    with USER_CONFIG_LOCK:
+        resolved_migration_state_file = (
+            Path(migration_state_file) if migration_state_file else get_migration_state_file()
+        )
+        return _write_json_payload(resolved_migration_state_file, _sanitize_migration_state(payload))

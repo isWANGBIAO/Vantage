@@ -89,6 +89,15 @@ macOS:
 ./RUN_DEV.sh
 ```
 
+## CLI and MCP
+
+Vantage exposes the same product operations through a catalog-driven CLI and
+stdio MCP server; neither includes an embedded agent or starts a second backend.
+The Windows installer provides the `vantage` command. See
+[CLI and MCP usage](docs/vantage-cli-mcp.md) and the
+[Vantage project Skill](.agents/skills/vantage/SKILL.md) for setup, operation
+discovery, and desktop-only boundaries.
+
 ## Packaging
 
 Windows full build, install, and launch:
@@ -111,13 +120,13 @@ GitHub Releases are automated for version tags. Keep
 tag:
 
 ```powershell
-git tag -a v1.0.73 -m "Vantage 1.0.73"
-git push origin v1.0.73
+git tag -a v1.0.79 -m "Vantage 1.0.79"
+git push origin v1.0.79
 ```
 
 The `Release` workflow builds the Windows installer, generates `SHA256SUMS.txt`,
 and publishes the assets to the matching GitHub Release. The tag must match the
-frontend package version, for example `v1.0.73` for package version `1.0.73`.
+frontend package version, for example `v1.0.79` for package version `1.0.79`.
 
 macOS full build, install, and launch:
 

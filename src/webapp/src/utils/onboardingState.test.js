@@ -39,6 +39,15 @@ test('loadOnboardingState reflects incomplete onboarding from Electron', async (
   });
 });
 
+test('loadOnboardingState rejects Electron backend read failures instead of assuming setup is complete', async () => {
+  const backendError = new Error('backend unavailable');
+
+  await assert.rejects(
+    loadOnboardingState({ getOnboardingState: async () => { throw backendError; } }),
+    (error) => error === backendError,
+  );
+});
+
 test('completeOnboardingSetup forwards the submission payload to Electron', async () => {
   const payload = {
     launchAtLogin: true,

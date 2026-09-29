@@ -148,6 +148,23 @@ class _AlwaysIncompleteLLMClient:
         raise run_prompt.StreamIncompleteError("Streaming response ended without a terminal event")
 
 
+class _EmptyContentLLMClient:
+    """Completes every request successfully but never returns any content."""
+
+    def __init__(self):
+        self.call_count = 0
+
+    def chat(self, messages, stream=False, print_callback=None, model=None, **kwargs):
+        self.call_count += 1
+        return {
+            "content": "",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10},
+            "duration": 1.0,
+            "first_token_latency": None,
+            "completed_at": "2026-05-04T02:00:01+08:00",
+        }
+
+
 class _CapturingLLMClient:
     def __init__(self, responses):
         self.responses = list(responses)
@@ -421,6 +438,52 @@ class RunPromptTests(unittest.TestCase):
             )
 
         self.assertEqual(client.call_count, 2)
+
+    def test_run_action_plan_round_signals_an_error_when_no_content_arrives(self):
+        """空内容必须发出分区错误事件，否则服务端会把它当成功并覆盖旧计划。"""
+        for section, expected_prefix in (("analysis", "STREAM_ANALYSIS_ERROR:"), ("plan", "STREAM_PLAN_ERROR:")):
+            with self.subTest(section=section):
+                client = _EmptyContentLLMClient()
+                emitted = []
+
+                _result, content = run_prompt.run_action_plan_round(
+                    client=client,
+                    messages=[{"role": "user", "content": "prompt"}],
+                    section=section,
+                    model_override="gpt-5.5",
+                    provider_route="custom",
+                    service_tier="priority",
+                    emit_start_before_first_attempt=False,
+                    max_empty_content_retries=1,
+                    metadata={},
+                    emit=emitted.append,
+                )
+
+                self.assertEqual(content, "")
+                errors = [line for line in emitted if line.startswith(expected_prefix)]
+                self.assertEqual(len(errors), 1, emitted)
+                payload = json.loads(errors[0][len(expected_prefix):])
+                self.assertIn(section, payload)
+                self.assertIn("no content", payload)
+
+    def test_run_action_plan_round_emits_no_error_when_content_arrives(self):
+        client = _FakeLLMClient()
+        emitted = []
+
+        _result, content = run_prompt.run_action_plan_round(
+            client=client,
+            messages=[{"role": "user", "content": "prompt"}],
+            section="analysis",
+            model_override="gpt-5.5",
+            provider_route="custom",
+            service_tier="priority",
+            emit_start_before_first_attempt=False,
+            metadata={},
+            emit=emitted.append,
+        )
+
+        self.assertEqual(content, "analysis reply")
+        self.assertEqual([line for line in emitted if "ERROR:" in line], [])
 
     def test_run_action_plan_round_preserves_missing_usage_as_unavailable(self):
         client = _CapturingLLMClient(
@@ -1123,6 +1186,113 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(fake_client.calls[0]["kwargs"]["metadata"]["full_context_message_count"], 3)
         self.assertEqual(fake_client.calls[0]["kwargs"]["metadata"]["sent_context_message_count"], len(sent_messages))
         self.assertEqual(fake_client.calls[0]["kwargs"]["metadata"]["context_strategy"], "action_plan_prefix_full_history")
+
+    def test_action_plan_mode_signals_each_empty_round_instead_of_exiting_quietly(self):
+        """两个阶段都空时，进程必须以 0 退出但打印分区错误标记。
+
+        否则服务端只看退出码，会把空结果当成成功计划并覆盖旧计划。
+        """
+        fake_client = _EmptyContentLLMClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history_dir = temp_path / "history"
+            history_dir.mkdir()
+            prompt_path = temp_path / "Prompt_Personal_Info.md"
+            prompt_path.write_text("analysis prompt", encoding="utf-8")
+            plan_prompt_path = temp_path / "Prompt_Action_Plan.md"
+            plan_prompt_path.write_text("plan {current_time} template", encoding="utf-8")
+
+            def fake_resolve_data_path(filename, user_home=None, onedrive_env=None):
+                return temp_path / filename
+
+            stdout = io.StringIO()
+            with patch.object(run_prompt.Config, "load_env"), patch.object(
+                run_prompt.Config,
+                "get_history_dir",
+                return_value=history_dir,
+            ), patch.object(
+                run_prompt,
+                "LLMClient",
+                return_value=fake_client,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_system_prompt_content",
+                return_value="system prompt",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_past_seven_days_rows",
+                return_value="past",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_today_data_row",
+                return_value="today",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_yesterday_data_row",
+                return_value="yesterday",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_future_planned_rows",
+                return_value="future",
+            ), patch.object(
+                sys,
+                "argv",
+                ["run_prompt.py", str(prompt_path)],
+            ), redirect_stdout(stdout):
+                run_prompt.main()
+
+        printed = stdout.getvalue()
+        self.assertIn("STREAM_ANALYSIS_ERROR:", printed)
+        self.assertIn("STREAM_PLAN_ERROR:", printed)
+        # No plan file may be written when both rounds came back empty.
+        self.assertFalse(list(history_dir.glob("action_plan_*.json")))
+
+    def test_action_plan_mode_signals_a_missing_plan_prompt(self):
+        """缺少计划模板时也要发标记，不能只打印一行普通文字。"""
+        fake_client = _EmptyContentLLMClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            history_dir = temp_path / "history"
+            history_dir.mkdir()
+            prompt_path = temp_path / "Prompt_Personal_Info.md"
+            prompt_path.write_text("analysis prompt", encoding="utf-8")
+
+            def fake_resolve_data_path(filename, user_home=None, onedrive_env=None):
+                return temp_path / filename
+
+            stdout = io.StringIO()
+            with patch.object(run_prompt.Config, "load_env"), patch.object(
+                run_prompt.Config,
+                "get_history_dir",
+                return_value=history_dir,
+            ), patch.object(
+                run_prompt,
+                "LLMClient",
+                return_value=fake_client,
+            ), patch.object(
+                run_prompt.DataLoader,
+                "get_system_prompt_content",
+                return_value="system prompt",
+            ), patch.object(
+                run_prompt.DataLoader,
+                "resolve_data_path",
+                side_effect=fake_resolve_data_path,
+            ), patch.object(
+                sys,
+                "argv",
+                ["run_prompt.py", str(prompt_path)],
+            ), redirect_stdout(stdout):
+                run_prompt.main()
+
+        printed = stdout.getvalue()
+        self.assertIn("STREAM_PLAN_ERROR:", printed)
+        self.assertIn("missing", printed)
 
     def test_chat_mode_passes_provider_route_to_llm_client(self):
         fake_client = _CapturingLLMClient(

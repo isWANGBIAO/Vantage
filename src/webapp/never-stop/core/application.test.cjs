@@ -1,0 +1,47 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const os = require('node:os');
+const { Application } = require('./application.cjs');
+const { ProjectFiles } = require('./files.cjs');
+test('publish uses saved draft version; edits do not reach runner before publish', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'never-stop-app-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const runner = new EventEmitter();
+  runner.snapshot = () => [{ id: 'a', root, publishedGoal: '' }];
+  let published;
+  runner.publish = async (id, text) => { published = text; };
+  const app = new Application({ runner, files: new ProjectFiles(), dataDir: root, resources: { list: () => [] }, principles: 'principles' });
+  await app.init();
+  const draft = await app.invoke('goal.read', { id: 'a' });
+  await app.invoke('goal.save', { id: 'a', text: 'new draft', version: draft.version });
+  assert.equal(published, undefined);
+  await assert.rejects(app.invoke('goal.publish', { id: 'a', text: 'stale' }), /冲突/);
+  await app.invoke('goal.publish', { id: 'a', text: 'new draft' });
+  assert.equal(published, 'new draft');
+  await assert.rejects(app.invoke('goal.read', { id: 'missing' }), /项目不存在/);
+});
+test('settings validate notification time and preserve unrelated settings', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'never-stop-settings-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const runner = new EventEmitter(); runner.snapshot = () => [];
+  const app = new Application({ runner, dataDir: root, resources: { list: () => [] } });
+  await app.init();
+  await assert.rejects(app.invoke('settings.save', { settings: { notificationTime: '99:99' } }), /时间/);
+  await app.invoke('settings.save', { settings: { notificationTime: '09:15' } });
+  assert.equal((await app.invoke('state')).settings.notificationsEnabled, false);
+  assert.equal((await app.invoke('state')).settings.notificationTime, '09:15');
+});
+test('live output is project scoped and clearing it does not control execution', async () => {
+  const runner = new EventEmitter(); runner.snapshot = () => [{ id: 'a', root: 'unused', desiredRunning: true }];
+  const calls = [];
+  const output = { read: (id, options) => { calls.push([id, options.after]); return { entries: [{ seq: 3, kind: 'tool', text: 'Read file' }], cursor: 3 }; }, clear: id => calls.push(['clear', id]) };
+  const app = new Application({ runner, output });
+  assert.equal((await app.invoke('output.read', { id: 'a', after: 2 })).cursor, 3);
+  await app.invoke('output.clear', { id: 'a' });
+  assert.deepEqual(calls, [['a', 2], ['clear', 'a']]);
+  await assert.rejects(app.invoke('output.read', { id: 'other' }), /项目不存在/);
+  assert.equal(runner.snapshot()[0].desiredRunning, true);
+});

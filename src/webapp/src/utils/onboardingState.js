@@ -54,13 +54,8 @@ export async function loadOnboardingState(electronAPI) {
     return { ...DEFAULT_ONBOARDING_STATE };
   }
 
-  try {
-    const payload = await resolvedElectronAPI.getOnboardingState();
-    return sanitizeOnboardingState(payload, 'electron');
-  } catch (error) {
-    console.warn('Failed to load onboarding state from Electron bridge.', error);
-    return { ...DEFAULT_ONBOARDING_STATE };
-  }
+  const payload = await resolvedElectronAPI.getOnboardingState();
+  return sanitizeOnboardingState(payload, 'electron');
 }
 
 export async function completeOnboardingSetup(submission, electronAPI) {

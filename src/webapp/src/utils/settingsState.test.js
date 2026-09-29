@@ -18,6 +18,35 @@ function createMemoryStorage() {
   };
 }
 
+test('interval-only browser saves preserve existing settings and zero survives reload', async () => {
+  const originalStorage = globalThis.localStorage;
+  globalThis.localStorage = createMemoryStorage();
+  try {
+    await saveSettingsState({ theme: 'light', actionPlanAutoGenerate: false, actionPlanCheckIntervalMinutes: 15 });
+    await saveSettingsState({ actionPlanCheckIntervalMinutes: 0 });
+    const state = await loadSettingsState();
+    assert.equal(state.settings.actionPlanCheckIntervalMinutes, 0);
+    assert.equal(state.settings.theme, 'light');
+    assert.equal(state.settings.actionPlanAutoGenerate, false);
+  } finally {
+    globalThis.localStorage = originalStorage;
+  }
+});
+
+test('browser settings enforce the shared action-plan interval limit', async () => {
+  const originalStorage = globalThis.localStorage;
+  globalThis.localStorage = createMemoryStorage();
+  try {
+    await saveSettingsState({ actionPlanCheckIntervalMinutes: 35_791 });
+    assert.equal((await loadSettingsState()).settings.actionPlanCheckIntervalMinutes, 35_791);
+
+    await saveSettingsState({ actionPlanCheckIntervalMinutes: 35_792 });
+    assert.equal((await loadSettingsState()).settings.actionPlanCheckIntervalMinutes, 60);
+  } finally {
+    globalThis.localStorage = originalStorage;
+  }
+});
+
 test('loadSettingsState falls back to browser defaults without Electron', async () => {
   const state = await loadSettingsState(undefined);
 
@@ -39,6 +68,15 @@ test('loadSettingsState falls back to browser defaults without Electron', async 
   assert.equal(state.settings.imageLastRefreshedAt, null);
   assert.equal(state.settings.actionPlanAutoGenerate, true);
   assert.equal(state.mode, 'browser');
+});
+
+test('loadSettingsState rejects Electron backend read failures instead of returning writable defaults', async () => {
+  const backendError = new Error('backend unavailable');
+
+  await assert.rejects(
+    loadSettingsState({ getSettingsState: async () => { throw backendError; } }),
+    (error) => error === backendError,
+  );
 });
 
 test('saveSettingsState forwards payload to Electron settings bridge', async () => {

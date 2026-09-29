@@ -872,6 +872,161 @@ class LLMClientTests(unittest.TestCase):
         self.assertEqual(used_request["thinking"], {"type": "enabled"})
         self.assertEqual(result["reasoning_effort"], "max")
 
+    def test_chat_maps_deepseek_flash_to_official_thinking_payload(self):
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {
+            "choices": [{"message": {"content": "done", "reasoning_content": "thought"}}],
+            "usage": {},
+        }
+        deepseek_provider = {
+            "route": "DeepSeek",
+            "name": "DeepSeek",
+            "type": "openai-compatible",
+            "base_url": "https://api.deepseek.com",
+            "api_key": "deepseek-key",
+            "model": "deepseek-flash",
+            "models": ["deepseek-flash"],
+        }
+        model_parameter_config = {
+            "sampling_defaults": {"temperature": 1, "top_p": 0.95, "top_k": 20},
+            "model_profiles": {
+                "deepseek-flash": {
+                    "omit_parameters": [
+                        "temperature",
+                        "top_p",
+                        "top_k",
+                        "presence_penalty",
+                        "frequency_penalty",
+                    ],
+                    "extra": {"thinking": {"type": "enabled"}},
+                    "reasoning_tiers": ["high", "max"],
+                    "reasoning_aliases": {"xhigh": "max"},
+                }
+            },
+        }
+
+        with (
+            patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.object(
+                llm_client.user_config,
+                "get_model_parameter_config",
+                return_value=model_parameter_config,
+                create=True,
+            ),
+            patch.object(
+                llm_client.user_config,
+                "get_provider_chain_config",
+                return_value=[deepseek_provider],
+                create=True,
+            ),
+            patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
+            patch.object(llm_client.requests, "get", return_value=self._models_response([])),
+            patch.dict(os.environ, {**self._env(), "AI_REASONING_EFFORT": "xhigh"}, clear=True),
+            patch.object(llm_client.requests, "post", return_value=fake_response) as mock_post,
+        ):
+            client = llm_client.LLMClient()
+            result = client.chat([{"role": "user", "content": "ping"}], stream=False)
+
+        used_request = mock_post.call_args.kwargs["json"]
+        self.assertEqual(used_request["thinking"], {"type": "enabled"})
+        for omitted in ("temperature", "top_p", "top_k", "presence_penalty", "frequency_penalty"):
+            self.assertNotIn(omitted, used_request)
+        self.assertEqual(used_request["reasoning_effort"], "max")
+        self.assertEqual(result["reasoning_effort"], "max")
+
+    def test_current_deepseek_flash_name_is_recognized_as_deepseek_v4(self):
+        client = llm_client.LLMClient.__new__(llm_client.LLMClient)
+        deepseek_provider = {"route": "DeepSeek", "name": "DeepSeek"}
+        custom_provider = {"route": "custom", "name": "wintop"}
+
+        # The current official name must be recognized for any provider.
+        for provider in (deepseek_provider, custom_provider):
+            for model in (
+                "deepseek-flash",
+                "DeepSeek-Flash",
+                "deepseek-flash-vision-exp",
+                "deepseek-ai/deepseek-flash",
+            ):
+                self.assertTrue(client._is_deepseek_v4_model(provider, model), model)
+
+        # The legacy prefix still resolves for DeepSeek-hosted providers only.
+        self.assertTrue(client._is_deepseek_v4_model(deepseek_provider, "deepseek-flash-0731"))
+        self.assertTrue(client._is_deepseek_v4_model(deepseek_provider, "deepseek-v4-pro"))
+        self.assertFalse(client._is_deepseek_v4_model(custom_provider, "deepseek-chat"))
+        self.assertFalse(client._is_deepseek_v4_model(deepseek_provider, "deepseek-chat"))
+        self.assertFalse(client._is_deepseek_v4_model(deepseek_provider, "glm-5.3-flash"))
+        self.assertFalse(client._is_deepseek_v4_model(deepseek_provider, "gpt-5.2"))
+
+    def test_reasoning_effort_is_resolved_from_configured_tiers(self):
+        client = llm_client.LLMClient.__new__(llm_client.LLMClient)
+        client.model_parameter_config = {
+            "model_profiles": {
+                "aliased-*": {
+                    "reasoning_tiers": ["high", "max"],
+                    "reasoning_aliases": {"xhigh": "max"},
+                },
+                "narrow-*": {"reasoning_tiers": ["high", "max"]},
+                "wide-*": {"reasoning_tiers": ["low", "medium", "high", "xhigh"]},
+            }
+        }
+        provider = {"route": "custom", "name": "wintop"}
+
+        # An explicit alias wins over clamping.
+        self.assertEqual(
+            client._normalize_reasoning_effort_for_model(provider, "aliased-1", "xhigh"),
+            "max",
+        )
+        # A level the model offers is kept as-is.
+        self.assertEqual(
+            client._normalize_reasoning_effort_for_model(provider, "narrow-1", "max"),
+            "max",
+        )
+        # An unsupported level degrades to the nearest lower offered level.
+        self.assertEqual(
+            client._normalize_reasoning_effort_for_model(provider, "narrow-1", "medium"),
+            "high",
+        )
+        # A level below the whole list cannot degrade further, so it floors.
+        self.assertEqual(
+            client._normalize_reasoning_effort_for_model(provider, "narrow-1", "low"),
+            "high",
+        )
+        # An unknown level falls back to the first offered level.
+        self.assertEqual(
+            client._normalize_reasoning_effort_for_model(provider, "narrow-1", "banana"),
+            "high",
+        )
+        # Unknown models use the documented default tiers.
+        self.assertEqual(
+            client._normalize_reasoning_effort_for_model(provider, "unknown-model", "max"),
+            "xhigh",
+        )
+        self.assertEqual(
+            client._normalize_reasoning_effort_for_model(provider, "wide-1", "high"),
+            "high",
+        )
+
+    def test_reasoning_tiers_fall_back_when_profile_is_missing_or_empty(self):
+        client = llm_client.LLMClient.__new__(llm_client.LLMClient)
+        client.model_parameter_config = {
+            "model_profiles": {"empty-*": {"reasoning_tiers": []}}
+        }
+        provider = {"route": "custom", "name": "wintop"}
+
+        self.assertEqual(
+            client._reasoning_tiers_for_model("nothing-matches"),
+            list(llm_client.user_config.DEFAULT_REASONING_TIERS),
+        )
+        self.assertEqual(
+            client._reasoning_tiers_for_model("empty-1"),
+            list(llm_client.user_config.DEFAULT_REASONING_TIERS),
+        )
+        self.assertEqual(
+            client._clamp_reasoning_effort_to_tiers("high", []),
+            "high",
+        )
+
     def test_chat_maps_qwen38_high_reasoning_to_xhigh(self):
         client = self._make_client()
         client.providers = [
@@ -1046,6 +1201,7 @@ class LLMClientTests(unittest.TestCase):
 
         with (
             patch.object(llm_client.Config, "load_env", return_value=None),
+            patch.dict(os.environ, self._env(), clear=True),
             patch.object(llm_client.user_config, "get_provider_chain_config", return_value=[]),
             patch.object(llm_client.user_config, "get_active_provider_config", return_value=None),
             patch.object(llm_client.requests, "get", return_value=self._models_response(["gpt-5.2"])),

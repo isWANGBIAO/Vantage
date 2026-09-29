@@ -530,6 +530,80 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertIn("不要把这类项目作为购买推荐", user_prompt)
         self.assertNotIn("cover_prompt", user_prompt)
 
+    def test_contextual_purchase_prompt_keeps_variable_parts_after_the_context(self):
+        """数据块在前；会变的数量与 dismissed 列表排在它之后。"""
+        context = "## Time Series Data (JSON)\n\n```json\n{\"columns\":[],\"rows\":[]}\n```"
+        first = server._build_purchase_recommendation_messages(
+            context,
+            dismissed_items=[{"name": "blocked thing", "category": "blocked category"}],
+            recommendation_count=15,
+        )
+        second = server._build_purchase_recommendation_messages(
+            context,
+            dismissed_items=[{"name": "another thing", "category": "other"}],
+            recommendation_count=15,
+        )
+        third = server._build_purchase_recommendation_messages(
+            context,
+            dismissed_items=[{"name": "blocked thing", "category": "blocked category"}],
+            recommendation_count=7,
+        )
+
+        self.assertEqual(first[0]["content"], second[0]["content"])
+        first_user = first[1]["content"]
+
+        # The read-only context leads the message.
+        self.assertTrue(first_user.startswith("Context bundle from Action Plan data sources:"))
+        context_end = first_user.index("```", first_user.index("```json")) + 3
+
+        # Both variable parts sit after it.
+        for marker in ("Dismissed purchase recommendations JSON:", "Generate a total of"):
+            self.assertIn(marker, first_user)
+            self.assertGreater(first_user.index(marker), context_end)
+
+        # Changing a dismissal or the count must leave the context prefix intact.
+        for other in (second, third):
+            self.assertEqual(first_user[:context_end], other[1]["content"][:context_end])
+            self.assertNotEqual(first_user, other[1]["content"])
+
+    def test_random_purchase_recommendation_seed_stays_at_the_cacheable_tail(self):
+        """每次变化的 seed 必须排在最后，不能作废它前面的恒定前缀。"""
+        dismissed = [{"name": "blocked thing", "category": "blocked category"}]
+        first = server._build_purchase_random_recommendation_messages(
+            dismissed_items=dismissed,
+            recommendation_count=5,
+            random_seed="seed-aaa",
+        )
+        second = server._build_purchase_random_recommendation_messages(
+            dismissed_items=dismissed,
+            recommendation_count=5,
+            random_seed="seed-bbb",
+        )
+
+        self.assertEqual(first[0]["content"], second[0]["content"])
+        first_user, second_user = first[1]["content"], second[1]["content"]
+        self.assertNotEqual(first_user, second_user)
+
+        # Everything before the seed line has to be byte-identical.
+        seed_marker = "Random seed:"
+        self.assertIn(seed_marker, first_user)
+        prefix_end = first_user.index(seed_marker)
+        self.assertEqual(first_user[:prefix_end], second_user[:prefix_end])
+
+        # The dismissed list is a separate variable input, so it must also sit
+        # after the fixed instructions rather than ahead of them.
+        other = server._build_purchase_random_recommendation_messages(
+            dismissed_items=[{"name": "another thing", "category": "other"}],
+            recommendation_count=5,
+            random_seed="seed-aaa",
+        )
+        other_user = other[1]["content"]
+        self.assertNotEqual(first_user, other_user)
+        dismissed_marker = "Dismissed purchase recommendations JSON:"
+        self.assertIn(dismissed_marker, first_user)
+        self.assertGreater(first_user.index(dismissed_marker), prefix_end)
+        self.assertEqual(first_user[:prefix_end], other_user[:prefix_end])
+
     def test_random_purchase_recommendation_prompt_excludes_context_bundle(self):
         messages = server._build_purchase_random_recommendation_messages(
             dismissed_items=[{"name": "blocked thing", "category": "blocked category"}],

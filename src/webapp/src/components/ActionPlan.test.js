@@ -105,10 +105,16 @@ test('ActionPlan uses provider-aware model options before falling back to legacy
 });
 
 test('ActionPlan uses model-aware reasoning options and payload mapping', () => {
-  assert.ok(actionPlanSource.includes('getReasoningOptionsForModel(selectedModelOption?.model)'));
-  assert.ok(actionPlanSource.includes('normalizeReasoningEffortForModel('));
+  // Levels come from the backend contract, which is derived from the provider
+  // configuration, so a configured level needs no frontend change.
+  assert.ok(actionPlanSource.includes('getReasoningOptionsForModelContract('));
+  assert.ok(actionPlanSource.includes('normalizeReasoningEffortForModelContract('));
   assert.ok(actionPlanSource.includes('reasoningOptions.map((option)'));
   assert.equal(actionPlanSource.includes('ACTION_PLAN_REASONING_OPTIONS.map((option)'), false);
+  // The model option is always passed alongside the contract so the two stay
+  // in sync, and the contract helper receives the tier list and aliases.
+  assert.ok(actionPlanSource.includes('selectedModelOption?.reasoning_tiers'));
+  assert.ok(actionPlanSource.includes('selectedModelOption?.reasoning_aliases'));
 });
 
 test('ActionPlan exposes fast mode only through service tier payload for supported proxy models', () => {

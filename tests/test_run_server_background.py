@@ -255,10 +255,92 @@ def test_run_server_entrypoint_validates_required_imports_in_frozen_mode(tmp_pat
     assert calls == ["validate-imports", "server-main"]
 
 
+def test_packaged_cli_entrypoint_passes_arguments_and_preserves_stdio():
+    launcher = _load_launcher_module()
+    captured = []
+    stdout = launcher.sys.stdout
+    stderr = launcher.sys.stderr
+
+    exit_code = launcher._run_cli_entrypoint(
+        ["mcp", "--help"],
+        is_frozen=False,
+        cli_main=lambda argv: captured.append(argv) or 7,
+    )
+
+    assert exit_code == 7
+    assert captured == [["mcp", "--help"]]
+    assert launcher.sys.stdout is stdout
+    assert launcher.sys.stderr is stderr
+
+
+def test_frozen_cli_entrypoint_configures_existing_runtime_before_imports(tmp_path):
+    launcher = _load_launcher_module()
+    calls = []
+
+    result = launcher._run_cli_entrypoint(
+        ["mcp"],
+        is_frozen=True,
+        resource_root=tmp_path / "_internal",
+        cli_main=lambda argv: calls.append(("cli", argv)) or 0,
+        validate_runtime_imports=lambda: calls.append(("validate", None)),
+    )
+
+    assert result == 0
+    assert calls == [("validate", None), ("cli", ["mcp"])]
+
+
+def test_cli_dispatch_skips_backend_server_setup_and_runtime_lock():
+    launcher = _load_launcher_module()
+    calls = []
+
+    with patch.object(
+        launcher.sys,
+        "argv",
+        ["VantageBackend.exe", "--run-cli", "mcp", "--help"],
+    ), patch.object(
+        launcher,
+        "_run_cli_entrypoint",
+        side_effect=lambda args: calls.append(args) or 0,
+    ), patch(
+        "src.core.backend_runtime_lock.backend_runtime_lock",
+        side_effect=AssertionError("CLI must not enter backend lifecycle lock"),
+    ), patch.object(
+        launcher,
+        "_resolve_runtime_context",
+        side_effect=AssertionError("CLI must not initialize the server runtime"),
+    ):
+        assert launcher.main() == 0
+
+    assert calls == [["mcp", "--help"]]
+
+
+def test_source_cli_dispatch_help_passes_through_stdout_without_starting_server():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "src/scripts/run_server_background.py",
+            "--run-cli",
+            "mcp",
+            "--help",
+        ],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "stdio" in result.stdout.lower()
+    assert result.stderr == ""
+
+
 def test_validate_packaged_runtime_imports_reports_missing_modules():
     launcher = _load_launcher_module()
+    imported = []
 
     def fake_import(module_name):
+        imported.append(module_name)
         if module_name == "zhdate":
             raise ModuleNotFoundError("No module named 'zhdate'")
         return object()
@@ -270,6 +352,8 @@ def test_validate_packaged_runtime_imports_reports_missing_modules():
         assert "No module named 'zhdate'" in str(exc)
     else:
         raise AssertionError("missing packaged runtime module did not fail validation")
+
+    assert {"mcp", "src.cli", "src.mcp_server"} <= set(imported)
 
 
 def test_run_prompt_entrypoint_delegates_args_to_run_prompt_main():

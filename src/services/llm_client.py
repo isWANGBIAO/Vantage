@@ -32,6 +32,16 @@ DEFAULT_GLM_MAX_OUTPUT_TOKENS = 32768
 DEFAULT_GLOBAL_PROMPT_TOKEN_CEILING = 250_000
 DEFAULT_PROMPT_PROTOCOL_OVERHEAD_TOKENS = 2_048
 
+# Ordered reasoning levels, weakest first. Per-model tiers are declared in the
+# provider configuration; these constants only rank a requested level so it can
+# be clamped onto whatever that model actually offers.
+_REASONING_EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max"]
+_REASONING_EFFORT_ALIASES = {
+    "extra_high": "xhigh",
+    "none": "minimal",
+    "ultra": "max",
+}
+
 
 def _hash_json_payload(value):
     encoded = json.dumps(
@@ -309,17 +319,19 @@ class LLMClient:
         return (
             model_basename
             in {
+                "deepseek-flash",
+                "deepseek-flash-vision-exp",
                 "deepseek-v4-pro",
                 "deepseek-v4-flash",
                 "deepseek-v4-flash-0731",
             }
             or (
                 "deepseek" in provider_name
-                and normalized_model.startswith("deepseek-v4")
+                and normalized_model.startswith(("deepseek-v4", "deepseek-flash"))
             )
             or (
                 "deepseek" in provider_route
-                and normalized_model.startswith("deepseek-v4")
+                and normalized_model.startswith(("deepseek-v4", "deepseek-flash"))
             )
         )
 
@@ -336,34 +348,59 @@ class LLMClient:
         normalized_model = str(model or "").strip().lower()
         return normalized_model.rsplit("/", 1)[-1] == "deepseek-v4-flash-0731"
 
-    def _normalize_reasoning_effort_for_model(self, provider, model, reasoning_effort):
+    def _reasoning_tiers_for_model(self, model) -> list:
+        """Allowed reasoning levels for a model, from its parameter profile."""
+        profile = self._model_parameter_profile(model)
+        tiers = profile.get("reasoning_tiers") if isinstance(profile, dict) else None
+        if not isinstance(tiers, list):
+            return list(user_config.DEFAULT_REASONING_TIERS)
+        normalized = [str(tier).strip().lower() for tier in tiers if str(tier).strip()]
+        return normalized or list(user_config.DEFAULT_REASONING_TIERS)
+
+    @staticmethod
+    def _clamp_reasoning_effort_to_tiers(reasoning_effort, tiers, aliases=None) -> str:
+        """Resolve a requested reasoning level against what a model offers.
+
+        Precedence: an explicit alias declared by the model profile, then the
+        requested level itself when it is offered, then the nearest lower
+        offered level, then the first offered level. An alias that points at a
+        level the model does not offer is ignored.
+        """
+        candidates = [str(tier).strip().lower() for tier in tiers if str(tier).strip()]
         normalized_effort = str(reasoning_effort or "").strip().lower()
-        if self._is_deepseek_v4_model(provider, model):
-            return "max" if normalized_effort in {"xhigh", "extra_high", "max"} else "high"
-        if self._is_qwen38_model(provider, model):
-            if normalized_effort in {"high", "xhigh", "extra_high", "max"}:
-                return "xhigh"
-            if normalized_effort in {"low", "medium"}:
-                return normalized_effort
-            return "medium"
-        if self._is_glm53_flash_model(provider, model):
-            # GLM-5.3 exposes only low/high/max.  The app's generic xhigh
-            # level is intentionally bounded to high so structured calls do
-            # not spend the entire output budget in hidden reasoning.
-            if normalized_effort in {"xhigh", "extra_high"}:
-                return "high"
-            if normalized_effort == "max":
-                return "max"
-            if normalized_effort == "high":
-                return "high"
-            if normalized_effort in {"low", "medium", "minimal", "none"}:
-                return "low"
-            return "max"
-        if normalized_effort == "max":
-            return "xhigh"
-        if normalized_effort in {"low", "medium", "high", "xhigh"}:
+        if not candidates:
+            return normalized_effort or "medium"
+        if isinstance(aliases, dict):
+            declared = aliases.get(normalized_effort)
+            if isinstance(declared, str) and declared.strip().lower() in candidates:
+                return declared.strip().lower()
+        if normalized_effort in candidates:
             return normalized_effort
-        return "medium"
+        if normalized_effort in _REASONING_EFFORT_ALIASES:
+            generic = _REASONING_EFFORT_ALIASES[normalized_effort]
+            if generic in candidates:
+                return generic
+            normalized_effort = generic
+        if normalized_effort not in _REASONING_EFFORT_ORDER:
+            return candidates[0]
+        requested_rank = _REASONING_EFFORT_ORDER.index(normalized_effort)
+        lower = [
+            tier for tier in candidates
+            if tier in _REASONING_EFFORT_ORDER
+            and _REASONING_EFFORT_ORDER.index(tier) <= requested_rank
+        ]
+        if lower:
+            return max(lower, key=_REASONING_EFFORT_ORDER.index)
+        return candidates[0]
+
+    def _normalize_reasoning_effort_for_model(self, provider, model, reasoning_effort):
+        profile = self._model_parameter_profile(model)
+        aliases = profile.get("reasoning_aliases") if isinstance(profile, dict) else None
+        return self._clamp_reasoning_effort_to_tiers(
+            reasoning_effort,
+            self._reasoning_tiers_for_model(model),
+            aliases,
+        )
 
     def _map_reasoning_effort_to_thinking_budget(self, reasoning_effort):
         budgets = {

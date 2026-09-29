@@ -3,10 +3,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { RotateCcw, FileText, CheckSquare, Activity, AlertTriangle } from 'lucide-react';
 import { getActionPlanRenderState } from '../utils/actionPlanContent';
+import automationLimits from '../utils/automationLimits.cjs';
 import {
-  getReasoningOptionsForModel,
+  getReasoningOptionsForModelContract,
   loadStoredActionPlanReasoningEffort,
-  normalizeReasoningEffortForModel,
+  normalizeReasoningEffortForModelContract,
   saveActionPlanReasoningEffort,
 } from '../utils/actionPlanReasoning';
 import {
@@ -51,9 +52,11 @@ import {
 import { redactSensitiveText } from '../utils/sensitiveText';
 import { CHAT_CONTEXT_BASE_UPDATED_EVENT } from '../utils/chatContextState';
 import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
-import { loadSettingsState } from '../utils/settingsState';
+import { loadSettingsState, saveSettingsState } from '../utils/settingsState';
+import { createActionPlanRevisionChecker, consumeActionPlanCompletion } from '../utils/actionPlanAutoRefresh';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
+const { MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES } = automationLimits;
 const COPY_FEEDBACK_DURATION_MS = 1500;
 
 async function writeTextWithFallback(content) {
@@ -186,6 +189,12 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const [selectedModel, setSelectedModel] = useState('');
   const selectedModelOption = findModelOption(availableModels, selectedModel);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [checkIntervalMinutes, setCheckIntervalMinutes] = useState(null);
+  const [intervalDraft, setIntervalDraft] = useState('60');
+  const [autoRefreshStatus, setAutoRefreshStatus] = useState('');
+  const [savingInterval, setSavingInterval] = useState(false);
+  const autoGenerationRef = useRef(false);
+  const revisionCheckerRef = useRef(createActionPlanRevisionChecker());
   const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now());
 
   const abortControllerRef = useRef(null);
@@ -205,9 +214,11 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   visibilityRef.current = isVisible;
   isGeneratingRef.current = isGenerating;
   selectedModelRef.current = selectedModelOption;
-  selectedReasoningEffortRef.current = normalizeReasoningEffortForModel(
+  selectedReasoningEffortRef.current = normalizeReasoningEffortForModelContract(
     selectedReasoningEffort,
     selectedModelOption?.model,
+    selectedModelOption?.reasoning_tiers,
+    selectedModelOption?.reasoning_aliases,
   );
   fastModeEnabledRef.current = fastModeEnabled;
 
@@ -405,8 +416,10 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       abortControllerRef.current = null;
     }
 
-    setIsGenerating(false);
-    setPlanContentWithRef((prev) => `${prev}\n\n> ${t('action_plan.placeholder.stopped')}`);
+    if (!autoGenerationRef.current) {
+      setIsGenerating(false);
+      setPlanContentWithRef((prev) => `${prev}\n\n> ${t('action_plan.placeholder.stopped')}`);
+    }
   }, [setPlanContentWithRef, t]);
 
   const handleReasoningEffortChange = (event) => {
@@ -452,7 +465,56 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     replaceToday = false,
     modelOverride = null,
     waitForProviderReady = false,
+    background = false,
   } = {}) => {
+    if (background && isGeneratingRef.current) throw new Error('Generation already running');
+    if (background) {
+      isGeneratingRef.current = true;
+      autoGenerationRef.current = true;
+      setIsGenerating(true);
+      setAutoRefreshStatus(t('action_plan.auto.generating'));
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      try {
+        const model = selectedModelRef.current;
+        const response = await fetchBackend('/api/action_plan', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(buildActionPlanGenerationPayload(
+            normalizeReasoningEffortForModelContract(
+              selectedReasoningEffortRef.current,
+              model?.model,
+              model?.reasoning_tiers,
+              model?.reasoning_aliases,
+            ),
+            { replaceToday: true, model: model?.model, providerRoute: model?.provider_route,
+              fastModeEnabled: fastModeEnabledRef.current && isFastModeSupportedForModel(model?.model) },
+          )),
+          signal: controller.signal, retryPolicy: 'stream',
+        });
+        await consumeActionPlanCompletion(response);
+        const data = await fetchBackendJson('/api/action_plan/today', {
+          signal: controller.signal, retryPolicy: 'load',
+        });
+        if (!data.exists || !data.analysis?.body || !data.plan?.body) {
+          throw new Error('New plan is incomplete');
+        }
+        if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        applyLoadedActionPlan(data);
+        await refreshChatContextBase();
+        setAutoRefreshStatus(t('action_plan.auto.updated'));
+      } catch (error) {
+        setAutoRefreshStatus(error.name === 'AbortError'
+          ? t('action_plan.auto.stopped')
+          : t('action_plan.auto.failed', { error: redactSensitiveText(error.message) }));
+        throw error;
+      } finally {
+        autoGenerationRef.current = false;
+        isGeneratingRef.current = false;
+        setIsGenerating(false);
+        if (abortControllerRef.current === controller) abortControllerRef.current = null;
+      }
+      return;
+    }
     if (isGeneratingRef.current) {
       stopGeneration();
     }
@@ -462,6 +524,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       loadAbortControllerRef.current = null;
     }
 
+    isGeneratingRef.current = true;
     setIsGenerating(true);
     setAnalysisThinking('');
     setPlanThinking('');
@@ -480,9 +543,11 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       t('action_plan.placeholder.waiting_analysis.body'),
     ));
     const effectiveModelOption = modelOverride || selectedModelRef.current;
-    const effectiveReasoningEffort = normalizeReasoningEffortForModel(
+    const effectiveReasoningEffort = normalizeReasoningEffortForModelContract(
       selectedReasoningEffortRef.current,
       effectiveModelOption?.model,
+      effectiveModelOption?.reasoning_tiers,
+      effectiveModelOption?.reasoning_aliases,
     );
     const effectiveFastModeEnabled = fastModeEnabledRef.current
       && isFastModeSupportedForModel(effectiveModelOption?.model);
@@ -728,6 +793,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       }
     }
   }, [
+    applyLoadedActionPlan,
     refreshChatContextBase,
     setAnalysisContentWithRef,
     setPlanContentWithRef,
@@ -786,8 +852,12 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     const loadStartupAutoGenerateEnabled = async () => {
       try {
         const settingsState = await loadSettingsState();
+        const interval = settingsState.settings?.actionPlanCheckIntervalMinutes ?? 60;
+        setCheckIntervalMinutes(interval);
+        setIntervalDraft(String(interval));
         return settingsState.settings?.actionPlanAutoGenerate !== false;
       } catch (error) {
+        setCheckIntervalMinutes(60);
         console.warn('Failed to load Action Plan startup setting:', error);
         return true;
       }
@@ -835,6 +905,62 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     };
   }, [loadTodaysPlan, setAnalysisContentWithRef, setPlanContentWithRef, startGeneration, t]);
 
+  useEffect(() => {
+    if (!(checkIntervalMinutes > 0)) return undefined;
+    let active = true;
+    let timer;
+    let initialized = false;
+    const controller = new AbortController();
+    const check = async () => {
+      try {
+        const outcome = await revisionCheckerRef.current({
+          getRevision: async () => (await fetchBackendJson('/api/action_plan/source_revision', {
+            signal: controller.signal, retryPolicy: 'load',
+          })).revision,
+          isGenerating: () => !active || isGeneratingRef.current || Boolean(loadAbortControllerRef.current),
+          generate: () => startGeneration({ background: true }),
+        });
+        if (outcome !== 'busy') initialized = true;
+      } catch (error) {
+        if (active && error.name !== 'AbortError' && !autoGenerationRef.current) {
+          initialized = true;
+          setAutoRefreshStatus(t('action_plan.auto.retry', { error: redactSensitiveText(error.message) }));
+        }
+      } finally {
+        if (active) {
+          const interval = Math.min(checkIntervalMinutes, MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES);
+          timer = window.setTimeout(check, initialized ? interval * 60000 : 1000);
+        }
+      }
+    };
+    void check();
+    return () => { active = false; controller.abort(); window.clearTimeout(timer); };
+  }, [checkIntervalMinutes, startGeneration, t]);
+
+  useEffect(() => () => {
+    if (autoGenerationRef.current) abortControllerRef.current?.abort();
+  }, []);
+
+  const saveCheckInterval = async () => {
+    const value = Number(intervalDraft);
+    if (!intervalDraft.trim() || !Number.isInteger(value) || value < 0 || value > MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES) {
+      setAutoRefreshStatus(t('action_plan.auto.invalid', {
+        max: MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES.toLocaleString('en-US'),
+      }));
+      return;
+    }
+    setSavingInterval(true);
+    try {
+      const result = await saveSettingsState({ actionPlanCheckIntervalMinutes: value });
+      const saved = result.settings?.actionPlanCheckIntervalMinutes ?? value;
+      setCheckIntervalMinutes(saved);
+      setIntervalDraft(String(saved));
+      setAutoRefreshStatus(t(saved === 0 ? 'action_plan.auto.disabled' : 'action_plan.auto.saved'));
+    } catch (error) {
+      setAutoRefreshStatus(t('action_plan.auto.save_failed', { error: redactSensitiveText(error.message) }));
+    } finally { setSavingInterval(false); }
+  };
+
   const analysisRender = getActionPlanRenderState(analysisContent);
   const planRender = getActionPlanRenderState(planContent);
   const analysisFullInputContent = buildAnalysisFullInput(systemPrompt, analysisPrompt);
@@ -874,11 +1000,15 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     planRoundStats?.duration,
     planRoundStats?.completion_reasoning_tokens,
   );
-  const reasoningOptions = getReasoningOptionsForModel(selectedModelOption?.model);
+  const reasoningOptions = getReasoningOptionsForModelContract(
+    selectedModelOption?.model,
+    selectedModelOption?.reasoning_tiers,
+  );
   const fastModeSupported = isFastModeSupportedForModel(selectedModelOption?.model);
-  const displayedReasoningEffort = normalizeReasoningEffortForModel(
+  const displayedReasoningEffort = normalizeReasoningEffortForModelContract(
     selectedReasoningEffort,
     selectedModelOption?.model,
+    selectedModelOption?.reasoning_tiers,
   );
   const promptContextWarning = getActionPlanPromptContextWarning(stats);
 
@@ -921,6 +1051,16 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
           <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
             {t('action_plan.subtitle')}
           </p>
+          <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+            {t('action_plan.auto.interval')}
+            <input type="number" min="0" max={MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES} step="1" value={intervalDraft}
+              disabled={savingInterval || checkIntervalMinutes === null}
+              onChange={(event) => setIntervalDraft(event.target.value)}
+              onBlur={saveCheckInterval}
+              onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+              style={{ width: '5rem' }} />
+          </label>
+          {autoRefreshStatus && <p role="status" style={{ fontSize: '0.8rem', margin: '0.25rem 0' }}>{autoRefreshStatus}</p>}
         </div>
 
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>

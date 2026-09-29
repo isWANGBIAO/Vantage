@@ -123,8 +123,15 @@ def test_run_bat_builds_and_silently_installs_latest_package():
     assert "call :RunElectronPackageWithFallback" in run_bat
     assert "npm run electron:package" in run_bat
     assert "npm run electron:build" not in run_bat
-    assert "ArgumentList '/S'" in run_bat
+    assert "ArgumentList = '/S'" in run_bat
+    # 安装器需要提权：不显式请求 RunAs 时它会一直等一个不会出现的许可提示。
+    assert "RunAs" in run_bat
+    assert "IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)" in run_bat
+    # 卡住时必须失败而不是无限等待。
+    assert "WaitForExit(600000)" in run_bat
     assert 'Filter \'Vantage Setup *.exe\'' in run_bat
+    # 旧安装包每个约 174 MB，必须自动清理，否则输出目录无限增长。
+    assert "stale installer artifact" in run_bat
 
 
 def test_run_bat_retries_electron_downloads_with_mirror_fallback():

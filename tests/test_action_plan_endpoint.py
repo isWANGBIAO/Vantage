@@ -1088,6 +1088,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
         combined = "".join(chunks)
         self.assertIn('STREAM_ANALYSIS_CONTENT', combined)
         self.assertNotIn('LLM route cliproxyapi_primary succeeded', combined)
+        self.assertEqual(json.loads(chunks[-1]), {"done": True})
 
     def test_generate_action_plan_logs_stderr_fallback_lines_to_server_log(self):
         fake_process = _FakeProcess(
@@ -1139,6 +1140,26 @@ class ActionPlanEndpointTests(unittest.TestCase):
 
         combined = "".join(chunks)
         self.assertIn('"error": "fatal action plan error"', combined)
+        self.assertNotIn('"done": true', combined)
+
+    def test_analysis_error_with_zero_exit_does_not_signal_done(self):
+        fake_process = _FakeProcess(lines=[b'STREAM_ANALYSIS_ERROR:"failed"\n'], returncode=0)
+        with patch.object(server.asyncio, "create_subprocess_exec", AsyncMock(return_value=fake_process)):
+            response = asyncio.run(server.generate_action_plan())
+            chunks = asyncio.run(_read_all_stream_chunks(response))
+        self.assertNotIn('"done": true', "".join(chunks))
+
+    def test_plan_and_generic_errors_preserve_previous_history_with_zero_exit(self):
+        for marker in ("STREAM_PLAN_ERROR:", "STREAM_ERROR:"):
+            with self.subTest(marker=marker):
+                fake_process = _FakeProcess(lines=[f'{marker}"failed"\n'.encode()], returncode=0)
+                with patch.object(server.asyncio, "create_subprocess_exec", AsyncMock(return_value=fake_process)), patch.object(
+                    server, "_replace_today_action_plan_files"
+                ) as replace_files:
+                    response = asyncio.run(server.generate_action_plan(server.ActionPlanRequest(replace_today=True)))
+                    chunks = asyncio.run(_read_all_stream_chunks(response))
+                self.assertNotIn('"done": true', "".join(chunks))
+                replace_files.assert_not_called()
 
     def test_generate_action_plan_redacts_api_key_from_stderr_logs_and_error(self):
         secret = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"

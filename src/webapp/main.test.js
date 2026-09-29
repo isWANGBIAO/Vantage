@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 
 const mainSource = readFileSync(new URL('./main.cjs', import.meta.url), 'utf8');
+const appSource = readFileSync(new URL('./src/App.jsx', import.meta.url), 'utf8');
+const settingsSource = readFileSync(new URL('./src/components/Settings.jsx', import.meta.url), 'utf8');
 const packageJson = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 );
@@ -96,9 +99,182 @@ test('Electron main process exposes Settings IPC and restricts path opening', ()
   assert.ok(mainSource.includes("ipcMain.handle('settings:get-state'"));
   assert.ok(mainSource.includes("ipcMain.handle('settings:save'"));
   assert.ok(mainSource.includes("ipcMain.handle('settings:open-path'"));
-  assert.ok(mainSource.includes('saveSettingsPayload'));
+  assert.ok(mainSource.includes('requestBackendJson'));
+  assert.doesNotMatch(mainSource, /saveSettingsPayload|saveOnboardingCompletion|persistSettings/);
   assert.ok(mainSource.includes('resolveAllowedSettingsPath'));
   assert.ok(mainSource.includes('settingsPathAllowlist'));
+});
+
+test('settings and onboarding IPC persist through canonical backend operations without JSON fallback', () => {
+  const settingsSave = mainSource.match(
+    /ipcMain\.handle\('settings:save',[\s\S]*?\n\}\);\n\nipcMain\.handle\('settings:open-path'/,
+  )?.[0];
+  const onboardingComplete = mainSource.match(
+    /ipcMain\.handle\('onboarding:complete',[\s\S]*?\n\}\);\n\nfunction createWindow/,
+  )?.[0];
+  const displayLanguageUpdate = mainSource.match(
+    /ipcMain\.handle\('settings:set-display-language',[\s\S]*?\n\}\);\n\nipcMain\.handle\('settings:get-system-locale'/,
+  )?.[0];
+
+  assert.ok(settingsSave, 'settings save handler should remain registered');
+  assert.ok(onboardingComplete, 'onboarding completion handler should remain registered');
+  assert.ok(displayLanguageUpdate, 'display-language handler should remain registered');
+  assert.match(settingsSave, /await requestBackendJson\(\s*'PUT',\s*'\/api\/automation\/settings'/);
+  assert.match(onboardingComplete, /await requestBackendJson\(\s*'POST',\s*'\/api\/automation\/onboarding\/complete'/);
+  assert.match(displayLanguageUpdate, /await requestBackendJson\(\s*'PUT',\s*'\/api\/automation\/settings\/display-language'/);
+  assert.match(settingsSave, /applyLaunchAtLoginSetting/);
+  assert.match(settingsSave, /syncTrayMenu\(\)/);
+  assert.match(settingsSave, /setTitleBarOverlay/);
+  assert.match(onboardingComplete, /applyLaunchAtLoginSetting/);
+  assert.match(onboardingComplete, /syncTrayMenu\(\)/);
+  assert.match(displayLanguageUpdate, /syncTrayMenu\(\)/);
+  assert.doesNotMatch(settingsSave, /catch\s*\(/);
+  assert.doesNotMatch(onboardingComplete, /catch\s*\(/);
+});
+
+test('Electron settings mapping forwards provider context and output capability fields', () => {
+  const providerFields = mainSource.match(/const providerFields = \[([\s\S]*?)\n\s*\];/)?.[1];
+  assert.ok(providerFields);
+  assert.match(providerFields, /'context_window_tokens'/);
+  assert.match(providerFields, /'max_output_tokens'/);
+});
+
+test('Electron settings mapper preserves omitted provider maps and explicit replacements', () => {
+  const mapperStart = mainSource.indexOf('function mapPayloadFields(payload, fieldMap)');
+  const mapperEnd = mainSource.indexOf('\nfunction buildElectronSettingsState', mapperStart);
+  assert.ok(mapperStart >= 0 && mapperEnd > mapperStart, 'settings mapper functions should remain available');
+
+  const sandbox = { Object, SETTINGS_PAYLOAD_FIELDS: { providerConfig: 'provider_config' } };
+  runInNewContext(
+    `${mainSource.slice(mapperStart, mapperEnd)}; globalThis.mapSettings = toBackendSettingsPayload;`,
+    sandbox,
+  );
+
+  const partial = sandbox.mapSettings({
+    providerConfig: { sampling_defaults: { temperature: 0.7 }, model_profiles: { local: { top_p: 0.9 } } },
+  });
+  assert.equal(Object.hasOwn(partial.provider_config, 'providers'), false);
+  assert.deepEqual(partial.provider_config.sampling_defaults, { temperature: 0.7 });
+
+  const replacement = sandbox.mapSettings({
+    providerConfig: { providers: { local: { route: 'local', model: 'example-model' } } },
+  });
+  assert.equal(Object.hasOwn(replacement.provider_config, 'providers'), true);
+  assert.equal(replacement.provider_config.providers.local.model, 'example-model');
+});
+
+test('Electron settings mapper preserves invalid null and array provider values for backend rejection', () => {
+  const mapperStart = mainSource.indexOf('function mapPayloadFields(payload, fieldMap)');
+  const mapperEnd = mainSource.indexOf('\nfunction buildElectronSettingsState', mapperStart);
+  assert.ok(mapperStart >= 0 && mapperEnd > mapperStart, 'settings mapper functions should remain available');
+
+  const sandbox = { Object, SETTINGS_PAYLOAD_FIELDS: { providerConfig: 'provider_config' } };
+  runInNewContext(
+    `${mainSource.slice(mapperStart, mapperEnd)}; globalThis.mapSettings = toBackendSettingsPayload;`,
+    sandbox,
+  );
+
+  for (const providers of [null, [{ route: 'local', model: 'example-model' }]]) {
+    const mapped = sandbox.mapSettings({ providerConfig: { providers } });
+    assert.strictEqual(mapped.provider_config.providers, providers);
+  }
+});
+
+test('Electron settings mapper rejects non-record provider entries before sending a request', () => {
+  const mapperStart = mainSource.indexOf('function mapPayloadFields(payload, fieldMap)');
+  const mapperEnd = mainSource.indexOf('\nfunction buildElectronSettingsState', mapperStart);
+  assert.ok(mapperStart >= 0 && mapperEnd > mapperStart, 'settings mapper functions should remain available');
+
+  const sandbox = { Object, SETTINGS_PAYLOAD_FIELDS: { providerConfig: 'provider_config' } };
+  runInNewContext(
+    `${mainSource.slice(mapperStart, mapperEnd)}; globalThis.mapSettings = toBackendSettingsPayload;`,
+    sandbox,
+  );
+
+  for (const entry of [null, false, 42, 'placeholder', []]) {
+    assert.throws(
+      () => sandbox.mapSettings({ providerConfig: { providers: { placeholder: entry } } }),
+      /plain JSON object/,
+    );
+  }
+});
+
+test('Electron settings mapper rejects non-JSON provider entries before they can become empty replacements', () => {
+  const mapperStart = mainSource.indexOf('function mapPayloadFields(payload, fieldMap)');
+  const mapperEnd = mainSource.indexOf('\nfunction buildElectronSettingsState', mapperStart);
+  assert.ok(mapperStart >= 0 && mapperEnd > mapperStart, 'settings mapper functions should remain available');
+
+  const sandbox = { Object, SETTINGS_PAYLOAD_FIELDS: { providerConfig: 'provider_config' } };
+  runInNewContext(
+    `${mainSource.slice(mapperStart, mapperEnd)}; globalThis.mapSettings = toBackendSettingsPayload;`,
+    sandbox,
+  );
+
+  for (const entry of [new Date(), new Map(), undefined]) {
+    assert.throws(
+      () => sandbox.mapSettings({ providerConfig: { providers: { local: entry } } }),
+      /plain JSON object/,
+    );
+  }
+  for (const providers of [new Date(), new Map()]) {
+    assert.throws(
+      () => sandbox.mapSettings({ providerConfig: { providers } }),
+      /plain JSON object/,
+    );
+  }
+  assert.throws(
+    () => sandbox.mapSettings({ providerConfig: { providers: { local: { model: undefined } } } }),
+    /plain JSON object/,
+  );
+
+  const ordinaryRecord = sandbox.mapSettings({
+    providerConfig: { providers: { local: { route: 'local', model: 'example-model' } } },
+  });
+  assert.equal(ordinaryRecord.provider_config.providers.local.model, 'example-model');
+
+  const nullPrototypeRecord = Object.create(null);
+  nullPrototypeRecord.model = 'example-model';
+  const nullPrototypeMapped = sandbox.mapSettings({
+    providerConfig: { providers: { local: nullPrototypeRecord } },
+  });
+  assert.equal(nullPrototypeMapped.provider_config.providers.local.model, 'example-model');
+
+  const omittedProviders = sandbox.mapSettings({ providerConfig: { sampling_defaults: { temperature: 1 } } });
+  assert.equal(Object.hasOwn(omittedProviders.provider_config, 'providers'), false);
+  const explicitEmptyProviders = sandbox.mapSettings({ providerConfig: { providers: {} } });
+  assert.deepEqual(explicitEmptyProviders.provider_config.providers, {});
+});
+
+test('desktop backend read failures are visible and cannot save fallback settings or onboarding defaults', () => {
+  assert.match(settingsSource, /loadSettingsState\(\)[\s\S]*?catch\s*\(error\)[\s\S]*?settings\.load\.failed/);
+  assert.match(settingsSource, /disabled=\{saving\s*\|\|\s*!state\}/);
+  assert.match(appSource, /initializeOnboardingState[\s\S]*?catch\s*\(error\)[\s\S]*?backendError/);
+  assert.match(appSource, /if\s*\(onboardingState\.backendError\)/);
+  assert.match(appSource, /app\.loading\.failed/);
+});
+
+test('Electron keeps native directory, picker, login, tray, and title-bar effects allowlisted', () => {
+  const settingsPathAllowlist = mainSource.match(/const settingsPathAllowlist = \{([\s\S]*?)\n\};/)?.[1];
+  const openPath = mainSource.match(
+    /ipcMain\.handle\('settings:open-path',[\s\S]*?\n\}\);\n\nipcMain\.handle\('onboarding:pick-legacy-root'/,
+  )?.[0];
+  const picker = mainSource.match(
+    /ipcMain\.handle\('onboarding:pick-legacy-root',[\s\S]*?\n\}\);\n\nipcMain\.handle\('settings:get-display-language-state'/,
+  )?.[0];
+  const titleBarTheme = mainSource.match(
+    /ipcMain\.handle\('window:set-title-bar-theme',[\s\S]*?\n\}\);/,
+  )?.[0];
+
+  assert.ok(settingsPathAllowlist);
+  for (const directory of ['config', 'history', 'logs', 'plots', 'cache', 'runtime', 'data']) {
+    assert.match(settingsPathAllowlist, new RegExp(`${directory}: \\(\\) => runtimePaths\\.`));
+  }
+  assert.match(openPath, /resolveAllowedSettingsPath\(pathKey\)/);
+  assert.match(openPath, /shell\.openPath\(targetPath\)/);
+  assert.match(openPath, /if \(!targetPath\)/);
+  assert.match(picker, /dialog\.showOpenDialog/);
+  assert.match(picker, /properties: \['openDirectory'\]/);
+  assert.match(titleBarTheme, /setTitleBarOverlay/);
 });
 
 test('Electron main process requests macOS camera access before bundled backend startup', () => {

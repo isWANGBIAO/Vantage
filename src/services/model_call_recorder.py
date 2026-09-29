@@ -2,11 +2,15 @@ import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.core.config import Config
 from src.utils.sensitive_data import redact_sensitive_text
+
+# A request that has not settled after this long belongs to a dead process: the
+# stream timeout is measured in minutes, never in hours.
+ABANDONED_CALL_AGE_SECONDS = 3600
 
 
 def _now():
@@ -328,6 +332,28 @@ def get_session_usage_summary(session_id, db_file=None):
         "total_duration": float(total_duration),
         "average_duration": average_duration,
     }
+
+
+def repair_abandoned_calls(db_file=None, *, older_than_seconds=ABANDONED_CALL_AGE_SECONDS):
+    """Drop `started` rows left behind by a process that never finished.
+
+    A row is written before the request is made and only reaches a terminal
+    status when the request settles. Killing the process in between leaves the
+    row in `started` forever: it is excluded from every usage aggregate, so it
+    is invisible in the dashboard while still occupying the database.
+
+    Rows younger than the threshold are kept, so a second instance starting up
+    cannot delete a call another instance is still running.
+    """
+    resolved_db_file = Path(db_file) if db_file else _db_path(Config.get_history_dir())
+    _ensure_db(resolved_db_file)
+    cutoff = _isoformat(_now() - timedelta(seconds=max(0, int(older_than_seconds))))
+    with _open_db(resolved_db_file) as conn:
+        removed = conn.execute(
+            "DELETE FROM model_calls WHERE status = 'started' AND created_at < ?",
+            (cutoff,),
+        ).rowcount
+    return int(removed or 0)
 
 
 def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10, call_limit=20, speed_limit=120):

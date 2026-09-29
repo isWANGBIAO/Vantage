@@ -17,6 +17,28 @@ const {
   saveOnboardingCompletion,
 } = require('./onboardingConfig.cjs');
 
+test('Action Plan interval persists zero and custom values across partial saves', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-interval-'));
+  const runtimePaths = Object.fromEntries(['config', 'history', 'log', 'plot', 'cache', 'runtime', 'migration', 'data'].map(key => [`${key}Dir`, path.join(root, key)]));
+  try {
+    assert.equal(loadSettings(runtimePaths).action_plan_check_interval_minutes, 60);
+    for (const minutes of [15, 0, 120, 35_791]) {
+      const result = saveSettingsPayload({ runtimePaths, payload: { actionPlanCheckIntervalMinutes: minutes } });
+      assert.equal(result.settings.actionPlanCheckIntervalMinutes, minutes);
+      saveSettingsPayload({ runtimePaths, payload: { theme: 'light' } });
+      assert.equal(loadSettings(runtimePaths).action_plan_check_interval_minutes, minutes);
+    }
+
+    const invalidUpdate = saveSettingsPayload({
+      runtimePaths,
+      payload: { actionPlanCheckIntervalMinutes: 35_792 },
+    });
+    assert.equal(invalidUpdate.settings.actionPlanCheckIntervalMinutes, 35_791);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('sanitizeProviderConfig removes deprecated provider models', () => {
   const removedName = ['gemi', 'ni'].join('');
   const sanitized = sanitizeProviderConfig({
@@ -273,6 +295,7 @@ test('saveSettingsPayload persists general settings and provider config', () => 
     theme: 'light',
     theme_mode: 'auto',
     action_plan_auto_generate: false,
+    action_plan_check_interval_minutes: 60,
     voice_provider_mode: 'custom',
     voice_base_url: 'https://voice.example.invalid/v1',
     voice_api_key: 'sk-voice-secret',
@@ -646,6 +669,7 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
     theme: 'dark',
     theme_mode: 'dark',
     action_plan_auto_generate: true,
+    action_plan_check_interval_minutes: 60,
     voice_provider_mode: 'inherit_ai',
     voice_base_url: '',
     voice_api_key: '',
@@ -740,6 +764,7 @@ test('saveOnboardingCompletion preserves every formal setting while migrating fu
     theme: 'light',
     theme_mode: 'auto',
     action_plan_auto_generate: false,
+    action_plan_check_interval_minutes: 60,
     voice_provider_mode: 'custom',
     voice_base_url: 'https://voice.example.invalid/v1',
     voice_api_key: 'sk-voice',

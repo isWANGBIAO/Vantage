@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DISPLAY_COPY } from './displayCopy.js';
+import { DISPLAY_COPY, translate } from './displayCopy.js';
 
 const UI_SOURCE_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const MANUAL_KEYS = [
@@ -172,4 +172,15 @@ test('displayCopy includes Action Plan context limit warning labels in both lang
     assert.ok(DISPLAY_COPY['en-US'][key], `${key} should exist in English copy`);
     assert.ok(DISPLAY_COPY['zh-CN'][key], `${key} should exist in Chinese copy`);
   }
+});
+
+test('Action Plan interval validation copy interpolates the shared maximum', () => {
+  assert.equal(
+    translate('en-US', 'action_plan.auto.invalid', { max: '35,791' }),
+    'Enter whole minutes from 0 to 35,791; 0 disables checks',
+  );
+  assert.equal(
+    translate('zh-CN', 'action_plan.auto.invalid', { max: '35,791' }),
+    '请输入 0–35,791 的整数分钟数，0 表示关闭',
+  );
 });

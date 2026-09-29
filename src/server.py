@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import sqlite3
+import ipaddress
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -49,7 +50,7 @@ from contextlib import closing, suppress
 from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, Request, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, WebSocket, Request, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -62,11 +63,22 @@ import pandas as pd
 
 from src.core.config import Config
 from src.core.user_config import (
+    USER_CONFIG_LOCK,
     DEFAULT_LOCAL_PROXY_BASE_URL,
+    MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES,
     LOCAL_PROXY_PROVIDER_ROUTES,
+    _sanitize_provider_config,
+    _sanitize_settings,
+    get_migration_state_file,
+    get_providers_file,
+    get_settings_file,
     get_provider_chain_config,
+    load_migration_state,
     load_provider_config,
     load_settings,
+    save_migration_state,
+    save_provider_config,
+    save_settings,
 )
 from src.core.media_storage import DEFAULT_LEGACY_MEDIA_ROOT, get_media_paths_settings_file, resolve_media_storage_paths
 from src.manager.manager_main import Monitor
@@ -77,6 +89,7 @@ from src.services.directory_size_scanner import DirectorySizeScanner
 from src.services.model_call_recorder import (
     get_session_usage_summary,
     get_usage_dashboard_snapshot,
+    repair_abandoned_calls,
 )
 from src.services.person_detection import (
     PERSON_DETECTION_CONFIDENCE,
@@ -197,6 +210,7 @@ FACE_OVERLAY_PERSON_FONT_SCALE = FACE_OVERLAY_BASE_SCORE_FONT_SCALE * 2
 FACE_OVERLAY_PERSON_THICKNESS = 6
 FACE_EXPORT_TIMEOUT_SECONDS = 60
 _face_analysis_runtime = None
+_automation_config_lock = USER_CONFIG_LOCK
 _face_analysis_runtime_lock = threading.Lock()
 _face_report_refresh_lock = threading.Lock()
 _face_analysis_job_lock = threading.Lock()
@@ -532,14 +546,56 @@ def _get_backend_bind_host(env=None):
 
 
 def _normalize_host_value(value):
-    if not value:
+    if value is None:
         return ""
-    return str(value).strip().strip("[]").split(":", 1)[0].lower()
+    host = str(value).strip().lower()
+    if not host:
+        return ""
+
+    if host.startswith("["):
+        closing_bracket = host.find("]")
+        if closing_bracket < 0:
+            return ""
+        address_text = host[1:closing_bracket]
+        port_suffix = host[closing_bracket + 1:]
+        if port_suffix and (
+            not port_suffix.startswith(":")
+            or not re.fullmatch(r"[0-9]{1,5}", port_suffix[1:])
+            or int(port_suffix[1:]) > 65535
+        ):
+            return ""
+        try:
+            address = ipaddress.ip_address(address_text)
+        except ValueError:
+            return ""
+        return str(address) if isinstance(address, ipaddress.IPv6Address) else ""
+
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        if ":" not in host:
+            return host
+        if host.count(":") != 1:
+            return ""
+        hostname, port = host.rsplit(":", 1)
+        if not hostname or not re.fullmatch(r"[0-9]{1,5}", port) or int(port) > 65535:
+            return ""
+        return hostname
 
 
 def _is_loopback_host(value):
     host = _normalize_host_value(value)
-    return host in {"", "127.0.0.1", "localhost", "::1", "testclient", "testserver"}
+    if host in {"localhost", "testclient", "testserver"}:
+        return True
+    if not host:
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped.is_loopback
+    return address.is_loopback
 
 
 def _has_local_action_intent(headers, expected_intent):
@@ -598,11 +654,484 @@ app.add_middleware(
 
 @app.middleware("http")
 async def enforce_loopback_backend_access(request: Request, call_next):
+    if not request.url.path.startswith("/api/automation/"):
+        return await call_next(request)
+
     client_host = getattr(request.client, "host", "")
     host_header = request.headers.get("host", "")
     if not _is_loopback_host(client_host) or not _is_loopback_host(host_header):
         return JSONResponse(status_code=403, content={"error": "Local backend access only"})
     return await call_next(request)
+
+
+_AUTOMATION_SETTINGS_FIELDS = frozenset({
+    "display_language",
+    "theme",
+    "theme_mode",
+    "launch_at_login",
+    "action_plan_auto_generate",
+    "action_plan_check_interval_minutes",
+    "voice_provider_mode",
+    "voice_base_url",
+    "voice_api_key",
+    "voice_model",
+    "voice_models",
+    "voice_last_refreshed_at",
+    "image_provider_mode",
+    "image_base_url",
+    "image_api_key",
+    "image_model",
+    "image_models",
+    "image_last_refreshed_at",
+})
+def _validate_automation_payload(payload, allowed_fields):
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Request body must be an object.")
+    unknown = set(payload) - allowed_fields
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported settings field: {next(iter(unknown))}",
+        )
+    return payload
+
+
+def _validate_provider_configuration_payload(payload):
+    if "provider_config" in payload:
+        submitted = payload["provider_config"]
+        if not isinstance(submitted, dict):
+            raise HTTPException(status_code=422, detail="provider_config must be an object.")
+        if "providers" in submitted:
+            providers = submitted["providers"]
+            if not isinstance(providers, dict):
+                raise HTTPException(status_code=422, detail="provider_config.providers must be an object.")
+            if any(not isinstance(entry, dict) for entry in providers.values()):
+                raise HTTPException(
+                    status_code=422,
+                    detail="provider_config.providers entries must be objects.",
+                )
+        return
+
+    provider = payload.get("provider")
+    if provider is not None and not isinstance(provider, dict):
+        raise HTTPException(status_code=422, detail="provider must be an object.")
+
+
+def _masked_settings_payload():
+    settings = load_settings()
+    settings_payload = dict(settings)
+    for key in ("voice_api_key", "image_api_key"):
+        has_key = bool(str(settings.get(key) or "").strip())
+        settings_payload[key] = "********" if has_key else ""
+        settings_payload[f"{key.removesuffix('_api_key')}_has_api_key"] = has_key
+
+    provider = load_provider_config()
+    masked_providers = {}
+    for route, entry in provider.get("providers", {}).items():
+        masked_entry = {
+            key: entry[key]
+            for key in (
+                "route",
+                "name",
+                "type",
+                "enabled",
+                "api_key",
+                "base_url",
+                "model",
+                "models",
+                "last_refreshed_at",
+                "context_window_tokens",
+                "max_output_tokens",
+            )
+            if key in entry
+        }
+        has_key = bool(str(entry.get("api_key") or "").strip())
+        masked_entry["api_key"] = "********" if has_key else ""
+        masked_providers[route] = masked_entry
+    provider_payload = {**provider, "providers": masked_providers}
+    migration = load_migration_state()
+    runtime_paths = Config.get_runtime_paths()
+    return {
+        "settings": settings_payload,
+        "provider": provider_payload,
+        "migration": {
+            "completed": migration["completed"],
+            "source_path": migration["source_path"],
+            "imported_at": migration["imported_at"],
+        },
+        "runtime_paths": {key: str(value) for key, value in runtime_paths.items()},
+    }
+
+
+def _prepare_provider_configuration(payload, current_provider):
+    if "provider_config" in payload:
+        submitted = dict(payload["provider_config"])
+        for key in ("selected_provider", "sampling_defaults", "model_profiles"):
+            submitted.setdefault(key, current_provider.get(key))
+        if "providers" in submitted:
+            submitted_providers = submitted["providers"]
+        else:
+            submitted_providers = current_provider.get("providers", {})
+
+        merged_providers = {}
+        for route, submitted_entry in submitted_providers.items():
+            old_entry = current_provider.get("providers", {}).get(route, {})
+            entry = {**old_entry, **submitted_entry}
+            submitted_key = entry.get("api_key")
+            if submitted_key in (None, "", "********"):
+                entry["api_key"] = old_entry.get("api_key", "")
+            merged_providers[route] = entry
+        submitted["providers"] = merged_providers
+        return submitted
+
+    provider = payload.get("provider")
+    if provider is None:
+        return None
+    route = str(provider.get("route") or "").strip()
+    if not any(provider.get(key) not in (None, "") for key in ("apiKey", "baseUrl", "model")):
+        if route in current_provider.get("providers", {}):
+            return {**current_provider, "selected_provider": route}
+        return None
+
+    route = route or current_provider.get("selected_provider") or "cliproxyapi"
+    providers = dict(current_provider.get("providers", {}))
+    old_entry = dict(providers.get(route, {}))
+    submitted_key = provider.get("apiKey")
+    if submitted_key not in (None, "", "********"):
+        old_entry["api_key"] = submitted_key
+    old_entry.update({
+        "route": route,
+        "name": old_entry.get("name") or route,
+        "type": "openai-compatible",
+        "enabled": old_entry.get("enabled", True),
+        "base_url": provider.get("baseUrl") or old_entry.get("base_url", ""),
+        "model": provider.get("model") or old_entry.get("model", ""),
+    })
+    if "api_key" not in old_entry:
+        old_entry["api_key"] = ""
+    providers[route] = old_entry
+    return {**current_provider, "selected_provider": route, "providers": providers}
+
+
+def _snapshot_config_file(path):
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _snapshot_automation_config_files():
+    return {
+        path: _snapshot_config_file(path)
+        for path in (get_settings_file(), get_providers_file())
+    }
+
+
+def _restore_config_files(original_files, update_error):
+    rollback_errors = []
+    for path, original_contents in reversed(list(original_files.items())):
+        try:
+            if original_contents is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(original_contents)
+        except Exception as rollback_error:
+            rollback_errors.append((path, rollback_error))
+    if rollback_errors:
+        for path, rollback_error in rollback_errors:
+            logging.error(
+                "Failed to restore settings file %s after a failed settings update: %s",
+                path,
+                rollback_error,
+            )
+        raise RuntimeError("Settings update failed and one or more files could not be restored.") from update_error
+
+
+def _persist_automation_settings_update(settings_payload, provider_payload):
+    writes = []
+    if settings_payload is not None:
+        writes.append((get_settings_file(), save_settings, settings_payload))
+    if provider_payload is not None:
+        writes.append((get_providers_file(), save_provider_config, provider_payload))
+    if not writes:
+        return
+
+    for _, save_payload, payload in writes:
+        save_payload(payload)
+
+
+@app.get("/api/automation/settings")
+def get_automation_settings():
+    with _automation_config_lock:
+        return _masked_settings_payload()
+
+
+@app.put("/api/automation/settings")
+def update_automation_settings(payload: dict):
+    with _automation_config_lock:
+        _validate_automation_payload(payload, _AUTOMATION_SETTINGS_FIELDS | {"provider", "provider_config"})
+        interval = payload.get("action_plan_check_interval_minutes")
+        if "action_plan_check_interval_minutes" in payload and (
+            not isinstance(interval, int)
+            or isinstance(interval, bool)
+            or interval < 0
+            or interval > MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "action_plan_check_interval_minutes must be an integer from 0 to "
+                    f"{MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES}."
+                ),
+            )
+        _validate_provider_configuration_payload(payload)
+        original_files = _snapshot_automation_config_files()
+        try:
+            settings_updates = {key: value for key, value in payload.items() if key in _AUTOMATION_SETTINGS_FIELDS}
+            current_settings = load_settings()
+            for key in ("voice_api_key", "image_api_key"):
+                if payload.get(key) == "********":
+                    settings_updates[key] = current_settings.get(key, "")
+            current_provider = load_provider_config()
+            settings_to_save = _sanitize_settings({**current_settings, **settings_updates}) if settings_updates else None
+            provider_to_save = _prepare_provider_configuration(payload, current_provider)
+            if provider_to_save is not None:
+                provider_to_save = _sanitize_provider_config(provider_to_save)
+
+            _persist_automation_settings_update(settings_to_save, provider_to_save)
+            return _masked_settings_payload()
+        except Exception as update_error:
+            _restore_config_files(original_files, update_error)
+            raise
+
+
+@app.get("/api/automation/settings/display-language")
+def get_automation_display_language():
+    with _automation_config_lock:
+        return {"display_language": load_settings().get("display_language", "system")}
+
+
+@app.put("/api/automation/settings/display-language")
+def update_automation_display_language(payload: dict):
+    _validate_automation_payload(payload, {"display_language"})
+    if "display_language" not in payload:
+        raise HTTPException(status_code=422, detail="display_language is required.")
+    with _automation_config_lock:
+        settings = load_settings()
+        saved = save_settings({**settings, "display_language": payload["display_language"]})
+        return {"display_language": saved["display_language"]}
+
+
+def _detect_automation_legacy_root():
+    project_root = Path(Config.get_project_root()).expanduser().resolve()
+    data_dir = Path(Config.get_data_dir()).expanduser().resolve()
+    if project_root == data_dir or data_dir in project_root.parents:
+        return None
+    return str(project_root) if (project_root / "history").is_dir() else None
+
+
+@app.get("/api/automation/onboarding")
+def get_automation_onboarding_state():
+    with _automation_config_lock:
+        settings = load_settings()
+        provider_configured = bool(get_provider_chain_config())
+        migration = load_migration_state()
+        return {
+            "completed": settings["onboarding_completed"],
+            "launchAtLogin": settings["launch_at_login"],
+            "displayLanguage": settings["display_language"],
+            "providerConfigured": provider_configured,
+            "migrationCompleted": migration["completed"],
+            "legacyRoot": migration["source_path"] or _detect_automation_legacy_root(),
+        }
+
+
+def _validate_legacy_history_source(legacy_root):
+    if not isinstance(legacy_root, str) or not legacy_root.strip():
+        raise HTTPException(status_code=400, detail="Legacy history import requires a source folder.")
+    source_root_input = Path(legacy_root).expanduser()
+    if not source_root_input.is_absolute():
+        raise HTTPException(status_code=400, detail="Legacy history source must be an absolute path.")
+    try:
+        if source_root_input.is_symlink():
+            raise HTTPException(status_code=400, detail="Legacy history source cannot be a symbolic link.")
+        source_root = source_root_input.resolve(strict=True)
+    except OSError:
+        raise HTTPException(status_code=400, detail="Legacy history source folder was not found.") from None
+    if not source_root.is_dir():
+        raise HTTPException(status_code=400, detail="Legacy history source must be a folder.")
+
+    source_history = source_root / "history"
+    if source_history.is_symlink() or not source_history.is_dir():
+        raise HTTPException(status_code=400, detail="Legacy history folder was not found in the selected source.")
+    target_history_input = Path(Config.get_history_dir()).expanduser()
+    if target_history_input.is_symlink():
+        raise HTTPException(status_code=400, detail="Configured history destination cannot be a symbolic link.")
+    target_history = target_history_input.resolve()
+    source_history = source_history.resolve()
+    if source_history == target_history:
+        return source_root, source_history, target_history, True
+    if source_root == target_history or target_history.is_relative_to(source_history) or source_root.is_relative_to(target_history):
+        raise HTTPException(status_code=400, detail="Legacy history source overlaps the configured destination.")
+    return source_root, source_history, target_history, False
+
+
+def _copy_missing_legacy_history(source_history: Path, target_history: Path):
+    target_history.mkdir(parents=True, exist_ok=True)
+    target_root = target_history.resolve()
+    for current_dir, dir_names, file_names in os.walk(source_history, followlinks=False):
+        current_path = Path(current_dir)
+        relative_dir = current_path.relative_to(source_history)
+        destination_dir = target_history / relative_dir
+        if destination_dir.is_symlink() or not destination_dir.resolve().is_relative_to(target_root):
+            raise HTTPException(status_code=400, detail="Legacy history destination escapes the configured history directory.")
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        dir_names[:] = [name for name in dir_names if not (current_path / name).is_symlink()]
+        for name in file_names:
+            source_file = current_path / name
+            if source_file.is_symlink() or not source_file.is_file():
+                continue
+            destination_file = destination_dir / name
+            if destination_file.is_symlink() or not destination_file.resolve().is_relative_to(target_root):
+                raise HTTPException(status_code=400, detail="Legacy history destination escapes the configured history directory.")
+            if destination_file.exists():
+                continue
+            try:
+                with source_file.open("rb") as source, destination_file.open("xb") as destination:
+                    shutil.copyfileobj(source, destination)
+            except FileExistsError:
+                continue
+            except OSError as error:
+                with suppress(OSError):
+                    destination_file.unlink()
+                raise HTTPException(status_code=500, detail="Failed to copy a legacy history file.") from error
+
+
+@app.post("/api/automation/onboarding/complete")
+def complete_automation_onboarding(payload: dict):
+    allowed_fields = {
+        "display_language",
+        "launch_at_login",
+        "selected_provider",
+        "base_url",
+        "api_key",
+        "model",
+        "skip_chat_setup",
+        "import_legacy_data",
+        "legacy_root",
+    }
+    _validate_automation_payload(payload, allowed_fields)
+    if not isinstance(payload.get("skip_chat_setup"), bool):
+        raise HTTPException(status_code=422, detail="skip_chat_setup must be an explicit boolean choice.")
+    if "launch_at_login" in payload and not isinstance(payload["launch_at_login"], bool):
+        raise HTTPException(status_code=422, detail="launch_at_login must be a boolean.")
+    if payload["skip_chat_setup"] is False:
+        selected_provider = payload.get("selected_provider")
+        if not isinstance(selected_provider, str) or not selected_provider.strip():
+            raise HTTPException(
+                status_code=422,
+                detail="selected_provider is required when skip_chat_setup is false.",
+            )
+    should_import = payload.get("import_legacy_data") is True
+    validated_source = None
+    if should_import:
+        validated_source = _validate_legacy_history_source(payload.get("legacy_root"))
+
+    with _automation_config_lock:
+        existing_migration = load_migration_state()
+    migration = {
+        "imported": False,
+        "completed": existing_migration["completed"],
+        "sourcePath": existing_migration["source_path"],
+    }
+
+    if should_import and validated_source:
+        source_root, source_history, target_history, same_root = validated_source
+        if not same_root and not (existing_migration["completed"] and existing_migration["source_path"] == str(source_root)):
+            _copy_missing_legacy_history(source_history, target_history)
+            imported = True
+        else:
+            imported = False
+
+    with _automation_config_lock:
+        saved_provider = load_provider_config()
+        if payload["skip_chat_setup"] is False:
+            selected_provider = payload["selected_provider"].strip()
+            providers = dict(saved_provider.get("providers", {}))
+            old_entry = dict(providers.get(selected_provider, {}))
+            submitted_model = str(payload.get("model") or "").strip()
+            old_model = old_entry.get("model", "")
+            model = submitted_model or old_model
+            submitted_api_key = str(payload.get("api_key") or "").strip()
+            if submitted_api_key == "********":
+                submitted_api_key = ""
+            old_base_url = old_entry.get("base_url", "")
+            submitted_base_url = str(payload.get("base_url") or "").strip()
+            base_url = submitted_base_url or old_base_url
+            model_changed = bool(submitted_model and submitted_model != old_model)
+            base_url_changed = bool(submitted_base_url and submitted_base_url != old_base_url)
+            old_models = old_entry.get("models", [])
+            providers[selected_provider] = {
+                **old_entry,
+                "route": selected_provider,
+                "name": old_entry.get("name") or selected_provider,
+                "type": old_entry.get("type") or "openai-compatible",
+                "enabled": True,
+                "api_key": submitted_api_key or old_entry.get("api_key", ""),
+                "base_url": base_url,
+                "model": model,
+                "models": [model] if model_changed else old_models,
+                "last_refreshed_at": None if model_changed or base_url_changed else old_entry.get("last_refreshed_at"),
+            }
+            provider_config = {
+                **saved_provider,
+                "selected_provider": selected_provider,
+                "providers": providers,
+            }
+
+        if should_import and validated_source:
+            source_root = validated_source[0]
+            migration_state = load_migration_state()
+            imported_at = migration_state["imported_at"] or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            saved_migration = save_migration_state({
+                "completed": True,
+                "source_path": str(source_root),
+                "imported_at": imported_at,
+            })
+            migration = {
+                "imported": imported,
+                "completed": saved_migration["completed"],
+                "sourcePath": saved_migration["source_path"],
+            }
+
+        current_settings = load_settings()
+        saved_settings = save_settings({
+            **current_settings,
+            "onboarding_completed": True,
+            "launch_at_login": payload.get("launch_at_login", current_settings["launch_at_login"]),
+            "display_language": payload.get("display_language", current_settings["display_language"]),
+        })
+        if payload["skip_chat_setup"] is False:
+            saved_provider = save_provider_config(provider_config)
+        provider_configured = bool(get_provider_chain_config())
+        return {
+            "completed": True,
+            "launchAtLogin": saved_settings["launch_at_login"],
+            "providerConfigured": provider_configured,
+            "migration": migration,
+            "settings": {
+                "display_language": saved_settings["display_language"],
+                "theme": saved_settings["theme"],
+                "theme_mode": saved_settings["theme_mode"],
+                "launch_at_login": saved_settings["launch_at_login"],
+            },
+            "provider": {
+                "selected_provider": saved_provider["selected_provider"],
+                "providers": list(saved_provider["providers"]),
+            },
+        }
+
 
 # Global State
 class SystemState:
@@ -2137,11 +2666,13 @@ def identify_logs_folder(
 
 def find_latest_file_recursive(
     directory,
-    extensions={'.jpg', '.png'},
+    extensions=None,
     *,
     max_seconds=LATEST_MEDIA_SCAN_MAX_SECONDS,
     max_entries=LATEST_MEDIA_SCAN_MAX_ENTRIES,
 ):
+    if extensions is None:
+        extensions = (".jpg", ".png")
     latest_file = None
     latest_time = 0
     visited_count = 0
@@ -2343,6 +2874,24 @@ async def startup_event():
         
         _mount_static_once("/static/screenshots", state.screenshots_path, "screenshots")
         _start_background_thread_once("initialize_latest_media_state", initialize_latest_media_state)
+
+        # Records left in `started` by a process that was killed would otherwise
+        # sit in the database forever and never appear in any usage total.
+        try:
+            removed_calls = repair_abandoned_calls()
+            if removed_calls:
+                print(f"[Usage] Cleared {removed_calls} abandoned in-flight call record(s)")
+        except Exception as e:
+            print(f"Usage record repair error: {e}")
+
+        # Same failure mode for the workbook snapshots `_safe_copy_excel` takes:
+        # a killed process never reaches its cleanup, so stale copies accumulate.
+        try:
+            removed_snapshots = DataLoader.cleanup_stale_excel_snapshots()
+            if removed_snapshots:
+                print(f"[Storage] Cleared {removed_snapshots} stale workbook snapshot(s)")
+        except Exception as e:
+            print(f"Workbook snapshot cleanup error: {e}")
 
     except Exception as e:
         print(f"Startup logic error: {e}")
@@ -3240,6 +3789,9 @@ class ChatRequest(BaseModel):
 
 
 _VALID_REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+# Level assumed when the client does not choose one. The per-model tiers in the
+# provider configuration decide what it actually resolves to.
+DEFAULT_CHAT_REASONING_EFFORT = "medium"
 _VALID_SERVICE_TIERS = {"priority", "fast"}
 
 
@@ -3523,6 +4075,91 @@ class ActionPlanRequest(BaseModel):
 
 ACTION_PLAN_REQUIRED_DATA_FILES = ("Time.xlsx",)
 
+# Everything the Action Plan reads besides the required workbook. The content
+# fingerprint has to cover all of it: an edit to the balance sheet or to any of
+# the prompts changes the generated plan, so it must be able to trigger a
+# refresh. These are read if present but are never treated as missing inputs.
+ACTION_PLAN_CONTENT_FILES = (
+    "Balance Sheet.xlsx",
+    "Prompt_Personal_Info.md",
+    "Prompt_Action_Plan.md",
+    "Prompt_Project_Management.md",
+    "Prompt_Advisor_Requirements.md",
+    "Prompt_Goals.md",
+    "Prompt_Inventory.md",
+    "Prompt_AI_Instructions.md",
+    "Prompt_Scientific_Theory.md",
+)
+
+# Workbook sources can be held open by Excel, so they are hashed through the
+# same locked-file snapshot path as the rest of the app. The other sources are
+# plain text and are read directly.
+_ACTION_PLAN_WORKBOOK_FILES = ("Time.xlsx", "Balance Sheet.xlsx")
+
+
+def _hash_action_plan_source(path: Path, name: str, digest) -> None:
+    """Feed one source file into the fingerprint, guarding against mid-read edits."""
+    is_workbook = path.suffix.lower() == ".xlsx"
+    before = path.stat()
+    digest.update(name.encode("utf-8"))
+    digest.update(b"\0")
+    if is_workbook:
+        snapshot = DataLoader._safe_copy_excel(path)
+        try:
+            with snapshot.open("rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        finally:
+            snapshot.unlink(missing_ok=True)
+    else:
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+    after = path.stat()
+    if (before.st_size, before.st_mtime_ns, before.st_ino) != (
+        after.st_size, after.st_mtime_ns, after.st_ino
+    ):
+        raise OSError("Action plan source changed while reading")
+
+
+def _resolve_action_plan_content_source(filename: str):
+    """Resolve one optional source, or None when it is absent."""
+    try:
+        return Path(DataLoader.resolve_data_path(filename))
+    except FileNotFoundError:
+        return None
+
+
+def _compute_action_plan_source_revision():
+    """Hash source bytes, rejecting a file that changes while it is read."""
+    digest = hashlib.sha256()
+    for filename in ACTION_PLAN_REQUIRED_DATA_FILES:
+        path = Path(DataLoader.resolve_data_path(filename))
+        _hash_action_plan_source(path, filename, digest)
+    for filename in ACTION_PLAN_CONTENT_FILES:
+        path = _resolve_action_plan_content_source(filename)
+        digest.update(filename.encode("utf-8"))
+        digest.update(b"\0")
+        if path is None or not path.exists():
+            # Record the absence so creating the file later also moves the fingerprint.
+            digest.update(b"<missing>")
+            continue
+        _hash_action_plan_source(path, filename, digest)
+    return digest.hexdigest()
+
+
+@app.get("/api/action_plan/source_revision")
+async def get_action_plan_source_revision():
+    try:
+        revision = await asyncio.to_thread(_compute_action_plan_source_revision)
+    except (OSError, subprocess.CalledProcessError):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "行动计划数据源暂不可用，请稍后重试。"},
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(content={"revision": revision}, headers={"Cache-Control": "no-store"})
+
 
 def _get_missing_action_plan_data_sources():
     missing_sources = []
@@ -3619,12 +4256,27 @@ async def list_llm_models():
                 seen.add(model)
                 models.append(model)
             if model and provider_route:
+                model_profile = client._model_parameter_profile(model)
+                model_aliases = (
+                    model_profile.get("reasoning_aliases")
+                    if isinstance(model_profile, dict)
+                    else None
+                )
                 model_options.append({
                     "id": f"{provider_route}::{model}",
                     "model": model,
                     "provider_route": provider_route,
                     "provider_label": provider_label,
                     "label": f"{model} | {provider_label}",
+                    "reasoning_tiers": client._reasoning_tiers_for_model(model),
+                    "reasoning_aliases": (
+                        dict(model_aliases) if isinstance(model_aliases, dict) else {}
+                    ),
+                    "default_reasoning_effort": client._normalize_reasoning_effort_for_model(
+                        provider,
+                        model,
+                        DEFAULT_CHAT_REASONING_EFFORT,
+                    ),
                     "is_default": (
                         provider is providers[0]
                         and model == provider.get("model")
@@ -3723,7 +4375,7 @@ def _first_complete_ai_provider():
     return None
 
 
-def _resolve_special_provider_config(
+def _resolve_special_provider_config_unlocked(
     *,
     kind: str,
     mode: str | None = None,
@@ -3791,6 +4443,26 @@ def _resolve_special_provider_config(
         "complete": not missing,
         "missing": missing,
     }
+
+
+def _resolve_special_provider_config(
+    *,
+    kind: str,
+    mode: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    route: str | None = None,
+    provider_type: str | None = None,
+):
+    with _automation_config_lock:
+        return _resolve_special_provider_config_unlocked(
+            kind=kind,
+            mode=mode,
+            base_url=base_url,
+            api_key=api_key,
+            route=route,
+            provider_type=provider_type,
+        )
 
 
 def _safe_resolved_provider_payload(provider_config: dict) -> dict:
@@ -4049,6 +4721,7 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
         stderr_task = asyncio.create_task(
             _drain_subprocess_stderr(proc.stderr, "action_plan", stderr_lines)
         )
+        stream_failed = False
         
         try:
             while True:
@@ -4056,6 +4729,8 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
                 if not line:
                     break
                 decoded = _decode_subprocess_chunk(line)
+                if decoded.startswith(("STREAM_ANALYSIS_ERROR:", "STREAM_PLAN_ERROR:", "STREAM_ERROR:")):
+                    stream_failed = True
                 yield json.dumps({"log": decoded}) + "\n"
                 
             await proc.wait()
@@ -4066,11 +4741,15 @@ async def generate_action_plan(request: Optional[ActionPlanRequest] = None):
                 err_msg = "\n".join(stderr_lines).strip() or f"run_prompt.py exited with code {proc.returncode}"
                 logging.error("Action plan subprocess failed: %s", err_msg)
                 yield json.dumps({"error": err_msg}) + "\n"
+            elif stream_failed:
+                logging.error("Action plan subprocess reported an analysis error")
             elif replace_today:
                 logging.info("Action plan subprocess completed successfully; replacing today's saved files")
                 _replace_today_action_plan_files(previous_today_files)
             else:
                 logging.info("Action plan subprocess completed successfully")
+            if proc.returncode == 0 and not stream_failed:
+                yield json.dumps({"done": True}) + "\n"
             
         except asyncio.CancelledError:
             logging.warning("Action plan stream cancelled by client")
@@ -4635,7 +5314,9 @@ def _delete_purchase_recommendation_dismissal(item_id):
     try:
         normalized_id = int(item_id)
     except (TypeError, ValueError):
-        raise ValueError("Dismissed recommendation id must be an integer.")
+        # The conversion failure is not useful to the caller; report only that
+        # the id was not an integer.
+        raise ValueError("Dismissed recommendation id must be an integer.") from None
     with closing(_connect_purchase_recommendation_db()) as conn:
         conn.execute("DELETE FROM purchase_recommendation_dismissals WHERE id = ?", (normalized_id,))
         conn.commit()
@@ -4874,9 +5555,12 @@ def _build_purchase_recommendation_messages(context_prompt, dismissed_items=None
         "必须把它视为“Asset 可能缺漏/待核实补录”，而不是新的购买需求。"
         "只输出 JSON，不要 Markdown。"
     )
+    # The context bundle is the bulk of this prompt and is read-only between
+    # edits, so it goes first. The instructions that embed the varying count and
+    # dismissed list follow it, so a changed count or dismissal only invalidates
+    # the trailing block instead of the whole cached payload.
     user_prompt = (
-        f"Generate a total of {total_count} purchase recommendations across exactly three groups: "
-        "practical, night_guard, wishlist. Keep all three groups present; distribute the total sensibly based on evidence.\n"
+        f"Context bundle from Action Plan data sources:\n{context_prompt}\n\n"
         "输出结构必须是 JSON object，只包含 recommendation_groups。"
         "recommendation_groups 必须包含 key=practical/night_guard/wishlist 三组。"
         "每个 item 必须包含 name、category、estimated_price、reason、evidence、duplicate_check、impulse_risk、recommendation_mode。"
@@ -4889,8 +5573,9 @@ def _build_purchase_recommendation_messages(context_prompt, dismissed_items=None
         "但 Balance Sheet 的 Asset 表没有对应记录，只能在 duplicate_check 或 evidence 中标记为“待核实补录”。"
         "不要把这类项目作为购买推荐；它们应被理解为需要补充价格、购买日期、归属和是否个人资产的台账补录项。"
         "例如宿舍台式机、已有笔记本、实验室/老师资产，都必须先区分个人资产还是非个人资产，不能编造成待购买物品。\n\n"
-        f"Dismissed purchase recommendations JSON:\n{dismissed_json}\n\n"
-        f"Context bundle from Action Plan data sources:\n{context_prompt}"
+        f"Generate a total of {total_count} purchase recommendations across exactly three groups: "
+        "practical, night_guard, wishlist. Keep all three groups present; distribute the total sensibly based on evidence.\n\n"
+        f"Dismissed purchase recommendations JSON:\n{dismissed_json}"
     )
     return [
         {"role": "system", "content": system_prompt},
@@ -4926,12 +5611,16 @@ def _build_purchase_random_recommendation_messages(dismissed_items=None, recomme
         "recommendation_groups 必须包含 key=practical/night_guard/wishlist 三组。"
         "每个 item 必须包含 name、category、estimated_price、reason、evidence、duplicate_check、impulse_risk、recommendation_mode。"
         "recommendation_mode 必须固定为 random。\n"
-        f"Random seed: {seed}. 按这个种子发散到彼此差异明显的品类，不要总是围绕同一批常见答案。\n"
         "随机探索边界：可以跨生活工具、桌面收纳、户外通勤、厨房小物、学习爱好、旅行、维护保养、数字生活等方向。"
         "不要推荐违法、成人、赌博、金融投资、处方药、医疗诊断、危险武器、活体动物或明显成瘾消费。"
         "价格可以从低价小物到中等愿望清单，但每项必须写清楚它为什么只是随机探索而不是基于个人表格证据。\n"
         "已排除购物推荐 / dismissed purchase recommendations JSON 表示用户已经打叉、不想再看到的方向。"
         "不要推荐同名、近似同类、功能重复的物品；如果排除项是一个品类，也要避开同用途替代品。\n\n"
+        # Everything above is constant. The seed and the dismissed list both
+        # change between calls, so they are kept at the very end: the constant
+        # instructions stay a reusable cache prefix instead of being invalidated
+        # by a fresh seed each time.
+        f"Random seed: {seed}. 按这个种子发散到彼此差异明显的品类，不要总是围绕同一批常见答案。\n\n"
         f"Dismissed purchase recommendations JSON:\n{dismissed_json}"
     )
     return [

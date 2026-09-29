@@ -191,17 +191,27 @@ function AppShell() {
     let cancelled = false;
 
     const initializeOnboardingState = async () => {
-      const nextState = await loadOnboardingState();
-      if (!cancelled) {
-        setOnboardingState({
-          loading: false,
-          completed: nextState.completed,
-          launchAtLogin: nextState.launchAtLogin,
-          displayLanguage: nextState.displayLanguage,
-          providerConfigured: nextState.providerConfigured,
-          migrationCompleted: nextState.migrationCompleted,
-          legacyRoot: nextState.legacyRoot,
-        });
+      try {
+        const nextState = await loadOnboardingState();
+        if (!cancelled) {
+          setOnboardingState({
+            loading: false,
+            completed: nextState.completed,
+            launchAtLogin: nextState.launchAtLogin,
+            displayLanguage: nextState.displayLanguage,
+            providerConfigured: nextState.providerConfigured,
+            migrationCompleted: nextState.migrationCompleted,
+            legacyRoot: nextState.legacyRoot,
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setOnboardingState((previous) => ({
+            ...previous,
+            loading: false,
+            backendError: error.message || String(error),
+          }));
+        }
       }
     };
 
@@ -330,6 +340,22 @@ function AppShell() {
   };
 
   const showOnboardingShell = !onboardingState.loading && !onboardingState.completed;
+
+  if (onboardingState.backendError) {
+    return (
+      <div className={appLayoutClassName}>
+        <main className="app-container onboarding-loading-shell">
+          <div className="glass-panel onboarding-loading-card">
+            <div className="onboarding-eyebrow">{t('app.loading.eyebrow')}</div>
+            <h1 className="onboarding-title">{t('app.loading.title')}</h1>
+            <p className="onboarding-description">
+              {t('app.loading.failed', { error: onboardingState.backendError })}
+            </p>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   if (onboardingState.loading) {
     return (

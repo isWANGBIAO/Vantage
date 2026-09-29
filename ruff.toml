@@ -1,0 +1,40 @@
+# Ruff configuration.
+#
+# Scope: rules that catch defects, not style. The selected set reports syntax
+# errors, undefined names, unused redefinitions, mutable or evaluated argument
+# defaults, loop-variable closures and exception-chaining mistakes. All of them
+# pass on the current tree, so this file is a ratchet: keep it green.
+#
+# Deliberately not enabled yet. Each one needs a cleanup pass first, and adding
+# a rule before the tree is clean would only force a suppression list:
+#   F401  unused-import          ~43 occurrences
+#   F841  unused-variable        ~10
+#   SIM105 suppressible-exception ~42
+#   SIM117 multiple-with          ~11
+#   SIM112 uncapitalized-env-var   ~8
+#   E402  import-not-at-top      ~89 (several are intentional lazy imports)
+#   E701  multiple-statements      ~8
+[lint]
+select = [
+    "E9",   # syntax and runtime errors
+    "F63",  # invalid print/assert syntax
+    "F7",   # statements that will not work as intended
+    "F82",  # undefined names
+    "F811", # redefinition of an unused name
+    "B006", # mutable argument default
+    "B017", # assert raises with a blind exception
+    "B020", # loop variable shadowing the iterable
+    "B023", # function definition does not bind the loop variable
+    "B904", # raise inside except without chaining
+]
+
+[lint.per-file-ignores]
+# FastAPI expresses a file upload as an evaluated default; that is the
+# framework's documented interface, not a mistake.
+"src/server.py" = ["B008"]
+# These files use pandas boolean masks (`df["passed"] == True`), which is an
+# element-wise comparison, not a truthiness check.
+"src/scripts/analyze_darkcircle_uniface.py" = ["E712"]
+"src/scripts/render_face_pipeline_markdown.py" = ["E712"]
+# The live endpoint test intentionally rebinds the fixture name it asserts on.
+"tests/test_face_live_endpoint.py" = ["F811"]

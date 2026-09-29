@@ -61,6 +61,11 @@ test('Settings saves provider config and refreshes available LLM models', () => 
   assert.equal(settingsSource.includes('backgroundMode'), false);
 });
 
+test('Settings form normalization preserves canonical model config and provider capability fields', () => {
+  assert.match(settingsSource, /function normalizeProviderConfigForForm[\s\S]*?return\s*\{[\s\S]*?\.\.\.providerConfig/);
+  assert.match(settingsSource, /function createProviderEntry[\s\S]*?return\s*\{\s*\.\.\.entry/);
+});
+
 test('Settings exposes Action Plan startup autogeneration as a performance setting', () => {
   assert.ok(settingsSource.includes('actionPlanAutoGenerate'));
   assert.ok(settingsSource.includes('settings.performance.action_plan_auto_generate'));

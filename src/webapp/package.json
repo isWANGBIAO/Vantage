@@ -1,7 +1,7 @@
 {
   "name": "vantage",
   "private": true,
-  "version": "1.0.73",
+  "version": "1.0.79",
   "description": "Vantage Electron Desktop Application",
   "author": "Biao Wang",
   "main": "main.cjs",
@@ -9,14 +9,18 @@
   "scripts": {
     "dev": "vite",
     "build": "node scripts/vite-build.mjs",
-    "test": "node --test vite.config.test.js package.test.js main.test.js \"src/**/*.test.js\"",
+    "test": "node --test vite.config.test.js package.test.js main.test.js prepare-build-version.test.js \"src/**/*.test.js\"",
     "check": "npm run lint && npm run test && npm run build",
     "lint": "eslint .",
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:build": "node scripts/vite-build.mjs && electron-builder",
     "electron:package": "electron-builder",
-    "electron:start": "electron ."
+    "electron:start": "electron .",
+    "never-stop:build": "vite build --config never-stop/vite.config.mjs",
+    "never-stop:start": "electron never-stop/main.cjs",
+    "never-stop:test": "node --test never-stop/core/*.test.cjs never-stop/test/*.test.cjs never-stop/ui/*.test.*",
+    "never-stop:package": "npm run never-stop:build && electron-builder --config never-stop/electron-builder.cjs --win portable"
   },
   "dependencies": {
     "echarts": "^6.1.0",
@@ -25,7 +29,8 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "ssh2": "^1.17.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
@@ -70,6 +75,16 @@
     ],
     "win": {
       "icon": "../../icon.png",
+      "extraResources": [
+        {
+          "from": "cli",
+          "to": "cli-bin",
+          "filter": [
+            "vantage.cmd",
+            "vantage-cli-path.ps1"
+          ]
+        }
+      ],
       "target": [
         "nsis"
       ]
@@ -84,6 +99,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh",
       "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
       "shortcutName": "Vantage",

@@ -3,8 +3,6 @@ from ctypes import windll, POINTER, c_ulong, byref, Structure
 import psutil
 from datetime import datetime
 import winrt.windows.devices.power as power
-from datetime import datetime
-import psutil
 import ctypes
 import tkinter as tk
 from ctypes import wintypes

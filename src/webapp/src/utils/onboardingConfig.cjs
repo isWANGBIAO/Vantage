@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES } = require('./automationLimits.cjs');
 
 const DEFAULT_SETTINGS = {
   version: 2,
@@ -9,6 +10,7 @@ const DEFAULT_SETTINGS = {
   theme: 'dark',
   theme_mode: 'dark',
   action_plan_auto_generate: true,
+  action_plan_check_interval_minutes: 60,
   voice_provider_mode: 'inherit_ai',
   voice_base_url: '',
   voice_api_key: '',
@@ -181,6 +183,10 @@ function sanitizeSettings(payload) {
       typeof safePayload.action_plan_auto_generate === 'boolean'
         ? safePayload.action_plan_auto_generate
         : DEFAULT_SETTINGS.action_plan_auto_generate,
+    action_plan_check_interval_minutes: Number.isSafeInteger(safePayload.action_plan_check_interval_minutes)
+      && safePayload.action_plan_check_interval_minutes >= 0
+      && safePayload.action_plan_check_interval_minutes <= MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
+      ? safePayload.action_plan_check_interval_minutes : 60,
     voice_provider_mode: sanitizeSpecialProviderMode(safePayload.voice_provider_mode, safePayload, 'voice'),
     voice_base_url: normalizeOptionalString(safePayload.voice_base_url) || '',
     voice_api_key: normalizeOptionalString(safePayload.voice_api_key) || '',
@@ -471,6 +477,7 @@ function buildSettingsState({
       themeMode: settings.theme_mode,
       launchAtLogin: settings.launch_at_login,
       actionPlanAutoGenerate: settings.action_plan_auto_generate,
+      actionPlanCheckIntervalMinutes: settings.action_plan_check_interval_minutes,
       voiceProviderMode: settings.voice_provider_mode,
       voiceBaseUrl: settings.voice_base_url,
       voiceApiKey: maskApiKey(settings.voice_api_key),
@@ -623,6 +630,10 @@ function saveSettingsPayload({
       typeof safePayload.actionPlanAutoGenerate === 'boolean'
         ? safePayload.actionPlanAutoGenerate
         : currentSettings.action_plan_auto_generate,
+    action_plan_check_interval_minutes: Number.isSafeInteger(safePayload.actionPlanCheckIntervalMinutes)
+      && safePayload.actionPlanCheckIntervalMinutes >= 0
+      && safePayload.actionPlanCheckIntervalMinutes <= MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
+      ? safePayload.actionPlanCheckIntervalMinutes : currentSettings.action_plan_check_interval_minutes,
     voice_provider_mode: Object.prototype.hasOwnProperty.call(safePayload, 'voiceProviderMode')
       ? (safePayload.voiceProviderMode === 'custom' ? 'custom' : 'inherit_ai')
       : currentSettings.voice_provider_mode,

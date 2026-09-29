@@ -101,6 +101,14 @@ test('settings destructive and clipboard actions provide explicit feedback', () 
   assert.equal(displayCopySource.includes("'settings.section.voice_provider': '语音 Provider'"), false);
 });
 
+test('settings exposes the system locale as a read-only value for computer use', () => {
+  assert.ok(settingsSource.includes('systemLocale'));
+  assert.ok(settingsSource.includes("t('settings.general.system_locale')"));
+  assert.ok(settingsSource.includes('{systemLocale}'));
+  const occurrences = displayCopySource.match(/'settings\.general\.system_locale'/g) || [];
+  assert.equal(occurrences.length, 2, 'expected English and Chinese labels for system locale');
+});
+
 test('project, plots, expense, and face pages remove visible audit regressions', () => {
   assert.equal(projectProgressCss.includes('--text-accent'), false);
   assert.equal(projectProgressCss.includes('--bg-hover'), false);

@@ -14,6 +14,7 @@ from src.utils.prompt_budget import estimate_tokens, select_rows_by_budget
 class DataLoader:
     HEALTH_DATA_DIR_NAMES = ("mi_fiteness_data", "zepplift_data")
     HEALTH_ARCHIVE_DIR_PATTERN = re.compile(r"^\d{8}\s+.*(?:健康历史数据|health history data)$", re.IGNORECASE)
+    STALE_SNAPSHOT_AGE_SECONDS = 24 * 3600
 
     @staticmethod
     def _duration_text_to_hours(value):
@@ -161,6 +162,33 @@ class DataLoader:
         root = DataLoader.resolve_data_root(user_home=user_home, onedrive_env=onedrive_env)
         path = root / filename
         return path
+
+    @staticmethod
+    def cleanup_stale_excel_snapshots(max_age_seconds=None):
+        """Remove `temp_read_*.xlsx` snapshots orphaned by a killed process.
+
+        `_safe_copy_excel` deletes its snapshot in a `finally`, so a clean exit
+        leaves nothing behind. A process killed mid-read never reaches that
+        block, and those files then sit in the temp directory forever. Only
+        snapshots older than the threshold are removed, so a snapshot the
+        current process just created is never deleted out from under it.
+        """
+        threshold = DataLoader.STALE_SNAPSHOT_AGE_SECONDS if max_age_seconds is None else max_age_seconds
+        cutoff = datetime.now().timestamp() - max(0, threshold)
+        removed = 0
+        try:
+            candidates = Path(tempfile.gettempdir()).glob("temp_read_*.xlsx")
+        except OSError:
+            return 0
+        for candidate in candidates:
+            try:
+                if candidate.is_file() and candidate.stat().st_mtime < cutoff:
+                    candidate.unlink()
+                    removed += 1
+            except OSError:
+                # A snapshot in use by another process is left alone.
+                continue
+        return removed
 
     @staticmethod
     def _safe_copy_excel(excel_file_path):
@@ -691,9 +719,15 @@ class DataLoader:
                 "value": normalize_prompt_value(col, latest_entry[col]),
             }
 
+        # The current day is edited all day long, and `latest_values` /
+        # `non_null_counts` are derived from it, so keeping any of it inside one
+        # compact JSON blob would invalidate the whole 90-day block on every
+        # edit. `rows` is filled with the historical rows only; the mutable day
+        # and its aggregates are emitted as their own trailing section, built
+        # after the optional budget selection below so both paths agree.
         data_payload = {
             "columns": payload_columns,
-            "rows": payload_rows,
+            "rows": [],
             "column_meta": column_meta,
             "days_requested": days_requested,
             "date_range": {
@@ -703,16 +737,21 @@ class DataLoader:
             "window_strategy": window_strategy,
             "total_days": (end_date.date() - resolved_start_date.date()).days + 1,
             "days_with_data": len(payload_rows),
-            "non_null_counts": non_null_counts,
-            "latest_values": latest_values,
-            "runtime_context": {
+        }
+
+        # The clock moves every minute, so it must not live inside a data block
+        # that is otherwise worth caching. It is emitted as its own trailing
+        # section, after the time series and the balance sheet, so a minute tick
+        # only invalidates what follows it instead of the whole payload.
+        runtime_context_summary = "## Runtime Context\n\n"
+        runtime_context_summary += json.dumps(
+            {
                 "current_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "calendar": DataLoader._build_calendar_info(),
             },
-        }
-        data_summary = "## Time Series Data (JSON)\n\n```json\n"
-        data_summary += json.dumps(data_payload, ensure_ascii=False, separators=(",", ":"))
-        data_summary += "\n```"
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
         balance_sheet_summary = DataLoader.get_balance_sheet_data_summary(
             DataLoader.resolve_data_path("Balance Sheet.xlsx"),
@@ -742,8 +781,20 @@ class DataLoader:
                  prompt_sections.append(f"{header}\n\n{content}")
 
         prompt_bundle = "\n\n".join(section for section in prompt_sections if section)
-        fixed_sections = [section for section in (balance_sheet_summary, future_planned_rows, prompt_bundle) if section]
-        fixed_tokens = estimate_tokens("\n\n".join(fixed_sections), tokenizer)
+
+        # `estimate_tokens` is a tokenizer call, not a pure function of the
+        # historical rows, so anything it measures that can still move would leak
+        # back into the stable block below. `estimated_tokens` is emitted inside
+        # the time series JSON, which sits at the very front of the prompt, so a
+        # single-digit change there invalidates every cached token after it.
+        #
+        # Only the prompt markdown is safe to measure. The workbooks are not:
+        # `Balance Sheet.xlsx` carries date-derived columns such as 已使用天数 and
+        # 日均使用成本, so measuring it re-couples this leading number to the
+        # calendar (measured: two rounds 20 minutes apart differed by 34 tokens).
+        # `Time.xlsx` is worse still — the whole point of the `## Current Day` /
+        # `## Future Planned Items` tail is that its edits stay out of this block.
+        fixed_tokens = estimate_tokens(prompt_bundle, tokenizer)
 
         selection_metadata = {
             "budget_tokens": None,
@@ -754,7 +805,23 @@ class DataLoader:
             "truncated": False,
         }
         if prompt_token_budget is not None:
-            remaining_row_budget = max(1, int(prompt_token_budget) - fixed_tokens)
+            # Row selection still reserves headroom for everything that follows
+            # the rows, so it keeps measuring the full prompt tail. This runs
+            # only when a budget is actually in force.
+            budget_reserved_tokens = estimate_tokens(
+                "\n\n".join(
+                    section
+                    for section in (
+                        balance_sheet_summary,
+                        runtime_context_summary,
+                        future_planned_rows,
+                        prompt_bundle,
+                    )
+                    if section
+                ),
+                tokenizer,
+            )
+            remaining_row_budget = max(1, int(prompt_token_budget) - budget_reserved_tokens)
             latest_date = max((row[0] for row in payload_rows), default="")
             row_candidates = [
                 {
@@ -780,7 +847,16 @@ class DataLoader:
             }
             payload_rows.sort(key=lambda row: row[0])
 
-        data_payload["rows"] = payload_rows
+        # The current day is edited all day long, and `latest_values` /
+        # `non_null_counts` are derived from it, so keeping any of it inside one
+        # compact JSON blob would invalidate the whole 90-day block on every
+        # edit. Only the historical rows go into the stable block; the mutable
+        # day and its aggregates are emitted as their own trailing section.
+        # This runs after the optional budget selection so both paths agree.
+        stable_rows = payload_rows[:-1] if len(payload_rows) > 1 else []
+        current_day_row = payload_rows[-1] if len(payload_rows) > 1 else None
+
+        data_payload["rows"] = stable_rows
         data_payload.update(
             {
                 "token_budget": selection_metadata["budget_tokens"],
@@ -794,12 +870,36 @@ class DataLoader:
         data_summary = "## Time Series Data (JSON)\n\n```json\n"
         data_summary += json.dumps(data_payload, ensure_ascii=False, separators=(",", ":"))
         data_summary += "\n```"
+
+        # Emitted after every stable block so a same-day edit only churns this
+        # section instead of the historical time series it was carved out of.
+        current_day_summary = "## Current Day\n\n```json\n"
+        current_day_summary += json.dumps(
+            {
+                "current_day": current_day_row,
+                "latest_values": latest_values,
+                "non_null_counts": non_null_counts,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        current_day_summary += "\n```"
         data_sections = [data_summary]
         if balance_sheet_summary:
             data_sections.append(balance_sheet_summary)
 
+        # Section order is chosen for prefix-cache reuse: everything that rarely
+        # changes comes first, and the two volatile blocks are last. The clock
+        # ticks every minute and the current day is edited all day, so placing
+        # them after the balance sheet and the editable prompts keeps those
+        # stable megabytes reusable instead of reprocessing them on every tick.
         combined_content = "\n\n".join(data_sections)
-        combined_content = f"{combined_content}\n\n{future_planned_rows}\n\n{prompt_bundle}"
+        combined_content = (
+            f"{combined_content}"
+            f"\n\n{future_planned_rows}\n\n{prompt_bundle}"
+            f"\n\n{current_day_summary}"
+            f"\n\n{runtime_context_summary}"
+        )
 
         return combined_content
 
@@ -849,6 +949,23 @@ class DataLoader:
             prompt_bundle_start = balance_end + len("\n```")
         except (ValueError, json.JSONDecodeError, TypeError):
             pass
+
+        # The runtime clock is its own trailing block, so it hashes separately
+        # from the data blocks and only the tail after it churns per minute.
+        runtime_marker = "## Runtime Context\n\n"
+        runtime_start = prompt_text.find(runtime_marker, prompt_bundle_start)
+        if runtime_start >= 0:
+            try:
+                runtime_payload_start = runtime_start + len(runtime_marker)
+                runtime_payload_end = prompt_text.index("\n", runtime_payload_start)
+            except ValueError:
+                runtime_payload_end = len(prompt_text)
+            runtime_text = prompt_text[runtime_payload_start:runtime_payload_end]
+            metadata["runtime_context_hash"] = DataLoader._hash_text(runtime_text)
+            metadata["cache_layout"] = metadata["cache_layout"].replace(
+                "_then_prompts", "_runtime_context_then_prompts"
+            )
+            prompt_bundle_start = runtime_payload_end
 
         metadata["prompt_bundle_hash"] = DataLoader._hash_text(prompt_text[prompt_bundle_start:])
         return metadata

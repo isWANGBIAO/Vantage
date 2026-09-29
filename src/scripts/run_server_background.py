@@ -28,9 +28,13 @@ from src.utils.sensitive_data import RedactingPipeLog, build_log_path_prefixes
 
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
+RUN_CLI_BRIDGE_ARG = "--run-cli"
 PACKAGED_RUNTIME_REQUIRED_IMPORTS = (
     "chinese_calendar",
     "zhdate",
+    "mcp",
+    "src.cli",
+    "src.mcp_server",
 )
 
 
@@ -157,6 +161,27 @@ def _run_prompt_entrypoint(
         sys.argv = previous_argv
 
 
+def _run_cli_entrypoint(
+    args: list[str],
+    *,
+    is_frozen: bool | None = None,
+    resource_root: Path | None = None,
+    cli_main=None,
+    validate_runtime_imports=_validate_packaged_runtime_imports,
+):
+    frozen_mode = getattr(sys, "frozen", False) if is_frozen is None else is_frozen
+    if frozen_mode:
+        runtime_root = resource_root or Config.get_project_root()
+        _configure_frozen_runtime_search_paths(runtime_root)
+        validate_runtime_imports()
+
+    resolved_cli_main = cli_main
+    if resolved_cli_main is None:
+        from src.cli import main as resolved_cli_main
+
+    return resolved_cli_main(args)
+
+
 def _main_without_backend_runtime_lock():
     if len(sys.argv) > 1 and sys.argv[1] == RUN_PROMPT_BRIDGE_ARG:
         _run_prompt_entrypoint(sys.argv[2:])
@@ -183,6 +208,9 @@ def _main_without_backend_runtime_lock():
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == RUN_CLI_BRIDGE_ARG:
+        return _run_cli_entrypoint(sys.argv[2:])
+
     if getattr(sys, "frozen", False):
         return _main_without_backend_runtime_lock()
 
@@ -195,4 +223,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main() or 0)

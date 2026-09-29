@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 const preloadSource = readFileSync(new URL('./preload.cjs', import.meta.url), 'utf8');
@@ -65,6 +66,28 @@ test('package bundles the backend runtime and installer shortcuts for Windows', 
         && entry.to === 'backend-runtime/VantageBackend',
     ),
   );
+  assert.ok(
+    packageJson.build.win.extraResources.some(
+      (entry) => entry.from === 'cli' && entry.to === 'cli-bin',
+    ),
+    'the CLI launcher and PATH helper must be shipped beside the bundled backend',
+  );
+  assert.equal(packageJson.build.nsis.include, 'build/installer.nsh');
+  const cliLauncher = readFileSync(new URL('./cli/vantage.cmd', import.meta.url), 'utf8');
+  const pathHelper = readFileSync(new URL('./cli/vantage-cli-path.ps1', import.meta.url), 'utf8');
+  const installer = readFileSync(new URL('./build/installer.nsh', import.meta.url), 'utf8');
+  assert.match(cliLauncher, /VantageBackend\.exe/i);
+  assert.match(cliLauncher, /--run-cli %\*/i);
+  assert.equal(/Vantage\.exe|electron/i.test(cliLauncher), false);
+  assert.match(pathHelper, /Update-PathValue/);
+  assert.match(pathHelper, /CurrentUser/);
+  assert.match(installer, /customInstall/);
+  assert.match(installer, /customUnInstall/);
+  assert.match(installer, /vantage-cli-path\.ps1/);
+  assert.match(installer, /resources\\cli-bin/);
+  assert.match(installer, /\$\{If\}\s+\$0\s+!=\s+"0"/);
+  assert.match(installer, /could not be added to the user PATH/i);
+  assert.equal(/\bAbort\b/i.test(installer), false, 'PATH failure must not abort installation');
   assert.equal(packageJson.build.nsis.oneClick, false);
   assert.equal(packageJson.build.nsis.allowToChangeInstallationDirectory, true);
   assert.equal(packageJson.build.nsis.createDesktopShortcut, 'always');
@@ -77,6 +100,34 @@ test('package bundles the backend runtime and installer shortcuts for Windows', 
     checksum: '374cfc092fd1bd1898472df627549ecc165b0d6ba88e82deba085673aec95336',
   });
   assert.match(packageJson.build.nsis.customNsisBinary.checksum, /^[a-f0-9]{64}$/);
+});
+
+test('Vantage user PATH registration is reversible and preserves unrelated entries', (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('the installer PATH helper uses the Windows registry and path rules');
+    return;
+  }
+
+  const helper = new URL('./cli/vantage-cli-path.ps1', import.meta.url);
+  const directory = 'C:\\Program Files\\Vantage\\resources\\cli-bin';
+  const existing = 'C:\\Existing;C:\\PROGRAM FILES\\VANTAGE\\resources\\CLI-BIN;C:\\Tail';
+  const runHelper = (action, pathValue) => execFileSync(
+    'powershell.exe',
+    [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', fileURLToPath(helper),
+      '-Action', action,
+      '-Directory', directory,
+      '-PathValue', pathValue,
+      '-TestPathValue',
+    ],
+    { encoding: 'utf8', windowsHide: true },
+  );
+
+  const added = runHelper('Add', existing);
+  assert.equal(added, `${directory};C:\\Existing;C:\\Tail`);
+  assert.equal(runHelper('Remove', added), 'C:\\Existing;C:\\Tail');
+  assert.equal(runHelper('Add', added), added, 'repeated installs must not duplicate the entry');
 });
 
 test('preload does not emit startup console noise', () => {

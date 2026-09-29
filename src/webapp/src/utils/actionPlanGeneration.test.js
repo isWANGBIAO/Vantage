@@ -65,14 +65,27 @@ test('buildActionPlanGenerationPayload includes fast priority tier only for supp
 test('buildActionPlanGenerationPayload maps reasoning for DeepSeek V4 models', () => {
   assert.deepEqual(
     buildActionPlanGenerationPayload('xhigh', {
-      model: 'deepseek-v4-pro',
-      providerRoute: 'deepseek',
+      model: 'deepseek-flash',
+      providerRoute: 'DeepSeek',
+    }),
+    {
+      reasoning_effort: 'high',
+      replace_today: false,
+      model: 'deepseek-flash',
+      provider_route: 'DeepSeek',
+    },
+  );
+
+  assert.deepEqual(
+    buildActionPlanGenerationPayload('max', {
+      model: 'deepseek-flash',
+      providerRoute: 'DeepSeek',
     }),
     {
       reasoning_effort: 'max',
       replace_today: false,
-      model: 'deepseek-v4-pro',
-      provider_route: 'deepseek',
+      model: 'deepseek-flash',
+      provider_route: 'DeepSeek',
     },
   );
 });

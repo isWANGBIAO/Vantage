@@ -2,9 +2,92 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
 
 from src.services.model_call_recorder import SessionRecorder
+
+
+class AbandonedCallRepairTests(unittest.TestCase):
+    def _seed(self, history_dir):
+        """建立一个含陈旧/新鲜/已终结记录的库。
+
+        注意 sqlite3 连接用作上下文管理器时只提交事务、不关闭连接，所以这里
+        必须显式 close，否则会留下文件句柄。
+        """
+        from src.services import model_call_recorder as recorder_module
+
+        db_file = recorder_module._db_path(history_dir)
+        recorder_module._ensure_db(db_file)
+        now = recorder_module._now()
+        rows = [
+            ("old-started", (now - timedelta(hours=5)).isoformat(timespec="seconds"), "started"),
+            ("fresh-started", (now - timedelta(seconds=30)).isoformat(timespec="seconds"), "started"),
+            ("old-completed", (now - timedelta(hours=5)).isoformat(timespec="seconds"), "completed"),
+            ("old-failed", (now - timedelta(hours=5)).isoformat(timespec="seconds"), "failed"),
+        ]
+        conn = sqlite3.connect(db_file)
+        try:
+            for call_id, created_at, status in rows:
+                conn.execute(
+                    "INSERT INTO model_calls (call_id, session_id, created_at, status, stream)"
+                    " VALUES (?, ?, ?, ?, 0)",
+                    (call_id, "session-repair", created_at, status),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        return db_file
+
+    def _statuses(self, db_file):
+        conn = sqlite3.connect(db_file)
+        try:
+            return {
+                row[0]: row[1]
+                for row in conn.execute("SELECT call_id, status FROM model_calls")
+            }
+        finally:
+            conn.close()
+
+    def test_repair_drops_only_abandoned_in_flight_rows(self):
+        from src.services import model_call_recorder as recorder_module
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+            history_dir = Path(tmpdir) / "history"
+            db_file = self._seed(history_dir)
+
+            removed = recorder_module.repair_abandoned_calls(db_file)
+            statuses = self._statuses(db_file)
+
+            # 连接必须已释放：能立刻删掉库文件，说明没有留下打开的句柄。
+            db_file.unlink()
+            released = not db_file.exists()
+
+        self.assertEqual(removed, 1)
+        self.assertTrue(released, "repair 之后仍持有数据库句柄")
+        # 陈旧的在途记录被清掉。
+        self.assertNotIn("old-started", statuses)
+        # 仍在进行的调用不能被另一个实例删掉。
+        self.assertIn("fresh-started", statuses)
+        # 已终结的记录必须保留。
+        self.assertIn("old-completed", statuses)
+        self.assertIn("old-failed", statuses)
+
+    def test_repair_is_idempotent_and_survives_a_missing_database(self):
+        from src.services import model_call_recorder as recorder_module
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+            db_file = self._seed(Path(tmpdir) / "history")
+            first = recorder_module.repair_abandoned_calls(db_file)
+            second = recorder_module.repair_abandoned_calls(db_file)
+
+        self.assertEqual(first, 1)
+        self.assertEqual(second, 0)
+
+        # 全新目录：库不存在时也要能用。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+            fresh = recorder_module._db_path(Path(tmpdir) / "history")
+            self.assertEqual(recorder_module.repair_abandoned_calls(fresh), 0)
 
 
 class SessionRecorderTests(unittest.TestCase):
