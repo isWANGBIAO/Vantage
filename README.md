@@ -120,13 +120,13 @@ GitHub Releases are automated for version tags. Keep
 tag:
 
 ```powershell
-git tag -a v1.0.79 -m "Vantage 1.0.79"
-git push origin v1.0.79
+git tag -a v1.0.80 -m "Vantage 1.0.80"
+git push origin v1.0.80
 ```
 
 The `Release` workflow builds the Windows installer, generates `SHA256SUMS.txt`,
 and publishes the assets to the matching GitHub Release. The tag must match the
-frontend package version, for example `v1.0.79` for package version `1.0.79`.
+frontend package version, for example `v1.0.80` for package version `1.0.80`.
 
 macOS full build, install, and launch:
 

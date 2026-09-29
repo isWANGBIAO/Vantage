@@ -1,7 +1,7 @@
 {
   "name": "vantage",
   "private": true,
-  "version": "1.0.79",
+  "version": "1.0.80",
   "description": "Vantage Electron Desktop Application",
   "author": "Biao Wang",
   "main": "main.cjs",
@@ -57,6 +57,7 @@
     },
     "files": [
       "dist/**/*",
+      "assets/**/*",
       "main.cjs",
       "build-info.json",
       "preload.cjs",
@@ -74,7 +75,7 @@
       }
     ],
     "win": {
-      "icon": "../../icon.png",
+      "icon": "assets/icon.ico",
       "extraResources": [
         {
           "from": "cli",

@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Moon, Settings as SettingsIcon, Sun } from 'lucide-react';
 import './App.css';
+import appIcon from '../assets/icon.png';
 import ActionPlanContainer from './components/ActionPlanContainer';
 import OnboardingShell from './components/OnboardingShell';
 import { completeOnboardingSetup, loadOnboardingState, pickLegacyRoot } from './utils/onboardingState';
@@ -395,13 +396,13 @@ function AppShell() {
         }}
       >
         <div className="app-brand">
-          <div
+          <img
+            src={appIcon}
+            alt=""
             style={{
               width: '32px',
               height: '32px',
-              background: 'var(--gradient-primary)',
-              borderRadius: '8px',
-              boxShadow: '0 0 15px rgba(108, 92, 231, 0.5)',
+              objectFit: 'contain',
             }}
           />
           <h1 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, letterSpacing: '0.5px' }}>

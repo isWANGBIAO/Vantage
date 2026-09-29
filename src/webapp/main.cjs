@@ -19,6 +19,7 @@ const { applyLaunchAtLoginSetting } = require('./src/utils/autoLaunch.cjs');
 const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
 const { resolveAppBuildInfo } = require('./src/utils/buildInfo.cjs');
 const { createBoundedLogger } = require('./src/utils/boundedLogger.cjs');
+const { loadAppIcon } = require('./src/utils/appIcon.cjs');
 const packageJson = require('./package.json');
 let buildInfo = {};
 try {
@@ -829,7 +830,7 @@ function createWindow() {
             contextIsolation: true,
             nodeIntegration: false,
         },
-        icon: path.join(__dirname, '..', '..', 'icon.png'),
+        icon: loadAppIcon({ appRoot: __dirname, nativeImage }).iconPath,
         title: 'Vantage',
         backgroundColor: '#050508',
         show: false,
@@ -875,10 +876,10 @@ function createWindow() {
 
 function createTray() {
     log.info('Creating system tray...');
-    const iconPath = path.join(__dirname, '..', '..', 'icon.png');
-    const icon = nativeImage.createFromPath(iconPath);
-
-    tray = new Tray(icon.resize({ width: 16, height: 16 }));
+    const { iconPath, image } = loadAppIcon({ appRoot: __dirname, nativeImage });
+    // Let Windows choose the ICO representation for the current display DPI.
+    tray = new Tray(process.platform === 'win32' ? iconPath : image.resize({ width: 22, height: 22 }));
+    log.info(`System tray icon loaded: ${iconPath}; size=${JSON.stringify(image.getSize())}`);
     syncTrayMenu();
 
     tray.on('double-click', () => {
