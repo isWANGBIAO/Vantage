@@ -27,7 +27,7 @@ public enum JSONValue: Codable, Equatable, Hashable, Sendable {
     public var object: [String: JSONValue] { if case .object(let v) = self { return v }; return [:] }
     public var array: [JSONValue] { if case .array(let v) = self { return v }; return [] }
     public var string: String {
-        switch self { case .string(let v): return v; case .number(let v): return v.formatted(); case .bool(let v): return String(v); default: return "" }
+        switch self { case .string(let v): return v; case .number(let v): return v.rounded() == v && abs(v) < 9_007_199_254_740_992 ? String(Int64(v)) : String(v); case .bool(let v): return String(v); default: return "" }
     }
     public var double: Double? { if case .number(let v) = self { return v }; return nil }
     public var bool: Bool? { if case .bool(let v) = self { return v }; return nil }

@@ -14,6 +14,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 from .client import ClientError, JobObserver, complete_result, payload_text, provider_patch
 from .charts import Chart
+from .markdown import markdown_blocks
 from .platform import Recorder, Tray, apply_autostart, choose_file, open_folder, system_locale
 
 CSS = b'''
@@ -61,13 +62,56 @@ def clear(widget):
         widget.remove(child)
 
 
-def text_view(text="", editable=False, height=150):
-    widget = Gtk.TextView(editable=editable, cursor_visible=editable, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+class MarkdownView(Gtk.TextView):
+    def __init__(self):
+        super().__init__(editable=False, cursor_visible=False, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        buf = self.get_buffer()
+        styles = {
+            "h1": {"weight": Pango.Weight.BOLD, "scale": 1.65, "pixels_above_lines": 12, "pixels_below_lines": 7},
+            "h2": {"weight": Pango.Weight.BOLD, "scale": 1.35, "pixels_above_lines": 10, "pixels_below_lines": 5},
+            "h3": {"weight": Pango.Weight.BOLD, "scale": 1.15, "pixels_above_lines": 8},
+            "bold": {"weight": Pango.Weight.BOLD}, "italic": {"style": Pango.Style.ITALIC},
+            "strike": {"strikethrough": True}, "code": {"family": "monospace", "background": "#28333f"},
+            "pre": {"family": "monospace", "background": "#19222c", "left_margin": 16, "pixels_above_lines": 2},
+            "table": {"family": "monospace", "pixels_above_lines": 3},
+            "table-head": {"family": "monospace", "weight": Pango.Weight.BOLD, "pixels_above_lines": 5},
+            "quote": {"style": Pango.Style.ITALIC, "left_margin": 18, "foreground": "#9daab9"},
+            "list": {"left_margin": 8, "pixels_above_lines": 3},
+            "rule": {"foreground": "#617080"}, "link": {"foreground": "#63a9ef", "underline": Pango.Underline.SINGLE},
+        }
+        for name, properties in styles.items():
+            buf.create_tag(name, **properties)
+
+    def set_markdown(self, source):
+        self.source = str(source)
+        buf = self.get_buffer()
+        buf.set_text("")
+        for style, runs in markdown_blocks(source):
+            start = buf.get_char_count()
+            for text, inline in runs:
+                inline_start = buf.get_char_count()
+                buf.insert(buf.get_end_iter(), text)
+                if inline:
+                    buf.apply_tag_by_name(inline, buf.get_iter_at_offset(inline_start), buf.get_end_iter())
+            buf.insert(buf.get_end_iter(), "\n")
+            if style != "body":
+                buf.apply_tag_by_name(style, buf.get_iter_at_offset(start), buf.get_end_iter())
+
+
+def set_view_text(view, text):
+    if isinstance(view, MarkdownView):
+        view.set_markdown(text)
+    else:
+        view.get_buffer().set_text(str(text))
+
+
+def text_view(text="", editable=False, height=150, markdown=False):
+    widget = MarkdownView() if markdown else Gtk.TextView(editable=editable, cursor_visible=editable, wrap_mode=Gtk.WrapMode.WORD_CHAR)
     widget.set_left_margin(10)
     widget.set_right_margin(10)
     widget.set_top_margin(10)
     widget.set_bottom_margin(10)
-    widget.get_buffer().set_text(str(text))
+    set_view_text(widget, text)
     scroller = Gtk.ScrolledWindow(min_content_height=height, vexpand=True)
     scroller.set_child(widget)
     return scroller, widget
@@ -147,6 +191,8 @@ class Window(Gtk.ApplicationWindow):
         self.nav_rows = {}
         self.tray = None
         self.snapshot = {}
+        self.face_last_status = None
+        self.last_plan_identity = None
         self._build_shell()
         self.connect("close-request", self.close_requested)
         if not smoke:
@@ -258,6 +304,7 @@ class Window(Gtk.ApplicationWindow):
 
     def apply_state(self, state):
         self.state = state
+        self.models = [{"model": model, "provider_route": route, "label": f"{provider.get('name') or route} / {model}"} for route, provider in state.get("provider", {}).get("providers", {}).items() if provider.get("enabled", True) for model in list(dict.fromkeys(provider.get("models", []) + ([provider["model"]] if provider.get("model") else [])))]
         self.language = state.get("settings", {}).get("display_language", "system")
         if self.language == "system":
             self.language = "zh-CN" if system_locale().lower().startswith("zh") else "en-US"
@@ -335,12 +382,23 @@ class Window(Gtk.ApplicationWindow):
                 cards.append(card)
             content.append(cards)
             content.append(label(self.tr("专注与久坐", "Focus & sedentary status"), "title-3"))
-            content.append(data_view(data["sedentary"]))
+            focus = data["sedentary"]
+            focus_card = box(horizontal=True)
+            focus_card.add_css_class("card")
+            focus_card.append(label(f"{focus.get('duration_minutes', 0)} " + self.tr("分钟", "min"), "metric"))
+            focus_card.append(label(self.tr("当前专注" if focus.get("active_timer") == "focus" else "休息 / 未检测到活动", "Focused" if focus.get("active_timer") == "focus" else "Away / no current activity")))
+            content.append(focus_card)
             content.append(label(self.tr("空气质量", "Air quality"), "title-3"))
-            content.append(data_view(data["air"]))
+            air = data["air"]
+            content.append(label(f"AQI {air.get('aqi')} · {air.get('level', '')}" if air.get("aqi") is not None else self.tr("当前位置的空气质量暂不可用", "Air quality is unavailable for the current location"), "dim-label"))
+            diagnostics = Gtk.Expander(label=self.tr("状态详情", "Status details"))
+            diagnostics.set_child(data_view({"focus": focus, "air": air}))
+            content.append(diagnostics)
             content.append(label(self.tr("行动计划", "Action plan"), "title-3"))
             today = data["today"]
-            content.append(label((today.get("plan") or {}).get("body", self.tr("暂无今日计划", "No saved plan today"))))
+            plan_scroll, self.dashboard_plan = text_view((today.get("plan") or {}).get("body", self.tr("暂无今日计划", "No saved plan today")), height=180, markdown=True)
+            plan_scroll.set_vexpand(False)
+            content.append(plan_scroll)
             actions = box(horizontal=True)
             actions.append(button(self.tr("查看行动计划", "Open action plan"), lambda: self.nav.select_row(self.nav_rows["plan"]), True))
             actions.append(button(self.tr("照片目录", "Photos folder"), lambda: self.open_media("photo")))
@@ -402,7 +460,7 @@ class Window(Gtk.ApplicationWindow):
             content.append(self.job_label)
             for section, title in [("analysis", self.tr("分析", "Analysis")), ("plan", self.tr("计划", "Plan"))]:
                 content.append(label(title, "title-3"))
-                scroll, view = text_view((data["today"].get(section) or {}).get("body", ""), height=190)
+                scroll, view = text_view((data["today"].get(section) or {}).get("body", ""), height=190, markdown=True)
                 setattr(self, f"plan_{section}_view", view)
                 content.append(scroll)
             details = Gtk.Expander(label=self.tr("生成信息与后台调度", "Generation details & scheduler"))
@@ -460,7 +518,7 @@ class Window(Gtk.ApplicationWindow):
                 if value.startswith(prefix):
                     self.job_render[section] += payload_text(value[len(prefix):])
                     if self.page == "plan" and hasattr(self, f"plan_{section}_view"):
-                        getattr(self, f"plan_{section}_view").get_buffer().set_text(self.job_render[section])
+                        set_view_text(getattr(self, f"plan_{section}_view"), self.job_render[section])
         elif kind == "truncated":
             self.job_render = {"analysis": "", "plan": ""}
             if self.page == "plan":
@@ -483,18 +541,20 @@ class Window(Gtk.ApplicationWindow):
 
     def cancel_job(self):
         if self.job_id:
-            self.run_async("cancel-job", lambda: self.client.request(f"/api/v1/action-plan/jobs/{quote(self.job_id, safe='')}/cancel", "POST", {}), lambda _: self.load_plan() if self.page == "plan" else None)
+            job_id = self.job_id
+            self.run_async("cancel-job", lambda: self.client.request(f"/api/v1/action-plan/jobs/{quote(job_id, safe='')}/cancel", "POST", {}), lambda _: self.load_plan() if self.page == "plan" else None)
 
     def load_chat(self):
         if self.chat_stop and not self.chat_stop.is_set():
             self.stack.set_visible_child_name("chat")
             return
         def render(data):
+            draft = buffer_text(self.chat_input) if hasattr(self, "chat_input") else ""
             content = self.heading("chat", self.tr("聊天上下文从后端读取；语音转录后可编辑再发送", "Conversation comes from the backend; review voice transcription before sending"))
             self.chat_options = self.model_controls(content)
             self.chat_messages = data["context"].get("messages", [])
             self.chat_text = "\n\n".join(f"{'你 / You' if m['role'] == 'user' else 'Vantage'}\n{m['content']}" for m in self.chat_messages)
-            scroll, self.chat_view = text_view(self.chat_text, height=320)
+            scroll, self.chat_view = text_view(self.chat_text, height=320, markdown=True)
             content.append(scroll)
             thought = Gtk.Expander(label=self.tr("思考与统计", "Reasoning & statistics"))
             thought_box = box()
@@ -503,7 +563,7 @@ class Window(Gtk.ApplicationWindow):
             thought_box.append(self.chat_thinking)
             thought.set_child(thought_box)
             content.append(thought)
-            scroll, self.chat_input = text_view(editable=True, height=90)
+            scroll, self.chat_input = text_view(draft, editable=True, height=90)
             content.append(scroll)
             actions = box(horizontal=True)
             actions.append(button(self.tr("发送", "Send"), self.send_chat, True))
@@ -545,7 +605,7 @@ class Window(Gtk.ApplicationWindow):
                 text, thinking = base + partial["content"], partial["thinking"]
                 def update(text=text, thinking=thinking):
                     if not self.closed and self.chat_stop is stop:
-                        self.chat_view.get_buffer().set_text(text)
+                        set_view_text(self.chat_view, text)
                         self.chat_thinking.set_text(thinking)
                     return False
                 GLib.idle_add(update)
@@ -576,7 +636,7 @@ class Window(Gtk.ApplicationWindow):
         self.stop_chat()
         def done(context):
             self.chat_messages = context.get("messages", [])
-            self.chat_view.get_buffer().set_text("\n\n".join(m["content"] for m in self.chat_messages))
+            set_view_text(self.chat_view, "\n\n".join(m["content"] for m in self.chat_messages))
             self.chat_text = buffer_text(self.chat_view)
             self.notice_ok(self.tr("聊天上下文已清空", "Conversation context cleared"))
         self.run_async("clear-chat", lambda: self.client.request("/api/v1/chat/context", "DELETE"), done)
@@ -589,10 +649,15 @@ class Window(Gtk.ApplicationWindow):
                 return self.client.transcribe(path)
             finally:
                 if recorded:
-                    self.recorder.discard()
+                    Path(path).unlink(missing_ok=True)
+                    if self.recorder.path == path:
+                        self.recorder.path = None
         self.run_async("transcribe", work, lambda data: target_input.get_buffer().set_text(data.get("transcription") or "") if self.page == "chat" and self.generation == generation else None)
 
     def toggle_recording(self):
+        if "transcribe" in self.pending:
+            self.notice_ok(self.tr("正在转录，请稍候再录音", "Transcription is in progress; wait before recording again"))
+            return
         try:
             if self.recorder.process:
                 path = self.recorder.stop()
@@ -629,7 +694,19 @@ class Window(Gtk.ApplicationWindow):
         def render(data):
             content = self.heading("expenses", self.tr("数据来源：后端配置的工作簿", "Source: the workbook configured in the backend"))
             value = data["balance"]
-            content.append(data_view(value.get("summary", {})))
+            summary = value.get("summary", {})
+            cards = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4, column_spacing=12, row_spacing=12)
+            metrics = [(self.tr("总资产", "Total assets"), (summary.get("assets", {}).get("total_assets") or {}).get("value")), (self.tr("负债", "Liabilities"), (summary.get("assets", {}).get("liabilities") or {}).get("value")), (self.tr("权益", "Equity"), (summary.get("assets", {}).get("equity") or {}).get("value")), (self.tr("日均支出", "Daily spend"), summary.get("time_cost", {}).get("daily_average")), (self.tr("每月必要预算", "Required budget/month"), (summary.get("budget") or {}).get("monthly_required")), (self.tr("每月可选预算", "Optional budget/month"), (summary.get("budget") or {}).get("monthly_optional"))]
+            for title, number in metrics:
+                card = box()
+                card.add_css_class("card")
+                card.append(label(title, "dim-label"))
+                card.append(label(f"{number:,.2f}" if isinstance(number, (int, float)) else "—", "metric"))
+                cards.append(card)
+            content.append(cards)
+            details = Gtk.Expander(label=self.tr("指标来源与时间成本", "Metric sources & time cost"))
+            details.set_child(data_view(summary))
+            content.append(details)
             content.append(data_view(value.get("suggestions", [])))
             for field, title, metrics in [("trend_points", "支出趋势 / Expense trend", [("balance", "Balance"), ("daily_average", "Daily average"), ("period_spend", "Period spend")]), ("forecast_points", "余额预测 / Forecast", [("projected_balance", "Projected balance"), ("total_income", "Income")])]:
                 points = value.get(field, [])
@@ -657,6 +734,8 @@ class Window(Gtk.ApplicationWindow):
         panel = box(6)
         search = Gtk.SearchEntry(placeholder_text=self.tr("筛选行", "Filter rows"))
         panel.append(search)
+        sort = Gtk.DropDown.new_from_strings([self.tr("原始顺序", "Original order"), *map(str, columns)])
+        panel.append(sort)
         listing = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         header = box(horizontal=True)
         for column in columns:
@@ -665,13 +744,23 @@ class Window(Gtk.ApplicationWindow):
             child.set_size_request(130, -1)
             header.append(child)
         panel.append(header)
-        def populate(*_):
+        paging = {"offset": 0}
+        status = label("")
+        def populate(reset=False):
+            if reset:
+                paging["offset"] = 0
             clear(listing)
             term = search.get_text().lower()
+            matching = []
             for values in rows:
                 values = [values.get(c) for c in columns] if isinstance(values, dict) else values
-                if term and term not in " ".join(scalar(v).lower() for v in values):
-                    continue
+                if not term or term in " ".join(scalar(v).lower() for v in values):
+                    matching.append(values)
+            selected = sort.get_selected() - 1
+            if selected >= 0:
+                matching.sort(key=lambda row: (0, row[selected]) if selected < len(row) and isinstance(row[selected], (int, float)) else (1, scalar(row[selected] if selected < len(row) else None)))
+            start = paging["offset"]
+            for values in matching[start:start + 100]:
                 row = box(horizontal=True)
                 for value in values:
                     child = label(scalar(value))
@@ -679,7 +768,21 @@ class Window(Gtk.ApplicationWindow):
                     child.set_size_request(130, -1)
                     row.append(child)
                 listing.append(row)
-        search.connect("search-changed", populate)
+            status.set_text(f"{min(start + 1, len(matching))}–{min(start + 100, len(matching))} / {len(matching)}")
+            previous.set_sensitive(start > 0)
+            following.set_sensitive(start + 100 < len(matching))
+        def move(offset):
+            paging["offset"] = max(0, paging["offset"] + offset)
+            populate()
+        actions = box(horizontal=True)
+        previous = button(self.tr("上一页", "Previous"), lambda: move(-100))
+        following = button(self.tr("下一页", "Next"), lambda: move(100))
+        actions.append(previous)
+        actions.append(status)
+        actions.append(following)
+        panel.append(actions)
+        search.connect("search-changed", lambda _: populate(True))
+        sort.connect("notify::selected", lambda *_: populate(True))
         populate()
         scroll = Gtk.ScrolledWindow(min_content_height=200, max_content_height=500, propagate_natural_height=True)
         scroll.set_child(listing)
@@ -737,7 +840,7 @@ class Window(Gtk.ApplicationWindow):
         def render(data):
             content = self.heading("face", self.tr("人脸分数不是医疗诊断；相机预览默认隐藏", "Face scores are not medical diagnoses; camera preview is hidden by default"))
             actions = box(horizontal=True)
-            actions.append(button(self.tr("分析历史", "Analyze history"), lambda: self.run_async("face-analyze", lambda: self.client.request("/api/v1/face/analyze", "POST", {}), lambda _: self.poll_face())))
+            actions.append(button(self.tr("分析历史", "Analyze history"), self.start_face_analysis))
             actions.append(button(self.tr("导出 Excel", "Export Excel"), lambda: choose_file(self, "Export face history", self.export_face, save=True, filename="Face_Analysis_History.xlsx")))
             actions.append(button(self.tr("显示相机", "Reveal camera"), self.start_camera))
             actions.append(button(self.tr("隐藏相机", "Hide camera"), self.stop_camera))
@@ -751,27 +854,39 @@ class Window(Gtk.ApplicationWindow):
             self.camera_picture.set_visible(False)
             content.append(self.camera_picture)
             content.append(data_view(data["status"]))
-            report = data["report"]
-            if report.get("error"):
-                content.append(label(report["error"], "dim-label"))
-            history = Gtk.Stack()
-            switcher = Gtk.StackSwitcher(stack=history)
-            content.append(switcher)
-            content.append(history)
-            for period, trend in report.get("trend_views", {}).items():
-                chart = Chart({"title": trend.get("label", period), "option": {"xAxis": {"type": "time"}, "yAxis": {"name": "Score"}, "series": [{"name": "Face score", "type": "line", "data": [[point.get("datetime"), point.get("score")] for point in trend.get("points", [])]}]}})
-                history.add_titled(chart, period, trend.get("label", period))
-            for extreme in ("heaviest", "lightest"):
-                record = report.get(extreme, {})
-                panel = Gtk.Expander(label=f"{extreme} · {record.get('date', '')} · {record.get('score', '—')} · " + self.tr("点击显示照片", "Reveal photo"))
-                picture_box = box()
-                panel.set_child(picture_box)
-                def revealed(widget, param, record=record, target=picture_box):
-                    if widget.get_expanded() and not target.get_first_child() and record.get("url"):
-                        self.load_picture(record["url"], target)
-                panel.connect("notify::expanded", revealed)
-                content.append(panel)
+            self.face_report_box = box()
+            content.append(self.face_report_box)
+            self.render_face_report(data["report"])
         self.load_data("face", {"report": "/api/v1/face/report", "progress": "/api/v1/face/progress", "status": "/api/v1/system/status"}, render)
+
+    def start_face_analysis(self):
+        self.face_last_status = "starting"
+        self.run_async("face-analyze", lambda: self.client.request("/api/v1/face/analyze", "POST", {}), lambda _: self.poll_face())
+
+    def render_face_report(self, report):
+        if self.page != "face" or not hasattr(self, "face_report_box"):
+            return
+        content = self.face_report_box
+        clear(content)
+        if report.get("error"):
+            content.append(label(report["error"], "dim-label"))
+        history = Gtk.Stack()
+        switcher = Gtk.StackSwitcher(stack=history)
+        content.append(switcher)
+        content.append(history)
+        for period, trend in report.get("trend_views", {}).items():
+            chart = Chart({"title": trend.get("label", period), "option": {"xAxis": {"type": "time"}, "yAxis": {"name": "Score"}, "series": [{"name": "Face score", "type": "line", "data": [[point.get("datetime"), point.get("score")] for point in trend.get("points", [])]}]}})
+            history.add_titled(chart, period, trend.get("label", period))
+        for extreme in ("heaviest", "lightest"):
+            record = report.get(extreme, {})
+            panel = Gtk.Expander(label=f"{extreme} · {record.get('date', '')} · {record.get('score', '—')} · " + self.tr("点击显示照片", "Reveal photo"))
+            picture_box = box()
+            panel.set_child(picture_box)
+            def revealed(widget, param, record=record, target=picture_box):
+                if widget.get_expanded() and not target.get_first_child() and record.get("url"):
+                    self.load_picture(record["url"], target)
+            panel.connect("notify::expanded", revealed)
+            content.append(panel)
 
     def load_picture(self, path, parent):
         picture = Gtk.Picture(can_shrink=True, height_request=240)
@@ -815,7 +930,13 @@ class Window(Gtk.ApplicationWindow):
         def done(data):
             if self.page == "face" and hasattr(self, "face_progress"):
                 self.face_progress.set_fraction(max(0, min(1, data.get("percent", 0) / 100)))
-                self.face_progress.set_text(data.get("status", "idle"))
+                status = data.get("status", "idle")
+                self.face_progress.set_text(status)
+                previous, self.face_last_status = self.face_last_status, status
+                if status == "done" and previous not in {None, "done"}:
+                    self.run_async("face-new-report", lambda: self.client.request("/api/v1/face/report"), self.render_face_report)
+                elif status == "error":
+                    self.show_error(ClientError(str(data.get("error") or "Face analysis failed")))
         self.run_async("face-progress", lambda: self.client.request("/api/v1/face/progress"), done)
         if self.camera_stop and not self.camera_stop.is_set():
             self.run_async("face-live", lambda: self.client.request("/api/v1/face/live?active=true"), lambda data: self.notice_ok(f"Live face score: {data.get('latest_score', '—')}"))
@@ -1006,11 +1127,13 @@ class Window(Gtk.ApplicationWindow):
         erase = Gtk.CheckButton(label=self.tr("明确清除密钥", "Explicitly clear key"))
         panel.append(erase)
         model = self.field(panel, "Model", provider.get("model"))
+        catalog = self.field(panel, self.tr("模型列表（逗号分隔）", "Model catalog (comma-separated)"), ", ".join(provider.get("models", [])))
+        refreshed = {"value": provider.get("last_refreshed_at")}
         enabled = Gtk.CheckButton(label=self.tr("启用", "Enabled"), active=provider.get("enabled", True))
         panel.append(enabled)
         result = label("")
         def payload():
-            return {"name": name.get_text(), "base_url": url.get_text().strip(), "model": model.get_text().strip(), "enabled": enabled.get_active()}
+            return {"name": name.get_text(), "base_url": url.get_text().strip(), "model": model.get_text().strip(), "models": list(dict.fromkeys([item.strip() for item in catalog.get_text().split(",") if item.strip()] + ([model.get_text().strip()] if model.get_text().strip() else []))), "last_refreshed_at": refreshed["value"], "enabled": enabled.get_active()}
         def save():
             selected = route_field.get_text().strip()
             values = payload()
@@ -1031,9 +1154,31 @@ class Window(Gtk.ApplicationWindow):
             request = {"route": route_field.get_text(), "base_url": url.get_text(), "type": "openai-compatible"}
             if key.get_text():
                 request["api_key"] = key.get_text()
-            self.run_async("discover-models", lambda: self.client.request("/api/v1/models/discover", "POST", request), lambda data: result.set_text(" · ".join(data.get("models", []))))
+            def discovered(data):
+                from datetime import datetime, timezone
+                models = data.get("models", [])
+                catalog.set_text(", ".join(models))
+                refreshed["value"] = data.get("last_refreshed_at") or datetime.now(timezone.utc).isoformat()
+                result.set_text(self.tr("已发现；点击保存持久化", "Discovered; click Save to persist") + " · " + " · ".join(models))
+            self.run_async("discover-models", lambda: self.client.request("/api/v1/models/discover", "POST", request), discovered)
         panel.append(button(self.tr("发现模型", "Discover models"), discover))
         panel.append(result)
+        if route:
+            def remove():
+                def work():
+                    current = self.client.request("/api/v1/settings")
+                    providers = current.get("provider", {}).get("providers", {})
+                    providers.pop(route, None)
+                    for entry in providers.values():
+                        entry.pop("api_key", None)
+                    selected = current.get("provider", {}).get("selected_provider")
+                    patch = {"providers": providers}
+                    if selected == route:
+                        patch["selected_provider"] = next(iter(providers), None)
+                    self.client.request("/api/v1/settings", "PUT", {"provider_config": patch})
+                    return self.client.request("/api/v1/settings")
+                self.run_async("delete-provider", work, lambda state: (self.apply_state(state), self.load_settings()))
+            panel.append(button(self.tr("删除服务", "Delete provider"), lambda: self.confirm(self.tr("删除此 AI 服务及其已保存密钥？", "Delete this provider and its saved key?"), remove)))
         parent.append(panel)
 
     def save_patch(self, patch, extra=None):
@@ -1119,9 +1264,24 @@ class Window(Gtk.ApplicationWindow):
             self.run_async("dashboard-live", lambda: self.client.request("/api/v1/system/statistics"), metrics)
         if self.connected and (not self.job_observer or self.job_observer.stop.is_set()):
             self.discover_job()
+            if self.page in {"plan", "dashboard"}:
+                self.run_async("saved-plan", lambda: self.client.request("/api/v1/action-plan/today"), self.update_saved_plan)
         if self.connected and self.page == "logs" and hasattr(self, "logs_pause") and not self.logs_pause.get_active():
             self.run_async("logs-poll", lambda: self.client.request("/api/v1/system/logs"), self.update_logs)
         return GLib.SOURCE_CONTINUE
+
+    def update_saved_plan(self, result):
+        identity = (result.get("id"), result.get("filename"), result.get("timestamp"))
+        if identity == self.last_plan_identity or not complete_result(result):
+            return
+        self.last_plan_identity = identity
+        if self.job_observer and not self.job_observer.stop.is_set():
+            return
+        if self.page == "plan" and hasattr(self, "plan_plan_view"):
+            for section in ("analysis", "plan"):
+                set_view_text(getattr(self, f"plan_{section}_view"), result[section]["body"])
+        elif self.page == "dashboard" and hasattr(self, "dashboard_plan"):
+            set_view_text(self.dashboard_plan, result["plan"]["body"])
 
     def close_requested(self, *_):
         if self.tray and self.tray.available:

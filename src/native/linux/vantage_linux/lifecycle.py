@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
+import threading
 from urllib.parse import urlsplit
 from .client import ClientError
 
@@ -15,6 +16,8 @@ class BackendHost:
         self.command = command
         self.process = None
         self.lock = None
+        self.stopped = threading.Event()
+        self.guard = threading.RLock()
         self.data_dir = Path(data_dir or os.environ.get("VANTAGE_DATA_DIR") or Path.home() / ".local/share/Vantage")
 
     def ready(self):
@@ -27,6 +30,15 @@ class BackendHost:
         return capabilities
 
     def connect(self, timeout=90):
+        try:
+            return self._connect(timeout)
+        except Exception:
+            self._cleanup_owned()
+            raise
+
+    def _connect(self, timeout):
+        if self.stopped.is_set():
+            raise ClientError("Backend host has been closed")
         try:
             return self.ready()
         except ClientError as exc:
@@ -52,9 +64,14 @@ class BackendHost:
                 if exc.status or not str(exc).startswith("Cannot reach"):
                     raise
             env = {**os.environ, "VANTAGE_APP_MODE": "packaged", "VANTAGE_DATA_DIR": str(self.data_dir), "VANTAGE_BACKEND_URL": self.client.base_url}
-            self.process = subprocess.Popen(self.command, env=env, cwd=self.data_dir, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with self.guard:
+                if self.stopped.is_set():
+                    raise ClientError("Backend startup was cancelled")
+                self.process = subprocess.Popen(self.command, env=env, cwd=self.data_dir, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if self.stopped.is_set():
+                raise ClientError("Backend startup was cancelled")
             if self.process and self.process.poll() is not None:
                 raise ClientError("The backend exited before it became ready; inspect the backend logs in the data directory")
             try:
@@ -62,18 +79,23 @@ class BackendHost:
             except ClientError as exc:
                 if exc.status or not str(exc).startswith("Cannot reach"):
                     raise
-            time.sleep(0.3)
+            self.stopped.wait(0.3)
         raise ClientError("Backend startup timed out. Retry connection or inspect backend logs")
 
     def close(self):
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=5)
-        self.process = None
-        if self.lock:
-            self.lock.close()
-            self.lock = None
+        self.stopped.set()
+        self._cleanup_owned()
+
+    def _cleanup_owned(self):
+        with self.guard:
+            if self.process and self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=5)
+            self.process = None
+            if self.lock:
+                self.lock.close()
+                self.lock = None

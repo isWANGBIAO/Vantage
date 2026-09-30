@@ -33,12 +33,18 @@ class Chart(Gtk.Box):
         self.area = Gtk.DrawingArea(content_width=620, content_height=280, hexpand=True)
         self.area.set_draw_func(self.draw)
         self.append(self.area)
-        self.legend = Gtk.Label(xalign=0, wrap=True, selectable=True)
+        self.legend = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         self.append(self.legend)
         if spec.get("error") or spec.get("empty"):
-            self.legend.set_text(str(spec.get("error") or "没有可显示的数据 / No data"))
+            self.legend.append(Gtk.Label(label=str(spec.get("error") or "没有可显示的数据 / No data")))
         else:
-            self.legend.set_text("   ·   ".join(str(s.get("name", "Series")) for s in self.option.get("series", [])))
+            from gi.repository import GLib
+            for index, series in enumerate(self.option.get("series", [])):
+                red, green, blue = COLORS[index % len(COLORS)]
+                color = f"#{int(red * 255):02x}{int(green * 255):02x}{int(blue * 255):02x}"
+                item = Gtk.Label(xalign=0)
+                item.set_markup(f'<span foreground="{color}">●</span> {GLib.markup_escape_text(str(series.get("name", "Series")))}')
+                self.legend.append(item)
         details = Gtk.Expander(label="检查数据 / Inspect values")
         text = Gtk.TextView(editable=False, cursor_visible=False, monospace=True, wrap_mode=Gtk.WrapMode.NONE)
         axis = self.option.get("xAxis", {})
@@ -89,7 +95,7 @@ class Chart(Gtk.Box):
             cr.set_source_rgb(0.65, 0.70, 0.75)
             for key, pos in [(prepared["keys"][0], left), (prepared["keys"][-1], right - 65)]:
                 cr.move_to(pos, height - 12)
-                cr.show_text(key[:16])
+                cr.show_text(str(key)[:16])
         groups = prepared["bar_groups"]
         cr.save()
         cr.rectangle(left - 15, top, right - left + 30, bottom - top)
@@ -121,6 +127,12 @@ class Chart(Gtk.Box):
                     (cr.line_to if begun else cr.move_to)(px, py)
                     begun = True
             cr.stroke()
+            if kind not in {"bar", "scatter"}:
+                visible = [point for point in series["coordinates"] if point["x"] is not None and point["y"] is not None]
+                if len(visible) <= 50 or series["source"].get("showSymbol", True):
+                    for point in visible:
+                        cr.arc(x(point["x"]), y(point["y"], axis), 3, 0, math.tau)
+                        cr.fill()
         cr.restore()
 
     def draw_radar(self, cr, width, height, series_list):

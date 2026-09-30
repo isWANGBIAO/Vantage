@@ -15,11 +15,13 @@ def main(argv=None):
     parser.add_argument("--connect-only", action="store_true")
     parser.add_argument("--check", action="store_true", help="Check GTK4 dependencies without starting backend")
     args = parser.parse_args(argv)
+    from vantage_linux.fonts import register_bundled_fonts
+    register_bundled_fonts(Path(__file__).resolve().parent)
     try:
         import gi
         gi.require_version("Gtk", "4.0")
         from gi.repository import Gtk
-        import cairo  # noqa: F401; Gtk.DrawingArea callbacks need PyCairo
+        import cairo  # Gtk.DrawingArea callbacks need PyCairo
     except (ImportError, ValueError):
         print("GTK4 dependencies missing. Install your distro's python3-gi, python3-cairo, python3-gi-cairo and gir1.2-gtk-4.0, then use /usr/bin/python3.", file=sys.stderr)
         return 2

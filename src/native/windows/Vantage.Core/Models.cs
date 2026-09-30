@@ -49,7 +49,7 @@ public sealed record ProjectStats(int TotalTasks, int CompletedTasks, double Com
 public sealed record ProjectCommit(string Hash, string Date, string Message);
 public sealed record ProjectsResponse(ProjectTasks Tasks, ProjectCommit[] Commits, ProjectStats Stats);
 public sealed record ChartDefinition(string Id, string Title, string? Subtitle, string? Description, JsonElement Option,
-    JsonElement Summary, string? Status, string? Message);
+    JsonElement Summary, string? Status, string? Message, bool Empty = false, string? Error = null, string? Formatter = null);
 public sealed record PlotsResponse(ChartDefinition[] Charts, JsonElement Warnings);
 public sealed record FaceProgress(string Status, double Percent, string? Error);
 

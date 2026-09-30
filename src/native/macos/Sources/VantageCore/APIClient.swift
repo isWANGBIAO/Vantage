@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CFNetwork
 
 public enum APIError: LocalizedError, Equatable {
     case invalidURL, insecureRedirect, http(Int, String), incompatibleVersion(String), malformedStream, oversizedRecord, incompleteStream, disconnected
@@ -61,7 +62,16 @@ public final class APIClient: @unchecked Sendable {
     private let redirectDelegate = NoRedirectDelegate()
     public init(address: BackendAddress, configuration: URLSessionConfiguration = .ephemeral) {
         self.address = address
-        configuration.urlCache = nil; configuration.httpCookieStorage = nil
+        configuration.urlCache = nil; configuration.httpCookieStorage = nil; configuration.urlCredentialStorage = nil
+        // Local IPC must not inherit a system HTTP/SOCKS/PAC proxy: settings
+        // requests can carry write-only provider credentials.
+        configuration.connectionProxyDictionary = [
+            kCFNetworkProxiesHTTPEnable as String: 0,
+            kCFNetworkProxiesHTTPSEnable as String: 0,
+            kCFNetworkProxiesSOCKSEnable as String: 0,
+            kCFNetworkProxiesProxyAutoConfigEnable as String: 0,
+            kCFNetworkProxiesProxyAutoDiscoveryEnable as String: 0
+        ]
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = min(configuration.timeoutIntervalForRequest, 45)
         configuration.timeoutIntervalForResource = min(configuration.timeoutIntervalForResource, 3600)
@@ -97,18 +107,24 @@ public final class APIClient: @unchecked Sendable {
                        receive: @escaping @Sendable (StreamEvent) async throws -> Void) async throws {
         var request = try request(path: path, method: method, query: query, body: body)
         request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
-        let (bytes, response) = try await session.bytes(for: request)
-        try validate(response)
-        var parser = NDJSONParser()
-        for try await byte in bytes {
+        let streamSession = URLSession(configuration: session.configuration, delegate: redirectDelegate, delegateQueue: nil)
+        defer { streamSession.invalidateAndCancel() }
+        try await withTaskCancellationHandler {
+            let (bytes, response) = try await streamSession.bytes(for: request)
+            try validate(response)
+            var parser = NDJSONParser()
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                if let event = try parser.append(byte) { try await receive(event) }
+            }
             try Task.checkCancellation()
-            if let event = try parser.append(byte) { try await receive(event) }
-        }
-        if let event = try parser.finish() { try await receive(event) }
+            if let event = try parser.finish() { try await receive(event) }
+        } onCancel: { streamSession.invalidateAndCancel() }
     }
     public func transcribe(file: URL) async throws -> String {
         let boundary = UUID().uuidString
         var request = try request(path: "/api/v1/media/transcribe", method: "POST", query: [:], body: nil)
+        request.timeoutInterval = 300
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"recording.m4a\"\r\nContent-Type: audio/mp4\r\n\r\n".utf8)
         body.append(try Data(contentsOf: file)); body.append(Data("\r\n--\(boundary)--\r\n".utf8)); request.httpBody = body
@@ -135,12 +151,17 @@ public final class APIClient: @unchecked Sendable {
     }
     public func jpegFrames(receive: @escaping @Sendable (Data) async -> Void) async throws {
         let request = try request(path: "/api/v1/camera/stream", method: "GET", query: [:], body: nil)
-        let (bytes, response) = try await session.bytes(for: request); try validate(response)
-        var parser = JPEGFrameParser()
-        for try await byte in bytes {
+        let streamSession = URLSession(configuration: session.configuration, delegate: redirectDelegate, delegateQueue: nil)
+        defer { streamSession.invalidateAndCancel() }
+        try await withTaskCancellationHandler {
+            let (bytes, response) = try await streamSession.bytes(for: request); try validate(response)
+            var parser = JPEGFrameParser()
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                if let image = try parser.append(byte) { await receive(image) }
+            }
             try Task.checkCancellation()
-            if let image = try parser.append(byte) { await receive(image) }
-        }
+        } onCancel: { streamSession.invalidateAndCancel() }
     }
 }
 public struct NDJSONParser {

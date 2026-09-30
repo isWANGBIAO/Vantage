@@ -19,8 +19,9 @@ public sealed class NativeChart : StackPanel
     readonly Slider start = new() { Header = "起点 / Start %", Minimum = 0, Maximum = 99, Value = 0, MinWidth = 180 };
     readonly Slider end = new() { Header = "终点 / End %", Minimum = 1, Maximum = 100, Value = 100, MinWidth = 180 };
     readonly JsonElement[] series;
-    public NativeChart(JsonElement option)
+    public NativeChart(JsonElement option, bool english = false)
     {
+        start.Header = english ? "Start %" : "起点 %"; end.Header = english ? "End %" : "终点 %";
         this.option = option; series = option.Field("series").Items().ToArray(); Spacing = 10;
         var legend = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14 };
         for (var index = 0; index < series.Length; index++)
@@ -35,7 +36,7 @@ public sealed class NativeChart : StackPanel
         canvas.SizeChanged += (_, _) => Draw(); Loaded += (_, _) => Draw();
         var rows = new List<Dictionary<string, object?>>();
         foreach (var s in series) foreach (var point in s.Field("data").Items()) rows.Add(new() { ["Series"] = s.Field("name").Text(), ["Value"] = point });
-        Children.Add(new Expander { Header = "数据明细 / Data values", Content = NativeDataView.Create(JsonData.Element(rows)), HorizontalAlignment = HorizontalAlignment.Stretch });
+        Children.Add(new Expander { Header = english ? "Data values" : "数据明细", Content = NativeDataView.Create(JsonData.Element(rows)), HorizontalAlignment = HorizontalAlignment.Stretch });
     }
     static SolidColorBrush Brush(int index) => new(Palette[index % Palette.Length]);
     void Draw()
@@ -46,28 +47,15 @@ public sealed class NativeChart : StackPanel
         if (series.Any(s => s.Field("type").Text() == "pie")) { DrawPie(); return; }
         DrawCartesian();
     }
-    sealed record PointValue(double X, double? Y, string Label);
-    PointValue[] Points(JsonElement s)
-    {
-        var axis = option.Field("xAxis"); if (axis.ValueKind == JsonValueKind.Array) axis = axis.Items().FirstOrDefault();
-        var labels = axis.Field("data").Items().Select(x => x.Text()).ToArray();
-        var numericX = axis.Field("type").Text() is "time" or "value";
-        return s.Field("data").Items().Select((raw, i) =>
-        {
-            var value = raw.ValueKind == JsonValueKind.Object ? raw.Field("value") : raw;
-            var pair = value.Items().ToArray(); var label = pair.Length > 1 ? pair[0].Text() : i < labels.Length ? labels[i] : i.ToString();
-            var y = pair.Length > 1 ? pair[^1].Number() : value.Number();
-            var x = (double)i;
-            if (numericX && pair.Length > 1) x = pair[0].Number() ?? (DateTimeOffset.TryParse(label, out var date) ? date.ToUnixTimeMilliseconds() : i);
-            return new PointValue(x, y, label);
-        }).ToArray();
-    }
+    ChartPoint[] Points(JsonElement s) => ChartMath.ExtractPoints(s, option.Field("xAxis"));
     void DrawCartesian()
     {
         const double left = 65, top = 20, bottom = 42; var width = Math.Max(100, canvas.ActualWidth - left - 80); var height = canvas.Height - top - bottom;
         var active = series.Select((s, i) => (s, i, points: Points(s))).Where(x => !hidden.Contains(x.i)).ToArray();
         var all = active.SelectMany(x => x.points).ToArray(); if (all.Length == 0) { Label("暂无数据 / No data", left, top); return; }
-        var minX = all.Min(p => p.X); var maxX = all.Max(p => p.X); if (minX == maxX) maxX++;
+        var minX = all.Min(p => p.X); var maxX = all.Max(p => p.X);
+        if (active.Any(x => x.s.Field("type").Text() == "bar")) { var xs = all.Select(p => p.X).Distinct().Order().ToArray(); var pad = xs.Length > 1 ? (xs[1] - xs[0]) / 2 : .5; minX -= pad; maxX += pad; }
+        if (minX == maxX) maxX++;
         var lowX = minX + (maxX - minX) * Math.Min(start.Value, end.Value - 1) / 100; var highX = minX + (maxX - minX) * Math.Max(end.Value, start.Value + 1) / 100;
         var axes = option.Field("yAxis"); var axisArray = axes.ValueKind == JsonValueKind.Array ? axes.Items().ToArray() : new[] { axes };
         var ranges = new Dictionary<int, (double min, double max)>();
@@ -77,7 +65,10 @@ public sealed class NativeChart : StackPanel
             if (values.Count == 0) values.Add(0);
             // Stacked bars share one cumulative axis; the data table retains every original value.
             foreach (var stack in group.Where(x => x.s.Field("stack").Text() != "").GroupBy(x => x.s.Field("stack").Text()))
-                values.AddRange(stack.SelectMany(x => x.points).Where(x => x.Y.HasValue).GroupBy(x => x.X).Select(x => x.Sum(p => p.Y!.Value)));
+            {
+                var extent = ChartMath.SignedStackExtent(stack.Select(x => x.points.Where(p => p.X >= lowX && p.X <= highX)));
+                values.Add(extent.min); values.Add(extent.max);
+            }
             var axis = group.Key < axisArray.Length ? axisArray[group.Key] : default;
             var min = axis.Field("min").Number() ?? (group.Any(x => x.s.Field("type").Text() == "bar") ? Math.Min(0, values.Min()) : values.Min());
             var max = axis.Field("max").Number() ?? values.Max(); if (min == max) max = min + 1;
@@ -85,13 +76,15 @@ public sealed class NativeChart : StackPanel
             Label($"{axis.Field("name").Text($"Y{group.Key + 1}")}: {min:0.##} … {max:0.##}", group.Key == 0 ? left : left + width - 140, top - 20 + group.Key * 14);
         }
         double X(double x) => left + (x - lowX) / (highX - lowX) * width;
-        double Y(double y, int axis) { var (min, max) = ranges[axis]; return top + height - (y - min) / (max - min) * height; }
+        double Y(double y, int axis) { var (min, max) = ranges[axis]; var inverse = axis < axisArray.Length && axisArray[axis].Field("inverse").ValueKind == JsonValueKind.True; return top + ChartMath.YRatio(y, min, max, inverse) * height; }
         for (var k = 0; k <= 4; k++)
         {
             var y = top + height * k / 4; Line(left, y, left + width, y, new SolidColorBrush(Color.FromArgb(50, 128, 128, 128)), 1);
-            if (ranges.TryGetValue(0, out var r)) Label($"{r.max - (r.max - r.min) * k / 4:0.##}", 0, y - 8);
+            if (ranges.TryGetValue(0, out var r)) { var inverse = axisArray.Length > 0 && axisArray[0].Field("inverse").ValueKind == JsonValueKind.True; var tick = inverse ? r.min + (r.max - r.min) * k / 4 : r.max - (r.max - r.min) * k / 4; Label($"{tick:0.##}", 0, y - 8); }
         }
-        var stacks = new Dictionary<(string, double), double>();
+        var stacks = new Dictionary<(int, string, double, bool), double>();
+        string BarGroup(JsonElement s, int index) => s.Field("stack").Text() is { Length: > 0 } stack ? $"{s.Field("yAxisIndex").Number() ?? 0}:{stack}" : $"series-{index}";
+        var barGroups = active.Where(x => x.s.Field("type").Text() == "bar").Select(x => BarGroup(x.s, x.i)).Distinct().ToArray();
         foreach (var (s, index, points) in active)
         {
             var axis = (int)(s.Field("yAxisIndex").Number() ?? 0); var type = s.Field("type").Text("line"); var stack = s.Field("stack").Text();
@@ -102,9 +95,10 @@ public sealed class NativeChart : StackPanel
                 var x = X(point.X); var value = point.Y.Value; var y = Y(value, axis); Shape shape;
                 if (type == "bar")
                 {
-                    var before = stack.Length > 0 ? stacks.GetValueOrDefault((stack, point.X)) : 0; var after = before + value;
-                    if (stack.Length > 0) stacks[(stack, point.X)] = after;
-                    var y0 = Y(before, axis); var y1 = Y(after, axis); var barWidth = Math.Max(2, width / Math.Max(1, points.Count(p => p.X >= lowX && p.X <= highX)) * .72);
+                    var stackKey = (axis, stack, point.X, value >= 0); var before = stack.Length > 0 ? stacks.GetValueOrDefault(stackKey) : 0; var after = before + value;
+                    if (stack.Length > 0) stacks[stackKey] = after;
+                    var y0 = Y(before, axis); var y1 = Y(after, axis); var slotWidth = width / Math.Max(1, points.Count(p => p.X >= lowX && p.X <= highX)) * .72; var barWidth = Math.Max(2, slotWidth / Math.Max(1, barGroups.Length));
+                    x += ChartMath.GroupedBarOffset(Array.IndexOf(barGroups, BarGroup(s, index)), barGroups.Length, slotWidth);
                     shape = new Rectangle { Width = barWidth, Height = Math.Max(1, Math.Abs(y0 - y1)), Fill = Brush(index) }; Canvas.SetLeft(shape, x - barWidth / 2); Canvas.SetTop(shape, Math.Min(y0, y1));
                 }
                 else
@@ -112,7 +106,7 @@ public sealed class NativeChart : StackPanel
                     if (type != "scatter" && previous.HasValue) Line(previous.Value.X, previous.Value.Y, x, y, Brush(index), 2);
                     shape = new Ellipse { Width = type == "scatter" ? 8 : 5, Height = type == "scatter" ? 8 : 5, Fill = Brush(index) }; Canvas.SetLeft(shape, x - 3); Canvas.SetTop(shape, y - 3); previous = new Point(x, y);
                 }
-                ToolTipService.SetToolTip(shape, $"{s.Field("name").Text()}\n{point.Label}: {value:0.####}"); canvas.Children.Add(shape);
+                ToolTipService.SetToolTip(shape, $"{s.Field("name").Text()}\n{point.Label}: {value:0.####} {(axis < axisArray.Length ? axisArray[axis].Field("name").Text() : "")}"); canvas.Children.Add(shape);
             }
         }
         var visible = all.Where(x => x.X >= lowX && x.X <= highX).OrderBy(x => x.X).ToArray();

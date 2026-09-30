@@ -75,7 +75,7 @@ enum NativePlatform {
     static func copy(_ text: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
     static func setLogin(_ enabled: Bool) throws {
         if enabled && SMAppService.mainApp.status != .enabled { try SMAppService.mainApp.register() }
-        if !enabled && SMAppService.mainApp.status != .notRegistered { try SMAppService.mainApp.unregister() }
+        if !enabled && [.enabled, .requiresApproval].contains(SMAppService.mainApp.status) { try SMAppService.mainApp.unregister() }
     }
     static var loginStatus: String {
         switch SMAppService.mainApp.status {
@@ -160,6 +160,7 @@ final class VoiceRecorder: ObservableObject {
     private var recorder: AVAudioRecorder?
     private var file: URL?
     private var intent = UUID()
+    var duration: TimeInterval { recorder?.currentTime ?? 0 }
     func start() async throws {
         let request = UUID(); intent = request
         let allowed = await AVCaptureDevice.requestAccess(for: .audio)

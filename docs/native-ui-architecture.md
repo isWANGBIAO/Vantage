@@ -1,6 +1,6 @@
 # 可替换原生 UI 的应用边界
 
-Vantage 的业务后端与界面独立运行。React + Electron 是现有客户端；Windows、macOS、Qt 或其他原生 UI 可以复用同一 HTTP 服务、持久设置与后台行动计划调度，无需移植 React 的业务定时器。此次不包含新的原生应用。
+Vantage 的业务后端与界面独立运行。React + Electron、Windows WinUI 3、macOS SwiftUI 和 Linux GTK4 客户端复用同一 HTTP 服务、持久设置与后台行动计划调度，无需移植 React 的业务定时器。原生应用入口、构建和验证边界见 [原生客户端](native-clients.md)。
 
 ## 分层与职责
 

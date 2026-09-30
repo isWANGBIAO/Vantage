@@ -7,6 +7,7 @@ namespace Vantage.Windows.Views;
 // Native controls keep data selectable and accessible without a web renderer.
 public static class NativeDataView
 {
+    public static bool English { get; set; }
     public static UIElement Create(JsonElement data, string? label = null, int depth = 0)
     {
         var panel = new StackPanel { Spacing = 8 };
@@ -34,7 +35,7 @@ public static class NativeDataView
     {
         var panel = new StackPanel { Spacing = 10 };
         if (title is not null) panel.Children.Add(Label(title, true));
-        var search = new TextBox { PlaceholderText = "筛选 / Filter", MaxWidth = 400, HorizontalAlignment = HorizontalAlignment.Left };
+        var search = new TextBox { PlaceholderText = English ? "Filter" : "筛选", MaxWidth = 400, HorizontalAlignment = HorizontalAlignment.Left };
         var content = new StackPanel { Spacing = 4 }; var page = 0; const int pageSize = 100;
         var counter = new TextBlock();
         void Render()

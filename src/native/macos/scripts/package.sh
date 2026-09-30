@@ -18,6 +18,7 @@ done
 [[ "$CONFIGURATION" == release || "$CONFIGURATION" == debug ]] || { echo "Invalid build configuration" >&2; exit 2; }
 [[ -n "$RUNTIME" && -x "$RUNTIME/VantageBackend" ]] || { echo "A complete backend runtime directory containing executable VantageBackend is required." >&2; exit 1; }
 RUNTIME="$(cd "$RUNTIME" && pwd)"
+python3 "$ROOT/scripts/validate_native_runtime.py" --runtime "$RUNTIME" --platform darwin --architecture "$(uname -m)"
 swift build --package-path "$PACKAGE" -c "$CONFIGURATION"
 BIN="$(swift build --package-path "$PACKAGE" -c "$CONFIGURATION" --show-bin-path)"
 mkdir -p "$OUTPUT"

@@ -9,8 +9,11 @@ final class DomainData: ObservableObject {
     @Published var error: String?
     func load(_ path: String, model: AppModel, page: AppPage? = nil) async {
         guard !loading else { return }; loading = true; defer { loading = false }
+        let client = model.api
         do {
-            data = try await model.api.request(path: path); error = nil
+            let result: JSONValue = try await client.request(path: path)
+            guard client === model.api, !Task.isCancelled else { return }
+            data = result; error = nil
             if let page { model.pageLoads[page.rawValue] = "loaded" }
         } catch {
             if Task.isCancelled { return }; self.error = SensitiveText.redact(error.localizedDescription)
@@ -70,7 +73,13 @@ struct DashboardView: View {
                                 VStack(alignment: .leading) {
                                     if revealed { PrivateImage(path: media[kind].string).frame(height: 240) }
                                     else { RoundedRectangle(cornerRadius: 10).fill(.quaternary).overlay(Image(systemName: "eye.slash").font(.largeTitle).foregroundStyle(.secondary)).frame(height: 160) }
-                                    HStack { Text(media[kind + "_name"].string).font(.caption).lineLimit(1); Spacer(); Button(model.text("打开目录", "Open folder")) { Task { do { try await model.api.openMediaFolder(kind) } catch { model.report(error) } } }
+                                    HStack {
+                                        Text(media[kind + "_name"].string).font(.caption).lineLimit(1)
+                                        Spacer()
+                                        Button(model.text("打开目录", "Open folder")) {
+                                            Task { do { try await model.api.openMediaFolder(kind) } catch { model.report(error) } }
+                                        }
+                                    }
                                 }.frame(maxWidth: .infinity)
                             }
                         }
@@ -161,7 +170,8 @@ struct ExpensesView: View {
             VStack(alignment: .leading, spacing: 22) {
                 LoadBanner(source: source) { Task { await refresh() } }
                 if !source.data["error"].string.isEmpty { Label(source.data["error"].string, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
-                GroupBox(model.text("资产与时间成本", "Assets and time cost")) { RecordDetails(value: source.data["summary"]).padding(8) }
+                FinanceSummary(summary: source.data["summary"])
+                DisclosureGroup(model.text("来源与汇总明细", "Source and summary details")) { RecordDetails(value: source.data["source"]); RecordDetails(value: source.data["summary"]) }
                 ForEach(Array(source.data["suggestions"].array.enumerated()), id: \.offset) { _, suggestion in
                     if !suggestion.string.isEmpty { Label(suggestion.string, systemImage: "lightbulb") } else { RecordDetails(value: suggestion) }
                 }
@@ -407,4 +417,31 @@ struct LogsView: View {
         }.toolbar { Button { Task { await refresh() } } label: { Image(systemName: "arrow.clockwise") } }
     }
     private func refresh() async { await source.load("/api/v1/system/logs", model: model, page: .logs) }
+}
+
+struct FinanceSummary: View {
+    @EnvironmentObject var model: AppModel
+    let summary: JSONValue
+    private func currency(_ value: JSONValue) -> String {
+        guard let number = value.double ?? value["value"].double else { return "—" }
+        return number.formatted(.currency(code: "CNY").precision(.fractionLength(0...2)))
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(model.text("资产与负债", "Assets and liabilities")).font(.title2.bold())
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180))]) {
+                ForEach(["fixed_assets", "current_assets", "total_assets", "liabilities", "equity", "cash_and_stock"], id: \.self) { key in
+                    MetricCard(title: key.replacingOccurrences(of: "_", with: " "), value: currency(summary["assets"][key]), symbol: "banknote")
+                }
+            }
+            Text(model.text("时间成本与预算", "Time cost and budget")).font(.title2.bold())
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180))]) {
+                MetricCard(title: model.text("每天成本", "Daily cost"), value: currency(summary["time_cost"]["daily_average"]), symbol: "calendar")
+                MetricCard(title: model.text("每分钟成本", "Cost per minute"), value: currency(summary["time_cost"]["per_minute"]), symbol: "clock")
+                MetricCard(title: model.text("本月总支出", "Monthly total"), value: currency(summary["time_cost"]["monthly_total"]), symbol: "calendar")
+                MetricCard(title: model.text("必需月预算", "Required monthly budget"), value: currency(summary["budget"]["monthly_required"]), symbol: "checkmark.circle")
+                MetricCard(title: model.text("可选月预算", "Optional monthly budget"), value: currency(summary["budget"]["monthly_optional"]), symbol: "circle.dashed")
+            }
+        }
+    }
 }

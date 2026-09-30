@@ -1,4 +1,6 @@
-from src.core.backend_runtime_packaging import build_backend_runtime_fingerprint, collect_backend_runtime_resources
+from src.core.backend_runtime_packaging import (
+    PYINSTALLER_EXCLUDES, build_backend_runtime_fingerprint, collect_backend_runtime_resources,
+)
 from tests.test_backend_runtime_packaging import _create_required_runtime_resources
 
 
@@ -13,3 +15,7 @@ def test_modular_backend_changes_invalidate_all_native_runtime_packages(tmp_path
     after = build_backend_runtime_fingerprint(tmp_path, resources=resources, distribution_closure=[])
     assert before["digest"] != after["digest"]
     assert "src/backend/chat.py" in {entry["path"] for entry in after["inputs"]}
+
+
+def test_shared_backend_does_not_collect_native_ui_or_smoke_fixtures():
+    assert "src.native" in PYINSTALLER_EXCLUDES

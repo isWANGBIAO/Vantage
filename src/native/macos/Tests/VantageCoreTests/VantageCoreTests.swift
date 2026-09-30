@@ -74,6 +74,19 @@ final class StreamTests: XCTestCase {
         let blank = #"{"exists":true,"analysis":{"body":" "},"plan":{"body":"plan"}}"#
         XCTAssertFalse(try JSONDecoder().decode(PlanResult.self, from: Data(blank.utf8)).isComplete)
     }
+    func testAggregateStreamBuffersStayBounded() throws {
+        let chunk = String(repeating: "x", count: 1024)
+        let json = try JSONEncoder().encode(JSONValue.object(["log": .string("STREAM_PLAN_CONTENT:" + chunk)]))
+        let item = try JSONDecoder().decode(StreamEvent.self, from: json)
+        var plan = PlanStreamState()
+        for _ in 0..<4200 { plan.apply(item) }
+        XCTAssertTrue(plan.needsSnapshot); XCTAssertEqual(plan.plan, "")
+        let chatData = try JSONEncoder().encode(JSONValue.object(["log": .string("STREAM_CONTENT:" + chunk)]))
+        let chatItem = try JSONDecoder().decode(StreamEvent.self, from: chatData)
+        var chat = ChatStreamState()
+        for _ in 0..<4200 { chat.apply(chatItem) }
+        XCTAssertNotNil(chat.failure); XCTAssertLessThanOrEqual(chat.content.utf8.count, ChatStreamState.maximumTextBytes)
+    }
     func testSecretsAreRedacted() { XCTAssertFalse(SensitiveText.redact("Bearer abc.def and sk-123456789abcdef").contains("123456789")) }
 }
 final class ChartTests: XCTestCase {
@@ -90,6 +103,13 @@ final class ChartTests: XCTestCase {
         let series = ChartData.series(value)
         XCTAssertEqual(series[0].stack, "time")
         XCTAssertEqual(series[0].points[1].x - series[0].points[0].x, 86400)
+    }
+    func testExplicitInverseAxisPreservesBoundsAndLabels() {
+        let axis = ChartAxis(.object(["min": .number(0), "max": .number(20), "inverse": .bool(true), "scale": .bool(true)]))
+        XCTAssertEqual(axis.bounds, -20.0...0.0)
+        XCTAssertEqual(axis.coordinate(5), -5)
+        XCTAssertEqual(axis.value(-5), 5)
+        XCTAssertFalse(axis.includesZero)
     }
     func testPieNamesPreserved() throws {
         let value = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"series":[{"type":"pie","data":[{"name":"Sleep","value":8},{"name":"Awake","value":16}]}]}"#.utf8))
@@ -117,6 +137,16 @@ final class HTTPTests: XCTestCase {
         return APIClient(address: try BackendAddress("http://127.0.0.1:8000/prefix"), configuration: config)
     }
     override func tearDown() { StubProtocol.handler = nil; super.tearDown() }
+    func testLocalSessionDisablesProxyCookiesAndCredentialCache() throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.connectionProxyDictionary = ["HTTPEnable": 1, "HTTPProxy": "proxy.example", "HTTPPort": 8080]
+        _ = APIClient(address: try BackendAddress("http://localhost"), configuration: configuration)
+        XCTAssertEqual(configuration.connectionProxyDictionary?["HTTPEnable"] as? Int, 0)
+        XCTAssertEqual(configuration.connectionProxyDictionary?["HTTPSEnable"] as? Int, 0)
+        XCTAssertEqual(configuration.connectionProxyDictionary?["SOCKSEnable"] as? Int, 0)
+        XCTAssertNil(configuration.httpCookieStorage)
+        XCTAssertNil(configuration.urlCredentialStorage)
+    }
     func testTypedRequestPreservesPrefixAndDoesNotRetryWrites() async throws {
         var count = 0
         StubProtocol.handler = { request in
@@ -145,5 +175,50 @@ final class HTTPTests: XCTestCase {
         let result = try await client().mediaData(reference: "/api/v1/media/image?path=%2Fphotos%2Fa%20b.png")
         XCTAssertEqual(result, Data([1, 2]))
         do { _ = try await client().mediaData(reference: "https://evil.test/private"); XCTFail("Unsafe image URL") } catch { XCTAssertEqual(error as? APIError, .invalidURL) }
+    }
+}
+
+final class MarkdownTests: XCTestCase {
+    func testCodeBlocksPreserveLiteralMarkdownAndIncompleteFence() {
+        XCTAssertEqual(MarkdownBlocks.parse("```swift\nlet x = 1\n# literal\n```"), [.code("swift", "let x = 1\n# literal")])
+        XCTAssertEqual(MarkdownBlocks.parse("```\nincomplete"), [.code("", "incomplete")])
+    }
+    func testTablesQuotesAndEscapedPipes() {
+        let result = MarkdownBlocks.parse("# Heading\n| Item | Value |\n| --- | ---: |\n| a\\|b | 3 |\n> note")
+        XCTAssertEqual(result, [.heading("Heading", 1), .table(["Item", "Value"], [["a|b", "3"]]), .quote("note")])
+    }
+    func testClockPaceAndCurrencyHaveDomainUnits() {
+        XCTAssertEqual(ChartFormatting.value(25.5, kind: "clock"), "01:30")
+        XCTAssertEqual(ChartFormatting.value(5.5, kind: "pace"), "5:30 /km")
+        XCTAssertEqual(JSONValue.number(1234).string, "1234")
+    }
+}
+
+private final class HangingProtocol: URLProtocol {
+    static var stopped: (() -> Void)?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/x-ndjson"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("{\"log\":\"waiting\"}\n".utf8))
+        // Deliberately keep transport open until the caller cancels.
+    }
+    override func stopLoading() { Self.stopped?() }
+}
+final class StreamCancellationTests: XCTestCase {
+    func testCancellingObservationClosesUnderlyingTransport() async throws {
+        let stopped = expectation(description: "URL loading stopped")
+        stopped.assertForOverFulfill = false
+        HangingProtocol.stopped = { stopped.fulfill() }
+        defer { HangingProtocol.stopped = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HangingProtocol.self]
+        let client = APIClient(address: try BackendAddress("http://127.0.0.1"), configuration: configuration)
+        let task = Task { try await client.stream(path: "/api/v1/action-plan/jobs/test/events") { _ in } }
+        try await Task.sleep(for: .milliseconds(150))
+        task.cancel()
+        await fulfillment(of: [stopped], timeout: 3)
+        do { try await task.value; XCTFail("Cancelled observation must not complete successfully") } catch { }
     }
 }

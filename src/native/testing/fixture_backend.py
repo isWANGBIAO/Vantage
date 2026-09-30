@@ -8,14 +8,19 @@ import argparse
 import base64
 import copy
 import json
+import io
+import zipfile
 import os
 from pathlib import Path
 import signal
 import threading
+import uuid
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+JPEG = base64.b64decode("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAYABgDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCKiiiug+NCiiigAooooAKKKKAP/9k=")
 STAMP = "2026-01-01T12:00:00+00:00"
 TODAY = {"exists": True, "analysis": {"body": "## 综合分析\n\n本页使用合成数据，专用于原生客户端验收。"}, "plan": {"body": "## 今日行动计划\n\n- [ ] 阅读 30 分钟\n- [ ] 完成原生客户端检查\n- [x] 整理项目任务"}, "meta": {"generated_at": STAMP, "model": "fixture-model", "provider_route": "fixture", "fallback_used": False, "stats": {}}, "date": "2026-01-01", "filename": "fixture-plan.json", "id": "fixture-plan"}
 
@@ -29,15 +34,18 @@ def settings(onboarded=True):
 
 
 def state(onboarded=True):
-    return {"settings": settings(onboarded), "job_mode": "success", "job": None, "events_reads": 0, "messages": [{"role": "assistant", "content": TODAY["plan"]["body"]}, {"role": "user", "content": "如何安排今天？"}, {"role": "assistant", "content": "先完成最重要的任务，再留出休息时间。"}], "requests": [], "dismissed": [], "face_running": False}
+    initial = copy.deepcopy(TODAY)
+    initial["id"] = "fixture-initial-" + uuid.uuid4().hex
+    initial["filename"] = initial["id"] + ".json"
+    return {"today": initial, "settings": settings(onboarded), "job_mode": "success", "job": None, "events_reads": 0, "messages": [{"role": "assistant", "content": TODAY["plan"]["body"]}, {"role": "user", "content": "如何安排今天？"}, {"role": "assistant", "content": "先完成最重要的任务，再留出休息时间。"}], "requests": [], "dismissed": [], "face_running": False}
 
 
 def context(s):
-    return {"base_context_version": "fixture-base", "context_version": f"fixture-{len(s['messages'])}", "has_action_plan_context": True, "messages": copy.deepcopy(s["messages"]), "display_messages": [{"role": "assistant", "content": TODAY["plan"]["body"]}], "stats": {"input_tokens": 42, "output_tokens": 18}, "preferred_model": "fixture-model", "preferred_provider_route": "fixture", "preferred_model_option_id": "fixture::fixture-model"}
+    return {"base_context_version": s["today"]["id"], "context_version": f"fixture-{len(s['messages'])}", "has_action_plan_context": True, "messages": copy.deepcopy(s["messages"]), "display_messages": [{"role": "assistant", "content": TODAY["plan"]["body"]}], "stats": {"input_tokens": 42, "output_tokens": 18}, "preferred_model": "fixture-model", "preferred_provider_route": "fixture", "preferred_model_option_id": "fixture::fixture-model"}
 
 
 def job(request):
-    return {"id": "fixture-job", "status": "running", "trigger": "manual", "request": {"reasoning_effort": None, "service_tier": None, "model": None, "provider_route": None, "replace_today": False, "wait_for_provider_ready": False, **request}, "created_at": STAMP, "updated_at": STAMP, "progress": {"phase": "plan", "events_received": 0}, "result": None, "error": None, "source_revision": "fixture-revision", "result_identity": None, "event_cursor": 0, "reused": False}
+    return {"id": "fixture-job-" + uuid.uuid4().hex, "status": "running", "trigger": "manual", "request": {"reasoning_effort": None, "service_tier": None, "model": None, "provider_route": None, "replace_today": False, "wait_for_provider_ready": False, **request}, "created_at": STAMP, "updated_at": STAMP, "progress": {"phase": "plan", "events_received": 0}, "result": None, "error": None, "source_revision": "fixture-revision", "result_identity": None, "event_cursor": 0, "reused": False}
 
 
 
@@ -61,6 +69,18 @@ def chart_payload():
         {"radar": {"indicator": [{"name": "Read", "max": 100}, {"name": "Move", "max": 100}, {"name": "Sleep", "max": 100}]}, "series": [{"name": "Activity", "type": "radar", "data": [{"name": "Today", "value": [70, 40, 80]}, {"name": "Goal", "value": [80, 60, 90]}]}]},
     ]
     return {"count": len(options), "charts": [{"id": f"fixture-{i}", "title": f"Synthetic chart {i + 1}", "description": "Native chart semantic smoke fixture", "empty": False, "error": None, "summary": [], "option": option} for i, option in enumerate(options)]}
+
+
+
+def excel_fixture():
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as book:
+        book.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
+        book.writestr("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+        book.writestr("xl/workbook.xml", '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Synthetic" sheetId="1" r:id="rId1"/></sheets></workbook>')
+        book.writestr("xl/_rels/workbook.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>')
+        book.writestr("xl/worksheets/sheet1.xml", '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Synthetic score</t></is></c><c r="B1"><v>25</v></c></row></sheetData></worksheet>')
+    return output.getvalue()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -135,7 +155,7 @@ class Handler(BaseHTTPRequestHandler):
             st["launch_at_login"] = body.get("launch_at_login", False)
             return self.respond({"completed": True, "launchAtLogin": st["launch_at_login"], "providerConfigured": True, "migration": {"imported": False, "completed": False, "sourcePath": None}, "settings": {k: st[k] for k in ("display_language", "theme", "theme_mode", "launch_at_login")}, "provider": {"selected_provider": "fixture", "providers": ["fixture"]}})
         if path == "/api/v1/action-plan/today":
-            return self.respond(TODAY)
+            return self.respond(s["today"])
         if path == "/api/v1/action-plan/jobs":
             if method == "POST":
                 if s["job"] and s["job"]["status"] in {"running", "queued", "cancelling"}:
@@ -160,6 +180,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond((json.dumps(events[0]) + "\n").encode(), content_type="application/x-ndjson")
                 if mode == "truncated" and s["events_reads"] == 1:
                     return self.respond(b'{"truncated":true,"cursor":2}\n', content_type="application/x-ndjson")
+                if mode == "hold":
+                    return self.respond((json.dumps({"sequence": 1, "timestamp": STAMP, "job_status": "running", "phase": "waiting"}) + "\n").encode(), content_type="application/x-ndjson")
                 if mode == "failed":
                     j.update(status="failed", error={"code": "FIXTURE", "message": "Synthetic failure"})
                     events.append({"sequence": 3, "timestamp": STAMP, "error": "Synthetic failure", "error_code": "FIXTURE", "job_status": "failed"})
@@ -167,7 +189,12 @@ class Handler(BaseHTTPRequestHandler):
                     j["status"] = "cancelled"
                     events.append({"sequence": 3, "timestamp": STAMP, "job_status": "cancelled"})
                 else:
-                    j.update(status="succeeded", result=copy.deepcopy(TODAY), result_identity="fixture-plan")
+                    completed = copy.deepcopy(TODAY)
+                    completed["id"] = "fixture-plan-" + uuid.uuid4().hex
+                    completed["filename"] = completed["id"] + ".json"
+                    completed["timestamp"] = time.time()
+                    s["today"] = completed
+                    j.update(status="succeeded", result=copy.deepcopy(completed), result_identity=completed["id"])
                     events.append({"sequence": 3, "timestamp": STAMP, "done": True, "job_status": "succeeded"})
                 j["event_cursor"] = 3
                 return self.respond("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in events).encode(), content_type="application/x-ndjson")
@@ -229,7 +256,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/v1/face/report":
             return self.respond(face_payload())
         if path == "/api/v1/face/export":
-            return self.respond(b"Synthetic export fixture", content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            return self.respond(excel_fixture(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if path == "/api/v1/camera/stream":
+            frame = b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(JPEG)).encode() + b"\r\n\r\n" + JPEG + b"\r\n"
+            return self.respond(frame * 3 + b"--frame--\r\n", content_type="multipart/x-mixed-replace; boundary=frame")
         if path == "/api/v1/media/latest":
             return self.respond({"photo": "/static/photos/synthetic-photo.png", "screenshot": "/static/screenshots/synthetic-screen.png", "photo_name": "synthetic-photo.png", "screenshot_name": "synthetic-screen.png", "latest_media_scan_truncated": False})
         if path == "/api/v1/camera/detection/toggle":

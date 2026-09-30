@@ -18,7 +18,9 @@ public sealed class JobObserver(ApiClient api)
                 var job = await api.JobAsync(id, ct);
                 snapshot?.Invoke(job);
                 if (job.IsTerminal) return ValidateTerminal(job);
-                await foreach (var item in api.JobEventsAsync(id, cursor, ct))
+                using var observation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                observation.CancelAfter(TimeSpan.FromSeconds(90));
+                await foreach (var item in api.JobEventsAsync(id, cursor, observation.Token))
                 {
                     if (item.Truncated || item.EventTruncated)
                     {
@@ -38,6 +40,7 @@ public sealed class JobObserver(ApiClient api)
             }
             catch (ApiException e) when (e.Status == HttpStatusCode.NotFound) { throw new JobLostException(); }
             catch (ApiException e) when ((int)e.Status >= 500) { delay = Math.Min(delay * 2, 5000); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { delay = Math.Min(delay * 2, 5000); }
             catch (HttpRequestException) { delay = Math.Min(delay * 2, 5000); }
             catch (IOException) { delay = Math.Min(delay * 2, 5000); }
             await Task.Delay(delay, ct);

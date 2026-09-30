@@ -19,12 +19,12 @@ struct BackendChart: View {
                     }
                     ForEach(Array(Set(series.map(\.axis))).sorted(), id: \.self) { axis in
                         let matching = series.filter { $0.axis == axis && (selectedSeries.isEmpty || selectedSeries == $0.id) }
-                        if !matching.isEmpty { NativeSeriesChart(series: matching, axisTitle: axisName(axis), timeAxis: xAxis["type"].string == "time") }
+                        if !matching.isEmpty { NativeSeriesChart(series: matching, axisTitle: axisName(axis), axisConfiguration: axisValue(axis), formatter: chart["formatter"].string, timeAxis: xAxis["type"].string == "time") }
                     }
                 }
                 HStack {
                     ForEach(Array(chart["summary"].array.enumerated()), id: \.offset) { _, summary in
-                        VStack(alignment: .leading) { Text(summary["label"].string).font(.caption).foregroundStyle(.secondary); Text(summary["value"].string + " " + summary["unit"].string).bold() }.padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                        VStack(alignment: .leading) { Text(summary["label"].string).font(.caption).foregroundStyle(.secondary); Text(ChartFormatting.summary(summary)).bold() }.padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                     }
                 }
                 DisclosureGroup("Data", isExpanded: $showData) {
@@ -37,17 +37,22 @@ struct BackendChart: View {
         } label: { Text(chart["title"].string).font(.title3.bold()) }
     }
     private var xAxis: JSONValue { chart["option"]["xAxis"].array.first ?? chart["option"]["xAxis"] }
-    private func axisName(_ index: Int) -> String {
+    private func axisValue(_ index: Int) -> JSONValue {
         let axes = chart["option"]["yAxis"].array
-        return axes.indices.contains(index) ? axes[index]["name"].string : chart["option"]["yAxis"]["name"].string
+        return axes.indices.contains(index) ? axes[index] : chart["option"]["yAxis"]
     }
+    private func axisName(_ index: Int) -> String { axisValue(index)["name"].string }
 }
 struct NativeSeriesChart: View {
     let series: [NativeChartSeries]
     var axisTitle = ""
+    var axisConfiguration: JSONValue = .null
+    var formatter = ""
     var timeAxis = false
     @State private var selectedX: Double?
+    @State private var zoom = 100.0
     private var points: [NativeChartPoint] { series.flatMap(\.points) }
+    private var axis: ChartAxis { ChartAxis(axisConfiguration) }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !axisTitle.isEmpty { Text(axisTitle).font(.caption).foregroundStyle(.secondary) }
@@ -60,13 +65,13 @@ struct NativeSeriesChart: View {
             } else {
                 Chart(points) { point in
                     if point.kind == "bar" {
-                        BarMark(x: .value("Date", point.x), y: .value("Value", point.y), stacking: point.stack.isEmpty ? .unstacked : .standard)
+                        BarMark(x: .value("Date", point.x), y: .value("Value", axis.coordinate(point.y)), stacking: point.stack.isEmpty ? .unstacked : .standard)
                             .foregroundStyle(by: .value("Series", point.series))
                             .position(by: .value("Group", point.stack.isEmpty ? point.series : point.stack))
                     } else if point.kind == "scatter" {
-                        PointMark(x: .value("Date", point.x), y: .value("Value", point.y)).foregroundStyle(by: .value("Series", point.series))
+                        PointMark(x: .value("Date", point.x), y: .value("Value", axis.coordinate(point.y))).foregroundStyle(by: .value("Series", point.series))
                     } else {
-                        LineMark(x: .value("Date", point.x), y: .value("Value", point.y), series: .value("Segment", "\(point.series)-\(point.segment)"))
+                        LineMark(x: .value("Date", point.x), y: .value("Value", axis.coordinate(point.y)), series: .value("Segment", "\(point.series)-\(point.segment)"))
                             .foregroundStyle(by: .value("Series", point.series))
                     }
                     if let selectedX, abs(point.x - selectedX) < 0.0001 { RuleMark(x: .value("Selected", selectedX)).foregroundStyle(.secondary).annotation(position: .top) { Text("\(point.label): \(point.y.formatted())").font(.caption) } }
@@ -76,14 +81,30 @@ struct NativeSeriesChart: View {
                         AxisGridLine(); AxisTick()
                         AxisValueLabel {
                             if let value = axis.as(Double.self) {
-                                if timeAxis { Text(Date(timeIntervalSince1970: value), format: .dateTime.month().day()) }
+                                if timeAxis { Text(ChartFormatting.dateTick(value)) }
                                 else { Text(points.min(by: { abs($0.x - value) < abs($1.x - value) })?.label ?? "") }
                             }
                         }
                     }
                 }
+                .chartYAxis {
+                    AxisMarks { axis in
+                        AxisGridLine(); AxisTick()
+                        AxisValueLabel { if let number = axis.as(Double.self) { Text(ChartFormatting.value(self.axis.value(number), kind: formatter, name: axisTitle)) } }
+                    }
+                }
+                .modifier(NativeChartScale(configuration: axisConfiguration))
                 .chartXSelection(value: $selectedX)
+                .chartScrollableAxes(.horizontal)
+                .chartXVisibleDomain(length: max(1, ((points.map(\.x).max() ?? 1) - (points.map(\.x).min() ?? 0)) * zoom / 100))
                 .frame(height: 260)
+                HStack { Text("Zoom").font(.caption); Slider(value: $zoom, in: 5...100); Text("\(Int(zoom))%").font(.caption.monospacedDigit()) }
+                if let selectedX, let nearest = points.min(by: { abs($0.x - selectedX) < abs($1.x - selectedX) }) {
+                    Text(nearest.label).font(.caption.bold())
+                    ForEach(points.filter { abs($0.x - nearest.x) < 0.0001 }) { point in
+                        Text(point.series + ": " + ChartFormatting.value(point.y, kind: formatter, name: point.series)).font(.caption)
+                    }
+                }
             }
         }
     }
@@ -163,5 +184,14 @@ struct DynamicGrid: View {
             }
             if filtered.count > limit { Button("Show more") { limit += 100 } }
         }
+    }
+}
+
+private struct NativeChartScale: ViewModifier {
+    let configuration: JSONValue
+    @ViewBuilder func body(content: Content) -> some View {
+        let axis = ChartAxis(configuration)
+        if let bounds = axis.bounds { content.chartYScale(domain: bounds) }
+        else { content.chartYScale(domain: .automatic(includesZero: axis.includesZero)) }
     }
 }

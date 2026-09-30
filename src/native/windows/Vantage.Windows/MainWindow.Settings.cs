@@ -36,7 +36,7 @@ public sealed partial class MainWindow
             var context = new NumberBox { Header = T("上下文容量（0 使用默认）", "Context tokens (0 = default)"), Minimum = 0, Maximum = 100000000, Value = provider["context_window_tokens"]?.GetValue<int>() ?? 0 };
             var output = new NumberBox { Header = T("最大输出（0 使用默认）", "Output tokens (0 = default)"), Minimum = 0, Maximum = 100000000, Value = provider["max_output_tokens"]?.GetValue<int>() ?? 0 };
             var removed = false;
-            var panel = Stack(Row(routeInput, name), enabled, url, key, clearKey, model, models, Row(context, output));
+            var panel = Stack(Row(routeInput, name), enabled, url, key, clearKey, Text(T("更改服务地址时，请重新输入密钥或明确清除旧密钥。密钥不会在读取设置时返回。", "When changing the endpoint, re-enter the key or explicitly clear it. Saved keys are never returned by settings reads.")), model, models, Row(context, output));
             var card = Card(panel);
             panel.Children.Add(Row(ActionButton(T("发现模型", "Discover models"), async () =>
             {
@@ -101,7 +101,7 @@ public sealed partial class MainWindow
                 if (remove) { providers.Remove(route); continue; }
                 var merged = (JsonObject?)(providers[route]?.DeepClone()) ?? [];
                 // Never replay a masked credential; omission is the write-only preserve operation.
-                merged.Remove("api_key"); foreach (var property in value) merged[property.Key] = property.Value?.DeepClone(); providers[route] = merged;
+                merged.Remove("api_key"); merged.Remove("context_window_tokens"); merged.Remove("max_output_tokens"); foreach (var property in value) merged[property.Key] = property.Value?.DeepClone(); providers[route] = merged;
             }
             var defaultRoute = Value(selected); if (providers.Count > 0 && !providers.ContainsKey(defaultRoute)) throw new InvalidDataException(T("请选择存在的默认 Provider", "Choose an existing default provider"));
             var patch = new JsonObject {
@@ -139,11 +139,11 @@ public sealed partial class MainWindow
         var skip = Check(T("暂不配置对话服务（保留已有设置）", "Skip chat setup (preserve existing configuration)"), true);
         var route = Input(T("Provider 标识", "Provider route"), "custom"); var url = Input("Base URL"); var model = Input(T("模型", "Model"));
         var key = new PasswordBox { Header = "API key", PasswordRevealMode = PasswordRevealMode.Hidden };
-        var provider = Stack(route, url, key, model); provider.IsEnabled = false; skip.Checked += (_, _) => provider.IsEnabled = false; skip.Unchecked += (_, _) => provider.IsEnabled = true;
+        var provider = new UserControl { Content = Stack(route, url, key, model), IsEnabled = false }; skip.Checked += (_, _) => provider.IsEnabled = false; skip.Unchecked += (_, _) => provider.IsEnabled = true;
         var import = Check(T("从选定目录导入已有数据", "Import existing data from a chosen folder"), false); var directory = Input(T("导入源目录", "Source folder")); directory.IsReadOnly = true;
         PageContent.Children.Add(Card(Stack(language, startup, skip, provider)));
         PageContent.Children.Add(new Expander { Header = T("导入已有数据（可选）", "Import existing data (optional)"), Content = Stack(import, directory, ActionButton(T("选择目录", "Choose folder"), async () => { var path = await NativeDesktop.PickFolderAsync(this); if (path is not null) directory.Text = path; })), HorizontalAlignment = HorizontalAlignment.Stretch });
-        PageContent.Children.Add(ActionButton(T("完成设置", "Finish setup"), async () =>
+        onboardingFinish = ActionButton(T("完成设置", "Finish setup"), async () =>
         {
             if (import.IsChecked == true && (directory.Text.Length == 0 || !await ConfirmAsync(T("导入数据", "Import data"), directory.Text + "\n" + T("从此目录复制缺少的历史和状态文件？", "Copy missing history and state files from this folder?")))) return;
             var value = new JsonObject { ["skip_chat_setup"] = skip.IsChecked == true, ["display_language"] = Value(language), ["launch_at_login"] = startup.IsChecked == true, ["import_legacy_data"] = import.IsChecked == true };
@@ -151,7 +151,8 @@ public sealed partial class MainWindow
             if (import.IsChecked == true) value["legacy_root"] = directory.Text;
             await api.CompleteOnboardingAsync(value, ct);
             if (!(await api.OnboardingAsync(ct)).Completed) throw new InvalidDataException(T("引导尚未完成", "Setup has not completed"));
-            key.Password = ""; settings = await api.SettingsAsync(ct); NativeDesktop.SetStartup(settings.Settings.Bool("launch_at_login")); ApplyAppearance(); BuildNavigation(); UpdateTray(); await NavigateAsync("dashboard");
-        }));
+            key.Password = ""; settings = await api.SettingsAsync(ct); onboarded = true; if (smokeOutput is null) NativeDesktop.SetStartup(settings.Settings.Bool("launch_at_login")); ApplyAppearance(); BuildNavigation(); UpdateTray(); await NavigateAsync("dashboard");
+        });
+        PageContent.Children.Add(onboardingFinish);
     }
 }

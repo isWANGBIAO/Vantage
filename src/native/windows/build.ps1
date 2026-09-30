@@ -10,6 +10,8 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $runtime = (Resolve-Path $BackendRuntime).Path
 if (-not (Test-Path (Join-Path $runtime 'VantageBackend.exe'))) { throw 'BackendRuntime must contain the real VantageBackend.exe bundle.' }
 if (-not (Test-Path (Join-Path $runtime 'runtime-manifest.json'))) { throw 'Backend runtime manifest is required; use src/scripts/build_backend_runtime.py.' }
+& python (Join-Path $repo 'scripts/validate_native_runtime.py') --runtime $runtime --platform win32 --architecture ($Architecture.ToLower())
+if ($LASTEXITCODE -ne 0) { throw 'Backend runtime validation failed.' }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo 'build/native/windows' }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $target = Join-Path $OutputDirectory 'Vantage'

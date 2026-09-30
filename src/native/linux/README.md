@@ -4,7 +4,7 @@
 
 ## 运行
 
-Ubuntu/Debian 的官方系统依赖：`python3-gi python3-cairo python3-gi-cairo gir1.2-gtk-4.0`。录音可选 `pipewire-bin`（pw-record）或 `alsa-utils`（arecord）。GTK 4.8+、Python 3.10+。
+Ubuntu/Debian 的官方系统依赖：`python3-gi python3-cairo python3-gi-cairo gir1.2-gtk-4.0 fonts-noto-cjk`。录音可选 `pipewire-bin`（pw-record）或 `alsa-utils`（arecord）。GTK 4.8+、Python 3.10+。
 
 ```sh
 /usr/bin/python3 src/native/linux/main.py --check
@@ -13,12 +13,13 @@ Ubuntu/Debian 的官方系统依赖：`python3-gi python3-cairo python3-gi-cairo
 /usr/bin/python3 src/native/linux/main.py --connect-only --backend-url http://127.0.0.1:8000
 ```
 
-打包版解压后运行 `./Vantage/vantage`。可选执行 `./Vantage/install-desktop-entry` 安装当前用户的启动器。无需管理员权限。包内含后端 runtime；GTK 来自发行版，不能把这个归档描述为无系统依赖的 AppImage。
+打包版解压后运行 `./Vantage/vantage`。可选执行 `./Vantage/install-desktop-entry` 安装当前用户的启动器。无需管理员权限。包内含后端 runtime；归档附带官方 Noto CJK 字体和版权文件，仅在应用进程中注册，避免缺字；GTK 来自发行版，不能把这个归档描述为无系统依赖的 AppImage。
 
 后端地址优先级为命令行、VANTAGE_BACKEND_URL、VANTAGE_BACKEND_HOST/PORT、127.0.0.1:8000。仅 loopback；不接受重定向或环境代理。HTTPS/带路径代理仅连接，不能启动。先检测已运行服务，未运行时才启动随包后端。只终止自己启动的子进程，不终止已连接的其他后端。运行数据默认 `~/.local/share/Vantage`，遵循 VANTAGE_DATA_DIR，不写源码目录。
 
 ## 功能
 
+- 原生 Markdown 标题、强调、列表/勾选项、表格、引用、代码与链接文字（无 HTML 执行）
 - 原生首次引导、写入式密钥、完整 provider 保留、模型发现、语音/图像服务、模型参数、主题与语言
 - 状态仪表盘、资源、久坐、空气质量、隐藏的媒体预览、目录打开
 - 行动计划创建/加入、NDJSON 增量、重连游标/去重、截断恢复、显式取消、成功结果校验、调度信息
@@ -41,4 +42,4 @@ dbus-run-session -- xvfb-run -a /usr/bin/python3 src/native/linux/smoke_test.py 
 
 烟测启动纯 stdlib 合成后端，无真实模型/硬件/个人数据，在真实 GTK 窗口遍历 10 页并截图，执行任务、聊天、清空、采购建议、引导流程。退出码非零即失败；`report.json` 明确检查内容。截图仅存在指定输出目录，不提交到公共仓库。完整硬件、桌面托盘宿主、录音权限、安装后自动启动仍需目标 Linux 桌面验收。
 
-构建脚本要求预先构建的 Linux ELF `VantageBackend`，复制其完整 PyInstaller runtime 目录，输出 `Vantage-linux-<arch>.tar.gz`，缺后端时明确失败，不静默创建不可运行的包。
+构建脚本要求预先构建的 Linux ELF `VantageBackend`，复制其完整 PyInstaller runtime 目录，输出 `Vantage-linux-<arch>.tar.gz`，同时验证 manifest/resource/fingerprint/架构、携带项目 LICENSE 和 Noto 字体许可，缺后端或字体许可时明确失败，不静默创建不可运行的包。

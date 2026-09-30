@@ -15,9 +15,12 @@ final class AppModel: ObservableObject {
     @Published var reasoning = "high"
     @Published var tier = ""
     @Published var plan: PlanResult?
+    @Published var creatingPlan = false
     @Published var job: ActionPlanJob?
     @Published var planStream = PlanStreamState()
     @Published var planConnection = ""
+    @Published var observationSettled = true
+    @Published var verifiedResultJobID: String?
     @Published var chat: ChatContext?
     @Published var chatStream = ChatStreamState()
     @Published var sendingChat = false
@@ -61,8 +64,8 @@ final class AppModel: ObservableObject {
             try await refreshModels()
             guard connectionID == epoch else { return }
             connected = true; error = nil
-            if state?.settings.launch_at_login == true && !ProcessInfo.processInfo.arguments.contains("--smoke-test") {
-                do { try NativePlatform.setLogin(true) } catch { self.error = "Settings are saved, but macOS login startup could not be applied: " + error.localizedDescription }
+            if let enabled = state?.settings.launch_at_login, !ProcessInfo.processInfo.arguments.contains("--smoke-test") {
+                do { try NativePlatform.setLogin(enabled) } catch { self.error = "Settings are saved, but macOS login startup could not be applied: " + error.localizedDescription }
             }
             if onboarding.completed { await refreshPlanAndJobs(); try await refreshChat() }
             monitor?.cancel()
@@ -94,17 +97,23 @@ final class AppModel: ObservableObject {
         state = result; NativePlatform.applyTheme(result.settings.theme_mode)
     }
     func saveSettings(_ payload: JSONValue) async throws {
-        let _: SettingsState = try await api.request(path: "/api/v1/settings", method: "PUT", body: payload)
+        let epoch = connectionID; let client = api
+        let _: SettingsState = try await client.request(path: "/api/v1/settings", method: "PUT", body: payload)
+        guard connectionID == epoch else { throw CancellationError() }
         try await refreshSettings()
+        guard connectionID == epoch else { throw CancellationError() }
         if let enabled = payload["launch_at_login"].bool {
             do { try NativePlatform.setLogin(enabled) } catch { throw APIError.http(409, "Settings were saved, but macOS login startup could not be applied. " + error.localizedDescription) }
         }
         try await refreshModels()
     }
     func completeOnboarding(_ body: JSONValue) async throws {
-        let _: JSONValue = try await api.request(path: "/api/v1/onboarding/complete", method: "POST", body: body)
+        let epoch = connectionID; let client = api
+        let _: JSONValue = try await client.request(path: "/api/v1/onboarding/complete", method: "POST", body: body)
+        guard connectionID == epoch else { throw CancellationError() }
         try await refreshSettings()
-        onboarding = try await api.request(path: "/api/v1/onboarding")
+        let result: OnboardingState = try await client.request(path: "/api/v1/onboarding")
+        guard connectionID == epoch else { throw CancellationError() }; onboarding = result
         if let enabled = body["launch_at_login"].bool { try NativePlatform.setLogin(enabled) }
         try await refreshModels(); await refreshPlanAndJobs(); try await refreshChat()
     }
@@ -130,21 +139,28 @@ final class AppModel: ObservableObject {
         } catch { if connectionID == epoch { report(error); pageLoads[AppPage.plan.rawValue] = "error" } }
     }
     func generate(replace: Bool) async {
+        guard !creatingPlan else { return }
+        let epoch = connectionID; let client = api
+        creatingPlan = true; defer { if connectionID == epoch { creatingPlan = false } }
         do {
             var request = ActionPlanRequest(); request.model = selectedOption?.model; request.provider_route = selectedOption?.provider_route
             request.reasoning_effort = reasoning.isEmpty ? nil : reasoning; request.service_tier = tier.isEmpty ? nil : tier
             request.replace_today = replace
-            let result: ActionPlanJob = try await api.request(path: "/api/v1/action-plan/jobs", method: "POST", body: try .encode(request))
-            observe(result)
+            let result: ActionPlanJob = try await client.request(path: "/api/v1/action-plan/jobs", method: "POST", body: try .encode(request))
+            guard connectionID == epoch else { return }; observe(result)
         } catch { report(error) }
     }
     func cancelJob() async {
         guard let job, !job.status.terminal else { return }
-        do { self.job = try await api.request(path: "/api/v1/action-plan/jobs/\(job.id)/cancel", method: "POST") }
-        catch { report(error) }
+        let epoch = connectionID; let client = api
+        do {
+            let result: ActionPlanJob = try await client.request(path: "/api/v1/action-plan/jobs/\(job.id)/cancel", method: "POST")
+            guard connectionID == epoch else { return }; self.job = result
+        } catch { if connectionID == epoch { report(error) } }
     }
     private func observe(_ initial: ActionPlanJob) {
         observation?.cancel(); job = initial; planStream = PlanStreamState(); planConnection = ""
+        observationSettled = false; verifiedResultJobID = nil
         let identity = UUID(); generation = identity
         let client = api
         observation = Task { [weak self] in
@@ -167,12 +183,14 @@ final class AppModel: ObservableObject {
                             }
                             self.plan = saved; self.planConnection = self.text("已保存完整计划", "Complete plan saved")
                             try await self.refreshChat()
+                            guard self.generation == identity else { break }
+                            self.verifiedResultJobID = snapshot.id
                         } else { self.planConnection = snapshot.error?.message ?? snapshot.status.rawValue }
                         break
                     }
                     self.planConnection = self.text("正在接收进度", "Receiving progress")
                     try await client.stream(path: "/api/v1/action-plan/jobs/\(initial.id)/events", query: ["after": String(self.planStream.cursor)]) { [weak self] event in
-                        await MainActor.run { guard let self, self.generation == identity else { return }; self.planStream.apply(event) }
+                        if let receiver = self { await receiver.receivePlanEvent(event, identity: identity) }
                     }
                     delay = 1
                     // Always reread authoritative state; neither EOF nor partial text proves success.
@@ -185,20 +203,32 @@ final class AppModel: ObservableObject {
                     try? await Task.sleep(for: .seconds(delay)); delay = min(delay * 2, 15)
                 }
             }
-            if self.generation == identity { self.observation = nil }
+            if self.generation == identity { self.observation = nil; self.observationSettled = true }
         }
     }
+    private func receivePlanEvent(_ event: StreamEvent, identity: UUID) {
+        guard generation == identity else { return }; planStream.apply(event)
+    }
+    private func receiveChatEvent(_ event: StreamEvent, epoch: UUID) {
+        guard connectionID == epoch else { return }; chatStream.apply(event)
+    }
     func refreshChat() async throws {
+        chatReady = false
         let epoch = connectionID; let client = api
         let snapshot: ChatContext = try await client.request(path: "/api/v1/chat/context")
         guard connectionID == epoch else { throw CancellationError() }
+        if chat == nil || chat?.base_context_version != snapshot.base_context_version {
+            if let preferred = snapshot.preferred_model_option_id, models.contains(where: { $0.id == preferred }) { selectedModel = preferred }
+        }
         chat = snapshot; chatReady = true
         pageLoads[AppPage.chat.rawValue] = "loaded"
     }
     func clearChat() async throws {
         guard !sendingChat else { return }
-        chat = try await api.request(path: "/api/v1/chat/context", method: "DELETE")
-        chatStream = ChatStreamState()
+        let epoch = connectionID; let client = api
+        let result: ChatContext = try await client.request(path: "/api/v1/chat/context", method: "DELETE")
+        guard connectionID == epoch else { throw CancellationError() }
+        chat = result; chatStream = ChatStreamState()
     }
     func sendChat() {
         let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -210,7 +240,7 @@ final class AppModel: ObservableObject {
             guard let self else { return }; defer { if self.connectionID == epoch { self.sendingChat = false; self.chatTask = nil } }
             do {
                 try await client.stream(path: "/api/v1/chat", method: "POST", body: try .encode(request)) { [weak self] event in
-                    await MainActor.run { guard let self, self.connectionID == epoch else { return }; self.chatStream.apply(event) }
+                    if let receiver = self { await receiver.receiveChatEvent(event, epoch: epoch) }
                 }
                 guard self.connectionID == epoch, !Task.isCancelled else { return }
                 if let failure = self.chatStream.failure { throw APIError.http(502, failure) }
@@ -224,8 +254,8 @@ final class AppModel: ObservableObject {
         connectionID = UUID(); generation = UUID()
         monitor?.cancel(); observation?.cancel(); chatTask?.cancel()
         monitor = nil; observation = nil; chatTask = nil
-        camera.stop(); host.shutdown(); connecting = false; connected = false; sendingChat = false; chatReady = false
-        chat = nil; state = nil; onboarding = nil; plan = nil; job = nil
+        camera.stop(); host.shutdown(); connecting = false; connected = false; sendingChat = false; chatReady = false; creatingPlan = false
+        chat = nil; state = nil; onboarding = nil; plan = nil; job = nil; observationSettled = true; verifiedResultJobID = nil
     }
 }
 
@@ -239,7 +269,7 @@ enum AppPage: String, CaseIterable, Identifiable {
         case .face: return "person.crop.rectangle"; case .usage: return "gauge.with.dots.needle.67percent"; case .logs: return "terminal"; case .settings: return "gearshape"
         }
     }
-    func title(_ model: AppModel) -> String {
+    @MainActor func title(_ model: AppModel) -> String {
         switch self {
         case .dashboard: return model.text("仪表盘", "Dashboard"); case .plan: return model.text("行动计划", "Action plan")
         case .chat: return model.text("对话", "Chat"); case .projects: return model.text("项目进度", "Projects")

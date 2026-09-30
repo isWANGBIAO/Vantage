@@ -101,12 +101,20 @@ public sealed partial class MainWindow
         }
         async Task Transcribe(string path)
         {
-            await using var audio = File.OpenRead(path); var result = await api.TranscribeAsync(audio, Path.GetFileName(path), ct);
-            message.Text = result.Transcription ?? ""; Status(T("转录已填入消息，可检查后发送", "Transcription is ready to review and send"));
+            if (transcriptionTask is { IsCompleted: false }) throw new InvalidOperationException(T("转录正在进行", "A transcription is already running"));
+            transcriptionLifetime?.Dispose(); transcriptionLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct); var uploadCt = transcriptionLifetime.Token;
+            async Task Upload()
+            {
+                await using var audio = File.OpenRead(path); var result = await api.TranscribeAsync(audio, Path.GetFileName(path), uploadCt);
+                uploadCt.ThrowIfCancellationRequested(); message.Text = result.Transcription ?? "";
+                Status(T("转录已填入消息，可检查后发送", "Transcription is ready to review and send"));
+            }
+            transcriptionTask = Upload(); await transcriptionTask;
         }
+        var recordingState = Text(T("录音未开始", "Not recording")); DateTimeOffset recordedAt = default;
         var record = ActionButton(T("录音 / 停止并转录", "Record / stop and transcribe"), async () =>
         {
-            if (!recorder.IsRecording) { await recorder.StartAsync(); Status(T("正在录音，点击同一按钮停止并转录", "Recording; click again to stop and transcribe")); }
+            if (!recorder.IsRecording) { await recorder.StartAsync(); recordedAt = DateTimeOffset.Now; Status(T("正在录音，点击同一按钮停止并转录", "Recording; click again to stop and transcribe")); }
             else { try { await Transcribe(await recorder.StopAsync()); } finally { await recorder.DisposeAsync(); } }
         });
         var send = ActionButton(T("发送", "Send"), Send);
@@ -120,6 +128,13 @@ public sealed partial class MainWindow
         PageContent.Children.Add(metadata); PageContent.Children.Add(history); PageContent.Children.Add(stats); PageContent.Children.Add(message);
         PageContent.Children.Add(Row(send, ActionButton(T("停止", "Stop"), () => { chatLifetime?.Cancel(); return Task.CompletedTask; }), record,
             ActionButton(T("音频文件转录", "Transcribe audio file"), async () => { var path = await NativeDesktop.PickAudioAsync(this); if (path is not null) await Transcribe(path); })));
+        PageContent.Children.Add(Row(recordingState, ActionButton(T("取消并删除录音", "Discard recording"), async () => { await StopAudioAsync(); recordingState.Text = T("录音已删除", "Recording discarded"); })));
+        if (smokeOutput is null) _ = PollAsync(async () =>
+        {
+            if (!recorder.IsRecording) { recordingState.Text = T("录音未开始", "Not recording"); return; }
+            var elapsed = DateTimeOffset.Now - recordedAt; recordingState.Text = T("正在录音 ", "Recording ") + elapsed.ToString(@"mm\:ss");
+            if (elapsed >= TimeSpan.FromMinutes(5)) { await recorder.DisposeAsync(); Status(T("录音达到5分钟上限，已停止并删除临时文件", "Recording reached its five-minute limit and was stopped; the temporary file was deleted")); }
+        }, TimeSpan.FromSeconds(1), ct);
         PageContent.Children.Add(Text(T("音频由共享后端发送到已配置的语音服务。录音只在点击后开始，临时录音转录后删除。", "Audio is sent through the shared backend to your configured voice provider. Recording starts only when clicked; temporary recordings are deleted after transcription.")));
         await Refresh();
     }

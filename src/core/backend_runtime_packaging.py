@@ -100,6 +100,7 @@ PYINSTALLER_EXCLUDES = (
     "polars",
     "src.AI_Prediction",
     "src.battery_monitor",
+    "src.native",
     "src.core.backend_runtime_lock",
     "src.scripts.convert_icon",
     "src.scripts.install_requirements",

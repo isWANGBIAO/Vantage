@@ -40,7 +40,7 @@ struct ActionPlanView: View {
                     } else {
                         Button(model.text("生成计划", "Generate plan")) {
                             if model.plan?.exists == true && replace { confirmReplace = true } else { Task { await model.generate(replace: replace) } }
-                        }.buttonStyle(.borderedProminent)
+                        }.buttonStyle(.borderedProminent).disabled(model.creatingPlan)
                         Toggle(model.text("成功后替换今日计划", "Replace today's plan after success"), isOn: $replace).toggleStyle(.checkbox)
                     }
                     Spacer()
@@ -83,6 +83,7 @@ struct ChatView: View {
     @State private var confirmClear = false
     @State private var transcribing = false
     @State private var showBase = false
+    @State private var sendVoice = true
     @State private var recordingTask: Task<Void, Never>?
     @State private var voiceEpoch = UUID()
     private var messages: [ChatMessage] {
@@ -126,9 +127,17 @@ struct ChatView: View {
             }
             if let stats = model.chatStream.stats ?? model.chat?.stats { DisclosureGroup(model.text("会话用量", "Session usage")) { RecordDetails(value: stats).frame(maxHeight: 180) }.font(.caption).padding(.horizontal, 20) }
             Divider()
+            HStack {
+                Text(model.state?.settings.voice_model ?? "").font(.caption).foregroundStyle(.secondary)
+                Toggle(model.text("录音转录后发送", "Send after voice transcription"), isOn: $sendVoice).toggleStyle(.checkbox).font(.caption)
+                if voice.recording {
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in Label("\(Int(voice.duration))s", systemImage: "record.circle").foregroundStyle(.red) }
+                }
+                Spacer()
+            }.padding(.horizontal, 18).padding(.top, 10)
             HStack(alignment: .bottom, spacing: 12) {
-                TextEditor(text: $model.draft).font(.body).frame(minHeight: 60, maxHeight: 130).padding(7).background(.background, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(.separator))
-                Button { recordingTask = Task { await toggleRecording() } } label: { Image(systemName: voice.recording ? "stop.circle.fill" : "mic.fill").foregroundStyle(voice.recording ? .red : .primary) }.disabled(transcribing || model.sendingChat).help(model.text("录音转文字", "Record and transcribe"))
+                TextEditor(text: $model.draft).font(.body).frame(minHeight: 60, maxHeight: 130).padding(7).background(.background, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor)))
+                Button { recordingTask = Task { await toggleRecording() } } label: { Image(systemName: voice.recording ? "stop.circle.fill" : "mic.fill").foregroundStyle(voice.recording ? .red : .primary) }.disabled(transcribing || model.sendingChat || (!model.chatReady && !voice.recording)).help(model.text("录音转文字", "Record and transcribe"))
                 if transcribing { ProgressView().controlSize(.small) }
                 if model.sendingChat { Button(model.text("停止", "Stop")) { model.stopChat() } }
                 else { Button(model.text("发送", "Send")) { model.sendChat() }.buttonStyle(.borderedProminent).disabled(!model.chatReady || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || voice.recording || transcribing).keyboardShortcut(.return, modifiers: .command) }
@@ -149,6 +158,7 @@ struct ChatView: View {
                 let text = try await client.transcribe(file: file)
                 guard epoch == voiceEpoch, !Task.isCancelled, client === model.api else { return }
                 model.draft += (model.draft.isEmpty ? "" : "\n") + text
+                if sendVoice && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { model.sendChat() }
             } else { try await voice.start() }
         } catch { voice.discard(); model.report(error) }
     }
@@ -158,13 +168,26 @@ struct MarkdownDocument: View {
     let text: String
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
-                if line.hasPrefix("### ") { Text(String(line.dropFirst(4))).font(.headline) }
-                else if line.hasPrefix("## ") { Text(String(line.dropFirst(3))).font(.title2.bold()).padding(.top, 8) }
-                else if line.hasPrefix("# ") { Text(String(line.dropFirst(2))).font(.title.bold()).padding(.top, 8) }
-                else if line.hasPrefix("- [x] ") || line.hasPrefix("- [ ] ") {
-                    Label { Text(.init(String(line.dropFirst(6)))) } icon: { Image(systemName: line.hasPrefix("- [x]") ? "checkmark.circle.fill" : "circle").foregroundStyle(.teal) }
-                } else { Text(.init(line.isEmpty ? " " : line)).frame(maxWidth: .infinity, alignment: .leading) }
+            ForEach(Array(MarkdownBlocks.parse(text).enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .heading(let title, let level):
+                    Text(.init(title)).font(level == 1 ? .title.bold() : level == 2 ? .title2.bold() : .headline).padding(.top, 8)
+                case .code(let language, let code):
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack { Text(language.isEmpty ? "Code" : language).font(.caption).foregroundStyle(.secondary); Spacer(); Button("Copy") { NativePlatform.copy(code) } }
+                        ScrollView(.horizontal) { Text(code).font(.system(.body, design: .monospaced)).frame(maxWidth: .infinity, alignment: .leading) }
+                    }.padding(12).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                case .table(let columns, let rows):
+                    DynamicGrid(columns: columns, rows: rows.map { $0.map(JSONValue.string) })
+                case .quote(let content):
+                    HStack(alignment: .top) { Rectangle().fill(Color.accentColor).frame(width: 3); Text(.init(content)).foregroundStyle(.secondary).padding(.vertical, 4) }.fixedSize(horizontal: false, vertical: true)
+                case .paragraph(let line):
+                    if line.hasPrefix("- [x] ") || line.hasPrefix("- [ ] ") {
+                        Label { Text(.init(String(line.dropFirst(6)))) } icon: { Image(systemName: line.hasPrefix("- [x]") ? "checkmark.circle.fill" : "circle").foregroundStyle(.teal) }
+                    } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                        HStack(alignment: .firstTextBaseline) { Text("•"); Text(.init(String(line.dropFirst(2)))) }
+                    } else { Text(.init(line.isEmpty ? " " : line)).frame(maxWidth: .infinity, alignment: .leading) }
+                }
             }
         }.textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
     }

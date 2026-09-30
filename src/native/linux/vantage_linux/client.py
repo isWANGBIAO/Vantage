@@ -153,12 +153,19 @@ class Client:
         return self.request("/api/v1/media/transcribe", "POST", body, {"Content-Type": f"multipart/form-data; boundary={boundary}"})
 
     def frames(self, stop):
-        with self.open("/api/v1/camera/stream", timeout=10) as response:
-            with self.active_lock:
-                self.active.setdefault("/api/v1/camera/stream", set()).add(response)
+        path = "/api/v1/camera/stream"
+        response = self.open(path, timeout=10)
+        with self.active_lock:
+            self.active.setdefault(path, set()).add(response)
+        try:
             pending = bytearray()
             while not stop.is_set():
-                chunk = response.read1(16384)
+                try:
+                    chunk = response.read1(16384)
+                except (OSError, ValueError, AttributeError):
+                    if stop.is_set():
+                        return
+                    raise ClientError("Camera stream interrupted") from None
                 if not chunk:
                     return
                 pending.extend(chunk)
@@ -171,6 +178,10 @@ class Client:
                     del pending[:end + 2]
                 if len(pending) > MAX_RESPONSE:
                     raise ClientError("Camera frame exceeds the safe size limit")
+        finally:
+            response.close()
+            with self.active_lock:
+                self.active.get(path, set()).discard(response)
 
 
 def provider_patch(state, route, values, key=None, clear_key=False):

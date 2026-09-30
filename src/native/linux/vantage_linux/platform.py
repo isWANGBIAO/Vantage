@@ -90,7 +90,7 @@ class Recorder:
                 self.process.wait()
             code = self.process.returncode
             self.process = None
-            if code not in {0, 1, -signal.SIGINT}:
+            if code not in {0, -signal.SIGINT}:
                 self.discard()
                 raise RuntimeError("麦克风不可用或权限被拒绝 / Microphone unavailable or permission denied")
         return self.path

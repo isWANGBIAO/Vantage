@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import CoreGraphics
 import ServiceManagement
 import VantageCore
 
@@ -124,7 +125,7 @@ struct SettingsView: View {
             SecureField(model.text("新 API key（留空保留）", "New API key (blank keeps saved key)"), text: voice ? $voiceKey : $imageKey)
             Toggle(model.text("清除已保存密钥", "Clear saved key"), isOn: voice ? $clearVoice : $clearImage)
             TextField(model.text("模型", "Model"), text: settings(voice ? \.voice_model : \.image_model, ""))
-            Button(model.text("发现模型", "Discover models")) { Task { await discoverSpecial(kind) } }
+            Button(model.text("发现模型", "Discover models")) { Task { await discoverSpecial(kind) } }.disabled(voice ? clearVoice : clearImage)
             let available = voice ? draft?.settings.voice_models : draft?.settings.image_models
             if !(available ?? []).isEmpty { Text((available ?? []).joined(separator: ", ")).font(.caption).textSelection(.enabled) }
         }
@@ -138,6 +139,7 @@ struct SettingsView: View {
                 }
                 Button(model.text("相机权限设置", "Camera permissions")) { NativePlatform.privacySettings("Camera") }
                 Button(model.text("麦克风权限设置", "Microphone permissions")) { NativePlatform.privacySettings("Microphone") }
+                Button(model.text("申请录屏权限", "Request screen recording access")) { _ = CGRequestScreenCaptureAccess() }
                 Button(model.text("录屏权限设置", "Screen recording permissions")) { NativePlatform.privacySettings("ScreenCapture") }
             }
             Text(model.text("照片与截图默认隐藏，打开预览才显示。录音只在按下麦克风后开始，临时文件在转录后删除", "Photos and screenshots stay hidden until revealed. Audio records only after pressing the microphone and temporary files are removed after transcription.")).font(.caption)
@@ -171,21 +173,27 @@ struct SettingsView: View {
         } catch { model.report(error) }
     }
     private func discoverProvider() async {
-        guard let provider = draft?.provider.providers[providerRoute] else { return }
+        let route = providerRoute; let client = model.api
+        guard let provider = draft?.provider.providers[route] else { return }
         do {
-            var request: [String: JSONValue] = ["route": .string(providerRoute), "base_url": .string(provider.base_url), "type": .string(provider.type)]
-            if let key = providerKeys[providerRoute], !key.isEmpty { request["api_key"] = .string(key) }
-            let result: JSONValue = try await model.api.request(path: "/api/v1/models/discover", method: "POST", body: .object(request))
-            draft?.provider.providers[providerRoute]?.models = result["models"].array.map(\.string)
-            draft?.provider.providers[providerRoute]?.last_refreshed_at = ISO8601DateFormatter().string(from: Date())
+            var request: [String: JSONValue] = ["route": .string(route), "base_url": .string(provider.base_url), "type": .string(provider.type)]
+            if let key = providerKeys[route], !key.isEmpty { request["api_key"] = .string(key) }
+            if clearKeys.contains(route) { request["route"] = .string(""); request["api_key"] = .string("") }
+            let result: JSONValue = try await client.request(path: "/api/v1/models/discover", method: "POST", body: .object(request))
+            guard client === model.api, draft?.provider.providers[route]?.base_url == provider.base_url else { return }
+            draft?.provider.providers[route]?.models = result["models"].array.map(\.string)
+            draft?.provider.providers[route]?.last_refreshed_at = ISO8601DateFormatter().string(from: Date())
         } catch { model.report(error) }
     }
     private func discoverSpecial(_ kind: String) async {
-        guard let settings = draft?.settings else { return }; let voice = kind == "voice"
+        guard let settings = draft?.settings else { return }; let voice = kind == "voice"; let client = model.api
         do {
             var body: [String: JSONValue] = ["kind": .string(kind), "mode": .string(voice ? settings.voice_provider_mode : settings.image_provider_mode), "base_url": .string(voice ? settings.voice_base_url : settings.image_base_url)]
             let key = voice ? voiceKey : imageKey; if !key.isEmpty { body["api_key"] = .string(key) }
-            let result: JSONValue = try await model.api.request(path: "/api/v1/providers/models/discover", method: "POST", body: .object(body))
+            let result: JSONValue = try await client.request(path: "/api/v1/providers/models/discover", method: "POST", body: .object(body))
+            guard client === model.api,
+                  (voice ? draft?.settings.voice_base_url : draft?.settings.image_base_url) == (voice ? settings.voice_base_url : settings.image_base_url),
+                  (voice ? draft?.settings.voice_provider_mode : draft?.settings.image_provider_mode) == (voice ? settings.voice_provider_mode : settings.image_provider_mode) else { return }
             let values = result["models"].array.map(\.string); let timestamp = ISO8601DateFormatter().string(from: Date())
             if voice { draft?.settings.voice_models = values; draft?.settings.voice_last_refreshed_at = timestamp }
             else { draft?.settings.image_models = values; draft?.settings.image_last_refreshed_at = timestamp }
@@ -242,12 +250,20 @@ struct OnboardingView: View {
                 }.buttonStyle(.borderedProminent).disabled(busy || (step == 1 && !skip && route.trimmingCharacters(in: .whitespaces).isEmpty) || (step == 2 && importing && legacyRoot.isEmpty))
             }
         }.padding(40).frame(maxWidth: 800).disabled(busy)
-        .onAppear { language = model.onboarding?.displayLanguage ?? "system"; startup = model.onboarding?.launchAtLogin ?? false }
+        .onAppear {
+            language = model.onboarding?.displayLanguage ?? "system"; startup = model.onboarding?.launchAtLogin ?? false
+            if let selected = model.state?.provider.selected_provider, let provider = model.state?.provider.providers[selected] {
+                route = selected; baseURL = provider.base_url; modelName = provider.model
+            }
+        }
     }
     private func finish() async {
         busy = true; failure = nil; defer { busy = false }
         var body: [String: JSONValue] = ["display_language": .string(language), "launch_at_login": .bool(startup), "skip_chat_setup": .bool(skip), "import_legacy_data": .bool(importing)]
-        if !skip { body["selected_provider"] = .string(route); body["base_url"] = .string(baseURL); body["api_key"] = .string(key); body["model"] = .string(modelName) }
+        if !skip {
+            body["selected_provider"] = .string(route); body["base_url"] = .string(baseURL); body["model"] = .string(modelName)
+            if !key.isEmpty { body["api_key"] = .string(key) }
+        }
         if importing { body["legacy_root"] = .string(legacyRoot) }
         do { try await model.completeOnboarding(.object(body)); key = "" } catch { failure = SensitiveText.redact(error.localizedDescription) }
     }

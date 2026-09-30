@@ -25,7 +25,7 @@ public sealed partial class MainWindow
         }
         PageContent.Children.Add(Row(ActionButton(T("刷新", "Refresh"), Refresh), ActionButton(T("相机权限", "Camera permissions"), () => { NativeDesktop.PermissionSettings("webcam"); return Task.CompletedTask; }), ActionButton(T("位置权限", "Location permissions"), () => { NativeDesktop.PermissionSettings("location"); return Task.CompletedTask; })));
         PageContent.Children.Add(statistics); PageContent.Children.Add(health); PageContent.Children.Add(cameraStatus);
-        var camera = new Image { Height = 350, Stretch = Stretch.Uniform }; var cameraToggle = new ToggleSwitch { Header = T("显示实时相机（默认遮挡）", "Show live camera (hidden by default)") }; CancellationTokenSource? cameraCts = null;
+        var camera = new Image { Height = 350, Stretch = Stretch.Uniform }; var cameraToggle = new ToggleSwitch { Header = T("显示实时相机（默认遮挡）", "Show live camera (hidden by default)") }; CancellationTokenSource? cameraCts = null; privacyToggles.Add(cameraToggle);
         cameraToggle.Toggled += async (_, _) =>
         {
             cameraCts?.Cancel(); cameraCts?.Dispose(); camera.Source = null;
@@ -37,6 +37,7 @@ public sealed partial class MainWindow
         };
         PageContent.Children.Add(Card(Stack(cameraToggle, camera, ActionButton(T("切换检测框", "Toggle detection boxes"), async () => { await api.PostAsync("/api/v1/camera/detection/toggle", ct: ct); await Refresh(); }))));
         var reveal = new ToggleSwitch { Header = T("显示最近照片与截图（默认遮挡）", "Show latest photo and screenshot (hidden by default)") };
+        privacyToggles.Add(reveal);
         reveal.Toggled += async (_, _) =>
         {
             images.Children.Clear(); if (!reveal.IsOn) return;
@@ -81,8 +82,8 @@ public sealed partial class MainWindow
         {
             content.Children.Clear(); if (data is null) return;
             if (data.Warnings.ValueKind == JsonValueKind.Array && data.Warnings.GetArrayLength() > 0) content.Children.Add(Card(DataView(data.Warnings, T("数据质量提示", "Data quality warnings"))));
-            foreach (var chart in data.Charts.Where(c => (c.Title + c.Description).Contains(filter.Text, StringComparison.CurrentCultureIgnoreCase)))
-                content.Children.Add(Card(Stack(Text(chart.Title, 22), Text(chart.Description ?? ""), DataView(chart.Summary), new NativeChart(chart.Option))));
+            foreach (var chart in data.Charts.Where(c => (PlotText.Translate(c.Title, English) + PlotText.Translate(c.Description ?? "", English)).Contains(filter.Text, StringComparison.CurrentCultureIgnoreCase)))
+                content.Children.Add(Card(Stack(Text(PlotText.Translate(chart.Title, English), 22), Text(PlotText.Translate(chart.Description ?? "", English)), DataView(PlotText.Localize(chart.Summary, English)), chart.Empty || chart.Error is not null ? Text(chart.Error ?? T("无源数据", "No source data")) : new NativeChart(PlotText.Localize(chart.Option, English), English))));
             if (data.Charts.Length == 0) content.Children.Add(Text(T("源工作簿中暂无图表数据", "No chart data in the source workbooks")));
         }
         async Task Refresh(bool rebuild) { if (rebuild) await api.PostAsync("/api/v1/plots/refresh", ct: ct); data = await api.GetAsync<PlotsResponse>("/api/v1/plots/data", ct); ct.ThrowIfCancellationRequested(); Render(); }
@@ -98,7 +99,7 @@ public sealed partial class MainWindow
         {
             var data = await api.GetAsync<JsonElement>("/api/v1/finance/balance-sheet", ct); ct.ThrowIfCancellationRequested(); finance.Children.Clear();
             if (data.Field("status").Text() == "unavailable") finance.Children.Add(Text(data.Field("error").Text()));
-            finance.Children.Add(Card(DataView(data.Field("summary"), T("财务摘要", "Financial summary")))); finance.Children.Add(DataView(data.Field("suggestions"), T("建议", "Suggestions")));
+            finance.Children.Add(FinanceSummary(data.Field("summary"))); finance.Children.Add(DataView(data.Field("suggestions"), T("建议", "Suggestions")));
             foreach (var key in new[] { "trend_points", "forecast_points" }) { finance.Children.Add(Text(key == "trend_points" ? T("消费趋势", "Expense trend") : T("余额预测", "Balance forecast"), 20)); finance.Children.Add(ChartForRows(data.Field(key), key)); }
             finance.Children.Add(ActionButton(T("复制分析输入", "Copy analysis input"), () => { NativeDesktop.Copy(data.Field("prompt_payload").ToString()); return Task.CompletedTask; }));
             foreach (var sheet in data.Field("sheets").Items())
@@ -147,11 +148,12 @@ public sealed partial class MainWindow
         xName ??= keys.FirstOrDefault(k => k is "datetime" or "date" or "timestamp" or "month" or "created_at") ?? keys.FirstOrDefault();
         var numeric = yName is not null ? new[] { yName } : keys.Where(k => k != xName && data.Any(row => row.Field(k).Number().HasValue)).ToArray();
         var series = numeric.Select(k => new { name = k, type = "line", data = data.Select((row, i) => new object?[] { xName is null ? i : row.Field(xName), row.Field(k).Number() }) });
-        return Stack(new NativeChart(JsonData.Element(new { xAxis = new { type = "time" }, yAxis = new { type = "value" }, series })), new Expander { Header = T("原始记录", "Source records"), Content = DataView(rows), HorizontalAlignment = HorizontalAlignment.Stretch });
+        return Stack(new NativeChart(JsonData.Element(new { xAxis = new { type = "time" }, yAxis = new { type = "value" }, series }), English), new Expander { Header = T("原始记录", "Source records"), Content = DataView(rows), HorizontalAlignment = HorizontalAlignment.Stretch });
     }
     async Task FaceAsync(CancellationToken ct)
     {
         PageContent.Children.Add(Heading(T("面部历史", "Face history"))); var progress = new ProgressBar { Minimum = 0, Maximum = 100 }; var status = Text(""); var report = Stack(); var live = Stack(); var liveToggle = new ToggleSwitch { Header = T("实时面部状态", "Live face status") };
+        privacyToggles.Add(liveToggle);
         var range = Choice(T("时间范围", "Time range"), new[] { "day", "week", "month", "all" }, "week"); JsonElement current = default;
         void Render()
         {
@@ -159,7 +161,7 @@ public sealed partial class MainWindow
             report.Children.Add(ChartForRows(current.Field("trend_views").Field(Value(range)).Field("points"), "Face", "datetime", "score"));
             foreach (var key in new[] { "lightest", "heaviest" })
             {
-                var entry = current.Field(key); var image = new Image { Height = 260, Stretch = Stretch.Uniform }; var reveal = new ToggleSwitch { Header = T("显示照片", "Reveal photo") };
+                var entry = current.Field(key); var image = new Image { Height = 260, Stretch = Stretch.Uniform }; var reveal = new ToggleSwitch { Header = T("显示照片", "Reveal photo") }; privacyToggles.Add(reveal);
                 reveal.Toggled += async (_, _) => { image.Source = null; var path = entry.Field("url").Text(); if (reveal.IsOn && path.Length > 0) { try { var bytes = await api.DownloadAsync(path, ct); if (reveal.IsOn && !ct.IsCancellationRequested) await ImageBytesAsync(image, bytes); } catch (Exception e) { if (!ct.IsCancellationRequested) ShowError(e); } } };
                 report.Children.Add(Card(Stack(Text($"{key} · {entry.Field("date").Text()} · {entry.Field("score").Text()}", 18), reveal, image)));
             }
@@ -183,8 +185,8 @@ public sealed partial class MainWindow
         async Task Refresh()
         {
             var data = await api.GetAsync<JsonElement>("/api/v1/usage", ct); ct.ThrowIfCancellationRequested(); content.Children.Clear();
-            content.Children.Add(Card(DataView(data.Field("summary"), T("累计统计", "Summary")))); content.Children.Add(ChartForRows(data.Field("by_day"), "Tokens", "date", "total_tokens"));
-            content.Children.Add(ChartForRows(data.Field("speed_series"), "Speed", "created_at", "output_tokens_per_second"));
+            content.Children.Add(UsageSummary(data.Field("summary"))); content.Children.Add(ChartForRows(data.Field("by_day"), "Tokens", "date", "total_tokens"));
+            content.Children.Add(UsageSpeedChart(data.Field("speed_series")));
             foreach (var (key, title) in new[] { ("by_source", T("按来源", "By source")), ("by_day", T("按日期", "By day")), ("sessions", T("会话", "Sessions")), ("recent_calls", T("最近调用", "Recent calls")) }) content.Children.Add(new Expander { Header = title, Content = DataView(data.Field(key)), HorizontalAlignment = HorizontalAlignment.Stretch });
         }
         PageContent.Children.Add(ActionButton(T("刷新", "Refresh"), Refresh)); PageContent.Children.Add(content); await Refresh();
@@ -193,7 +195,7 @@ public sealed partial class MainWindow
     {
         PageContent.Children.Add(Heading(T("系统日志", "System logs"))); var search = Input(T("搜索日志", "Search logs")); var severity = Choice(T("级别", "Severity"), new[] { "All", "ERROR", "WARNING", "INFO", "DEBUG" }, "All"); var automatic = Check(T("自动刷新", "Auto refresh"), true);
         var log = new TextBox { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 400, FontFamily = new FontFamily("Consolas") }; string[] lines = [];
-        void Render() => log.Text = string.Join("", lines.Where(x => x.Contains(search.Text, StringComparison.CurrentCultureIgnoreCase) && (Value(severity) == "All" || x.Contains(Value(severity), StringComparison.OrdinalIgnoreCase))));
+        void Render() => log.Text = string.Join("\n", lines.Select(x => x.TrimEnd()).Where(x => x.Contains(search.Text, StringComparison.CurrentCultureIgnoreCase) && (Value(severity) == "All" || x.Contains(Value(severity), StringComparison.OrdinalIgnoreCase))));
         async Task Refresh() { var data = await api.GetAsync<LogsResponse>("/api/v1/system/logs", ct); ct.ThrowIfCancellationRequested(); lines = data.Logs; Render(); }
         search.TextChanged += (_, _) => Render(); severity.SelectionChanged += (_, _) => Render();
         PageContent.Children.Add(Row(search, severity)); PageContent.Children.Add(Row(automatic, ActionButton(T("刷新", "Refresh"), Refresh), ActionButton(T("复制已筛选日志", "Copy filtered logs"), () => { NativeDesktop.Copy(log.Text); return Task.CompletedTask; })));

@@ -28,7 +28,7 @@ def series_points(series, categories=None):
             x, y = point[0], point[1]
         else:
             x, y = (categories[i] if categories and i < len(categories) else i + 1), point
-        points.append((str(x), float(y) if numeric(y) else None))
+        points.append((x, float(y) if numeric(y) else None))
     return points
 
 
@@ -45,7 +45,7 @@ def prepare_chart(option, limit=90):
         keys.sort(key=lambda k: time_value(k) or 0)
         xvalues = {key: time_value(key) for key in keys}
     elif xaxis.get("type") == "value":
-        xvalues = {key: float(key) if key.replace(".", "", 1).replace("-", "", 1).isdigit() else None for key in keys}
+        xvalues = {key: float(key) if str(key).replace(".", "", 1).replace("-", "", 1).isdigit() else None for key in keys}
     else:
         xvalues = {key: float(i) for i, key in enumerate(keys)}
     valid_x = [v for v in xvalues.values() if v is not None]

@@ -39,6 +39,8 @@ public sealed class BackendHost(ApiClient api) : IDisposable
         start.Environment["VANTAGE_BACKEND_HOST"] = api.Address.BaseUri.DnsSafeHost.Trim('[', ']');
         start.Environment["VANTAGE_BACKEND_PORT"] = api.Address.BaseUri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
         start.Environment.Remove("VANTAGE_PROJECT_ROOT");
+        try
+        {
         owned = Process.Start(start) ?? throw new InvalidOperationException("Backend process could not start.");
         using var ready = CancellationTokenSource.CreateLinkedTokenSource(ct); ready.CancelAfter(TimeSpan.FromMinutes(2));
         while (true)
@@ -49,6 +51,8 @@ public sealed class BackendHost(ApiClient api) : IDisposable
             catch (OperationCanceledException) when (!ready.IsCancellationRequested) { }
             await Task.Delay(500, ready.Token);
         }
+        }
+        catch { Dispose(); throw; }
     }
     public void Dispose()
     {
