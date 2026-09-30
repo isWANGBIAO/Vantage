@@ -3,7 +3,7 @@
 Vantage 提供三个使用系统控件的客户端，共享唯一 Python/FastAPI 后端与 `/api/v1` 契约。
 
 - Windows：[`src/native/windows`](../src/native/windows/README.md)，WinUI 3 / Windows App SDK，.NET 8
-- macOS：[`src/native/macos`](../src/native/macos/README.md)，SwiftUI / AppKit / CoreGraphics，macOS 14+
+- macOS：[`src/native/macos`](../src/native/macos/README.md)，SwiftUI / AppKit / CoreGraphics，完整安装包 macOS 15+
 - Linux：[`src/native/linux`](../src/native/linux/README.md)，GTK4 / PyGObject / Cairo
 
 这些客户端不装载 WebView、React 页面或 Electron runtime。原有 React/Electron 客户端继续使用同一后端；原生界面不复制配置持久化、provider 路由、模型执行、工作簿分析或自动调度规则。

@@ -98,6 +98,8 @@ jobs:
         run: ./src/native/windows/build.ps1 -BackendRuntime build/backend-runtime/stage/VantageBackend -OutputDirectory build/native/windows
       - name: Exercise native window against synthetic data
         run: python scripts/smoke_native_client.py --client build/native/windows/Vantage/Vantage.Windows.exe --output build/native-smoke/windows
+      - name: Exercise native first-run setup and navigation gate
+        run: python scripts/smoke_native_client.py --client build/native/windows/Vantage/Vantage.Windows.exe --output build/native-smoke/windows-onboarding --onboarding
       - uses: actions/upload-artifact@v4
         with:
           name: Vantage-Windows-x64-${{ github.sha }}
@@ -113,6 +115,7 @@ jobs:
             build/native-smoke/windows/
             build/native-smoke/windows-source/
             build/native-smoke/windows-build/
+            build/native-smoke/windows-onboarding/
           if-no-files-found: warn
           retention-days: 14
 

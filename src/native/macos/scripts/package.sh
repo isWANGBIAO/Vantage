@@ -14,7 +14,8 @@ while (($#)); do
     *) echo "Usage: $0 --backend-runtime DIR [--output DIR] [--configuration release|debug]" >&2; exit 2 ;;
   esac
 done
-[[ "$(uname -s)" == Darwin ]] || { echo "Packaging requires macOS 14+ and Xcode Command Line Tools." >&2; exit 1; }
+[[ "$(uname -s)" == Darwin ]] || { echo "Packaging requires macOS 15+ and Xcode Command Line Tools." >&2; exit 1; }
+[[ "$(sw_vers -productVersion | cut -d. -f1)" -ge 15 ]] || { echo "The complete backend/app bundle is built and validated for macOS 15+." >&2; exit 1; }
 [[ "$CONFIGURATION" == release || "$CONFIGURATION" == debug ]] || { echo "Invalid build configuration" >&2; exit 2; }
 [[ -n "$RUNTIME" && -x "$RUNTIME/VantageBackend" ]] || { echo "A complete backend runtime directory containing executable VantageBackend is required." >&2; exit 1; }
 RUNTIME="$(cd "$RUNTIME" && pwd)"

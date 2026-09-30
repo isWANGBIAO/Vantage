@@ -117,7 +117,12 @@ final class AppModel: ObservableObject {
         try await refreshSettings()
         let result: OnboardingState = try await client.request(path: "/api/v1/onboarding")
         guard connectionID == epoch else { throw CancellationError() }; onboarding = result
-        if let enabled = body["launch_at_login"].bool { try NativePlatform.setLogin(enabled) }
+        if let enabled = body["launch_at_login"].bool {
+            do { try NativePlatform.setLogin(enabled) }
+            catch { report(APIError.http(409, text("引导已保存，但 macOS 登录启动未能应用：", "Setup was saved, but macOS login startup could not be applied: ") + error.localizedDescription)) }
+        }
+        // An OS login-item failure must not leave the completed application's
+        // model picker and conversation uninitialized.
         try await refreshModels(); await refreshPlanAndJobs(); try await refreshChat()
     }
     func refreshModels() async throws {

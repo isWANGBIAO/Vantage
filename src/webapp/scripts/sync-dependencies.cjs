@@ -598,10 +598,10 @@ function signalProcessGroup(processGroupId, signal) {
   }
 }
 
-function writeHelperJsonAtomically(targetPath, payload) {
+function writeHelperFileAtomically(targetPath, contents) {
   const tempPath = `${targetPath}.${crypto.randomBytes(8).toString('hex')}.tmp`;
   try {
-    fs.writeFileSync(tempPath, `${JSON.stringify(payload)}\n`, {
+    fs.writeFileSync(tempPath, contents, {
       encoding: 'utf8',
       flag: 'wx',
       mode: 0o600,
@@ -611,6 +611,10 @@ function writeHelperJsonAtomically(targetPath, payload) {
     fs.rmSync(tempPath, { force: true });
     throw error;
   }
+}
+
+function writeHelperJsonAtomically(targetPath, payload) {
+  writeHelperFileAtomically(targetPath, `${JSON.stringify(payload)}\n`);
 }
 
 function spawnWindowsOwnedCommand(execution, options) {
@@ -882,11 +886,9 @@ function runDependencySyncLockHelper() {
 
   try {
     installLockGuardian(lockPath, token, parentPid, process.pid);
-    fs.writeFileSync(readyPath, `${token}\n`, {
-      encoding: 'utf8',
-      flag: 'wx',
-      mode: 0o600,
-    });
+    // The parent polls this path synchronously. Publishing the file before its
+    // token is written can make it mistake an initializing helper for failure.
+    writeHelperFileAtomically(readyPath, `${token}\n`);
   } catch {
     cleanup(2);
     return;

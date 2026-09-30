@@ -1,6 +1,8 @@
 # Vantage 原生 macOS 客户端
 
-macOS 14+，SwiftUI + AppKit + CPU/CoreGraphics 图表；没有 WebView、Electron 或 React 运行时。复用同一个 `/api/v1` Python 后端。
+完整应用包要求 macOS 15+，SwiftUI + AppKit + CPU/CoreGraphics 图表；没有 WebView、Electron 或 React 运行时。复用同一个 `/api/v1` Python 后端。
+
+界面源码 Swift Package 的 API target 为 macOS 14；Python 运行时与完整 `.app` 按 macOS 15 构建和验收（Apple Silicon / Intel），`LSMinimumSystemVersion` 为 15.0。尚未验证整包在 macOS 14 上运行。
 
 ## 构建和启动
 

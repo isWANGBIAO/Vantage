@@ -18,7 +18,7 @@ public sealed partial class MainWindow
         var wait = Check(T("等待本地服务就绪", "Wait for local provider readiness"), false);
         var progress = Text(T("尚无活动任务", "No active job")); var actualRequest = Text("");
         var eventLog = Input(T("实时进度", "Live progress"), multi: true); eventLog.IsReadOnly = true;
-        var resultPanel = Stack(); string? currentJob = null; PlanResult? displayedPlan = null;
+        var resultPanel = Stack(); resultPanel.Name = "PlanSavedResult"; string? currentJob = null; PlanResult? displayedPlan = null;
         async Task<PlanResult> LoadSaved()
         {
             var saved = await api.PlanAsync(ct); ct.ThrowIfCancellationRequested();
@@ -61,6 +61,7 @@ public sealed partial class MainWindow
             await Observe(await api.CreateJobAsync(new(models.Model, models.Route, models.Reasoning, models.Tier, replace.IsChecked == true, wait.IsChecked == true), ct));
         });
         var cancel = ActionButton(T("取消活动任务", "Cancel active job"), async () => { var active = currentJob ?? (await api.JobsAsync(ct)).Active?.Id; if (active is not null) { var result = await api.CancelJobAsync(active, ct); progress.Text = result.Status; } });
+        generate.Name = "PlanGenerate"; cancel.Name = "PlanCancel";
         PageContent.Children.Add(Row(generate, cancel, ActionButton(T("重新连接 / 刷新", "Reconnect / refresh"), () => NavigateAsync("plan"))));
         PageContent.Children.Add(Row(replace, wait)); PageContent.Children.Add(progress); PageContent.Children.Add(actualRequest); PageContent.Children.Add(eventLog); PageContent.Children.Add(resultPanel);
         await LoadSaved();
@@ -81,7 +82,7 @@ public sealed partial class MainWindow
     {
         PageContent.Children.Add(Heading(T("对话", "Chat")));
         var model = new ModelPicker(await api.GetAsync<JsonElement>("/api/v1/models", ct)); PageContent.Children.Add(model);
-        var metadata = Text(""); var history = Stack(); var message = Input(T("消息 · Ctrl+Enter 发送", "Message · Ctrl+Enter to send"), multi: true); message.MinHeight = 100;
+        var metadata = Text(""); var history = Stack(); history.Name = "ChatHistory"; var message = Input(T("消息 · Ctrl+Enter 发送", "Message · Ctrl+Enter to send"), multi: true); message.MinHeight = 100; message.Name = "ChatInput";
         var stats = new Expander { Header = T("会话统计", "Session statistics"), HorizontalAlignment = HorizontalAlignment.Stretch };
         Task? sending = null; ChatContext? authoritativeContext = null; long draftRevision = 0; bool clearingForSend = false;
         message.TextChanging += (sender, args) => { if (!clearingForSend) draftRevision++; };
@@ -149,14 +150,16 @@ public sealed partial class MainWindow
             if (!recorder.IsRecording) { await recorder.StartAsync(); recordedAt = DateTimeOffset.Now; Status(T("正在录音，点击同一按钮停止并转录", "Recording; click again to stop and transcribe")); }
             else { try { await Transcribe(await recorder.StopAsync()); } finally { await recorder.DisposeAsync(); } }
         });
-        var send = ActionButton(T("发送", "Send"), Send);
+        var send = ActionButton(T("发送", "Send"), Send); send.Name = "ChatSend";
         var key = new KeyboardAccelerator { Key = VirtualKey.Enter, Modifiers = VirtualKeyModifiers.Control }; key.Invoked += async (_, e) => { e.Handled = true; await Send(); }; message.KeyboardAccelerators.Add(key);
-        PageContent.Children.Add(Row(ActionButton(T("刷新会话", "Reload session"), Refresh), ActionButton(T("清空对话", "Clear chat"), async () =>
+        var clear = ActionButton(T("清空对话", "Clear chat"), async () =>
         {
             if (!await ConfirmAsync(T("清空对话", "Clear chat"), T("清空已保存的对话历史？行动计划上下文会保留。", "Clear saved messages? The action-plan context is retained."))) return;
             chatLifetime?.Cancel(); if (sending is not null) await sending;
             Display(await api.ClearChatAsync(ct));
-        })));
+        });
+        clear.Name = "ChatClear";
+        PageContent.Children.Add(Row(ActionButton(T("刷新会话", "Reload session"), Refresh), clear));
         PageContent.Children.Add(metadata); PageContent.Children.Add(history); PageContent.Children.Add(stats); PageContent.Children.Add(message);
         PageContent.Children.Add(Row(send, ActionButton(T("停止", "Stop"), () => { chatLifetime?.Cancel(); return Task.CompletedTask; }), record,
             ActionButton(T("音频文件转录", "Transcribe audio file"), async () => { var path = await NativeDesktop.PickAudioAsync(this); if (path is not null) await Transcribe(path); })));

@@ -1030,6 +1030,87 @@ test('three simultaneous processes migrate one orphaned legacy lock without clob
   }
 });
 
+test('helper readiness is published atomically when its writer is interrupted', async () => {
+  const webappRoot = createWebappFixture();
+  const workerPath = writeSyncWorker(webappRoot);
+  const eventsPath = path.join(webappRoot, 'events.log');
+  const writeStartedPath = path.join(webappRoot, 'ready-write-started');
+  const readObservedPath = path.join(webappRoot, 'ready-read-observed');
+  const preloadPath = path.join(webappRoot, 'ready-publication-barrier.cjs');
+  writeFileSync(preloadPath, `
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const originalWrite = fs.writeFileSync;
+const originalRead = fs.readFileSync;
+const writeStartedPath = ${JSON.stringify(writeStartedPath)};
+const readObservedPath = ${JSON.stringify(readObservedPath)};
+const waitArray = new Int32Array(new SharedArrayBuffer(4));
+
+if (process.argv[2] === '--dependency-sync-lock-helper') {
+  fs.writeFileSync = function (target, contents, options) {
+    // Pause after creation, before bytes are written, for either the old direct
+    // ready file or the new atomic publication's temporary file.
+    if (typeof target !== 'string'
+      || !/^ready(?:\\.[a-f0-9]+\\.tmp)?$/u.test(path.basename(target))) {
+      return originalWrite.apply(this, arguments);
+    }
+    const descriptor = fs.openSync(target, options.flag, options.mode);
+    try {
+      originalWrite(writeStartedPath, 'started');
+      const deadline = Date.now() + 3000;
+      while (!fs.existsSync(readObservedPath)) {
+        if (Date.now() >= deadline) {
+          throw new Error('the parent did not reach the readiness read barrier');
+        }
+        Atomics.wait(waitArray, 0, 0, 5);
+      }
+      return originalWrite(descriptor, contents, options);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  };
+} else {
+  fs.readFileSync = function (target) {
+    try {
+      return originalRead.apply(this, arguments);
+    } finally {
+      if (typeof target === 'string'
+        && path.basename(target) === 'ready'
+        && fs.existsSync(writeStartedPath)) {
+        originalWrite(readObservedPath, 'observed');
+      }
+    }
+  };
+}
+`, 'utf8');
+  const worker = spawnSyncWorker({
+    workerPath,
+    webappRoot,
+    workerId: 'ready-race',
+    eventsPath,
+    releasePath: path.join(webappRoot, 'release-holder'),
+    signStampPath: path.join(webappRoot, 'native-sign-stamp'),
+    extraEnv: {
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require ${JSON.stringify(preloadPath)}`,
+    },
+  });
+
+  try {
+    const result = await worker.completion;
+    assert.equal(existsSync(writeStartedPath), true);
+    assert.equal(existsSync(readObservedPath), true);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(readEventLines(eventsPath), ['ready-race:ci:start', 'ready-race:ci:end']);
+    assert.equal(existsSync(statePathFor(webappRoot)), true);
+    assert.deepEqual(listDependencyLeaseNames(dependencySyncLockPath(webappRoot)), []);
+  } finally {
+    worker.child.kill('SIGKILL');
+    await Promise.allSettled([worker.completion]);
+    await removeFixtureWhenIdle(webappRoot);
+  }
+});
+
 test('an identity swap makes the displaced holder fail closed before publishing state', async () => {
   const webappRoot = createWebappFixture();
   const workerPath = writeSyncWorker(webappRoot);

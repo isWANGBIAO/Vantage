@@ -15,6 +15,8 @@ Ubuntu/Debian 的官方系统依赖：`python3-gi python3-cairo python3-gi-cairo
 
 打包版解压后运行 `./Vantage/vantage`。可选执行 `./Vantage/install-desktop-entry` 安装当前用户的启动器。无需管理员权限。包内含后端 runtime；归档附带官方 Noto CJK 字体和版权文件，仅在应用进程中注册，避免缺字；GTK 来自发行版，不能把这个归档描述为无系统依赖的 AppImage。
 
+CI 完整归档在 Ubuntu 24.04 x64 构建和运行验证；上面的 GTK/Python 版本是界面源码要求，不保证预编译后端兼容更旧的 glibc 或任意发行版。其他发行版应在对应目标系统重建共享后端并验收。
+
 后端地址优先级为命令行、VANTAGE_BACKEND_URL、VANTAGE_BACKEND_HOST/PORT、127.0.0.1:8000。仅 loopback；不接受重定向或环境代理。HTTPS/带路径代理仅连接，不能启动。先检测已运行服务，未运行时才启动随包后端。只终止自己启动的子进程，不终止已连接的其他后端。运行数据默认 `~/.local/share/Vantage`，遵循 VANTAGE_DATA_DIR，不写源码目录。
 
 ## 功能

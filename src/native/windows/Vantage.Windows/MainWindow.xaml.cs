@@ -123,6 +123,7 @@ public sealed partial class MainWindow : Window
     void BuildNavigation()
     {
         Navigation.MenuItems.Clear(); Navigation.IsSettingsVisible = onboarded; Navigation.IsPaneToggleButtonVisible = onboarded;
+        if (Navigation.SettingsItem is NavigationViewItem settingsItem) settingsItem.Content = T("设置", "Settings");
         foreach (var (id, zh, en, icon) in new[] {
             ("dashboard", "概览", "Dashboard", Symbol.Home), ("plan", "行动计划", "Action plan", Symbol.Bullets),
             ("chat", "对话", "Chat", Symbol.Message), ("projects", "项目进度", "Projects", Symbol.Flag),
@@ -192,7 +193,19 @@ public sealed partial class MainWindow : Window
     Button ActionButton(string title, Func<Task> action)
     {
         var button = new Button { Content = title };
-        button.Click += async (_, _) => { button.IsEnabled = false; try { await action(); } catch (OperationCanceledException) { } catch (Exception e) { ShowError(e); } finally { button.IsEnabled = true; } };
+        button.Click += async (sender, args) =>
+        {
+            button.IsEnabled = false; Exception? failure = null;
+            try { await action(); }
+            catch (OperationCanceledException e) { failure = e; }
+            catch (Exception e) { failure = e; ShowError(e); }
+            finally
+            {
+                button.IsEnabled = true;
+                if (smokeButtonActions.TryGetValue(button, out var completion))
+                { if (failure is null) completion.TrySetResult(true); else completion.TrySetException(failure); }
+            }
+        };
         return button;
     }
     static TextBlock Text(string value, double size = 14) => new() { Text = value, FontSize = size, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
@@ -209,7 +222,9 @@ public sealed partial class MainWindow : Window
     async Task<bool> ConfirmAsync(string title, string message)
     {
         var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = title, Content = Text(message), PrimaryButtonText = T("确认", "Confirm"), CloseButtonText = T("取消", "Cancel"), DefaultButton = ContentDialogButton.Close };
-        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+        activeDialog = dialog;
+        try { return await dialog.ShowAsync() == ContentDialogResult.Primary; }
+        finally { activeDialog = null; }
     }
     void ApplyAppearance()
     {
@@ -236,51 +251,6 @@ public sealed partial class MainWindow : Window
         catch (Exception e) { if (!ct.IsCancellationRequested) { ShowError(e); StatusBar.Message += T("；点击刷新重试", "; use Refresh to reconnect"); } }
     }
     UIElement DataView(JsonElement data, string? label = null) => NativeDataView.Create(data, label);
-    async Task RunSmokeAsync(string output)
-    {
-        var failures = new List<string>();
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
-        try
-        {
-            if (!ready) throw new InvalidOperationException("Backend initialization failed.");
-            if (!onboarded)
-            {
-                await NavigateAsync("chat");
-                if (selectedPage != "onboarding") failures.Add("Unfinished onboarding allowed navigation.");
-                var before = CountVisuals(PageContent);
-                if (onboardingFinish is null) throw new InvalidOperationException("Onboarding completion button is absent.");
-                var peer = new ButtonAutomationPeer(onboardingFinish);
-                ((IInvokeProvider)peer.GetPattern(PatternInterface.Invoke)).Invoke();
-                using var setupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-                while (!onboarded) await Task.Delay(100, setupTimeout.Token);
-                smokePages.Add(new { id = "onboarding", loaded = before > 5, explicit_skip = true, navigation_guard = true });
-            }
-            foreach (var page in new[] { "dashboard", "plan", "chat", "projects", "finance", "plots", "face", "usage", "logs", "settings" })
-            {
-                await NavigateAsync(page); Root.UpdateLayout(); await Task.Delay(100);
-                var count = CountVisuals(PageContent);
-                if (count < 5 || StatusBar.Severity == InfoBarSeverity.Error) failures.Add($"{page}: failed or empty native view");
-                string? screenshot = null; string? renderError = null;
-                try { screenshot = await ScreenshotAsync(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(output))!, page + ".png")); }
-                catch (Exception e) { renderError = e.GetType().Name; }
-                smokePages.Add(new { id = page == "plan" ? "action-plan" : page, loaded = count >= 5 && StatusBar.Severity != InfoBarSeverity.Error, visual_count = count, native = true, screenshot, render_error = renderError });
-            }
-            var job = await api.CreateJobAsync(new());
-            var terminal = await new JobObserver(api).ObserveAsync(job.Id, null, null, lifetime.Token);
-            if (terminal.Status != "succeeded" || !JobObserver.MatchesSavedResult(terminal.Result, await api.PlanAsync())) failures.Add("Action plan did not complete.");
-            var state = new ChatStreamState();
-            await foreach (var e in api.ChatAsync(new("Native smoke fixture"), lifetime.Token)) state.Apply(e);
-            state.RequireSuccess(); if (!(await api.ChatContextAsync()).Messages.Any()) failures.Add("Chat context was not persisted.");
-            var cleared = await api.ClearChatAsync();
-            var reread = await api.ChatContextAsync();
-            if (reread.ContextVersion != cleared.ContextVersion || cleared.Messages.Any(m => m.Role == "user" && m.Content == "Native smoke fixture")) failures.Add("Chat clear did not return the authoritative base state.");
-            await api.PostAsync("/api/v1/media/open-folder", new { type = "photo" });
-        }
-        catch (Exception e) { failures.Add(e.Message); }
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);
-        await File.WriteAllTextAsync(output, JsonSerializer.Serialize(new { success = failures.Count == 0, pages = smokePages, errors = failures }, new JsonSerializerOptions { WriteIndented = true }));
-        quitting = true; Environment.ExitCode = failures.Count == 0 ? 0 : 1; await ShutdownAsync(); Application.Current.Exit();
-    }
     async Task<string> ScreenshotAsync(string path)
     {
         var bitmap = new RenderTargetBitmap(); await bitmap.RenderAsync(Root);

@@ -265,6 +265,7 @@ struct OnboardingView: View {
             if !key.isEmpty { body["api_key"] = .string(key) }
         }
         if importing { body["legacy_root"] = .string(legacyRoot) }
-        do { try await model.completeOnboarding(.object(body)); key = "" } catch { failure = SensitiveText.redact(error.localizedDescription) }
+        do { try await model.completeOnboarding(.object(body)); key = "" }
+        catch { failure = SensitiveText.redact(error.localizedDescription); model.report(error) }
     }
 }

@@ -11,7 +11,7 @@ public sealed partial class MainWindow
     async Task DashboardAsync(CancellationToken ct)
     {
         PageContent.Children.Add(Heading(T("概览", "Dashboard")));
-        var statistics = Stack(); var health = Stack(); var images = Stack(); var cameraStatus = Text("");
+        var statistics = Stack(); var health = Stack(); var images = Stack(); images.Name = "LatestMedia"; var cameraStatus = Text("");
         async Task Refresh()
         {
             var status = await api.StatusAsync(ct); var stats = await api.GetAsync<SystemStatistics>("/api/v1/system/statistics", ct);
@@ -25,7 +25,7 @@ public sealed partial class MainWindow
         }
         PageContent.Children.Add(Row(ActionButton(T("刷新", "Refresh"), Refresh), ActionButton(T("相机权限", "Camera permissions"), () => { NativeDesktop.PermissionSettings("webcam"); return Task.CompletedTask; }), ActionButton(T("位置权限", "Location permissions"), () => { NativeDesktop.PermissionSettings("location"); return Task.CompletedTask; })));
         PageContent.Children.Add(statistics); PageContent.Children.Add(health); PageContent.Children.Add(cameraStatus);
-        var camera = new Image { Height = 350, Stretch = Stretch.Uniform }; var cameraToggle = new ToggleSwitch { Header = T("显示实时相机（默认遮挡）", "Show live camera (hidden by default)") }; CancellationTokenSource? cameraCts = null; privacyToggles.Add(cameraToggle);
+        var camera = new Image { Name = "CameraPreview", Height = 350, Stretch = Stretch.Uniform }; var cameraToggle = new ToggleSwitch { Name = "CameraToggle", Header = T("显示实时相机（默认遮挡）", "Show live camera (hidden by default)") }; CancellationTokenSource? cameraCts = null; privacyToggles.Add(cameraToggle);
         cameraToggle.Toggled += async (_, _) =>
         {
             cameraCts?.Cancel(); cameraCts?.Dispose(); camera.Source = null;
@@ -36,7 +36,7 @@ public sealed partial class MainWindow
             catch (Exception e) { if (!ct.IsCancellationRequested) ShowError(e); }
         };
         PageContent.Children.Add(Card(Stack(cameraToggle, camera, ActionButton(T("切换检测框", "Toggle detection boxes"), async () => { await api.PostAsync("/api/v1/camera/detection/toggle", ct: ct); await Refresh(); }))));
-        var reveal = new ToggleSwitch { Header = T("显示最近照片与截图（默认遮挡）", "Show latest photo and screenshot (hidden by default)") };
+        var reveal = new ToggleSwitch { Name = "LatestMediaToggle", Header = T("显示最近照片与截图（默认遮挡）", "Show latest photo and screenshot (hidden by default)") };
         privacyToggles.Add(reveal);
         reveal.Toggled += async (_, _) =>
         {
@@ -54,7 +54,8 @@ public sealed partial class MainWindow
             catch (Exception e) { ShowError(e); }
         };
         PageContent.Children.Add(reveal); PageContent.Children.Add(images);
-        PageContent.Children.Add(Row(ActionButton(T("打开照片目录", "Open photo folder"), () => api.PostAsync("/api/v1/media/open-folder", new { type = "photo" }, ct)), ActionButton(T("打开截图目录", "Open screenshot folder"), () => api.PostAsync("/api/v1/media/open-folder", new { type = "screenshot" }, ct))));
+        var photoFolder = ActionButton(T("打开照片目录", "Open photo folder"), () => api.PostAsync("/api/v1/media/open-folder", new { type = "photo" }, ct)); photoFolder.Name = "PhotoFolder";
+        PageContent.Children.Add(Row(photoFolder, ActionButton(T("打开截图目录", "Open screenshot folder"), () => api.PostAsync("/api/v1/media/open-folder", new { type = "screenshot" }, ct))));
         await Refresh(); if (smokeOutput is null) _ = PollAsync(Refresh, TimeSpan.FromSeconds(10), ct);
     }
     async Task ProjectsAsync(CancellationToken ct)
@@ -92,7 +93,7 @@ public sealed partial class MainWindow
     }
     async Task FinanceAsync(CancellationToken ct)
     {
-        PageContent.Children.Add(Heading(T("资产与消费", "Assets and expenses"))); var finance = Stack(); var recommendations = Stack(); var dismissed = Stack();
+        PageContent.Children.Add(Heading(T("资产与消费", "Assets and expenses"))); var finance = Stack(); var recommendations = Stack(); recommendations.Name = "PurchaseRecommendations"; var dismissed = Stack();
         var model = new ModelPicker(await api.GetAsync<JsonElement>("/api/v1/models", ct));
         var count = new NumberBox { Header = T("建议数量", "Recommendation count"), Minimum = 3, Maximum = 30, Value = 10, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline };
         async Task Refresh()
@@ -137,7 +138,8 @@ public sealed partial class MainWindow
         PageContent.Children.Add(ActionButton(T("刷新资产负债表", "Refresh balance sheet"), Refresh)); PageContent.Children.Add(finance);
         PageContent.Children.Add(Heading(T("采购建议", "Purchase recommendations"))); PageContent.Children.Add(model); PageContent.Children.Add(count);
         PageContent.Children.Add(Text(T("读取建议可能由后端生成并产生模型费用。点击下方按钮开始。", "Loading recommendations may generate them and incur model usage. Choose a button to begin.")));
-        PageContent.Children.Add(Row(ActionButton(T("读取建议", "Load recommendations"), () => LoadRecommendations(false)), ActionButton(T("重新生成", "Regenerate"), () => LoadRecommendations(true)))); PageContent.Children.Add(recommendations);
+        var loadRecommendations = ActionButton(T("读取建议", "Load recommendations"), () => LoadRecommendations(false)); loadRecommendations.Name = "RecommendationsLoad";
+        PageContent.Children.Add(Row(loadRecommendations, ActionButton(T("重新生成", "Regenerate"), () => LoadRecommendations(true)))); PageContent.Children.Add(recommendations);
         PageContent.Children.Add(new Expander { Header = T("已隐藏的建议", "Dismissed recommendations"), Content = Stack(ActionButton(T("读取已隐藏项", "Load dismissed"), LoadDismissed), ActionButton(T("恢复全部", "Restore all"), async () => { if (await ConfirmAsync(T("恢复全部", "Restore all"), T("恢复所有已隐藏的采购建议？", "Restore every dismissed recommendation?"))) { await api.SendAsync<JsonElement>(HttpMethod.Delete, "/api/v1/finance/purchase-recommendations/dismissed", ct: ct); await LoadDismissed(); if (recommendations.Children.Count > 0) await LoadRecommendations(false); } }), dismissed), HorizontalAlignment = HorizontalAlignment.Stretch });
         await Refresh();
     }
@@ -161,7 +163,7 @@ public sealed partial class MainWindow
             report.Children.Add(ChartForRows(current.Field("trend_views").Field(Value(range)).Field("points"), "Face", "datetime", "score"));
             foreach (var key in new[] { "lightest", "heaviest" })
             {
-                var entry = current.Field(key); var image = new Image { Height = 260, Stretch = Stretch.Uniform }; var reveal = new ToggleSwitch { Header = T("显示照片", "Reveal photo") }; privacyToggles.Add(reveal);
+                var entry = current.Field(key); var image = new Image { Name = "FacePhoto" + key, Height = 260, Stretch = Stretch.Uniform }; var reveal = new ToggleSwitch { Name = "FacePhotoToggle" + key, Header = T("显示照片", "Reveal photo") }; privacyToggles.Add(reveal);
                 reveal.Toggled += async (_, _) => { image.Source = null; var path = entry.Field("url").Text(); if (reveal.IsOn && path.Length > 0) { try { var bytes = await api.DownloadAsync(path, ct); if (reveal.IsOn && !ct.IsCancellationRequested) { await ImageBytesAsync(image, bytes, ct); if (!reveal.IsOn) image.Source = null; } } catch (Exception e) { if (!ct.IsCancellationRequested) ShowError(e); } } };
                 report.Children.Add(Card(Stack(Text($"{key} · {entry.Field("date").Text()} · {entry.Field("score").Text()}", 18), reveal, image)));
             }

@@ -39,7 +39,7 @@ $env:VANTAGE_BACKEND_URL='http://127.0.0.1:<fixture-port>'
 ./build/native/windows/Vantage/Vantage.Windows.exe --smoke-test <report.json>
 ```
 
-smoke 只连接该后端，不启动真实硬件/模型；导航十个业务页，读取非空 native visual tree，执行任务、聊天、清空与本地目录 intent 契约，并输出 success/pages/errors。该入口只供显式测试，不能指向个人真实 backend。测试不会点击外部服务或录音权限。
+smoke 只连接该后端，不启动真实硬件/模型；导航十个业务页并验证非空 native visual tree / PNG；通过 WinUI UI Automation 的 Invoke/Value/Toggle 操作真实生成、取消、聊天、清空确认、媒体显隐和目录按钮，再用只读 API 核对持久结果。截图覆盖实际滚动后的多轴/堆积/雷达图、计划正文、会话、Provider 与媒体区域。截图失败会使测试失败，报告输出 success/pages/errors/actions。该入口只供显式测试，不能指向个人真实 backend。测试不会点击外部服务或录音权限。
 
 Linux 上的源码检查不能证明 WinUI 编译或系统行为；相机/麦克风权限、托盘恢复、真实启动项、DPI、多显示器、辅助功能与完整安装包仍需 Windows 真机验收。请区分 CI fixture 通过与真实数据/硬件验收。
 

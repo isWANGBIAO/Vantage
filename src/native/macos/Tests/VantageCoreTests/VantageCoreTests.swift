@@ -346,3 +346,16 @@ final class ChatDraftRecoveryTests: XCTestCase {
         XCTAssertEqual(ChatDraftRecovery.recover(submitted: "old", currentDraft: "", beforeVersion: nil, afterVersion: nil).draft, "")
     }
 }
+
+final class BootstrapGateTests: XCTestCase {
+    func testDelayedOrFailedOnboardingReadCannotExposeBusinessPages() {
+        XCTAssertEqual(BootstrapGate.stage(settingsReady: false, onboardingCompleted: nil), .connecting)
+        // Settings may arrive while the onboarding request is still pending or failed.
+        XCTAssertEqual(BootstrapGate.stage(settingsReady: true, onboardingCompleted: nil), .connecting)
+        XCTAssertEqual(BootstrapGate.stage(settingsReady: true, onboardingCompleted: false), .onboarding)
+        XCTAssertEqual(BootstrapGate.stage(settingsReady: true, onboardingCompleted: true), .ready)
+    }
+    func testMissingSettingsStillBlocksPreviouslyCompletedOnboarding() {
+        XCTAssertEqual(BootstrapGate.stage(settingsReady: false, onboardingCompleted: true), .connecting)
+    }
+}

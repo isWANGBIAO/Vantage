@@ -9,7 +9,7 @@
 <key>CFBundleShortVersionString</key><string>1.0.0</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleIconFile</key><string>Vantage.icns</string>
-<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSCameraUsageDescription</key><string>Vantage uses the camera for your local presence and face-history features when you enable capture.</string>
 <key>NSMicrophoneUsageDescription</key><string>Vantage records audio only when you request voice transcription.</string>

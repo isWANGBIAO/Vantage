@@ -22,7 +22,7 @@ REQUIRED_PAGES = frozenset({
 })
 
 
-def validate_report(report: object) -> None:
+def validate_report(report: object, screenshot_root: Path | None = None) -> None:
     if not isinstance(report, dict) or report.get("success") is not True:
         raise ValueError("Native smoke did not report success.")
     if report.get("errors"):
@@ -37,6 +37,19 @@ def validate_report(report: object) -> None:
     missing = REQUIRED_PAGES - loaded
     if missing:
         raise ValueError("Native smoke missed loaded pages: " + ", ".join(sorted(missing)))
+    for page in pages:
+        if not isinstance(page, dict) or page.get("id") not in REQUIRED_PAGES:
+            continue
+        screenshot = page.get("screenshot")
+        if page.get("render_error") or not isinstance(screenshot, str) or not screenshot:
+            raise ValueError(f"Native smoke has no valid screenshot for {page.get('id')}.")
+        if screenshot_root is not None:
+            path = Path(screenshot).resolve()
+            if not path.is_relative_to(screenshot_root.resolve()) or not path.is_file():
+                raise ValueError("Native screenshot is missing or outside this run's evidence directory.")
+            with path.open("rb") as stream:
+                if stream.read(8) != b"\x89PNG\r\n\x1a\n":
+                    raise ValueError("Native screenshot is not a PNG image.")
 
 
 def isolated_environment(base_url: str, root: Path) -> dict[str, str]:
@@ -60,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--client", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=180)
+    parser.add_argument("--onboarding", action="store_true", help="Start the synthetic backend with unfinished setup.")
     args = parser.parse_args(argv)
     client = args.client.resolve(strict=True)
     output = args.output.resolve()
@@ -68,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     # A previous passing report must never make a failed run look successful.
     if report_path.exists():
         report_path.unlink()
-    server = start_fixture()
+    server = start_fixture(onboarded=not args.onboarding)
     base_url = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         with tempfile.TemporaryDirectory(prefix="vantage-native-smoke-") as temporary:
@@ -90,7 +104,14 @@ def main(argv: list[str] | None = None) -> int:
                             process.wait(timeout=5)
             if code:
                 raise RuntimeError(f"Native application exited with status {code}; see smoke evidence.")
-            validate_report(json.loads(report_path.read_text(encoding="utf-8")))
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            validate_report(report, screenshot_root=output)
+            if args.onboarding and not any(
+                page.get("id") == "onboarding" and page.get("loaded") is True
+                and page.get("explicit_skip") is True and page.get("navigation_guard") is True
+                for page in report["pages"] if isinstance(page, dict)
+            ):
+                raise ValueError("Cold-start smoke did not verify the native setup gate and explicit completion.")
     except BaseException as exc:
         (output / "runner-error.json").write_text(
             json.dumps({"success": False, "error_type": type(exc).__name__, "message": str(exc)}, indent=2),

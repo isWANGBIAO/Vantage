@@ -66,8 +66,8 @@ struct RootView: View {
     @State private var backendAddress = ""
     var body: some View {
         Group {
-            if model.onboarding?.completed == false { OnboardingView() }
-            else if model.state == nil {
+            if BootstrapGate.stage(settingsReady: model.state != nil, onboardingCompleted: model.onboarding?.completed) == .onboarding { OnboardingView() }
+            else if BootstrapGate.stage(settingsReady: model.state != nil, onboardingCompleted: model.onboarding?.completed) == .connecting {
                 VStack(spacing: 20) {
                     Image(systemName: "eye.circle.fill").font(.system(size: 72)).foregroundStyle(.teal)
                     Text("Vantage").font(.largeTitle.bold())
