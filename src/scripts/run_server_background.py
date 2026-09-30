@@ -36,7 +36,6 @@ PACKAGED_RUNTIME_REQUIRED_IMPORTS = (
     "mcp",
     "src.cli",
     "src.mcp_server",
-    "src.scripts.analyze_face",
 )
 
 

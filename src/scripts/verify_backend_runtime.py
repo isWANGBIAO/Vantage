@@ -44,6 +44,7 @@ from src.core.backend_runtime_lock import (
 from src.core.runtime_library_bootstrap import collect_runtime_library_dirs
 from src.core.media_storage import save_media_paths_settings
 from src.scripts.cleanup_vantage_python_processes import iter_vantage_server_processes, terminate_processes
+from src.utils.sensitive_data import redact_sensitive_text
 
 
 BLOCKING_RUNTIME_PATTERNS = (
@@ -217,7 +218,11 @@ def _run_packaged_cli_smoke(
         check=False,
     )
     if completed.returncode != 0 or completed.stderr.strip():
-        raise RuntimeError("Packaged CLI status smoke request failed.")
+        diagnostic = redact_sensitive_text(
+            completed.stderr.strip()[:2000],
+            path_prefixes={"<RUNTIME_DIR>": cwd, "<USER_HOME>": Path.home(), "<PROJECT_ROOT>": PROJECT_ROOT},
+        )
+        raise RuntimeError(f"Packaged CLI status smoke request failed (exit={completed.returncode}): {diagnostic}")
     try:
         response = json.loads(completed.stdout)
     except (json.JSONDecodeError, TypeError, ValueError):
@@ -234,7 +239,11 @@ def _run_packaged_face_entrypoint_smoke(executable_path, *, cwd, env, timeout_se
         encoding="utf-8", errors="replace", timeout=timeout_seconds, check=False,
     )
     if completed.returncode != 0 or "--export" not in completed.stdout:
-        raise RuntimeError("Packaged face-analysis entry point is unavailable.")
+        diagnostic = redact_sensitive_text(
+            completed.stderr.strip()[:2000],
+            path_prefixes={"<RUNTIME_DIR>": cwd, "<USER_HOME>": Path.home(), "<PROJECT_ROOT>": PROJECT_ROOT},
+        )
+        raise RuntimeError(f"Packaged face-analysis entry point is unavailable (exit={completed.returncode}): {diagnostic}")
 
 
 def _run_packaged_mcp_smoke(

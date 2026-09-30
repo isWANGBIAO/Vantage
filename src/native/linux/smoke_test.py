@@ -136,6 +136,19 @@ def main():
                 state['stable'] += 1
                 if state['stable'] < 3:
                     return GLib.SOURCE_CONTINUE
+                if reveal:
+                    textures = []
+                    def collect_textures(widget):
+                        if isinstance(widget, Gtk.Picture) and widget.get_paintable() is not None:
+                            textures.append(widget.get_paintable())
+                        child = widget.get_first_child()
+                        while child:
+                            collect_textures(child)
+                            child = child.get_next_sibling()
+                    collect_textures(window.stack.get_visible_child())
+                    if not textures or any(texture.get_intrinsic_width() < 32 or texture.get_intrinsic_height() < 32 for texture in textures):
+                        raise RuntimeError('Revealed synthetic media did not decode to a real image texture')
+                    report['checks'].append(f'{name}: {len(textures)} decoded image textures with nonzero dimensions')
                 screenshot(window, name)
                 report['checks'].append('scrolled native rendering: ' + name)
                 state['extras'].pop(0)
