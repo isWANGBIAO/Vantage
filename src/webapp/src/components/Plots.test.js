@@ -16,10 +16,10 @@ test('Plots routes visible shell copy through the display language layer', () =>
 });
 
 test('Plots refresh button clears the dashboard cache before reloading data', () => {
-  assert.ok(plotsSource.includes("fetchBackendJson('/api/plots/refresh', {"));
+  assert.ok(plotsSource.includes("fetchBackendJson('/api/v1/plots/refresh', {"));
   assert.ok(plotsSource.includes("method: 'POST'"));
   assert.ok(plotsSource.includes("retryPolicy: 'mutation'"));
-  assert.ok(!plotsSource.includes("'/api/plots/data${refresh ? '?refresh=1' : ''}'"));
+  assert.ok(!plotsSource.includes("'/api/v1/plots/data${refresh ? '?refresh=1' : ''}'"));
 });
 
 test('Plots maps backend affected_chart_ids warnings back to charts', () => {

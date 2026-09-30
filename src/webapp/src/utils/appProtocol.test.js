@@ -62,14 +62,14 @@ test('packaged assets enforce host, containment, symlinks, MIME, and CSP', async
 
 test('session gate rejects external windows, subframes, arbitrary navigation, and missing identities', () => {
   const contents = { id: 7, getURL: () => `${APP_ORIGIN}/index.html` };
-  const details = { webContentsId: 7, resourceType: 'xhr', url: `${APP_ORIGIN}/api/status`, frame: { url: `${APP_ORIGIN}/index.html`, parent: null } };
+  const details = { webContentsId: 7, resourceType: 'xhr', url: `${APP_ORIGIN}/api/v1/system/status`, frame: { url: `${APP_ORIGIN}/index.html`, parent: null } };
   assert.equal(isTrustedAppNetworkRequest(details, contents), true);
   assert.equal(isTrustedAppNetworkRequest({ ...details, webContentsId: 8 }, contents), false);
   assert.equal(isTrustedAppNetworkRequest({ ...details, webContentsId: undefined }, contents), false);
   assert.equal(isTrustedAppNetworkRequest({ ...details, resourceType: 'subFrame' }, contents), false);
   assert.equal(isTrustedAppNetworkRequest({ ...details, frame: { ...details.frame, parent: {} } }, contents), false);
   assert.equal(isTrustedAppNetworkRequest({ ...details, frame: { url: 'data:text/html,untrusted' } }, contents), false);
-  assert.equal(isTrustedAppNetworkRequest({ ...details, url: 'vantage://attacker/api/status' }, contents), false);
+  assert.equal(isTrustedAppNetworkRequest({ ...details, url: 'vantage://attacker/api/v1/system/status' }, contents), false);
   assert.equal(isTrustedAppNetworkRequest({ ...details, resourceType: 'mainFrame' }, contents), false);
   assert.equal(isTrustedAppNetworkRequest({ ...details, resourceType: 'mainFrame', url: `${APP_ORIGIN}/index.html` }, contents), true);
 });
@@ -94,7 +94,7 @@ test('same-origin JSON POST uses only the configured loopback target and drops a
     assert.equal(calls[0].path, '/api/v1/action-plan/jobs');
     assert.equal(calls[0].body, '{"replace_today":true}');
     for (const header of ['authorization', 'cookie', 'origin']) assert.equal(calls[0].headers[header], undefined);
-    assert.equal((await handle(new Request(`${APP_ORIGIN}/api/status`))).status, 403, 'Ungated direct factory use fails closed');
+    assert.equal((await handle(new Request(`${APP_ORIGIN}/api/v1/system/status`))).status, 403, 'Ungated direct factory use fails closed');
     assert.equal((await handle(trustedRequest('/static/image.png', { method: 'POST', body: 'x' }))).status, 405);
   });
 }));
@@ -104,7 +104,7 @@ test('proxy never follows a redirect or exposes its destination to the renderer'
   await withBackend((_request, response) => { leaked++; response.end('{}'); }, async destination => {
     await withBackend((_request, response) => { response.writeHead(307, { location: destination.baseUrl }); response.end(); }, async connection => {
       const handle = createAppProtocolHandler({ assetRoot: bundle, connection });
-      const result = await handle(trustedRequest('/api/settings', { method: 'POST', body: 'synthetic-private-data' }));
+      const result = await handle(trustedRequest('/api/v1/settings', { method: 'POST', body: 'synthetic-private-data' }));
       assert.equal(result.status, 502);
       assert.equal(result.headers.has('location'), false);
       assert.equal(leaked, 0);

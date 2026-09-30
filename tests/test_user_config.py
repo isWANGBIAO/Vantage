@@ -308,15 +308,28 @@ def test_load_provider_config_removes_deprecated_provider_models(tmp_path):
     assert removed_name not in providers_file.read_text(encoding="utf-8").lower()
 
 
-def test_load_migration_state_repairs_corrupt_json_in_migration_dir(tmp_path):
+def test_load_migration_state_preserves_corrupt_json_in_migration_dir(tmp_path):
     user_config = _load_user_config_module()
     migration_dir = tmp_path / "migration"
 
     with patch.object(Config, "get_migration_dir", return_value=migration_dir):
         migration_file = migration_dir / "migration-state.json"
         migration_dir.mkdir(parents=True, exist_ok=True)
-        migration_file.write_text("{not-json", encoding="utf-8")
+        original = b"{not-json"
+        migration_file.write_bytes(original)
 
+        with pytest.raises(user_config.ConfigurationReadError, match="invalid JSON"):
+            user_config.load_migration_state()
+
+    assert migration_file.read_bytes() == original
+
+
+def test_load_migration_state_creates_defaults_only_when_file_is_absent(tmp_path):
+    user_config = _load_user_config_module()
+    migration_dir = tmp_path / "migration"
+    migration_file = migration_dir / "migration-state.json"
+
+    with patch.object(Config, "get_migration_dir", return_value=migration_dir):
         payload = user_config.load_migration_state()
 
     expected = {

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from src.backend import system as _backend_system
 from src import server
 from src.services.location_trust import LocationSample, LocationTrustResolver
 
@@ -41,25 +42,25 @@ def backend_sample(**overrides):
 @pytest.fixture(autouse=True)
 def isolated_aqi_location_dependencies(monkeypatch):
     monkeypatch.setattr(
-        server,
+        _backend_system,
         "_AQI_LOCATION_TRUST_RESOLVER",
         LocationTrustResolver(),
         raising=False,
     )
     backend_location = AsyncMock(return_value=None)
     monkeypatch.setattr(
-        server,
+        _backend_system,
         "get_trusted_location_sample_async",
         backend_location,
         raising=False,
     )
     upstream = Mock(side_effect=AssertionError("untrusted location reached upstream"))
-    monkeypatch.setattr(server.requests, "get", upstream)
+    monkeypatch.setattr(_backend_system.requests, "get", upstream)
     return backend_location, upstream
 
 
 def run_aqi(**kwargs):
-    return asyncio.run(server.get_aqi_stats(**kwargs))
+    return asyncio.run(_backend_system.get_aqi_stats(**kwargs))
 
 
 def assert_location_unavailable(payload):
@@ -74,7 +75,7 @@ def assert_location_unavailable(payload):
 
 
 def test_aqi_endpoint_accepts_browser_accuracy_and_timestamp_metadata():
-    parameters = inspect.signature(server.get_aqi_stats).parameters
+    parameters = inspect.signature(_backend_system.get_aqi_stats).parameters
 
     assert "accuracy" in parameters
     assert "timestamp_ms" in parameters
@@ -195,7 +196,7 @@ def test_browser_sample_without_backend_fails_closed_without_upstream(
 
     assert_location_unavailable(payload)
     backend_location.assert_awaited_once()
-    upstream = server.requests.get
+    upstream = _backend_system.requests.get
     upstream.assert_not_called()
     output = capsys.readouterr().out
     assert "31.2304" not in output
@@ -209,7 +210,7 @@ def test_backend_trusted_location_is_used_when_browser_is_missing(
     backend_location, _ = isolated_aqi_location_dependencies
     backend_location.return_value = backend_sample()
     upstream = Mock(return_value=successful_response(88))
-    monkeypatch.setattr(server.requests, "get", upstream)
+    monkeypatch.setattr(_backend_system.requests, "get", upstream)
 
     payload = run_aqi()
 
@@ -239,7 +240,7 @@ def test_invalid_browser_sample_does_not_fallback_to_trusted_backend(
 
     assert_location_unavailable(payload)
     backend_location.assert_not_awaited()
-    server.requests.get.assert_not_called()
+    _backend_system.requests.get.assert_not_called()
 
 
 def test_matching_browser_and_backend_uses_backend_coordinates(
@@ -253,7 +254,7 @@ def test_matching_browser_and_backend_uses_backend_coordinates(
         source="configured",
     )
     upstream = Mock(return_value=successful_response(42))
-    monkeypatch.setattr(server.requests, "get", upstream)
+    monkeypatch.setattr(_backend_system.requests, "get", upstream)
 
     payload = run_aqi(
         lat=31.2304,
@@ -324,7 +325,7 @@ def test_upstream_failures_preserve_unavailable_contract_for_trusted_location(
                 json=lambda: {"current": {}},
             )
         )
-    monkeypatch.setattr(server.requests, "get", upstream)
+    monkeypatch.setattr(_backend_system.requests, "get", upstream)
 
     payload = run_aqi()
 
@@ -344,7 +345,7 @@ def test_upstream_failures_preserve_unavailable_contract_for_trusted_location(
 
 
 def test_aqi_endpoint_source_contains_no_shanghai_fallback():
-    source = inspect.getsource(server.get_aqi_stats)
+    source = inspect.getsource(_backend_system.get_aqi_stats)
 
     for forbidden in (
         "SJTU",

@@ -5,7 +5,7 @@ import { runInNewContext } from 'node:vm';
 
 const source = readFileSync(new URL('../../preload.cjs', import.meta.url), 'utf8');
 
-test('preload exposes a narrow platform contract and retains the legacy bridge', async () => {
+test('preload exposes a narrow platform contract without a parallel legacy bridge', async () => {
   const exposed = {};
   const invocations = [];
   const descriptor = { kind: 'electron', backend: { baseUrl: 'http://127.0.0.1:8765' } };
@@ -25,13 +25,13 @@ test('preload exposes a narrow platform contract and retains the legacy bridge',
     },
   });
   assert.equal(exposed.vantagePlatform.descriptor.backend.baseUrl, 'http://127.0.0.1:8765');
-  assert.equal(typeof exposed.electronAPI.getSettingsState, 'function');
+  assert.equal(Object.hasOwn(exposed, 'electronAPI'), false);
   assert.equal(Object.hasOwn(exposed.vantagePlatform, 'invoke'), false);
-  await exposed.vantagePlatform.requestConfiguration('PUT', '/api/automation/settings', { theme: 'light' });
+  await exposed.vantagePlatform.requestConfiguration('PUT', '/api/v1/settings', { theme: 'light' });
   await exposed.vantagePlatform.applySavedPreferences();
   await exposed.vantagePlatform.waitUntilBackendReady();
   assert.deepEqual(invocations, [
-    ['backend:configuration-request', 'PUT', '/api/automation/settings', { theme: 'light' }],
+    ['backend:configuration-request', 'PUT', '/api/v1/settings', { theme: 'light' }],
     ['platform:apply-saved-preferences'],
     ['backend:wait-until-ready'],
   ]);

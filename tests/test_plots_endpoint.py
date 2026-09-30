@@ -2,41 +2,42 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-from src import server
+import subprocess
+from src.backend import plots as _backend_plots
 from src.services import plot_dashboard
 
 
 class PlotRefreshEndpointTests(unittest.TestCase):
     def setUp(self):
-        if hasattr(server, "_clear_plot_dashboard_cache"):
-            server._clear_plot_dashboard_cache()
+        if hasattr(_backend_plots, "_clear_plot_dashboard_cache"):
+            _backend_plots._clear_plot_dashboard_cache()
 
     def tearDown(self):
-        if hasattr(server, "_clear_plot_dashboard_cache"):
-            server._clear_plot_dashboard_cache()
+        if hasattr(_backend_plots, "_clear_plot_dashboard_cache"):
+            _backend_plots._clear_plot_dashboard_cache()
 
     def test_refresh_plots_clears_dashboard_cache_without_matplotlib_export(self):
         with (
-            patch.object(server, "_clear_plot_dashboard_cache") as clear_cache,
+            patch.object(_backend_plots, "_clear_plot_dashboard_cache") as clear_cache,
             patch.object(
-                server.subprocess,
+                subprocess,
                 "run",
                 side_effect=AssertionError("Vantage UI refresh should not run plot.py"),
             ) as run_script,
         ):
-            payload = asyncio.run(server.refresh_plots())
+            payload = asyncio.run(_backend_plots.refresh_plots())
 
         self.assertEqual(payload, {"message": "Plot dashboard data cache cleared", "status": "ready"})
         clear_cache.assert_called_once()
         run_script.assert_not_called()
 
     def test_refresh_plots_rejects_concurrent_refresh(self):
-        acquired = server._plot_refresh_lock.acquire(blocking=False)
+        acquired = _backend_plots._plot_refresh_lock.acquire(blocking=False)
         self.assertTrue(acquired)
         try:
-            response = asyncio.run(server.refresh_plots())
+            response = asyncio.run(_backend_plots.refresh_plots())
         finally:
-            server._plot_refresh_lock.release()
+            _backend_plots._plot_refresh_lock.release()
 
         self.assertEqual(response.status_code, 409)
 
@@ -47,13 +48,13 @@ class PlotRefreshEndpointTests(unittest.TestCase):
             calls.append(func)
             return {"charts": [], "count": len(calls)}
 
-        with patch.object(server, "_get_plot_dashboard_cache_key", return_value=(("Time.xlsx", 1, 1),)), patch.object(
-            server.asyncio,
+        with patch.object(_backend_plots, "_get_plot_dashboard_cache_key", return_value=(("Time.xlsx", 1, 1),)), patch.object(
+            _backend_plots.asyncio,
             "to_thread",
             side_effect=fake_to_thread,
         ):
-            first = asyncio.run(server.get_plot_dashboard_data())
-            second = asyncio.run(server.get_plot_dashboard_data())
+            first = asyncio.run(_backend_plots.get_plot_dashboard_data())
+            second = asyncio.run(_backend_plots.get_plot_dashboard_data())
 
         self.assertEqual(first["count"], 1)
         self.assertEqual(second["count"], 1)
@@ -67,16 +68,16 @@ class PlotRefreshEndpointTests(unittest.TestCase):
             return {"charts": [], "count": len(calls)}
 
         with patch.object(
-            server,
+            _backend_plots,
             "_get_plot_dashboard_cache_key",
             side_effect=[(("Time.xlsx", 1, 1),), (("Time.xlsx", 2, 1),)],
         ), patch.object(
-            server.asyncio,
+            _backend_plots.asyncio,
             "to_thread",
             side_effect=fake_to_thread,
         ):
-            first = asyncio.run(server.get_plot_dashboard_data())
-            second = asyncio.run(server.get_plot_dashboard_data())
+            first = asyncio.run(_backend_plots.get_plot_dashboard_data())
+            second = asyncio.run(_backend_plots.get_plot_dashboard_data())
 
         self.assertEqual(first["count"], 1)
         self.assertEqual(second["count"], 2)
@@ -94,8 +95,8 @@ class PlotRefreshEndpointTests(unittest.TestCase):
             plot_dashboard.plot_module,
             "load_balance_sheet",
             side_effect=FileNotFoundError("Excel file not found: /Users/example/OneDrive/Balance Sheet.xlsx"),
-        ), patch.object(server.asyncio, "to_thread", side_effect=fake_to_thread):
-            response = asyncio.run(server.get_plot_dashboard_data())
+        ), patch.object(_backend_plots.asyncio, "to_thread", side_effect=fake_to_thread):
+            response = asyncio.run(_backend_plots.get_plot_dashboard_data())
 
         self.assertIsInstance(response, dict)
         self.assertGreater(response["count"], 0)

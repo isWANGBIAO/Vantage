@@ -425,7 +425,7 @@ def initialize_latest_media_state():
     except Exception as e:
         print(f"Error finding latest files: {e}")
 
-@router.post("/api/open_folder")
+@router.post("/api/v1/media/open-folder")
 async def open_folder(request: Request):
     if not _security._has_local_action_intent(request.headers, "open-folder"):
         return JSONResponse(status_code=403, content={"error": "Missing local action intent"})
@@ -477,7 +477,7 @@ async def open_folder(request: Request):
     print(f"[OpenFolder] Base path not found or invalid.")
     return JSONResponse(status_code=404, content={"error": "Folder path not found or not set"})
 
-@router.get("/api/latest_images")
+@router.get("/api/v1/media/latest")
 def get_latest_images():
     try:
         photo_path = _runtime.state.paths.get('photo')
@@ -515,7 +515,7 @@ def get_latest_images():
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@router.get("/api/image_proxy")
+@router.get("/api/v1/media/image")
 async def image_proxy(path: str):
     """Proxy endpoint to serve local images not in static directories"""
     if not os.path.exists(path):

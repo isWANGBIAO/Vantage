@@ -19,7 +19,7 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
 
         const checkStatus = async () => {
             try {
-                const data = await fetchBackendJson('/api/status', { retryPolicy: 'poll' });
+                const data = await fetchBackendJson('/api/v1/system/status', { retryPolicy: 'poll' });
                 setStatus({
                     online: data.camera_online,
                     show_person_box: data.show_person_box,
@@ -50,7 +50,7 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
         }}>
             {status.online && isVisible && privacyRevealed ? (
                 <img
-                    src={buildBackendUrl('/api/stream')}
+                    src={buildBackendUrl('/api/v1/camera/stream')}
                     alt={t('camera_feed.live_stream_alt')}
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
@@ -90,7 +90,7 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
                     onClick={async () => {
                         setToggling(true);
                         try {
-                            const data = await fetchBackendJson('/api/toggle_detection', {
+                            const data = await fetchBackendJson('/api/v1/camera/detection/toggle', {
                                 method: 'POST',
                                 retryPolicy: 'mutation',
                             });

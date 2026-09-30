@@ -58,7 +58,7 @@ def test_jobs_http_deduplicates_survives_observer_disconnect_and_exposes_result(
     asyncio.run(run())
 
 
-def test_legacy_stream_shares_job_service_and_explicit_cancel_cleans_up(monkeypatch):
+def test_job_event_stream_shares_job_service_and_explicit_cancel_cleans_up(monkeypatch):
     async def run():
         entered = asyncio.Event()
         cleaned = asyncio.Event()
@@ -76,14 +76,19 @@ def test_legacy_stream_shares_job_service_and_explicit_cancel_cleans_up(monkeypa
         app = FastAPI()
         app.include_router(application.build_router())
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://127.0.0.1") as client:
-            request = asyncio.create_task(client.post("/api/action_plan", json={}))
+            created = await client.post("/api/v1/action-plan/jobs", json={})
+            assert created.status_code == 202
+            job_id = created.json()["id"]
+            request = asyncio.create_task(client.get(f"/api/v1/action-plan/jobs/{job_id}/events"))
             await entered.wait()
-            job_id = jobs.active()["id"]
+            assert jobs.active()["id"] == job_id
             response = await client.post(f"/api/v1/action-plan/jobs/{job_id}/cancel")
             assert response.json()["status"] == "cancelled"
             assert cleaned.is_set()
-            legacy = await request
-            assert legacy.headers["x-vantage-job-id"] == job_id
-            assert not any(json.loads(line).get("done") for line in legacy.text.splitlines())
+            events = await request
+            assert events.status_code == 200
+            payloads = [json.loads(line) for line in events.text.splitlines()]
+            assert any(event.get("cancelled") is True for event in payloads)
+            assert not any(event.get("done") for event in payloads)
         await jobs.close()
     asyncio.run(run())

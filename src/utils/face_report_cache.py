@@ -54,7 +54,7 @@ def build_face_report_response(report: dict, photos_path: str | None = None) -> 
                 return f"/static/photos/{rel}"
 
         encoded_path = urllib.parse.quote(abs_path)
-        return f"/api/image_proxy?path={encoded_path}"
+        return f"/api/v1/media/image?path={encoded_path}"
 
     trend_plot_path = report.get("trend_plot_path", "")
     trend_plot = ""

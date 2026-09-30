@@ -1,6 +1,6 @@
 import asyncio
 
-from src import server
+from src.backend import runtime as _backend_runtime
 
 
 class _DummyCamera:
@@ -12,19 +12,19 @@ class _DummyCamera:
 
 
 def test_shutdown_event_stops_loops_and_releases_camera():
-    original_camera = server.state.camera
-    original_running = server.state.is_running
+    original_camera = _backend_runtime.state.camera
+    original_running = _backend_runtime.state.is_running
     dummy_camera = _DummyCamera()
 
     try:
-        server.state.camera = dummy_camera
-        server.state.is_running = True
+        _backend_runtime.state.camera = dummy_camera
+        _backend_runtime.state.is_running = True
 
-        asyncio.run(server.shutdown_event())
+        asyncio.run(_backend_runtime.shutdown_event())
 
-        assert server.state.is_running is False
+        assert _backend_runtime.state.is_running is False
         assert dummy_camera.released is True
-        assert server.state.camera is None
+        assert _backend_runtime.state.camera is None
     finally:
-        server.state.camera = original_camera
-        server.state.is_running = original_running
+        _backend_runtime.state.camera = original_camera
+        _backend_runtime.state.is_running = original_running

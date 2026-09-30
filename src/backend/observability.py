@@ -135,7 +135,7 @@ def _reset_status_logs(prefix=None):
 def reset_camera_status_logs():
     _reset_status_logs("camera")
 
-@router.get("/api/system_logs")
+@router.get("/api/v1/system/logs")
 async def get_system_logs():
     try:
         log_file = _resolve_latest_runtime_log_path("server")

@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from src.core.provider_credentials import _destination_bound_api_key
 from src.core.user_config import (
     DEFAULT_LOCAL_PROXY_BASE_URL,
     LOCAL_PROXY_PROVIDER_ROUTES,
@@ -138,7 +139,7 @@ class ProviderModelDiscoverRequest(BaseModel):
     api_key: Optional[str] = None
     type: Optional[str] = None
 
-@router.get("/api/llm_models")
+@router.get("/api/v1/models")
 async def list_llm_models():
     return await asyncio.to_thread(_build_llm_models_payload)
 
@@ -206,10 +207,14 @@ def _resolve_discover_secret(request: LLMModelDiscoverRequest):
         saved_config = load_provider_config()
         saved_provider = saved_config.get("providers", {}).get(route)
         if isinstance(saved_provider, dict):
-            if not api_key or api_key == "********":
-                api_key = str(saved_provider.get("api_key") or "").strip()
+            saved_base_url = str(saved_provider.get("base_url") or "").strip()
+            if not saved_base_url and route.lower() in LOCAL_PROXY_PROVIDER_ROUTES:
+                saved_base_url = DEFAULT_LOCAL_PROXY_BASE_URL
             if not base_url:
-                base_url = str(saved_provider.get("base_url") or "").strip()
+                base_url = saved_base_url
+            api_key = _destination_bound_api_key(
+                api_key, base_url, saved_provider.get("api_key"), saved_base_url,
+            )
             provider_type = str(saved_provider.get("type") or provider_type).strip()
 
     if not base_url and route.lower() in LOCAL_PROXY_PROVIDER_ROUTES:
@@ -316,11 +321,11 @@ def _resolve_special_provider_config_unlocked(
             resolved["missing"].append(f"{normalized_kind}_model")
         return resolved
 
-    saved_api_key = str(settings.get(f"{normalized_kind}_api_key") or "").strip()
-    resolved_api_key = str(api_key or "").strip()
-    if not resolved_api_key or resolved_api_key == "********":
-        resolved_api_key = saved_api_key
-    resolved_base_url = str(base_url or settings.get(f"{normalized_kind}_base_url") or "").strip()
+    saved_base_url = str(settings.get(f"{normalized_kind}_base_url") or "").strip()
+    resolved_base_url = str(base_url or saved_base_url).strip()
+    resolved_api_key = _destination_bound_api_key(
+        api_key, resolved_base_url, settings.get(f"{normalized_kind}_api_key"), saved_base_url,
+    )
     resolved_type = str(provider_type or "openai-compatible").strip() or "openai-compatible"
     resolved_route = str(route or normalized_kind).strip() or normalized_kind
     missing = []
@@ -390,7 +395,7 @@ def _redact_subprocess_command_for_log(cmd, *, api_key: str | None = None) -> st
             redact_next = True
     return " ".join(redacted_parts)
 
-@router.post("/api/provider_models/discover")
+@router.post("/api/v1/providers/models/discover")
 async def discover_provider_models(request: ProviderModelDiscoverRequest):
     resolved = await asyncio.to_thread(
         _resolve_special_provider_config,
@@ -437,7 +442,7 @@ async def discover_provider_models(request: ProviderModelDiscoverRequest):
             },
         )
 
-@router.post("/api/llm_models/discover")
+@router.post("/api/v1/models/discover")
 async def discover_llm_models(request: LLMModelDiscoverRequest):
     resolved = await asyncio.to_thread(_resolve_discover_secret, request)
     try:

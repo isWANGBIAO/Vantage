@@ -23,7 +23,7 @@ BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.s
 LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.13.5/bin/python3.13"
 FRONTEND_ROOT="${PROJECT_ROOT}/src/webapp"
 FRONTEND_NATIVE_CODESIGN_STAMP="${FRONTEND_ROOT}/node_modules/.macos-native-codesign.sha256"
-BACKEND_STATUS_URL="${BACKEND_STATUS_URL:-http://127.0.0.1:8000/api/status}"
+BACKEND_STATUS_URL="${BACKEND_STATUS_URL:-http://127.0.0.1:8000/api/v1/system/status}"
 BACKEND_WAIT_TIMEOUT="${BACKEND_WAIT_TIMEOUT:-60}"
 SERVER_LATEST_POINTER="${PROJECT_ROOT}/logs/server.latest.log"
 export BACKEND_STATUS_URL BACKEND_WAIT_TIMEOUT SERVER_LATEST_POINTER
@@ -204,7 +204,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-status_url = os.environ.get("BACKEND_STATUS_URL", "http://127.0.0.1:8000/api/status")
+status_url = os.environ.get("BACKEND_STATUS_URL", "http://127.0.0.1:8000/api/v1/system/status")
 timeout = int(os.environ.get("BACKEND_WAIT_TIMEOUT", "60"))
 latest_pointer = Path(os.environ.get("SERVER_LATEST_POINTER", "logs/server.latest.log"))
 deadline = time.time() + timeout

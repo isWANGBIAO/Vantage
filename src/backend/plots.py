@@ -54,7 +54,7 @@ def _clear_plot_dashboard_cache():
         _plot_dashboard_cache_key = None
         _plot_dashboard_cache_payload = None
 
-@router.post("/api/plots/refresh")
+@router.post("/api/v1/plots/refresh")
 async def refresh_plots():
     if not _plot_refresh_lock.acquire(blocking=False):
         return JSONResponse(
@@ -73,7 +73,7 @@ async def refresh_plots():
     print("Plot dashboard data cache cleared")
     return {"message": "Plot dashboard data cache cleared", "status": "ready"}
 
-@router.get("/api/plots/data")
+@router.get("/api/v1/plots/data")
 async def get_plot_dashboard_data():
     global _plot_dashboard_cache_key, _plot_dashboard_cache_payload
     try:

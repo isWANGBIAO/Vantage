@@ -1,3 +1,5 @@
+from src.backend import camera as _backend_camera
+from src.backend import runtime as _backend_runtime
 import gc
 import os
 import tempfile
@@ -709,14 +711,25 @@ class TakePhotoTests(unittest.TestCase):
         captured_at = datetime(2026, 7, 26, 14, 25, 7)
         gate = take_a_photo.PresencePhotoMinuteGate()
         ready = threading.Barrier(8)
+        attempts_finished = threading.Event()
+        completed_lock = threading.Lock()
+        declined_attempts = 0
+
+        def hold_winning_save(*_args, **_kwargs):
+            # Keep the winning write in flight until the other seven calls
+            # encounter its reservation. A completed duplicate may legitimately
+            # return the already-saved path, which is tested separately.
+            self.assertTrue(attempts_finished.wait(timeout=5))
 
         with tempfile.TemporaryDirectory() as tmpdir, patch.object(
             take_a_photo,
             "save_image_with_gps",
+            side_effect=hold_winning_save,
         ) as mock_save:
             def attempt_save(_index):
+                nonlocal declined_attempts
                 ready.wait()
-                return take_a_photo.save_presence_photo_once_per_minute(
+                result = take_a_photo.save_presence_photo_once_per_minute(
                     frame,
                     tmpdir,
                     1.0,
@@ -724,6 +737,12 @@ class TakePhotoTests(unittest.TestCase):
                     captured_at=captured_at,
                     gate=gate,
                 )
+                if result is None:
+                    with completed_lock:
+                        declined_attempts += 1
+                        if declined_attempts == 7:
+                            attempts_finished.set()
+                return result
 
             with ThreadPoolExecutor(max_workers=8) as executor:
                 paths = list(executor.map(attempt_save, range(8)))
@@ -960,7 +979,6 @@ class TakePhotoTests(unittest.TestCase):
         mock_save.assert_not_called()
 
     def test_unavailable_presence_clears_previous_live_box_and_returns_unknown(self):
-        from src import server
         from src.services.person_detection import PresenceDetectionUnavailable
 
         frame = np.zeros((4, 4, 3), dtype=np.uint8)
@@ -971,41 +989,41 @@ class TakePhotoTests(unittest.TestCase):
             if not boxes_seen_before_failure:
                 boxes_seen_before_failure.append(None)
                 return [previous_box]
-            boxes_seen_before_failure[0] = list(server.state.person_boxes)
-            server.state.is_running = False
+            boxes_seen_before_failure[0] = list(_backend_runtime.state.person_boxes)
+            _backend_runtime.state.is_running = False
             raise PresenceDetectionUnavailable("YuNet inference unavailable")
 
-        with server.state.lock:
-            original_is_running = server.state.is_running
-            original_latest_frame = server.state.latest_frame
+        with _backend_runtime.state.lock:
+            original_is_running = _backend_runtime.state.is_running
+            original_latest_frame = _backend_runtime.state.latest_frame
             original_latest_frame_published_at = (
-                server.state.latest_frame_published_at
+                _backend_runtime.state.latest_frame_published_at
             )
-            original_person_boxes = list(server.state.person_boxes)
-            server.state.is_running = True
-            server.state.latest_frame = frame
-            server.state.latest_frame_published_at = 0.0
-            server.state.person_boxes = []
+            original_person_boxes = list(_backend_runtime.state.person_boxes)
+            _backend_runtime.state.is_running = True
+            _backend_runtime.state.latest_frame = frame
+            _backend_runtime.state.latest_frame_published_at = 0.0
+            _backend_runtime.state.person_boxes = []
 
         try:
             with (
-                patch.object(server, "get_face_detector", return_value=object()),
-                patch.object(server, "should_run_face_detection", return_value=True),
+                patch.object(_backend_camera, "get_face_detector", return_value=object()),
+                patch.object(_backend_camera, "should_run_face_detection", return_value=True),
                 patch.object(
-                    server,
+                    _backend_runtime,
                     "wait_for_next_inference_start",
                     side_effect=[0.0, 1.0],
                     create=True,
                 ),
                 patch.object(
-                    server,
+                    _backend_camera,
                     "detect_foreground_presence_face_boxes",
                     side_effect=detect_live_presence,
                 ),
-                patch.object(server.time, "sleep"),
+                patch.object(_backend_camera.time, "sleep"),
                 patch("builtins.print"),
             ):
-                server.face_detection_loop()
+                _backend_camera.face_detection_loop()
 
             with tempfile.TemporaryDirectory() as tmpdir, patch.object(
                 take_a_photo,
@@ -1023,18 +1041,18 @@ class TakePhotoTests(unittest.TestCase):
                 )
 
             self.assertEqual(boxes_seen_before_failure[0], [previous_box])
-            self.assertEqual(server.state.person_boxes, [])
+            self.assertEqual(_backend_runtime.state.person_boxes, [])
             self.assertIsNone(presence_status)
             self.assertIsNone(photo_path)
             mock_save.assert_not_called()
         finally:
-            with server.state.lock:
-                server.state.is_running = original_is_running
-                server.state.latest_frame = original_latest_frame
-                server.state.latest_frame_published_at = (
+            with _backend_runtime.state.lock:
+                _backend_runtime.state.is_running = original_is_running
+                _backend_runtime.state.latest_frame = original_latest_frame
+                _backend_runtime.state.latest_frame_published_at = (
                     original_latest_frame_published_at
                 )
-                server.state.person_boxes = original_person_boxes
+                _backend_runtime.state.person_boxes = original_person_boxes
 
     def test_take_photo_returns_absent_after_successful_detection_finds_no_presence(self):
         frame = np.zeros((4, 4, 3), dtype=np.uint8)

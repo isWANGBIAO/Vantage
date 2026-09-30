@@ -31,10 +31,10 @@ test('Expense Sheet renders a separate future income forecast section', () => {
 });
 
 test('Expense Sheet refresh clears the dashboard cache before reloading charts', () => {
-  assert.ok(jsxSource.includes("fetchBackendJson('/api/plots/refresh', {"));
+  assert.ok(jsxSource.includes("fetchBackendJson('/api/v1/plots/refresh', {"));
   assert.ok(jsxSource.includes("method: 'POST'"));
   assert.ok(jsxSource.includes("retryPolicy: 'mutation'"));
-  assert.ok(!jsxSource.includes("'/api/plots/data${refresh ? '?refresh=1' : ''}'"));
+  assert.ok(!jsxSource.includes("'/api/v1/plots/data${refresh ? '?refresh=1' : ''}'"));
 });
 
 test('Expense Sheet provides a toolbar action for copying the full prompt JSON', () => {
@@ -54,7 +54,7 @@ test('Expense Sheet loads AI purchase recommendations and renders the top recomm
   assert.ok(jsxSource.includes('recommendation_count'));
   assert.ok(jsxSource.includes('recommendation_mix'));
   assert.ok(jsxSource.includes('recommendation_mode'));
-  assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations/regenerate'"));
+  assert.ok(jsxSource.includes("fetchBackendJson('/api/v1/finance/purchase-recommendations/regenerate'"));
   assert.ok(jsxSource.includes('purchaseRecommendations'));
   assert.ok(jsxSource.includes('expense-purchase-card'));
   assert.ok(jsxSource.includes('expense-purchase-mode-badge'));
@@ -92,7 +92,7 @@ test('Expense Sheet purchase recommendation copy actions use fallback clipboard 
 });
 
 test('Expense Sheet lets users dismiss purchase recommendation items', () => {
-  assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismiss'"));
+  assert.ok(jsxSource.includes("fetchBackendJson('/api/v1/finance/purchase-recommendations/dismiss'"));
   assert.ok(jsxSource.includes('handleDismissPurchaseItem'));
   assert.ok(jsxSource.includes('expense-purchase-dismiss-button'));
   assert.ok(jsxSource.includes("t('expense.purchase.dismiss')"));
@@ -107,12 +107,12 @@ test('Expense Sheet icon-only dismiss buttons reset global button padding', () =
 });
 
 test('Expense Sheet shows and clears dismissed purchase recommendation count', () => {
-  assert.ok(jsxSource.includes("fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed'"));
+  assert.ok(jsxSource.includes("fetchBackendJson('/api/v1/finance/purchase-recommendations/dismissed'"));
   assert.ok(jsxSource.includes("method: 'DELETE'"));
   assert.ok(jsxSource.includes('handleClearDismissedPurchaseItems'));
   assert.ok(jsxSource.includes('showDismissedPurchaseItems'));
   assert.ok(jsxSource.includes('handleRestoreDismissedPurchaseItem'));
-  assert.ok(jsxSource.includes("`/api/balance_sheet/purchase_recommendations/dismissed/${itemId}`"));
+  assert.ok(jsxSource.includes("`/api/v1/finance/purchase-recommendations/dismissed/${itemId}`"));
   assert.ok(jsxSource.includes("t('expense.purchase.show_dismissed')"));
   assert.ok(jsxSource.includes("t('expense.purchase.hide_dismissed')"));
   assert.ok(jsxSource.includes("t('expense.purchase.restore_dismissed')"));

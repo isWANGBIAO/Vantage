@@ -286,7 +286,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
 
   const fetchDismissedPurchaseItems = useCallback(async () => {
     try {
-      const payload = await fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed', {
+      const payload = await fetchBackendJson('/api/v1/finance/purchase-recommendations/dismissed', {
         retryPolicy: 'load',
       });
       setDismissedPurchaseItems(Array.isArray(payload?.items) ? payload.items : []);
@@ -316,7 +316,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     let cancelled = false;
     const loadModels = async () => {
       try {
-        const payload = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load' });
+        const payload = await fetchBackendJson('/api/v1/models', { retryPolicy: 'load' });
         if (!cancelled) {
           applyModelCatalog(payload);
         }
@@ -377,8 +377,8 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     }
     const query = params.toString();
     return query
-      ? `/api/balance_sheet/purchase_recommendations?${query}`
-      : '/api/balance_sheet/purchase_recommendations';
+      ? `/api/v1/finance/purchase-recommendations?${query}`
+      : '/api/v1/finance/purchase-recommendations';
   }, [buildPurchaseRequestConfig]);
 
   const fetchPurchaseRecommendations = useCallback(async ({ regenerate = false, silent = false } = {}) => {
@@ -391,7 +391,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
 
     try {
       const payload = regenerate
-        ? await fetchBackendJson('/api/balance_sheet/purchase_recommendations/regenerate', {
+        ? await fetchBackendJson('/api/v1/finance/purchase-recommendations/regenerate', {
           method: 'POST',
           retryPolicy: 'mutation',
           headers: { 'Content-Type': 'application/json' },
@@ -420,18 +420,18 @@ export default function ExpenseSheet({ theme = 'dark' }) {
 
     try {
       if (refresh) {
-        await fetchBackendJson('/api/plots/refresh', {
+        await fetchBackendJson('/api/v1/plots/refresh', {
           method: 'POST',
           retryPolicy: 'mutation',
         });
       }
 
-      const plotsPromise = fetchBackendJson('/api/plots/data')
+      const plotsPromise = fetchBackendJson('/api/v1/plots/data')
         .then((payload) => ({ ok: true, payload }))
         .catch((err) => ({ ok: false, error: err.message || t('expense.error.load_chart') }));
 
       const [res, plotResult] = await Promise.all([
-        fetchBackend('/api/balance_sheet', {
+        fetchBackend('/api/v1/finance/balance-sheet', {
           retryPolicy: 'load',
           allowHttpError: true,
         }),
@@ -584,7 +584,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     }
 
     try {
-      const payload = await fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismiss', {
+      const payload = await fetchBackendJson('/api/v1/finance/purchase-recommendations/dismiss', {
         method: 'POST',
         retryPolicy: 'mutation',
         headers: { 'Content-Type': 'application/json' },
@@ -629,7 +629,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
       return;
     }
     try {
-      const payload = await fetchBackendJson(`/api/balance_sheet/purchase_recommendations/dismissed/${itemId}`, {
+      const payload = await fetchBackendJson(`/api/v1/finance/purchase-recommendations/dismissed/${itemId}`, {
         method: 'DELETE',
         retryPolicy: 'mutation',
       });
@@ -647,7 +647,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
 
   const handleClearDismissedPurchaseItems = useCallback(async () => {
     try {
-      await fetchBackendJson('/api/balance_sheet/purchase_recommendations/dismissed', {
+      await fetchBackendJson('/api/v1/finance/purchase-recommendations/dismissed', {
         method: 'DELETE',
         retryPolicy: 'mutation',
       });

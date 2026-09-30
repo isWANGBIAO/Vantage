@@ -2,11 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import {
-  CHAT_CONTEXT_BASE_MESSAGE_COUNT_STORAGE_KEY,
-  CHAT_HISTORY_STORAGE_KEY,
-  buildInitialEmbeddedChatState,
-} from '../utils/chatContextState.js';
+import { normalizeBackendChatContext } from '../utils/chatContextState.js';
 
 const chatSource = readFileSync(new URL('./ChatInterface.jsx', import.meta.url), 'utf8');
 const displayCopySource = readFileSync(new URL('../utils/displayCopy.js', import.meta.url), 'utf8');
@@ -31,24 +27,6 @@ globalThis.getVisibleMessages = getVisibleMessages;`,
   return {
     consumeChatStreamChunk: sandbox.globalThis.consumeChatStreamChunk,
     getVisibleMessages: sandbox.globalThis.getVisibleMessages,
-  };
-}
-
-function createMemoryStorage(initialEntries = {}) {
-  const store = new Map(
-    Object.entries(initialEntries).map(([key, value]) => [key, String(value)]),
-  );
-
-  return {
-    getItem(key) {
-      return store.has(key) ? store.get(key) : null;
-    },
-    setItem(key, value) {
-      store.set(key, String(value));
-    },
-    removeItem(key) {
-      store.delete(key);
-    },
   };
 }
 
@@ -217,7 +195,7 @@ test('consumeChatStreamChunk parses stats payloads without affecting content', (
 });
 
 test('ChatInterface syncs visible history with backend chat context endpoints', () => {
-  assert.ok(chatSource.includes("fetchBackendJson('/api/chat/context'"));
+  assert.ok(chatSource.includes("fetchBackendJson('/api/v1/chat/context'"));
   assert.ok(chatSource.includes("method: 'DELETE'") || chatSource.includes('method: "DELETE"'));
   assert.ok(chatSource.includes('CHAT_CONTEXT_BASE_UPDATED_EVENT'));
 });
@@ -292,57 +270,48 @@ test('ChatInterface supports embedded workspace mode with a separate sticky comp
   assert.equal(chatSource.includes("position: embedded ? 'sticky' : 'static'"), false);
 });
 
-test('embedded chat bootstrap hides inherited action-plan messages before context sync finishes', () => {
+test('embedded chat hides inherited plan replies after backend restore', () => {
   const { getVisibleMessages } = loadChatHelpers();
-  const baseMessages = [
-    { role: 'assistant', content: 'Analysis reply' },
-    { role: 'assistant', content: 'Plan reply' },
-  ];
-  const followUpMessages = [
-    ...baseMessages,
-    { role: 'user', content: 'Refine item 1.' },
-    { role: 'assistant', content: 'Updated item 1.' },
-  ];
-  const storage = createMemoryStorage({
-    [CHAT_HISTORY_STORAGE_KEY]: JSON.stringify(followUpMessages),
-  });
-
-  const initialState = buildInitialEmbeddedChatState(storage);
-  const visibleMessages = getVisibleMessages({
-    embedded: true,
-    messages: initialState.messages,
-    baseMessages: initialState.baseMessages,
-  });
-
-  assert.equal(initialState.baseMessages.length, 2);
-  assert.deepEqual(
-    visibleMessages,
-    followUpMessages.slice(2),
-  );
+  const base = [{ role: 'assistant', content: 'analysis' }, { role: 'assistant', content: 'plan' }];
+  const tail = [{ role: 'user', content: 'question' }, { role: 'assistant', content: 'answer' }];
+  const state = normalizeBackendChatContext({ base_context_version: 'base', context_version: 'turn', display_messages: base, messages: [...base, ...tail] });
+  assert.deepEqual(getVisibleMessages({ embedded: true, messages: state.messages, baseMessages: state.baseMessages }), tail);
 });
 
-test('embedded chat bootstrap respects persisted base-message counts after warm reloads', () => {
-  const { getVisibleMessages } = loadChatHelpers();
-  const baseMessages = [
-    { role: 'assistant', content: 'Analysis reply' },
-    { role: 'assistant', content: 'Plan reply' },
-  ];
-  const followUpMessages = [
-    ...baseMessages,
-    { role: 'user', content: 'Refine item 1.' },
-  ];
-  const storage = createMemoryStorage({
-    [CHAT_HISTORY_STORAGE_KEY]: JSON.stringify(followUpMessages),
-    [CHAT_CONTEXT_BASE_MESSAGE_COUNT_STORAGE_KEY]: '2',
-  });
+test('chat uses backend history without a stale local-storage fallback', () => {
+  assert.ok(chatSource.includes('normalizeBackendChatContext(data)'));
+  assert.ok(chatSource.includes("'/api/v1/chat/context'"));
+  assert.ok(chatSource.includes('chatAbortControllerRef.current?.abort()'));
+  assert.ok(!chatSource.includes('loadStoredChatMessages'));
+  assert.ok(!chatSource.includes('saveStoredChatMessages'));
+  assert.ok(!chatSource.includes('reconcileChatHistoryWithBaseVersion'));
+});
 
-  const initialState = buildInitialEmbeddedChatState(storage);
-  const visibleMessages = getVisibleMessages({
-    embedded: true,
-    messages: initialState.messages,
-    baseMessages: initialState.baseMessages,
-  });
-
-  assert.equal(initialState.baseMessages.length, 2);
-  assert.deepEqual(visibleMessages, [{ role: 'user', content: 'Refine item 1.' }]);
+test('actual clear callback replaces follow-up messages with same-base backend response', async () => {
+  const start = chatSource.indexOf('    const clearChat = async () => {');
+  const end = chatSource.indexOf('    const handleModelChange = ', start);
+  assert.ok(start >= 0 && end > start);
+  const base = [{ role: 'assistant', content: 'plan reply' }];
+  let messages = [...base, { role: 'user', content: 'old question' }];
+  let requested;
+  const sandbox = {
+    isLoading: false,
+    window: { confirm: () => true },
+    t: (key) => key,
+    fetchBackendJson: async (path, options) => {
+      requested = { path, options };
+      return { base_context_version: 'unchanged', context_version: 'reset', display_messages: base, messages: base };
+    },
+    contextRequestVersionRef: { current: 1 },
+    normalizeBackendChatContext,
+    setMessages: (value) => { messages = value; },
+    setBaseMessages: () => {}, setContextReady: () => {}, setChatError: () => {}, setStats: () => {},
+    console,
+    globalThis: {},
+  };
+  vm.runInNewContext(`${chatSource.slice(start, end)}\nglobalThis.clearChat = clearChat;`, sandbox);
+  await sandbox.globalThis.clearChat();
+  assert.equal(requested.path, '/api/v1/chat/context');
+  assert.equal(requested.options.method, 'DELETE');
+  assert.deepEqual(messages, base);
 });

@@ -1,8 +1,8 @@
-"""HTTP composition root and backward-compatible backend entry point.
+"""HTTP composition root and backend entry point.
 
 Business functions and APIRouters live in :mod:`src.backend`; this module only
-assembles the application, preserves historical Python imports, and launches it.
-New code should import the owning backend domain instead of this legacy facade.
+assembles the application and launches it. Import domain functions from their
+owning modules; native clients use the single versioned HTTP API.
 """
 import os
 import sys
@@ -47,10 +47,12 @@ from src.backend import (
     system,
     transcription,
 )
-from src.backend.compat import install_legacy_exports
 from src.core.backend_connection import backend_bind_address
+from src.core.user_config import ConfigurationReadError
+from src.backend.responses import configuration_read_error_response
 
 app = FastAPI(lifespan=runtime.lifespan)
+app.add_exception_handler(ConfigurationReadError, configuration_read_error_response)
 runtime.bind_app(app)
 app.add_middleware(
     CORSMiddleware,
@@ -59,7 +61,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.middleware("http")(security.enforce_loopback_backend_access)
+app.add_middleware(security.LoopbackAccessMiddleware)
 
 ROUTE_MODULES = (
     settings,
@@ -94,11 +96,6 @@ def main():
     host, port = backend_bind_address()
     uvicorn.run(app, host=host, port=port, access_log=False)
 
-
-install_legacy_exports(
-    sys.modules[__name__],
-    (*ROUTE_MODULES, processes, runtime, security),
-)
 
 if __name__ == "__main__":
     main()

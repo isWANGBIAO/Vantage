@@ -31,20 +31,20 @@ test('browser and native configuration adapters use one HTTP state for settings,
     const payload = body ? JSON.parse(body) : undefined;
     calls.push({ method: request.method, path: request.url, payload });
     response.setHeader('Content-Type', 'application/json');
-    if (request.url === '/api/automation/settings') {
+    if (request.url === '/api/v1/settings') {
       if (payload) settings = { ...settings, ...payload };
       response.end(JSON.stringify({ settings, provider: { version: 2, providers: {} } }));
-    } else if (request.url === '/api/automation/settings/display-language') {
+    } else if (request.url === '/api/v1/settings/display-language') {
       if (payload) settings = { ...settings, ...payload };
       response.end(JSON.stringify({ display_language: settings.display_language }));
-    } else if (request.url === '/api/automation/onboarding') {
+    } else if (request.url === '/api/v1/onboarding') {
       response.end(JSON.stringify(onboarding));
-    } else if (request.url === '/api/automation/onboarding/complete') {
+    } else if (request.url === '/api/v1/onboarding/complete') {
       onboarding = { completed: true, launchAtLogin: payload.launch_at_login };
       response.end(JSON.stringify(onboarding));
     } else { response.writeHead(404); response.end('{}'); }
   }, async (baseUrl) => {
-    const originalConfig = globalThis.vantageConfig;
+    const originalBridge = globalThis.vantagePlatform;
     const originalStorage = globalThis.localStorage;
     let applied = 0;
     const native = createPlatformAdapter({
@@ -52,7 +52,7 @@ test('browser and native configuration adapters use one HTTP state for settings,
       requestConfiguration: nativeTransport.createBackendJsonRequester({ connection: connectionContract.resolveBackendConnection({ baseUrl }) }),
       applySavedPreferences: async () => { applied += 1; },
     });
-    globalThis.vantageConfig = { backendBaseUrl: baseUrl };
+    globalThis.vantagePlatform = { descriptor: { kind: 'browser', backend: { baseUrl } } };
     globalThis.localStorage = {
       getItem() { throw new Error('Business state must not read localStorage'); },
       setItem() { throw new Error('Business state must not write localStorage'); },
@@ -77,7 +77,7 @@ test('browser and native configuration adapters use one HTTP state for settings,
       assert.deepEqual(calls.find(call => call.path.endsWith('/complete')).payload, { launch_at_login: true, skip_chat_setup: true });
       assert.deepEqual(calls.find(call => call.method === 'PUT').payload, { theme: 'light', action_plan_check_interval_minutes: 0 });
     } finally {
-      globalThis.vantageConfig = originalConfig;
+      globalThis.vantagePlatform = originalBridge;
       globalThis.localStorage = originalStorage;
     }
   });
@@ -87,8 +87,8 @@ test('both configuration transports reject failed writes and redirects without n
   let destinationRequests = 0;
   await withServer((_request, response) => { destinationRequests += 1; response.end('{}'); }, async destination => {
     await withServer((_request, response) => { response.writeHead(307, { Location: destination }); response.end(); }, async baseUrl => {
-      const originalConfig = globalThis.vantageConfig;
-      globalThis.vantageConfig = { backendBaseUrl: baseUrl };
+      const originalBridge = globalThis.vantagePlatform;
+      globalThis.vantagePlatform = { descriptor: { kind: 'browser', backend: { baseUrl } } };
       let applied = false;
       const native = createPlatformAdapter({
         requestConfiguration: nativeTransport.createBackendJsonRequester({ connection: connectionContract.resolveBackendConnection({ baseUrl }) }),
@@ -101,7 +101,7 @@ test('both configuration transports reject failed writes and redirects without n
         await assert.rejects(saveDisplayLanguageSetting('zh-CN'));
         assert.equal(destinationRequests, 0);
         assert.equal(applied, false);
-      } finally { globalThis.vantageConfig = originalConfig; }
+      } finally { globalThis.vantagePlatform = originalBridge; }
     });
   });
 });

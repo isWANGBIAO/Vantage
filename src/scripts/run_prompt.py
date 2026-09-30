@@ -13,7 +13,7 @@ project_root = current_dir.parent.parent
 sys.path.append(str(project_root))
 
 from src.core.config import Config
-from src.core.context import ContextManager
+from src.core.context import ContextManager, atomic_write_json, context_transaction, write_context_messages
 from src.services.llm_client import LLMClient, StreamIncompleteError
 from src.services.audio_service import AudioService, AudioTranscriptionError
 from src.services.model_call_recorder import get_session_usage_summary
@@ -540,24 +540,18 @@ def _write_context_session_id(context_file, session_id, source, **metadata):
     for key, value in metadata.items():
         if value is not None:
             payload[key] = value
-    session_path.write_text(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    atomic_write_json(session_path, payload)
 
 
 def _get_or_create_context_session_id(context_file, source):
-    session_id = _read_context_session_id(context_file)
-    if session_id:
-        return session_id
+    with context_transaction(context_file):
+        session_id = _read_context_session_id(context_file)
+        if session_id:
+            return session_id
 
-    session_id = str(uuid.uuid4())
-    _write_context_session_id(context_file, session_id, source)
-    return session_id
+        session_id = str(uuid.uuid4())
+        _write_context_session_id(context_file, session_id, source)
+        return session_id
 
 
 def _create_new_context_session_id(context_file, source):
@@ -907,10 +901,7 @@ def main():
                     
                     context_mgr.save()
                     action_plan_context_file = context_mgr.context_file.parent / "latest_action_plan_context.json"
-                    action_plan_context_file.write_text(
-                        json.dumps(context_mgr.messages, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
+                    write_context_messages(action_plan_context_file, context_mgr.messages)
                     action_plan_session_metadata = {
                         "model": result_round_2.get("model") or result.get("model"),
                         "provider_route": result_round_2.get("provider_route") or result.get("provider_route"),

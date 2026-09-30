@@ -3,12 +3,12 @@ const https = require('https');
 const { buildConnectionUrl } = require('./backendConnection.cjs');
 
 const CONFIGURATION_OPERATIONS = new Set([
-    'GET /api/automation/settings',
-    'PUT /api/automation/settings',
-    'GET /api/automation/settings/display-language',
-    'PUT /api/automation/settings/display-language',
-    'GET /api/automation/onboarding',
-    'POST /api/automation/onboarding/complete',
+    'GET /api/v1/settings',
+    'PUT /api/v1/settings',
+    'GET /api/v1/settings/display-language',
+    'PUT /api/v1/settings/display-language',
+    'GET /api/v1/onboarding',
+    'POST /api/v1/onboarding/complete',
 ]);
 
 function createBackendJsonRequester({ connection, waitUntilReady = async () => {}, timeoutMs = 10000 } = {}) {

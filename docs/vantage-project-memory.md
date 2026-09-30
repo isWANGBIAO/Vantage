@@ -47,11 +47,11 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 
 ## 行动计划工作流与边界
 
-人工读取当前今日计划使用 action_plan.today.read；生成使用 action_plan.generate。要替换今天已保存的计划，显式设置 replace_today=true。该操作会返回 NDJSON 进度流；只有收到明确的 done=true 且未收到 error/STREAM_ERROR，才可视为生成成功。完成后再次调用 action_plan.today.read，检查最新日期、分析与计划内容是否完整，再对外说明已经更新。失败、超时、缺少完成事件或响应不完整时，不得把旧计划说成新结果，也不得向用户声称替换成功。
+人工读取当前今日计划使用 action_plan.today.read；生成使用 action_plan.jobs.create，观察使用 action_plan.jobs.events，状态使用 action_plan.jobs.read。要替换今天已保存的计划，显式设置 replace_today=true。创建返回任务快照与ID，events操作返回NDJSON进度流；只有收到明确的 done=true 且未收到 error/STREAM_ERROR，才可视为生成成功。完成后再次调用 action_plan.today.read，检查最新日期、分析与计划内容是否完整，再对外说明已经更新。失败、超时、缺少完成事件或响应不完整时，不得把旧计划说成新结果，也不得向用户声称替换成功。
 
 “每隔 N 分钟自动检查数据变化”现在由 src/services/action_plan_scheduler.py 在后端生命周期内运行。成功版本与来源指纹保存在运行目录的原子元数据文件中；失败不会推进版本。React 只读轮询任务状态、显示进度和接受用户发起/取消，不触发定时生成。新版原生客户端可使用 /api/v1/capabilities、/api/v1/operations 和 /openapi.json 发现协议，详见 docs/native-ui-architecture.md。
 
-所有 HTTP 行动计划生成入口（包含兼容的 /api/action_plan）进入单一 ActionPlanJobService。action_plan.jobs.create 返回稳定任务 ID；重复请求合并到正在运行的任务，响应 reused=true。断开观察不会取消生成；需显式调用 action_plan.jobs.cancel。任务仅在收到完成信号且验证新保存结果完整后成功。事件只做有界进程内保留；后端重启后任务 ID 可失效，已保存计划不丢失。
+行动计划只通过 canonical /api/v1/action-plan/jobs 进入单一 ActionPlanJobService。action_plan.jobs.create 返回稳定任务 ID；重复请求合并到正在运行的任务，响应 reused=true。断开观察不会取消生成；需显式调用 action_plan.jobs.cancel。任务仅在收到完成信号且验证新保存结果完整后成功。事件只做有界进程内保留；后端重启后任务 ID 可失效，已保存计划不丢失。
 
 ## 用户可见操作映射
 
@@ -77,7 +77,6 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 | 刷新仪表盘图表缓存 | plots.refresh | vantage plots refresh |
 | 读取仪表盘图表 | plots.read | vantage plots read |
 | 读取今日行动计划 | action_plan.today.read | vantage action-plan today read |
-| 读取最近行动计划内容 | action_plan.content.read | vantage action-plan content read |
 | 读取聊天上下文 | chat.context.read | vantage chat context read |
 | 重置聊天上下文 | chat.context.reset | vantage chat context reset |
 | 读取模型用量 | usage.read | vantage usage read |
@@ -85,7 +84,6 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 | 发现特殊 provider 模型 | providers.special_models.discover | vantage providers special-models discover |
 | 发现模型 | models.discover | vantage models discover |
 | 向模型发送聊天并读取流 | chat.send | vantage chat send |
-| 生成并保存行动计划 | action_plan.generate | vantage action-plan generate |
 | 转录本地音频文件 | media.transcribe | vantage media transcribe |
 | 读取近期后端日志 | logs.read | vantage logs read |
 | 读取采购建议 | finance.recommendations.read | vantage finance recommendations read |

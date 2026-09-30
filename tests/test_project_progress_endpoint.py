@@ -7,7 +7,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from src import server
+import os as _stdlib_os
+from src.backend import projects as _backend_projects
+from src.backend import source_paths as _backend_source_paths
 
 
 class ProjectProgressEndpointTests(unittest.TestCase):
@@ -35,23 +37,23 @@ class ProjectProgressEndpointTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            original_abspath = server.os.path.abspath
+            original_abspath = _stdlib_os.path.abspath
 
             def fake_abspath(path):
-                if path == server.__file__:
+                if path == _backend_source_paths.SERVER_FILE:
                     return os.path.join(src_dir, "server.py")
                 return original_abspath(path)
 
-            with patch.object(server.os.path, "abspath", side_effect=fake_abspath), patch.object(
-                server.Config,
+            with patch.object(_stdlib_os.path, "abspath", side_effect=fake_abspath), patch.object(
+                _backend_projects.Config,
                 "get_project_root",
                 return_value=resource_root,
             ), patch.object(
-                server.subprocess,
+                _backend_projects.subprocess,
                 "run",
                 return_value=SimpleNamespace(returncode=128, stdout=b"", stderr=b"not a git repo"),
             ):
-                payload = asyncio.run(server.get_project_progress())
+                payload = asyncio.run(_backend_projects.get_project_progress())
 
         self.assertEqual(payload["commits"], [{"hash": "abc1234", "date": "2026-04-24", "message": "fix packaged progress"}])
         self.assertEqual(payload["stats"]["total_tasks"], 2)

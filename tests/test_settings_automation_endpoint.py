@@ -7,7 +7,9 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from src import server
+from src.backend import providers as _backend_providers
+from src.backend import security as _backend_security
+from src.backend import settings as _backend_settings
 from src.core import user_config
 from src.services.automation_catalog import get_operation
 
@@ -34,13 +36,13 @@ def _use_runtime_dirs(monkeypatch, root: Path):
             "runtime": "get_runtime_dir",
             "migration": "get_migration_dir",
         }[name]
-        monkeypatch.setattr(server.Config, method_name, staticmethod(lambda path=path: path))
-    monkeypatch.setattr(server.Config, "get_project_root", staticmethod(lambda: root / "project"))
+        monkeypatch.setattr(_backend_settings.Config, method_name, staticmethod(lambda path=path: path))
+    monkeypatch.setattr(_backend_settings.Config, "get_project_root", staticmethod(lambda: root / "project"))
     return paths
 
 
 def _run_concurrent_updates_with_stale_read_gate(monkeypatch, loader_name, first_update, second_update):
-    original_loader = getattr(server, loader_name)
+    original_loader = getattr(_backend_settings, loader_name)
     first_read = threading.Event()
     second_read = threading.Event()
     release_first = threading.Event()
@@ -67,7 +69,7 @@ def _run_concurrent_updates_with_stale_read_gate(monkeypatch, loader_name, first
                     raise TimeoutError("second settings update was not released")
         return state
 
-    monkeypatch.setattr(server, loader_name, gated_loader)
+    monkeypatch.setattr(_backend_settings, loader_name, gated_loader)
 
     def run_update(update, done):
         try:
@@ -114,12 +116,12 @@ def _run_concurrent_updates_with_stale_read_gate(monkeypatch, loader_name, first
 
 def test_settings_and_onboarding_catalog_operations_use_shared_backend_routes():
     expected = {
-        "settings.state.read": ("GET", "/api/automation/settings"),
-        "settings.update": ("PUT", "/api/automation/settings"),
-        "settings.display_language.read": ("GET", "/api/automation/settings/display-language"),
-        "settings.display_language.update": ("PUT", "/api/automation/settings/display-language"),
-        "onboarding.state.read": ("GET", "/api/automation/onboarding"),
-        "onboarding.complete": ("POST", "/api/automation/onboarding/complete"),
+        "settings.state.read": ("GET", "/api/v1/settings"),
+        "settings.update": ("PUT", "/api/v1/settings"),
+        "settings.display_language.read": ("GET", "/api/v1/settings/display-language"),
+        "settings.display_language.update": ("PUT", "/api/v1/settings/display-language"),
+        "onboarding.state.read": ("GET", "/api/v1/onboarding"),
+        "onboarding.complete": ("POST", "/api/v1/onboarding/complete"),
     }
 
     for name, (method, path) in expected.items():
@@ -135,6 +137,7 @@ def test_settings_read_update_round_trip_uses_python_json_and_masks_secrets(tmp_
         {
             "display_language": "en-US",
             "voice_provider_mode": "custom",
+            "voice_base_url": "https://voice.example/v1",
             "voice_api_key": "voice-secret",
         }
     )
@@ -152,7 +155,7 @@ def test_settings_read_update_round_trip_uses_python_json_and_masks_secrets(tmp_
         }
     )
 
-    state = server.get_automation_settings()
+    state = _backend_settings.get_automation_settings()
     assert state["settings"]["display_language"] == "en-US"
     assert state["settings"]["voice_api_key"] == "********"
     assert state["settings"]["voice_has_api_key"] is True
@@ -160,7 +163,7 @@ def test_settings_read_update_round_trip_uses_python_json_and_masks_secrets(tmp_
     assert "voice-secret" not in json.dumps(state)
     assert "provider-secret" not in json.dumps(state)
 
-    updated = server.update_automation_settings(
+    updated = _backend_settings.update_automation_settings(
         {
             "display_language": "zh-CN",
             "action_plan_check_interval_minutes": 0,
@@ -172,6 +175,7 @@ def test_settings_read_update_round_trip_uses_python_json_and_masks_secrets(tmp_
     assert updated["settings"]["display_language"] == "zh-CN"
     assert updated["settings"]["action_plan_check_interval_minutes"] == 0
     assert user_config.load_settings()["voice_api_key"] == "voice-secret"
+    assert user_config.load_settings()["voice_base_url"] == "https://voice.example/v1"
     assert user_config.load_provider_config()["providers"]["local"]["api_key"] == "provider-secret"
     assert paths["config"].joinpath("settings.json").exists()
     assert paths["config"].joinpath("providers.json").exists()
@@ -184,8 +188,8 @@ def test_concurrent_display_language_and_settings_updates_preserve_both_fields(t
     _run_concurrent_updates_with_stale_read_gate(
         monkeypatch,
         "load_settings",
-        lambda: server.update_automation_display_language({"display_language": "zh-CN"}),
-        lambda: server.update_automation_settings({"action_plan_auto_generate": True}),
+        lambda: _backend_settings.update_automation_display_language({"display_language": "zh-CN"}),
+        lambda: _backend_settings.update_automation_settings({"action_plan_auto_generate": True}),
     )
 
     settings = user_config.load_settings()
@@ -208,10 +212,10 @@ def test_concurrent_provider_selection_and_entry_update_preserve_both_changes(tm
     _run_concurrent_updates_with_stale_read_gate(
         monkeypatch,
         "load_provider_config",
-        lambda: server.update_automation_settings(
+        lambda: _backend_settings.update_automation_settings(
             {"provider_config": {"selected_provider": "secondary"}}
         ),
-        lambda: server.update_automation_settings(
+        lambda: _backend_settings.update_automation_settings(
             {
                 "provider_config": {
                     "providers": {
@@ -255,7 +259,7 @@ def test_settings_update_preserves_model_profiles_and_provider_capabilities_when
         }
     )
 
-    canonical_state = server.get_automation_settings()
+    canonical_state = _backend_settings.get_automation_settings()
     canonical_provider = canonical_state["provider"]["providers"]["local"]
     assert canonical_provider["context_window_tokens"] == 131072
     assert canonical_provider["max_output_tokens"] == 32768
@@ -281,9 +285,9 @@ def test_settings_update_preserves_model_profiles_and_provider_capabilities_when
             }
         },
     }
-    server.update_automation_settings({"provider_config": form_provider_config})
+    _backend_settings.update_automation_settings({"provider_config": form_provider_config})
 
-    readback_provider = server.get_automation_settings()["provider"]["providers"]["local"]
+    readback_provider = _backend_settings.get_automation_settings()["provider"]["providers"]["local"]
     assert readback_provider["context_window_tokens"] == 131072
     assert readback_provider["max_output_tokens"] == 32768
     persisted = user_config.load_provider_config()
@@ -308,7 +312,7 @@ def test_settings_update_keeps_explicit_provider_deletion_intent(tmp_path, monke
         }
     )
 
-    server.update_automation_settings(
+    _backend_settings.update_automation_settings(
         {
             "provider_config": {
                 "selected_provider": "local",
@@ -326,13 +330,13 @@ def test_settings_update_rejects_action_plan_interval_above_catalog_limit(tmp_pa
     _use_runtime_dirs(monkeypatch, tmp_path)
     user_config.save_settings({"action_plan_check_interval_minutes": 30})
 
-    server.update_automation_settings({
+    _backend_settings.update_automation_settings({
         "action_plan_check_interval_minutes": user_config.MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES,
     })
     assert user_config.load_settings()["action_plan_check_interval_minutes"] == 35_791
 
     with pytest.raises(HTTPException, match="action_plan_check_interval_minutes"):
-        server.update_automation_settings({"action_plan_check_interval_minutes": 35_792})
+        _backend_settings.update_automation_settings({"action_plan_check_interval_minutes": 35_792})
 
     assert user_config.load_settings()["action_plan_check_interval_minutes"] == 35_791
 
@@ -352,7 +356,7 @@ def test_settings_partial_provider_config_without_providers_preserves_provider_s
         }
     )
 
-    server.update_automation_settings(
+    _backend_settings.update_automation_settings(
         {
             "provider_config": {
                 "sampling_defaults": {"temperature": 0.71},
@@ -398,7 +402,7 @@ def test_settings_update_rejects_invalid_provider_config_before_writing_any_json
     providers_before = providers_file.read_bytes()
 
     with pytest.raises(HTTPException) as error:
-        server.update_automation_settings(
+        _backend_settings.update_automation_settings(
             {
                 "display_language": "zh-CN",
                 "provider_config": {"providers": submitted_providers},
@@ -429,15 +433,15 @@ def test_settings_update_rolls_back_both_json_files_when_provider_write_fails(tm
     providers_file = paths["config"] / "providers.json"
     settings_before = settings_file.read_bytes()
     providers_before = providers_file.read_bytes()
-    save_provider_config = server.save_provider_config
+    save_provider_config = _backend_settings.save_provider_config
 
     def save_provider_then_fail(payload):
         save_provider_config(payload)
         raise OSError("simulated failure after provider config write")
 
-    monkeypatch.setattr(server, "save_provider_config", save_provider_then_fail)
+    monkeypatch.setattr(_backend_settings, "save_provider_config", save_provider_then_fail)
     with pytest.raises(OSError, match="simulated failure"):
-        server.update_automation_settings(
+        _backend_settings.update_automation_settings(
             {
                 "display_language": "zh-CN",
                 "provider_config": {
@@ -465,11 +469,11 @@ def test_onboarding_state_and_completion_import_only_into_configured_history(tmp
     (paths["history"] / "keep.json").parent.mkdir(parents=True)
     (paths["history"] / "keep.json").write_text("newer", encoding="utf-8")
 
-    before = server.get_automation_onboarding_state()
+    before = _backend_settings.get_automation_onboarding_state()
     assert before["completed"] is False
     assert before["migrationCompleted"] is False
 
-    result = server.complete_automation_onboarding(
+    result = _backend_settings.complete_automation_onboarding(
         {
             "display_language": "zh-CN",
             "launch_at_login": True,
@@ -491,8 +495,8 @@ def test_onboarding_state_and_completion_import_only_into_configured_history(tmp
     assert user_config.load_settings()["onboarding_completed"] is True
     assert user_config.load_provider_config()["providers"]["custom"]["api_key"] == "onboarding-secret"
     assert user_config.load_migration_state()["source_path"] == str(legacy_root.resolve())
-    assert server.get_automation_onboarding_state()["migrationCompleted"] is True
-    assert "onboarding-secret" not in json.dumps(server.get_automation_settings())
+    assert _backend_settings.get_automation_onboarding_state()["migrationCompleted"] is True
+    assert "onboarding-secret" not in json.dumps(_backend_settings.get_automation_settings())
 
 
 def test_onboarding_rejects_missing_history_before_changing_configuration(tmp_path, monkeypatch):
@@ -501,7 +505,7 @@ def test_onboarding_rejects_missing_history_before_changing_configuration(tmp_pa
     invalid_root.mkdir()
 
     with pytest.raises(HTTPException, match="history"):
-        server.complete_automation_onboarding(
+        _backend_settings.complete_automation_onboarding(
             {
                 "selected_provider": "custom",
                 "api_key": "secret",
@@ -535,7 +539,7 @@ def test_onboarding_requires_explicit_chat_setup_choice_before_mutating_settings
     provider_before = user_config.load_provider_config()
 
     with pytest.raises(HTTPException, match="skip_chat_setup"):
-        server.complete_automation_onboarding({})
+        _backend_settings.complete_automation_onboarding({})
 
     assert user_config.load_settings() == settings_before
     assert user_config.load_provider_config() == provider_before
@@ -545,7 +549,7 @@ def test_onboarding_requires_selected_provider_when_chat_setup_is_not_skipped(tm
     _use_runtime_dirs(monkeypatch, tmp_path)
 
     with pytest.raises(HTTPException, match="selected_provider"):
-        server.complete_automation_onboarding({"skip_chat_setup": False})
+        _backend_settings.complete_automation_onboarding({"skip_chat_setup": False})
 
     assert user_config.load_settings()["onboarding_completed"] is False
     assert user_config.load_provider_config()["providers"] == {}
@@ -575,7 +579,7 @@ def test_skipping_chat_setup_preserves_existing_provider_configuration(tmp_path,
     provider_file = user_config.get_providers_file()
     provider_bytes_before = provider_file.read_bytes()
 
-    result = server.complete_automation_onboarding({"skip_chat_setup": True})
+    result = _backend_settings.complete_automation_onboarding({"skip_chat_setup": True})
 
     assert result["providerConfigured"] is True
     assert result["launchAtLogin"] is True
@@ -593,7 +597,7 @@ def test_onboarding_rejects_non_boolean_launch_at_login_before_mutating_settings
     settings_before = user_config.load_settings()
 
     with pytest.raises(HTTPException, match="launch_at_login"):
-        server.complete_automation_onboarding({
+        _backend_settings.complete_automation_onboarding({
             "skip_chat_setup": True,
             "launch_at_login": launch_at_login,
         })
@@ -625,7 +629,7 @@ def test_onboarding_provider_update_merges_existing_routes_and_preserves_blank_s
         },
     })
 
-    server.complete_automation_onboarding({
+    _backend_settings.complete_automation_onboarding({
         "skip_chat_setup": False,
         "selected_provider": "custom",
         "api_key": submitted_api_key,
@@ -643,38 +647,30 @@ def test_onboarding_provider_update_merges_existing_routes_and_preserves_blank_s
 
 
 def test_settings_and_onboarding_routes_reject_non_loopback_access():
-    request = SimpleNamespace(
-        url=SimpleNamespace(path="/api/automation/settings"),
-        client=SimpleNamespace(host="192.0.2.10"),
-        headers={"host": "127.0.0.1:8000"},
-    )
-
-    async def accepted(_request):
-        return "accepted"
-
-    response = asyncio.run(server.enforce_loopback_backend_access(request, accepted))
-    assert response.status_code == 403
+    scope = {"type": "http", "client": ("192.0.2.10", 12345),
+             "headers": [(b"host", b"127.0.0.1:8000")]}
+    assert _backend_security._backend_access_error(scope) == "Local backend access only"
 
 
 def test_display_language_read_waits_for_shared_config_lock(monkeypatch):
-    monkeypatch.setattr(server, "load_settings", lambda: {"display_language": "en-US"})
+    monkeypatch.setattr(_backend_settings, "load_settings", lambda: {"display_language": "en-US"})
     started = threading.Event()
     completed = threading.Event()
     result = []
 
     def read_display_language():
         started.set()
-        result.append(server.get_automation_display_language())
+        result.append(_backend_settings.get_automation_display_language())
         completed.set()
 
     reader = threading.Thread(target=read_display_language)
-    server._automation_config_lock.acquire()
+    _backend_settings._automation_config_lock.acquire()
     try:
         reader.start()
         started_in_time = started.wait(5)
         completed_while_locked = completed.wait(0.1) if started_in_time else False
     finally:
-        server._automation_config_lock.release()
+        _backend_settings._automation_config_lock.release()
 
     reader.join(timeout=5)
     assert started_in_time, "display-language reader did not start"
@@ -696,14 +692,14 @@ def test_user_config_loader_waits_for_automation_config_lock(tmp_path, monkeypat
         completed.set()
 
     reader = threading.Thread(target=load_settings_in_worker)
-    server._automation_config_lock.acquire()
+    _backend_settings._automation_config_lock.acquire()
     try:
         reader.start()
         started_in_time = started.wait(5)
         completed_while_locked = completed.wait(0.1) if started_in_time else False
         user_config.save_settings({"display_language": "zh-CN"})
     finally:
-        server._automation_config_lock.release()
+        _backend_settings._automation_config_lock.release()
 
     reader.join(timeout=5)
     assert started_in_time, "user_config loader did not start"
@@ -736,7 +732,7 @@ def test_special_provider_resolution_holds_one_lock_across_settings_and_provider
     writer_completed = threading.Event()
     resolved = []
     errors = []
-    original_load_settings = server.load_settings
+    original_load_settings = _backend_providers.load_settings
 
     def pause_after_settings_read():
         settings = original_load_settings()
@@ -746,11 +742,11 @@ def test_special_provider_resolution_holds_one_lock_across_settings_and_provider
                 raise TimeoutError("special-provider reader was not released")
         return settings
 
-    monkeypatch.setattr(server, "load_settings", pause_after_settings_read)
+    monkeypatch.setattr(_backend_providers, "load_settings", pause_after_settings_read)
 
     def read_special_provider():
         try:
-            resolved.append(server._resolve_special_provider_config(kind="voice"))
+            resolved.append(_backend_providers._resolve_special_provider_config(kind="voice"))
         except Exception as error:
             errors.append(error)
 
@@ -804,13 +800,11 @@ def test_special_provider_resolution_holds_one_lock_across_settings_and_provider
         ("[::1]:8000", "::1"),
         ("::1", "::1"),
         ("localhost", "localhost"),
-        ("testclient", "testclient"),
-        ("testserver", "testserver"),
     ],
 )
 def test_loopback_host_parser_normalizes_local_host_forms(value, normalized):
-    assert server._normalize_host_value(value) == normalized
-    assert server._is_loopback_host(value) is True
+    assert _backend_security._normalize_host_value(value) == normalized
+    assert _backend_security._is_loopback_host(value) is True
 
 
 @pytest.mark.parametrize(
@@ -819,6 +813,8 @@ def test_loopback_host_parser_normalizes_local_host_forms(value, normalized):
         "",
         "  ",
         "not a host",
+        "testclient",
+        "testserver",
         "localhost:invalid-port",
         "[::1]:invalid-port",
         "192.0.2.10",
@@ -828,22 +824,14 @@ def test_loopback_host_parser_normalizes_local_host_forms(value, normalized):
     ],
 )
 def test_loopback_host_parser_fails_closed_for_empty_invalid_and_remote_hosts(value):
-    assert server._is_loopback_host(value) is False
+    assert _backend_security._is_loopback_host(value) is False
 
 
 def test_loopback_host_parser_accepts_ipv4_mapped_loopback_address():
-    assert server._is_loopback_host("::ffff:127.0.0.1") is True
+    assert _backend_security._is_loopback_host("::ffff:127.0.0.1") is True
 
 
-def test_loopback_guard_does_not_change_existing_status_route_access():
-    request = SimpleNamespace(
-        url=SimpleNamespace(path="/api/status"),
-        client=SimpleNamespace(host="192.0.2.10"),
-        headers={"host": "192.0.2.20:8000"},
-    )
-
-    async def accepted(_request):
-        return "accepted"
-
-    response = asyncio.run(server.enforce_loopback_backend_access(request, accepted))
-    assert response == "accepted"
+def test_loopback_guard_rejects_non_loopback_status_access():
+    scope = {"type": "http", "path": "/api/v1/system/status", "client": ("192.0.2.10", 12345),
+             "headers": [(b"host", b"192.0.2.20:8000")]}
+    assert _backend_security._backend_access_error(scope) == "Local backend access only"

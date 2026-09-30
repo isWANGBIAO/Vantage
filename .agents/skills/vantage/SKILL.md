@@ -44,11 +44,11 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 
 ## 行动计划：等待成功，再验证
 
-手动查询使用 action_plan.today.read；需要生成时使用 action_plan.generate。是否替换今天的保存结果由 replace_today 参数控制，只有用户要求替换时才将其设为 true。
+手动查询使用 action_plan.today.read；需要生成时使用 action_plan.jobs.create，记录任务ID，再用 action_plan.jobs.events 或 action_plan.jobs.read 观察结果。是否替换今天的保存结果由 replace_today 参数控制，只有用户要求替换时才将其设为 true。
 
-生成返回进度流。必须持续读取到成功完成事件 done=true；如果出现 error、STREAM_ERROR、超时、流提前结束或正文不完整，就按失败处理，不报告计划已替换。成功后重新读取 action_plan.today.read，确认最新日期、分析和计划正文完整，再给用户结论。
+action_plan.jobs.events 返回进度流。必须持续读取到成功完成事件 done=true；如果出现 error、STREAM_ERROR、超时、流提前结束或正文不完整，就按失败处理，不报告计划已替换。成功后重新读取 action_plan.today.read，确认最新日期、分析和计划正文完整，再给用户结论。
 
-定时检查数据变化由后端负责，任何 UI 或 CLI/MCP 通过 settings.update 设置间隔后都共享同一调度。action_plan.source_revision.read 可读取来源指纹，action_plan.scheduler.read 可查看调度状态。长任务使用 action_plan.jobs.create/list/read/events/cancel；断开观察不会取消后端任务，只有显式 cancel 才取消。只有 succeeded 且完整保存结果才算完成；显示效果仍需可见 UI 单独验证。
+定时检查数据变化由后端负责，任何 UI 或 CLI/MCP 通过 settings.update 设置间隔后都共享同一调度。action_plan.source_revision.read 可读取来源指纹，action_plan.scheduler.read 可查看调度状态。长任务使用 action_plan.jobs.create、action_plan.jobs.list、action_plan.jobs.read、action_plan.jobs.events、action_plan.jobs.cancel；断开观察不会取消后端任务，只有显式 cancel 才取消。只有 succeeded 且完整保存结果才算完成；显示效果仍需可见 UI 单独验证。
 
 注意两个有副作用的操作：face.live.read 只有在确实需要标记实时查看器可见时才传 active=true；system.media.open_folder 会打开系统文件管理器，不是纯读取。
 

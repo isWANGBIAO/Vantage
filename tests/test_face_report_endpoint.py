@@ -9,7 +9,12 @@ from unittest.mock import patch
 
 from fastapi import BackgroundTasks
 
-from src import server
+import os as _stdlib_os
+from src.backend import face as _backend_face
+from src.backend import observability as _backend_observability
+from src.backend import plots as _backend_plots
+from src.backend import processes as _backend_processes
+from src.backend import source_paths as _backend_source_paths
 from src.utils.face_analysis_db import (
     initialize_face_analysis_storage,
     load_face_analysis_records,
@@ -31,12 +36,14 @@ class FaceReportEndpointTests(unittest.TestCase):
             background_tasks = BackgroundTasks()
             logs_dir = tmp / "logs"
 
-            with patch.object(server.Config, "get_logs_dir", return_value=logs_dir), patch.object(
-                server,
+            with patch.dict(_stdlib_os.environ, {"VANTAGE_DATA_DIR": str(tmp)}), patch.object(
+                _backend_face.Config, "get_logs_dir", return_value=logs_dir,
+            ), patch.object(
+                _backend_observability,
                 "datetime",
                 FrozenDateTime,
-            ), patch.object(server.subprocess, "run") as mock_run:
-                payload = asyncio.run(server.analyze_face_history(background_tasks))
+            ), patch.object(_backend_face.subprocess, "run") as mock_run:
+                payload = asyncio.run(_backend_face.analyze_face_history(background_tasks))
                 self.assertEqual(payload["message"], "Analysis started in background")
                 self.assertEqual(len(background_tasks.tasks), 1)
                 task = background_tasks.tasks[0]
@@ -46,7 +53,7 @@ class FaceReportEndpointTests(unittest.TestCase):
                 stdout_handle = mock_run.call_args.kwargs["stdout"]
                 stderr_handle = mock_run.call_args.kwargs["stderr"]
                 self.assertTrue(stdout_handle.closed)
-                self.assertEqual(stderr_handle, server.subprocess.STDOUT)
+                self.assertEqual(stderr_handle, _backend_face.subprocess.STDOUT)
                 self.assertEqual(
                     Path(latest_pointer_content).resolve(),
                     (tmp / "logs" / "face-analysis" / "face-analysis-20260420_221530.log").resolve(),
@@ -96,12 +103,12 @@ class FaceReportEndpointTests(unittest.TestCase):
 
             try:
                 with (
-                    patch.object(server, "__file__", str(tmp / "server.py")),
-                    patch.object(server.Config, "get_project_root", return_value=tmp),
-                    patch.object(server.Config, "get_runtime_paths", return_value=runtime_paths),
-                    patch.object(server.Config, "get_logs_dir", return_value=runtime_paths["log_dir"]),
+                    patch.object(_backend_source_paths, 'SERVER_FILE', str(tmp / "server.py")),
+                    patch.object(_backend_face.Config, "get_project_root", return_value=tmp),
+                    patch.object(_backend_face.Config, "get_runtime_paths", return_value=runtime_paths),
+                    patch.object(_backend_face.Config, "get_logs_dir", return_value=runtime_paths["log_dir"]),
                 ):
-                    payload = asyncio.run(server.analyze_face_history(background_tasks))
+                    payload = asyncio.run(_backend_face.analyze_face_history(background_tasks))
                     self.assertEqual(payload["message"], "Analysis started in background")
                     task = background_tasks.tasks[0]
                     task.func(*task.args, **task.kwargs)
@@ -111,8 +118,8 @@ class FaceReportEndpointTests(unittest.TestCase):
                 )
                 persisted = Path(latest).read_text(encoding="utf-8")
             finally:
-                with server._face_analysis_job_lock:
-                    server._face_analysis_job_running = False
+                with _backend_face._face_analysis_job_lock:
+                    _backend_face._face_analysis_job_running = False
 
             self.assertNotIn(str(private_history), persisted)
             self.assertNotIn(secret, persisted)
@@ -124,8 +131,8 @@ class FaceReportEndpointTests(unittest.TestCase):
         background_tasks = BackgroundTasks()
 
         try:
-            first_payload = asyncio.run(server.analyze_face_history(background_tasks))
-            second_response = asyncio.run(server.analyze_face_history(background_tasks))
+            first_payload = asyncio.run(_backend_face.analyze_face_history(background_tasks))
+            second_response = asyncio.run(_backend_face.analyze_face_history(background_tasks))
 
             self.assertEqual(first_payload["message"], "Analysis started in background")
             self.assertEqual(second_response.status_code, 409)
@@ -133,9 +140,9 @@ class FaceReportEndpointTests(unittest.TestCase):
             self.assertEqual(payload["status"], "running")
             self.assertEqual(len(background_tasks.tasks), 1)
         finally:
-            if hasattr(server, "_face_analysis_job_running"):
-                with server._face_analysis_job_lock:
-                    server._face_analysis_job_running = False
+            if hasattr(_backend_face, "_face_analysis_job_running"):
+                with _backend_face._face_analysis_job_lock:
+                    _backend_face._face_analysis_job_running = False
 
     def test_cached_report_returns_without_running_subprocess(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -177,13 +184,13 @@ class FaceReportEndpointTests(unittest.TestCase):
                 db_path,
             )
 
-            with patch.object(server, "FACE_ANALYSIS_DB_FILE", db_path), patch.object(
-                server.asyncio, "to_thread", side_effect=AssertionError("GET /api/face/report should not trigger background analysis")
+            with patch.object(_backend_face, "FACE_ANALYSIS_DB_FILE", db_path), patch.object(
+                _backend_face.asyncio, "to_thread", side_effect=AssertionError("GET /api/v1/face/report should not trigger background analysis")
             ):
-                payload = asyncio.run(server.get_face_report())
+                payload = asyncio.run(_backend_face.get_face_report())
 
         self.assertEqual(payload["heaviest"]["score"], 9.8)
-        self.assertIn("/api/image_proxy", payload["heaviest"]["url"])
+        self.assertIn("/api/v1/media/image", payload["heaviest"]["url"])
         self.assertIn("dark_circles_trend.png", payload["trend_plot"])
         self.assertEqual(set(payload["trend_views"].keys()), {"day", "week", "month", "all"})
         self.assertEqual(payload["trend_views"]["all"]["points"][0]["score"], 9.8)
@@ -210,8 +217,8 @@ class FaceReportEndpointTests(unittest.TestCase):
                 db_path,
             )
 
-            with patch.object(server, "FACE_ANALYSIS_DB_FILE", db_path):
-                payload = asyncio.run(server.get_face_report())
+            with patch.object(_backend_face, "FACE_ANALYSIS_DB_FILE", db_path):
+                payload = asyncio.run(_backend_face.get_face_report())
 
         self.assertEqual(payload["trend_views"]["day"]["points"], [])
         self.assertEqual(payload["trend_views"]["week"]["points"], [])
@@ -221,8 +228,8 @@ class FaceReportEndpointTests(unittest.TestCase):
     def test_missing_cache_returns_empty_state_error(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "missing.db"
-            with patch.object(server, "FACE_ANALYSIS_DB_FILE", db_path):
-                payload = asyncio.run(server.get_face_report())
+            with patch.object(_backend_face, "FACE_ANALYSIS_DB_FILE", db_path):
+                payload = asyncio.run(_backend_face.get_face_report())
 
         self.assertEqual(payload["error"], "No report generated")
 
@@ -233,14 +240,14 @@ class FaceReportEndpointTests(unittest.TestCase):
             save_face_progress_cache({"status": "running", "percent": 42, "timestamp": 100}, db_path)
 
             try:
-                with server._face_analysis_job_lock:
-                    server._face_analysis_job_running = True
+                with _backend_face._face_analysis_job_lock:
+                    _backend_face._face_analysis_job_running = True
 
-                with patch.object(server, "FACE_ANALYSIS_DB_FILE", db_path), patch.object(server.time, "time", return_value=200):
-                    payload = asyncio.run(server.get_face_progress())
+                with patch.object(_backend_face, "FACE_ANALYSIS_DB_FILE", db_path), patch.object(_backend_face.time, "time", return_value=200):
+                    payload = asyncio.run(_backend_face.get_face_progress())
             finally:
-                with server._face_analysis_job_lock:
-                    server._face_analysis_job_running = False
+                with _backend_face._face_analysis_job_lock:
+                    _backend_face._face_analysis_job_running = False
 
         self.assertEqual(payload["status"], "running")
         self.assertEqual(payload["percent"], 42)
@@ -250,10 +257,10 @@ class FaceReportEndpointTests(unittest.TestCase):
         proc = SimpleNamespace(returncode=0, stdout=b"no export path\n", stderr=b"")
 
         with (
-            patch.object(server.subprocess, "run", return_value=proc),
-            patch.object(server, "_get_runtime_workdir", return_value=Path("C:/runtime")),
+            patch.object(_backend_face.subprocess, "run", return_value=proc),
+            patch.object(_backend_processes, "_get_runtime_workdir", return_value=Path("C:/runtime")),
         ):
-            response = asyncio.run(server.export_face_excel())
+            response = asyncio.run(_backend_face.export_face_excel())
 
         self.assertEqual(response.status_code, 500)
         payload = json.loads(response.body.decode("utf-8"))
@@ -269,12 +276,12 @@ class FaceReportEndpointTests(unittest.TestCase):
             return proc
 
         with (
-            patch.object(server.asyncio, "to_thread", side_effect=fake_to_thread),
-            patch.object(server.subprocess, "run", return_value=proc),
-            patch.object(server.os.path, "exists", return_value=True),
-            patch.object(server, "FileResponse", side_effect=lambda path, **kwargs: {"path": path, **kwargs}),
+            patch.object(_backend_face.asyncio, "to_thread", side_effect=fake_to_thread),
+            patch.object(_backend_face.subprocess, "run", return_value=proc),
+            patch.object(_stdlib_os.path, "exists", return_value=True),
+            patch.object(_backend_face, "FileResponse", side_effect=lambda path, **kwargs: {"path": path, **kwargs}),
         ):
-            response = asyncio.run(server.export_face_excel())
+            response = asyncio.run(_backend_face.export_face_excel())
 
         self.assertEqual(len(to_thread_calls), 1)
         self.assertEqual(response["path"], "C:/runtime/face.xlsx")
@@ -315,19 +322,19 @@ class FaceReportEndpointTests(unittest.TestCase):
                 },
             }
 
-            with patch.object(server, "FACE_ANALYSIS_DB_FILE", db_path), patch.object(
-                server, "FACE_REPORT_PLOT_OUTPUT_DIR", output_dir
+            with patch.object(_backend_face, "FACE_ANALYSIS_DB_FILE", db_path), patch.object(
+                _backend_plots, "FACE_REPORT_PLOT_OUTPUT_DIR", output_dir
             ), patch.object(
-                server, "get_face_analysis_runtime", return_value=(object(), object(), object())
+                _backend_face, "get_face_analysis_runtime", return_value=(object(), object(), object())
             ), patch.object(
-                server,
+                _backend_face,
                 "get_face_analysis_pipeline_module",
                 return_value=SimpleNamespace(
                     analyze_photo_file=lambda *args, **kwargs: fake_record,
                     build_face_report=lambda *args, **kwargs: fake_report,
                 ),
             ):
-                server.process_captured_face_photo(str(photo_path))
+                _backend_face.process_captured_face_photo(str(photo_path))
 
             rows = load_face_analysis_records(db_path)
             cached = load_face_report_cache(db_path)

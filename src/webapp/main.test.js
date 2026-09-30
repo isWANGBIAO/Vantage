@@ -31,7 +31,7 @@ test('startup transport waits for backend readiness before sending onboarding an
       connection: connection.resolveBackendConnection({ baseUrl: `http://127.0.0.1:${server.address().port}` }),
       waitUntilReady: () => backendReadyPromise,
     });
-    const requests = ['/api/automation/onboarding', '/api/automation/settings'].map(p => requestBackendJson('GET', p));
+    const requests = ['/api/v1/onboarding', '/api/v1/settings'].map(p => requestBackendJson('GET', p));
     assert.equal(sent.length, 0, 'No connection attempt while packaged backend is starting');
     release();
     const responses = await Promise.all(requests);
@@ -130,41 +130,25 @@ test('Electron main window hides native chrome while keeping native window contr
   assert.ok(mainSource.includes('autoHideMenuBar: true'));
 });
 
-test('Electron main process exposes Settings IPC and restricts path opening', () => {
-  assert.ok(mainSource.includes("ipcMain.handle('settings:get-state'"));
-  assert.ok(mainSource.includes("ipcMain.handle('settings:save'"));
-  assert.ok(mainSource.includes("ipcMain.handle('settings:open-path'"));
-  assert.ok(mainSource.includes('requestBackendJson'));
+test('Electron exposes one canonical configuration transport and only narrow native IPC', () => {
+  assert.ok(mainSource.includes("ipcMain.handle('backend:configuration-request'"));
+  assert.ok(mainSource.includes("ipcMain.handle('platform:open-settings-path'"));
+  assert.doesNotMatch(mainSource, /ipcMain\.handle\('(?:settings:|onboarding:)/);
+  assert.doesNotMatch(mainSource, /buildElectronSettingsState|toBackendSettingsPayload|configurationProtocol/);
   assert.doesNotMatch(mainSource, /saveSettingsPayload|saveOnboardingCompletion|persistSettings/);
   assert.ok(mainSource.includes('resolveAllowedSettingsPath'));
   assert.ok(mainSource.includes('settingsPathAllowlist'));
 });
 
-test('settings and onboarding IPC persist through canonical backend operations without JSON fallback', () => {
-  const settingsSave = mainSource.match(
-    /ipcMain\.handle\('settings:save',[\s\S]*?\n\}\);\n\nipcMain\.handle\('settings:open-path'/,
-  )?.[0];
-  const onboardingComplete = mainSource.match(
-    /ipcMain\.handle\('onboarding:complete',[\s\S]*?\n\}\);\n\nfunction (?:isTrustedRendererDocument|createWindow)/,
-  )?.[0];
-  const displayLanguageUpdate = mainSource.match(
-    /ipcMain\.handle\('settings:set-display-language',[\s\S]*?\n\}\);\n\nipcMain\.handle\('settings:get-system-locale'/,
-  )?.[0];
-
-  assert.ok(settingsSave, 'settings save handler should remain registered');
-  assert.ok(onboardingComplete, 'onboarding completion handler should remain registered');
-  assert.ok(displayLanguageUpdate, 'display-language handler should remain registered');
-  assert.match(settingsSave, /await requestBackendJson\(\s*'PUT',\s*'\/api\/automation\/settings'/);
-  assert.match(onboardingComplete, /await requestBackendJson\(\s*'POST',\s*'\/api\/automation\/onboarding\/complete'/);
-  assert.match(displayLanguageUpdate, /await requestBackendJson\(\s*'PUT',\s*'\/api\/automation\/settings\/display-language'/);
-  assert.match(settingsSave, /applyLaunchAtLoginSetting/);
-  assert.match(settingsSave, /syncTrayMenu\(\)/);
-  assert.match(settingsSave, /setTitleBarOverlay/);
-  assert.match(onboardingComplete, /applyLaunchAtLoginSetting/);
-  assert.match(onboardingComplete, /syncTrayMenu\(\)/);
-  assert.match(displayLanguageUpdate, /syncTrayMenu\(\)/);
-  assert.doesNotMatch(settingsSave, /catch\s*\(/);
-  assert.doesNotMatch(onboardingComplete, /catch\s*\(/);
+test('native preferences reread canonical settings before applying OS side effects', () => {
+  const readPreferences = mainSource.match(/async function readSavedPreferences\([\s\S]*?\n\}/)?.[0];
+  const applyPreferences = mainSource.match(/function applySavedNativePreferences\([\s\S]*?\n\}/)?.[0];
+  assert.match(readPreferences, /requestBackendJson\('GET', '\/api\/v1\/settings'\)/);
+  assert.match(applyPreferences, /await readSavedPreferences\(\)/);
+  assert.match(applyPreferences, /applyLaunchAtLoginSetting/);
+  assert.match(applyPreferences, /settings\.launch_at_login/);
+  assert.match(applyPreferences, /syncTrayMenu\(\)/);
+  assert.match(applyPreferences, /setTitleBarOverlay/);
 });
 
 test('Electron settings mapping forwards provider context and output capability fields', () => {
@@ -259,13 +243,13 @@ test('desktop backend read failures are visible and cannot save fallback setting
 test('Electron keeps native directory, picker, login, tray, and title-bar effects allowlisted', () => {
   const settingsPathAllowlist = mainSource.match(/const settingsPathAllowlist = \{([\s\S]*?)\n\};/)?.[1];
   const openPath = mainSource.match(
-    /ipcMain\.handle\('settings:open-path',[\s\S]*?\n\}\);\n\nipcMain\.handle\('onboarding:pick-legacy-root'/,
+    /ipcMain\.handle\('platform:open-settings-path',[\s\S]*?\n\}\);\n\nipcMain\.handle\('platform:pick-legacy-root'/,
   )?.[0];
   const picker = mainSource.match(
-    /ipcMain\.handle\('onboarding:pick-legacy-root',[\s\S]*?\n\}\);\n\nipcMain\.handle\('settings:get-display-language-state'/,
+    /ipcMain\.handle\('platform:pick-legacy-root',[\s\S]*?\n\}\);\n\nipcMain\.handle\('platform:get-system-locale'/,
   )?.[0];
   const titleBarTheme = mainSource.match(
-    /ipcMain\.handle\('window:set-title-bar-theme',[\s\S]*?\n\}\);/,
+    /ipcMain\.handle\('platform:set-title-bar-theme',[\s\S]*?\n\}\);/,
   )?.[0];
 
   assert.ok(settingsPathAllowlist);
@@ -298,7 +282,7 @@ test('Electron main process requests macOS camera access before bundled backend 
   assert.ok(mainSource.includes("CAMERA_FRAME_BRIDGE_START_CHANNEL = 'camera:start-frame-bridge'"));
   assert.ok(mainSource.includes("CAMERA_FRAME_CHANNEL = 'camera:renderer-frame'"));
   assert.ok(mainSource.includes("CAMERA_FRAME_BRIDGE_ERROR_CHANNEL = 'camera:frame-bridge-error'"));
-  assert.ok(mainSource.includes("buildConnectionUrl(backendConnection, '/api/renderer_camera/frame')"));
+  assert.ok(mainSource.includes("buildConnectionUrl(backendConnection, '/api/v1/camera/frame')"));
   assert.ok(mainSource.includes("'x-vantage-intent': RENDERER_CAMERA_FRAME_INTENT"));
   assert.ok(mainSource.includes('Renderer camera access granted; confirming macOS camera media access'));
   assert.ok(mainSource.includes('Renderer camera frame capture failed'));

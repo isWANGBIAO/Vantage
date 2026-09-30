@@ -2,16 +2,16 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from src import server
+from src.backend import face as _backend_face
 
 
 def test_detection_model_prewarm_flag_zero_keeps_yunet_lazy():
     with (
-        patch.object(server, "PREWARM_FACE_ON_STARTUP", False),
-        patch.object(server, "PREWARM_FACE_DETECTION_ON_STARTUP", False),
-        patch.object(server, "get_face_detector") as get_face_detector,
+        patch.object(_backend_face, "PREWARM_FACE_ON_STARTUP", False),
+        patch.object(_backend_face, "PREWARM_FACE_DETECTION_ON_STARTUP", False),
+        patch.object(_backend_face, "get_face_detector") as get_face_detector,
     ):
-        server.prewarm_runtime_models()
+        _backend_face.prewarm_runtime_models()
 
     get_face_detector.assert_not_called()
 
@@ -20,16 +20,16 @@ def test_detection_model_prewarm_runs_foreground_presence_inference(capsys):
     face_detector = MagicMock()
 
     with (
-        patch.object(server, "PREWARM_FACE_ON_STARTUP", False),
-        patch.object(server, "PREWARM_FACE_DETECTION_ON_STARTUP", True),
-        patch.object(server, "get_face_detector", return_value=face_detector) as get_face,
+        patch.object(_backend_face, "PREWARM_FACE_ON_STARTUP", False),
+        patch.object(_backend_face, "PREWARM_FACE_DETECTION_ON_STARTUP", True),
+        patch.object(_backend_face, "get_face_detector", return_value=face_detector) as get_face,
         patch.object(
-            server,
+            _backend_face,
             "detect_foreground_presence_face_boxes",
             return_value=[],
         ) as detect_foreground,
     ):
-        server.prewarm_runtime_models()
+        _backend_face.prewarm_runtime_models()
 
     get_face.assert_called_once_with()
     detect_foreground.assert_called_once()
@@ -48,15 +48,15 @@ def test_detection_model_prewarm_runs_foreground_presence_inference(capsys):
 
 def test_detection_model_prewarm_reports_yunet_load_failure(capsys):
     with (
-        patch.object(server, "PREWARM_FACE_ON_STARTUP", False),
-        patch.object(server, "PREWARM_FACE_DETECTION_ON_STARTUP", True),
+        patch.object(_backend_face, "PREWARM_FACE_ON_STARTUP", False),
+        patch.object(_backend_face, "PREWARM_FACE_DETECTION_ON_STARTUP", True),
         patch.object(
-            server,
+            _backend_face,
             "get_face_detector",
             side_effect=RuntimeError("invalid YuNet model"),
         ),
     ):
-        server.prewarm_runtime_models()
+        _backend_face.prewarm_runtime_models()
 
     output = capsys.readouterr().out
     assert "Failed to warm camera face detector: invalid YuNet model" in output
@@ -67,16 +67,16 @@ def test_detection_model_prewarm_reports_yunet_inference_failure(capsys):
     face_detector = MagicMock()
 
     with (
-        patch.object(server, "PREWARM_FACE_ON_STARTUP", False),
-        patch.object(server, "PREWARM_FACE_DETECTION_ON_STARTUP", True),
-        patch.object(server, "get_face_detector", return_value=face_detector),
+        patch.object(_backend_face, "PREWARM_FACE_ON_STARTUP", False),
+        patch.object(_backend_face, "PREWARM_FACE_DETECTION_ON_STARTUP", True),
+        patch.object(_backend_face, "get_face_detector", return_value=face_detector),
         patch.object(
-            server,
+            _backend_face,
             "detect_foreground_presence_face_boxes",
             side_effect=RuntimeError("YuNet inference failed"),
         ),
     ):
-        server.prewarm_runtime_models()
+        _backend_face.prewarm_runtime_models()
 
     output = capsys.readouterr().out
     assert "Failed to warm camera face detector: YuNet inference failed" in output

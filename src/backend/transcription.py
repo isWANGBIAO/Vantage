@@ -18,7 +18,7 @@ TRANSCRIBE_TIMEOUT_SECONDS = 60
 def _load_voice_transcription_config():
     return _providers._resolve_special_provider_config(kind="voice")
 
-@router.post("/api/transcribe")
+@router.post("/api/v1/media/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     voice_config = _load_voice_transcription_config()
     if not voice_config["complete"]:

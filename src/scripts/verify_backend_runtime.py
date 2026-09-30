@@ -68,7 +68,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--timeout-seconds",
         type=int,
         default=60,
-        help="Maximum number of seconds to wait for /api/status during smoke launch.",
+        help="Maximum number of seconds to wait for /api/v1/system/status during smoke launch.",
     )
     parser.add_argument(
         "--skip-launch",
@@ -129,7 +129,7 @@ def _wait_for_status(timeout_seconds: int) -> dict[str, object]:
     last_error = None
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen("http://127.0.0.1:8000/api/status", timeout=5) as response:
+            with urllib.request.urlopen("http://127.0.0.1:8000/api/v1/system/status", timeout=5) as response:
                 payload = json.loads(response.read().decode("utf-8"))
                 return payload
         except Exception as exc:  # noqa: BLE001

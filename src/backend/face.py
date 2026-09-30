@@ -159,7 +159,7 @@ def process_captured_face_photo(photo_path):
 
     return True
 
-@router.post("/api/face/analyze")
+@router.post("/api/v1/face/analyze")
 async def analyze_face_history(background_tasks: BackgroundTasks):
     """Trigger background analysis of face history"""
     global _face_analysis_job_running
@@ -212,7 +212,7 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_analysis)
     return {"message": "Analysis started in background"}
 
-@router.get("/api/face/live")
+@router.get("/api/v1/face/live")
 async def get_face_live(active: bool = False):
     if active:
         _camera.mark_face_live_viewer_active()
@@ -237,7 +237,7 @@ async def get_face_live(active: bool = False):
         "points": points,
     }
 
-@router.get("/api/face/report")
+@router.get("/api/v1/face/report")
 async def get_face_report():
     """Get the latest analysis report including extremes and plot URL"""
     try:
@@ -254,7 +254,7 @@ async def get_face_report():
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@router.get("/api/face/export_excel")
+@router.get("/api/v1/face/export")
 async def export_face_excel():
     """Export face analysis data to Excel"""
     try:
@@ -308,7 +308,7 @@ async def export_face_excel():
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@router.get("/api/face/progress")
+@router.get("/api/v1/face/progress")
 async def get_face_progress():
     """Get the current progress of face analysis"""
     try:

@@ -14,7 +14,7 @@ test('Dashboard keeps startup prewarm polling active while delegating geolocatio
 test('Dashboard forwards the complete browser position through the location query helper', () => {
   assert.ok(dashboardSource.includes("import { buildBrowserLocationQuery } from '../utils/locationSample.js';"));
   assert.ok(dashboardSource.includes('const locationQuery = buildBrowserLocationQuery(position);'));
-  assert.ok(dashboardSource.includes("const url = locationQuery ? `/api/aqi?${locationQuery}` : '/api/aqi';"));
+  assert.ok(dashboardSource.includes("const url = locationQuery ? `/api/v1/system/air-quality?${locationQuery}` : '/api/v1/system/air-quality';"));
   assert.ok(dashboardSource.includes('void fetchAqiBackend(position);'));
 });
 

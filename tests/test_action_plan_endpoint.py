@@ -7,6 +7,15 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import os as _stdlib_os
+import sys as _stdlib_sys
+from src.backend import action_plans as _backend_action_plans
+from src.backend import chat as _backend_chat
+from src.backend import media as _backend_media
+from src.backend import providers as _backend_providers
+from src.backend import runtime as _backend_runtime
+from src.backend import source_paths as _backend_source_paths
+from src.backend import transcription as _backend_transcription
 from src import server
 from tests.backend_helpers import iter_registered_routes
 from src.services.model_call_recorder import SessionRecorder
@@ -110,8 +119,13 @@ async def _consume_response_body(response):
 
 class ActionPlanEndpointTests(unittest.TestCase):
     def setUp(self):
+        runtime_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(runtime_directory.cleanup)
+        runtime_environment = patch.dict(os.environ, {"VANTAGE_DATA_DIR": runtime_directory.name})
+        runtime_environment.start()
+        self.addCleanup(runtime_environment.stop)
         self._missing_action_plan_sources_patcher = patch.object(
-            server,
+            _backend_action_plans,
             "_get_missing_action_plan_data_sources",
             return_value=[],
         )
@@ -130,8 +144,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
     def test_server_keeps_debug_suite_endpoints_registered(self):
         route_paths = {route.path for route in iter_registered_routes(server.app)}
 
-        self.assertIn("/api/action_plan_content", route_paths)
-        self.assertIn("/api/system_logs", route_paths)
+        self.assertIn("/api/v1/action-plan/today", route_paths)
+        self.assertIn("/api/v1/system/logs", route_paths)
 
     def test_image_proxy_rejects_sibling_directory_with_same_prefix(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -143,12 +157,12 @@ class ActionPlanEndpointTests(unittest.TestCase):
             target = sibling_dir / "secret.jpg"
             target.write_bytes(b"fake-image")
 
-            with patch.object(server.state, "photos_path", str(allowed_dir)), patch.object(
-                server.state,
+            with patch.object(_backend_runtime.state, "photos_path", str(allowed_dir)), patch.object(
+                _backend_runtime.state,
                 "screenshots_path",
                 None,
             ):
-                response = asyncio.run(server.image_proxy(str(target)))
+                response = asyncio.run(_backend_media.image_proxy(str(target)))
 
             self.assertEqual(response.status_code, 403)
 
@@ -156,13 +170,13 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _CancelableProcess()
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ):
             response = asyncio.run(
-                server.chat_endpoint(
-                    server.ChatRequest(message="hello"),
+                _backend_chat.chat_endpoint(
+                    _backend_chat.ChatRequest(message="hello"),
                 ),
             )
 
@@ -177,13 +191,13 @@ class ActionPlanEndpointTests(unittest.TestCase):
         sent_at = "2026-04-08T12:02:03+08:00"
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ) as mock_create:
             response = asyncio.run(
-                server.chat_endpoint(
-                    server.ChatRequest(
+                _backend_chat.chat_endpoint(
+                    _backend_chat.ChatRequest(
                         message="hello",
                         reasoning_effort="high",
                         client_sent_at=sent_at,
@@ -201,13 +215,13 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _FakeProcess(lines=[b'STREAM_CONTENT:"ok"\n'])
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ) as mock_create:
             response = asyncio.run(
-                server.chat_endpoint(
-                    server.ChatRequest(
+                _backend_chat.chat_endpoint(
+                    _backend_chat.ChatRequest(
                         message="hello",
                         model="gpt-5.5",
                         provider_route="custom",
@@ -226,14 +240,14 @@ class ActionPlanEndpointTests(unittest.TestCase):
             history_dir.mkdir()
             outside_context = Path(temp_dir) / "outside.json"
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir), patch.object(
-                server.asyncio,
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir), patch.object(
+                _backend_providers.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(),
             ) as mock_create:
                 response = asyncio.run(
-                    server.chat_endpoint(
-                        server.ChatRequest(
+                    _backend_chat.chat_endpoint(
+                        _backend_chat.ChatRequest(
                             message="hello",
                             context_file=str(outside_context),
                         ),
@@ -249,28 +263,28 @@ class ActionPlanEndpointTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             fixed_time = 1234567890
             expected_temp_file = Path(temp_dir) / f"temp_audio_{fixed_time}.webm"
-            original_abspath = server.os.path.abspath
+            original_abspath = _stdlib_os.path.abspath
 
             def fake_abspath(path):
-                if path == server.__file__:
+                if path == _backend_source_paths.SERVER_FILE:
                     return os.path.join(temp_dir, "src", "server.py")
                 return original_abspath(path)
 
-            with patch.object(server.time, "time", return_value=fixed_time), patch.object(
-                server.os.path,
+            with patch.object(_backend_providers.time, "time", return_value=fixed_time), patch.object(
+                _stdlib_os.path,
                 "abspath",
                 side_effect=fake_abspath,
             ), patch.object(
-                server,
+                _backend_providers,
                 "load_settings",
                 return_value=self._complete_voice_settings(),
             ), patch.object(
-                server.asyncio,
+                _backend_providers.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(side_effect=RuntimeError("spawn failed")),
             ):
                 with self.assertRaises(RuntimeError):
-                    asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+                    asyncio.run(_backend_transcription.transcribe_audio(_FakeUploadFile()))
 
             self.assertFalse(expected_temp_file.exists())
 
@@ -278,40 +292,40 @@ class ActionPlanEndpointTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             fixed_time = 1234567891
             expected_temp_file = Path(temp_dir) / f"temp_audio_{fixed_time}.webm"
-            original_abspath = server.os.path.abspath
+            original_abspath = _stdlib_os.path.abspath
 
             def fake_abspath(path):
-                if path == server.__file__:
+                if path == _backend_source_paths.SERVER_FILE:
                     return os.path.join(temp_dir, "src", "server.py")
                 return original_abspath(path)
 
             fake_process = _FakeProcess()
             fake_process.communicate = AsyncMock(side_effect=RuntimeError("communicate failed"))
 
-            with patch.object(server.time, "time", return_value=fixed_time), patch.object(
-                server.os.path,
+            with patch.object(_backend_providers.time, "time", return_value=fixed_time), patch.object(
+                _stdlib_os.path,
                 "abspath",
                 side_effect=fake_abspath,
             ), patch.object(
-                server,
+                _backend_providers,
                 "load_settings",
                 return_value=self._complete_voice_settings(),
             ), patch.object(
-                server.asyncio,
+                _backend_providers.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(return_value=fake_process),
             ):
                 with self.assertRaises(RuntimeError):
-                    asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+                    asyncio.run(_backend_transcription.transcribe_audio(_FakeUploadFile()))
 
             self.assertFalse(expected_temp_file.exists())
 
     def test_transcribe_audio_times_out_and_kills_subprocess(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_abspath = server.os.path.abspath
+            original_abspath = _stdlib_os.path.abspath
 
             def fake_abspath(path):
-                if path == server.__file__:
+                if path == _backend_source_paths.SERVER_FILE:
                     return os.path.join(temp_dir, "src", "server.py")
                 return original_abspath(path)
 
@@ -319,16 +333,16 @@ class ActionPlanEndpointTests(unittest.TestCase):
             fake_process.returncode = None
             fake_process.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
 
-            with patch.object(server.os.path, "abspath", side_effect=fake_abspath), patch.object(
-                server,
+            with patch.object(_stdlib_os.path, "abspath", side_effect=fake_abspath), patch.object(
+                _backend_providers,
                 "load_settings",
                 return_value=self._complete_voice_settings(),
             ), patch.object(
-                server.asyncio,
+                _backend_providers.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(return_value=fake_process),
             ):
-                response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+                response = asyncio.run(_backend_transcription.transcribe_audio(_FakeUploadFile()))
 
         self.assertEqual(response.status_code, 504)
         payload = json.loads(response.body.decode("utf-8"))
@@ -342,17 +356,17 @@ class ActionPlanEndpointTests(unittest.TestCase):
             temp_paths.append(Path(cmd[cmd.index("--transcribe") + 1]))
             return _FakeProcess(returncode=0)
 
-        with patch.object(server.time, "time", return_value=1234567892), patch.object(
-            server,
+        with patch.object(_backend_providers.time, "time", return_value=1234567892), patch.object(
+            _backend_providers,
             "load_settings",
             return_value=self._complete_voice_settings(),
         ), patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(side_effect=fake_create_subprocess_exec),
         ):
-            asyncio.run(server.transcribe_audio(_FakeUploadFile()))
-            asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+            asyncio.run(_backend_transcription.transcribe_audio(_FakeUploadFile()))
+            asyncio.run(_backend_transcription.transcribe_audio(_FakeUploadFile()))
 
         self.assertEqual(len(temp_paths), 2)
         self.assertEqual(len(set(temp_paths)), 2)
@@ -360,7 +374,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
 
     def test_transcribe_audio_returns_configuration_error_when_voice_provider_missing(self):
         with patch.object(
-            server,
+            _backend_transcription,
             "_load_voice_transcription_config",
             return_value={
                 "base_url": "",
@@ -372,11 +386,11 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 "missing": ["voice_base_url", "voice_api_key"],
             },
         ), patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(),
         ) as mock_create:
-            response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+            response = asyncio.run(_backend_transcription.transcribe_audio(_FakeUploadFile()))
 
         self.assertEqual(response.status_code, 400)
         payload = json.loads(response.body.decode("utf-8"))
@@ -398,12 +412,12 @@ class ActionPlanEndpointTests(unittest.TestCase):
             created_env.update(kwargs.get("env") or {})
             return fake_process
 
-        with patch.object(server, "load_settings", return_value=self._complete_voice_settings()), patch.object(
-            server.asyncio,
+        with patch.object(_backend_providers, "load_settings", return_value=self._complete_voice_settings()), patch.object(
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(side_effect=fake_create_subprocess_exec),
         ):
-            response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+            response = asyncio.run(_backend_transcription.transcribe_audio(_FakeUploadFile()))
 
         self.assertEqual(response["transcription"], "hello")
         self.assertEqual(response["voice_model"], "sensevoice")
@@ -427,14 +441,14 @@ class ActionPlanEndpointTests(unittest.TestCase):
             return fake_process
 
         with patch.object(
-            server,
+            _backend_providers,
             "load_settings",
             return_value={
                 "voice_provider_mode": "inherit_ai",
                 "voice_model": "sensevoice",
             },
         ), patch.object(
-            server,
+            _backend_providers,
             "load_provider_config",
             return_value={
                 "selected_provider": "custom",
@@ -449,11 +463,11 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 },
             },
         ), patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(side_effect=fake_create_subprocess_exec),
         ):
-            response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+            response = asyncio.run(_backend_transcription.transcribe_audio(_FakeUploadFile()))
 
         self.assertEqual(response["transcription"], "hello")
         self.assertEqual(response["voice_model"], "sensevoice")
@@ -465,7 +479,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
 
     def test_provider_model_discover_inherits_ai_provider(self):
         with patch.object(
-            server,
+            _backend_providers,
             "load_provider_config",
             return_value={
                 "selected_provider": "custom",
@@ -480,13 +494,13 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 },
             },
         ), patch.object(
-            server.LLMClient,
+            _backend_providers.LLMClient,
             "discover_models_for_config",
             return_value={"models": ["gpt-image-1"], "model_capabilities": {}, "error": None},
         ) as mock_discover:
             response = asyncio.run(
-                server.discover_provider_models(
-                    server.ProviderModelDiscoverRequest(
+                _backend_providers.discover_provider_models(
+                    _backend_providers.ProviderModelDiscoverRequest(
                         kind="image",
                         mode="inherit_ai",
                     )
@@ -514,12 +528,12 @@ class ActionPlanEndpointTests(unittest.TestCase):
             created_env.update(kwargs.get("env") or {})
             return fake_process
 
-        with patch.object(server, "load_settings", return_value=self._complete_voice_settings()), patch.object(
-            server.asyncio,
+        with patch.object(_backend_providers, "load_settings", return_value=self._complete_voice_settings()), patch.object(
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(side_effect=fake_create_subprocess_exec),
         ), patch("builtins.print") as mock_print:
-            response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+            response = asyncio.run(_backend_transcription.transcribe_audio(_FakeUploadFile()))
 
         self.assertEqual(response["transcription"], "hello")
         self.assertNotIn("--transcribe-api-key", created_args)
@@ -532,26 +546,26 @@ class ActionPlanEndpointTests(unittest.TestCase):
 
     def test_transcribe_audio_returns_error_when_subprocess_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_abspath = server.os.path.abspath
+            original_abspath = _stdlib_os.path.abspath
 
             def fake_abspath(path):
-                if path == server.__file__:
+                if path == _backend_source_paths.SERVER_FILE:
                     return os.path.join(temp_dir, "src", "server.py")
                 return original_abspath(path)
 
             fake_process = _FakeProcess(returncode=1, stderr_data=b"transcribe failed")
             fake_process.communicate = AsyncMock(return_value=(b"TRANSCRIPTION_ERROR:missing api key\n", b"transcribe failed"))
 
-            with patch.object(server.os.path, "abspath", side_effect=fake_abspath), patch.object(
-                server,
+            with patch.object(_stdlib_os.path, "abspath", side_effect=fake_abspath), patch.object(
+                _backend_providers,
                 "load_settings",
                 return_value=self._complete_voice_settings(),
             ), patch.object(
-                server.asyncio,
+                _backend_providers.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(return_value=fake_process),
             ):
-                response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+                response = asyncio.run(_backend_transcription.transcribe_audio(_FakeUploadFile()))
 
             self.assertEqual(response.status_code, 500)
             payload = json.loads(response.body.decode("utf-8"))
@@ -562,12 +576,12 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _FakeProcess(returncode=1)
         fake_process.communicate = AsyncMock(return_value=(b"TRANSCRIPTION_ERROR:bad key sk-voice\n", b""))
 
-        with patch.object(server, "load_settings", return_value=self._complete_voice_settings()), patch.object(
-            server.asyncio,
+        with patch.object(_backend_providers, "load_settings", return_value=self._complete_voice_settings()), patch.object(
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ):
-            response = asyncio.run(server.transcribe_audio(_FakeUploadFile()))
+            response = asyncio.run(_backend_transcription.transcribe_audio(_FakeUploadFile()))
 
         self.assertEqual(response.status_code, 500)
         payload = json.loads(response.body.decode("utf-8"))
@@ -591,14 +605,14 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 new_file.write_text("new", encoding="utf-8")
                 return _FakeProcess(returncode=0)
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir), patch.object(
-                server.asyncio,
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir), patch.object(
+                _backend_providers.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(side_effect=fake_create_subprocess_exec),
             ):
                 response = asyncio.run(
-                    server.generate_action_plan(
-                        server.ActionPlanRequest(replace_today=True),
+                    _backend_action_plans.create_action_plan_stream(
+                        _backend_action_plans.ActionPlanRequest(replace_today=True),
                     ),
                 )
                 asyncio.run(_read_all_stream_chunks(response))
@@ -619,14 +633,14 @@ class ActionPlanEndpointTests(unittest.TestCase):
             old_file_a.write_text("old a", encoding="utf-8")
             old_file_b.write_text("old b", encoding="utf-8")
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir), patch.object(
-                server.asyncio,
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir), patch.object(
+                _backend_providers.asyncio,
                 "create_subprocess_exec",
                 AsyncMock(return_value=_FakeProcess(lines=[], returncode=1, stderr_data=b"boom")),
             ):
                 response = asyncio.run(
-                    server.generate_action_plan(
-                        server.ActionPlanRequest(replace_today=True),
+                    _backend_action_plans.create_action_plan_stream(
+                        _backend_action_plans.ActionPlanRequest(replace_today=True),
                     ),
                 )
                 asyncio.run(_read_all_stream_chunks(response))
@@ -655,8 +669,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
-                payload = asyncio.run(server.get_today_action_plan())
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir):
+                payload = asyncio.run(_backend_action_plans.get_today_action_plan())
 
         self.assertEqual(payload["exists"], True)
         self.assertEqual(payload["analysis"]["body"], "analysis markdown")
@@ -697,8 +711,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
-                payload = asyncio.run(server.get_today_action_plan())
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir):
+                payload = asyncio.run(_backend_action_plans.get_today_action_plan())
 
         self.assertEqual(
             payload["meta"]["input"],
@@ -746,8 +760,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
                     duration=4.0,
                 )
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
-                payload = asyncio.run(server.get_usage_dashboard())
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir):
+                payload = asyncio.run(_backend_chat.get_usage_dashboard())
 
         self.assertEqual(payload["summary"]["session_count"], 1)
         self.assertEqual(payload["summary"]["completed_call_count"], 1)
@@ -762,13 +776,13 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _FakeProcess()
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ) as mock_create:
             response = asyncio.run(
-                server.generate_action_plan(
-                    server.ActionPlanRequest(reasoning_effort="high"),
+                _backend_action_plans.create_action_plan_stream(
+                    _backend_action_plans.ActionPlanRequest(reasoning_effort="high"),
                 ),
             )
             chunk = asyncio.run(_read_first_stream_chunk(response))
@@ -780,13 +794,13 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _FakeProcess()
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ) as mock_create:
             response = asyncio.run(
-                server.generate_action_plan(
-                    server.ActionPlanRequest(reasoning_effort="max"),
+                _backend_action_plans.create_action_plan_stream(
+                    _backend_action_plans.ActionPlanRequest(reasoning_effort="max"),
                 ),
             )
             asyncio.run(_read_first_stream_chunk(response))
@@ -797,13 +811,13 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _FakeProcess()
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ) as mock_create:
             response = asyncio.run(
-                server.generate_action_plan(
-                    server.ActionPlanRequest(model="gpt-5.5", provider_route="custom"),
+                _backend_action_plans.create_action_plan_stream(
+                    _backend_action_plans.ActionPlanRequest(model="gpt-5.5", provider_route="custom"),
                 ),
             )
             asyncio.run(_read_first_stream_chunk(response))
@@ -815,13 +829,13 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _FakeProcess()
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ) as mock_create:
             response = asyncio.run(
-                server.generate_action_plan(
-                    server.ActionPlanRequest(
+                _backend_action_plans.create_action_plan_stream(
+                    _backend_action_plans.ActionPlanRequest(
                         model="gpt-5.5",
                         provider_route="custom",
                         service_tier="priority",
@@ -838,7 +852,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _FakeProcess()
 
         with patch.object(
-            server,
+            _backend_providers,
             "_wait_for_action_plan_provider_ready",
             AsyncMock(
                 return_value={
@@ -848,13 +862,13 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 }
             ),
         ) as mock_wait, patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ) as mock_create:
             response = asyncio.run(
-                server.generate_action_plan(
-                    server.ActionPlanRequest(
+                _backend_action_plans.create_action_plan_stream(
+                    _backend_action_plans.ActionPlanRequest(
                         model="gpt-5.5",
                         provider_route="custom",
                         wait_for_provider_ready=True,
@@ -870,7 +884,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
 
     def test_generate_action_plan_does_not_spawn_when_waited_provider_stays_unready(self):
         with patch.object(
-            server,
+            _backend_providers,
             "_wait_for_action_plan_provider_ready",
             AsyncMock(
                 return_value={
@@ -881,13 +895,13 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 }
             ),
         ), patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(),
         ) as mock_create:
             response = asyncio.run(
-                server.generate_action_plan(
-                    server.ActionPlanRequest(
+                _backend_action_plans.create_action_plan_stream(
+                    _backend_action_plans.ActionPlanRequest(
                         model="gpt-5.5",
                         provider_route="custom",
                         wait_for_provider_ready=True,
@@ -904,15 +918,15 @@ class ActionPlanEndpointTests(unittest.TestCase):
         missing_sources = [{"name": "Time.xlsx", "path": "/Users/example/OneDrive/Time.xlsx"}]
 
         with patch.object(
-            server,
+            _backend_action_plans,
             "_get_missing_action_plan_data_sources",
             return_value=missing_sources,
         ), patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(),
-        ) as mock_create, patch.object(server.logging, "warning") as mock_warning:
-            response = asyncio.run(server.generate_action_plan())
+        ) as mock_create, patch.object(_backend_action_plans.logging, "warning") as mock_warning:
+            response = asyncio.run(_backend_action_plans.create_action_plan_stream())
             chunks = asyncio.run(_read_all_stream_chunks(response))
 
         combined = "".join(chunks)
@@ -943,8 +957,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
             },
         ]
 
-        with patch.object(server, "LLMClient", return_value=fake_client):
-            payload = asyncio.run(server.list_llm_models())
+        with patch.object(_backend_providers, "LLMClient", return_value=fake_client):
+            payload = asyncio.run(_backend_providers.list_llm_models())
 
         self.assertEqual(payload["models"], ["gpt-5.5", "gpt-5.4"])
         self.assertEqual(payload["default_model"], "gpt-5.5")
@@ -955,7 +969,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertEqual(payload["model_options"][0]["provider_route"], "custom")
 
     def test_discover_llm_models_redacts_api_key_from_errors(self):
-        request = server.LLMModelDiscoverRequest(
+        request = _backend_providers.LLMModelDiscoverRequest(
             route="custom",
             base_url="http://127.0.0.1:8317/v1",
             api_key="TEST_API_KEY_SHOULD_BE_REDACTED",
@@ -963,11 +977,11 @@ class ActionPlanEndpointTests(unittest.TestCase):
         )
 
         with patch.object(
-            server.LLMClient,
+            _backend_providers.LLMClient,
             "discover_models_for_config",
             side_effect=RuntimeError("bad key TEST_API_KEY_SHOULD_BE_REDACTED"),
         ):
-            response = asyncio.run(server.discover_llm_models(request))
+            response = asyncio.run(_backend_providers.discover_llm_models(request))
 
         payload = json.loads(response.body.decode("utf-8"))
         self.assertEqual(response.status_code, 400)
@@ -975,7 +989,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
         self.assertIn("[REDACTED_API_KEY]", payload["error"])
 
     def test_discover_llm_models_uses_saved_key_and_local_proxy_default_url(self):
-        request = server.LLMModelDiscoverRequest(
+        request = _backend_providers.LLMModelDiscoverRequest(
             route="custom",
             base_url="",
             api_key="********",
@@ -984,7 +998,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
 
         with (
             patch.object(
-                server,
+                _backend_providers,
                 "load_provider_config",
                 return_value={
                     "version": 2,
@@ -999,7 +1013,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 },
             ),
             patch.object(
-                server.LLMClient,
+                _backend_providers.LLMClient,
                 "discover_models_for_config",
                 return_value={
                     "models": ["gpt-5.5"],
@@ -1008,7 +1022,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 },
             ) as discover,
         ):
-            payload = asyncio.run(server.discover_llm_models(request))
+            payload = asyncio.run(_backend_providers.discover_llm_models(request))
 
         self.assertEqual(payload["models"], ["gpt-5.5"])
         discover.assert_called_once_with(
@@ -1022,11 +1036,11 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _FakeProcess()
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ) as mock_create:
-            response = asyncio.run(server.generate_action_plan())
+            response = asyncio.run(_backend_action_plans.create_action_plan_stream())
             asyncio.run(_read_first_stream_chunk(response))
 
         self.assertEqual(mock_create.await_args.kwargs["env"]["AI_REASONING_EFFORT"], "medium")
@@ -1035,13 +1049,13 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _FakeProcess()
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ) as mock_create:
             response = asyncio.run(
-                server.generate_action_plan(
-                    server.ActionPlanRequest(reasoning_effort="invalid"),
+                _backend_action_plans.create_action_plan_stream(
+                    _backend_action_plans.ActionPlanRequest(reasoning_effort="invalid"),
                 ),
             )
             asyncio.run(_read_first_stream_chunk(response))
@@ -1052,18 +1066,18 @@ class ActionPlanEndpointTests(unittest.TestCase):
         fake_process = _FakeProcess()
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ) as mock_create:
-            response = asyncio.run(server.generate_action_plan())
+            response = asyncio.run(_backend_action_plans.create_action_plan_stream())
             asyncio.run(_read_first_stream_chunk(response))
 
         self.assertEqual(mock_create.await_args.kwargs["env"]["PYTHONUNBUFFERED"], "1")
 
     def test_generate_action_plan_does_not_stream_stderr_logs_on_success(self):
         async def fake_create_subprocess_exec(*args, **kwargs):
-            if kwargs["stderr"] == server.asyncio.subprocess.STDOUT:
+            if kwargs["stderr"] == _backend_providers.asyncio.subprocess.STDOUT:
                 return _FakeProcess(
                     lines=[
                         b'2026-03-08 14:58:33 - INFO - LLM route cliproxyapi_primary succeeded with model gpt-5.2 at http://127.0.0.1:8317/v1\n',
@@ -1079,11 +1093,11 @@ class ActionPlanEndpointTests(unittest.TestCase):
             )
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(side_effect=fake_create_subprocess_exec),
         ):
-            response = asyncio.run(server.generate_action_plan())
+            response = asyncio.run(_backend_action_plans.create_action_plan_stream())
             chunks = asyncio.run(_read_all_stream_chunks(response))
 
         combined = "".join(chunks)
@@ -1102,14 +1116,14 @@ class ActionPlanEndpointTests(unittest.TestCase):
         )
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
-        ), patch.object(server.logging, "warning") as mock_warning, patch.object(
-            server.logging,
+        ), patch.object(_backend_action_plans.logging, "warning") as mock_warning, patch.object(
+            _backend_action_plans.logging,
             "info",
         ) as mock_info:
-            response = asyncio.run(server.generate_action_plan())
+            response = asyncio.run(_backend_action_plans.create_action_plan_stream())
             chunks = asyncio.run(_read_all_stream_chunks(response))
 
         combined = "".join(chunks)
@@ -1132,11 +1146,11 @@ class ActionPlanEndpointTests(unittest.TestCase):
         )
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ):
-            response = asyncio.run(server.generate_action_plan())
+            response = asyncio.run(_backend_action_plans.create_action_plan_stream())
             chunks = asyncio.run(_read_all_stream_chunks(response))
 
         combined = "".join(chunks)
@@ -1145,8 +1159,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
 
     def test_analysis_error_with_zero_exit_does_not_signal_done(self):
         fake_process = _FakeProcess(lines=[b'STREAM_ANALYSIS_ERROR:"failed"\n'], returncode=0)
-        with patch.object(server.asyncio, "create_subprocess_exec", AsyncMock(return_value=fake_process)):
-            response = asyncio.run(server.generate_action_plan())
+        with patch.object(_backend_providers.asyncio, "create_subprocess_exec", AsyncMock(return_value=fake_process)):
+            response = asyncio.run(_backend_action_plans.create_action_plan_stream())
             chunks = asyncio.run(_read_all_stream_chunks(response))
         self.assertNotIn('"done": true', "".join(chunks))
 
@@ -1154,10 +1168,10 @@ class ActionPlanEndpointTests(unittest.TestCase):
         for marker in ("STREAM_PLAN_ERROR:", "STREAM_ERROR:"):
             with self.subTest(marker=marker):
                 fake_process = _FakeProcess(lines=[f'{marker}"failed"\n'.encode()], returncode=0)
-                with patch.object(server.asyncio, "create_subprocess_exec", AsyncMock(return_value=fake_process)), patch.object(
-                    server, "_replace_today_action_plan_files"
+                with patch.object(_backend_providers.asyncio, "create_subprocess_exec", AsyncMock(return_value=fake_process)), patch.object(
+                    _backend_action_plans, "_replace_today_action_plan_files"
                 ) as replace_files:
-                    response = asyncio.run(server.generate_action_plan(server.ActionPlanRequest(replace_today=True)))
+                    response = asyncio.run(_backend_action_plans.create_action_plan_stream(_backend_action_plans.ActionPlanRequest(replace_today=True)))
                     chunks = asyncio.run(_read_all_stream_chunks(response))
                 self.assertNotIn('"done": true', "".join(chunks))
                 replace_files.assert_not_called()
@@ -1174,11 +1188,11 @@ class ActionPlanEndpointTests(unittest.TestCase):
         )
 
         with patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
-        ), patch.object(server.logging, "error") as mock_error:
-            response = asyncio.run(server.generate_action_plan())
+        ), patch.object(_backend_action_plans.logging, "error") as mock_error:
+            response = asyncio.run(_backend_action_plans.create_action_plan_stream())
             chunks = asyncio.run(_read_all_stream_chunks(response))
 
         combined = "".join(chunks)
@@ -1193,22 +1207,22 @@ class ActionPlanEndpointTests(unittest.TestCase):
         executable_path = r"C:\Program Files\Vantage\VantageBackend.exe"
         runtime_root = Path(r"C:\Program Files\Vantage\resources\backend-runtime\VantageBackend\_internal")
 
-        with patch.object(server.sys, "frozen", True, create=True), patch.object(
-            server.sys,
+        with patch.object(_stdlib_sys, "frozen", True, create=True), patch.object(
+            _stdlib_sys,
             "executable",
             executable_path,
         ), patch.object(
-            server.Config,
+            _backend_chat.Config,
             "get_project_root",
             return_value=runtime_root,
         ), patch.object(
-            server.asyncio,
+            _backend_providers.asyncio,
             "create_subprocess_exec",
             AsyncMock(return_value=fake_process),
         ) as mock_create:
             response = asyncio.run(
-                server.generate_action_plan(
-                    server.ActionPlanRequest(
+                _backend_action_plans.create_action_plan_stream(
+                    _backend_action_plans.ActionPlanRequest(
                         model="gpt-5.3-codex-spark",
                         reasoning_effort="high",
                     ),
@@ -1246,8 +1260,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
-                payload = asyncio.run(server.get_chat_context())
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir):
+                payload = asyncio.run(_backend_chat.get_chat_context())
 
         self.assertEqual(payload["has_action_plan_context"], True)
         self.assertTrue(payload["base_context_version"])
@@ -1279,8 +1293,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir), patch.object(
-                server,
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir), patch.object(
+                _backend_chat,
                 "get_session_usage_summary",
                 return_value={
                     "session_id": "session-chat-1",
@@ -1292,7 +1306,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
                     "average_duration": 3.06,
                 },
             ):
-                payload = asyncio.run(server.get_chat_context())
+                payload = asyncio.run(_backend_chat.get_chat_context())
 
         self.assertEqual(payload["stats"]["session_id"], "session-chat-1")
         self.assertEqual(payload["stats"]["total_tokens"], 41)
@@ -1319,8 +1333,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
-                payload = asyncio.run(server.get_chat_context())
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir):
+                payload = asyncio.run(_backend_chat.get_chat_context())
 
         self.assertEqual(payload["preferred_model"], "deepseek-v4-flash")
         self.assertEqual(payload["preferred_provider_route"], "deepseek")
@@ -1346,8 +1360,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
-                payload = asyncio.run(server.reset_chat_context())
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir):
+                payload = asyncio.run(_backend_chat.reset_chat_context())
 
             restored_messages = json.loads(latest_context.read_text(encoding="utf-8"))
 
@@ -1369,8 +1383,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
-                payload = asyncio.run(server.reset_chat_context())
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir):
+                payload = asyncio.run(_backend_chat.reset_chat_context())
 
             restored_messages = json.loads(latest_context.read_text(encoding="utf-8"))
 
@@ -1401,8 +1415,8 @@ class ActionPlanEndpointTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(server.Config, "get_history_dir", return_value=history_dir):
-                asyncio.run(server.reset_chat_context())
+            with patch.object(_backend_chat.Config, "get_history_dir", return_value=history_dir):
+                asyncio.run(_backend_chat.reset_chat_context())
 
             restored_session_payload = json.loads(
                 (history_dir / "latest_context_session.json").read_text(encoding="utf-8")

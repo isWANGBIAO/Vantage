@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from src import server
+from src.backend import camera as _backend_camera
 from src.services import person_detection
 
 
@@ -39,9 +39,9 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
                 self.assertFalse(hasattr(person_detection, name))
 
     def test_server_uses_shared_model_and_confidence_constants(self):
-        self.assertEqual(server.PERSON_DETECTION_MODEL, person_detection.PERSON_DETECTION_MODEL)
+        self.assertEqual(_backend_camera.PERSON_DETECTION_MODEL, person_detection.PERSON_DETECTION_MODEL)
         self.assertEqual(
-            server.PERSON_DETECTION_CONFIDENCE,
+            _backend_camera.PERSON_DETECTION_CONFIDENCE,
             person_detection.PERSON_DETECTION_CONFIDENCE,
         )
 

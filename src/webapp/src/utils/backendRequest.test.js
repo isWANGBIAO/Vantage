@@ -19,7 +19,7 @@ function jsonResponse(body, init = {}) {
 
 test('buildBackendUrl prefixes relative backend paths', () => {
   assert.equal(BACKEND_BASE_URL, 'http://127.0.0.1:8000');
-  assert.equal(buildBackendUrl('/api/status'), 'http://127.0.0.1:8000/api/status');
+  assert.equal(buildBackendUrl('/api/v1/system/status'), 'http://127.0.0.1:8000/api/v1/system/status');
   assert.equal(buildBackendUrl('/static/demo.png'), 'http://127.0.0.1:8000/static/demo.png');
   assert.equal(buildBackendUrl('http://127.0.0.1:8000/demo'), 'http://127.0.0.1:8000/demo');
   assert.throws(() => buildBackendUrl('http://example.com/demo'), /loopback/);
@@ -61,7 +61,7 @@ test('fetchBackendJson retries transient GET failures', async () => {
   };
 
   try {
-    const data = await fetchBackendJson('/api/status', {
+    const data = await fetchBackendJson('/api/v1/system/status', {
       retryPolicy: 'load',
       wait: async () => {},
     });
@@ -86,7 +86,7 @@ test('fetchBackend retries retriable GET http errors', async () => {
   };
 
   try {
-    const response = await fetchBackend('/api/system_logs', {
+    const response = await fetchBackend('/api/v1/system/logs', {
       retryPolicy: 'poll',
       wait: async () => {},
     });
@@ -109,7 +109,7 @@ test('fetchBackend does not retry non-idempotent mutations by default', async ()
 
   try {
     await assert.rejects(
-      fetchBackend('/api/toggle_detection', {
+      fetchBackend('/api/v1/camera/detection/toggle', {
         method: 'POST',
         retryPolicy: 'mutation',
         wait: async () => {},
@@ -135,7 +135,7 @@ test('native connection overrides build-time environment and browser uses an exp
   const platform = { backend: { connection: { baseUrl: 'http://127.0.0.1:8123' } } };
   assert.equal(resolveBackendBaseUrl(undefined, { platform, env: { VANTAGE_BACKEND_URL: 'http://127.0.0.1:8111' } }), 'http://127.0.0.1:8123');
   assert.equal(resolveBackendBaseUrl(undefined, { env: { VANTAGE_BACKEND_PORT: '8111' } }), 'http://127.0.0.1:8111');
-  assert.equal(resolveBackendBaseUrl(undefined, { runtimeConfig: { backendBaseUrl: 'http://localhost:8222' } }), 'http://localhost:8222');
+  assert.equal(resolveBackendBaseUrl(undefined, { env: { VANTAGE_BACKEND_URL: 'http://localhost:8222' } }), 'http://localhost:8222');
 });
 
 test('backend fetches disable redirects even when a caller requests following them', async () => {
@@ -143,7 +143,7 @@ test('backend fetches disable redirects even when a caller requests following th
   let options;
   globalThis.fetch = async (_url, received) => { options = received; return jsonResponse({ ok: true }); };
   try {
-    await fetchBackend('/api/automation/settings', { method: 'PUT', body: '{}', redirect: 'follow' });
+    await fetchBackend('/api/v1/settings', { method: 'PUT', body: '{}', redirect: 'follow' });
     assert.equal(options.redirect, 'error');
   } finally {
     globalThis.fetch = originalFetch;
@@ -160,7 +160,7 @@ test('AbortSignal cancels a request during native startup without waiting for re
   globalThis.vantagePlatform = { waitUntilBackendReady: () => startup };
   globalThis.fetch = async () => { fetched = true; return jsonResponse({ ok: true }); };
   try {
-    const request = fetchBackend('/api/status', { signal: controller.signal });
+    const request = fetchBackend('/api/v1/system/status', { signal: controller.signal });
     controller.abort();
     await assert.rejects(request, { name: 'AbortError' });
     assert.equal(fetched, false);
@@ -181,7 +181,7 @@ test('backend readiness failure propagates without fetching or retrying', async 
   globalThis.vantagePlatform = { waitUntilBackendReady: async () => { throw new Error('startup failed'); } };
   globalThis.fetch = async () => { fetched = true; return jsonResponse({ ok: true }); };
   try {
-    await assert.rejects(fetchBackend('/api/status'), /startup failed/);
+    await assert.rejects(fetchBackend('/api/v1/system/status'), /startup failed/);
     assert.equal(fetched, false);
   } finally {
     globalThis.vantagePlatform = originalBridge;
@@ -199,11 +199,16 @@ test('packaged renderer stays same-origin and rewrites its configured backend as
     assert.equal(buildBackendUrl('/api/v1/action-plan/jobs'), '/api/v1/action-plan/jobs');
     assert.equal(buildBackendUrl('vantage://app/static/image.png'), '/static/image.png');
     assert.equal(buildBackendUrl('http://127.0.0.1:8765/prefix/static/image.png'), '/static/image.png');
-    assert.throws(() => buildBackendUrl('vantage://other/api/status'), /trusted renderer/);
+    assert.throws(() => buildBackendUrl('vantage://other/api/v1/system/status'), /trusted renderer/);
     assert.throws(() => buildBackendUrl('http://127.0.0.1:8765/unrelated'), /trusted renderer/);
-    assert.throws(() => buildBackendUrl('https://untrusted.invalid/api/status'), /trusted renderer/);
+    assert.throws(() => buildBackendUrl('https://untrusted.invalid/api/v1/system/status'), /trusted renderer/);
   } finally {
     globalThis.vantagePlatform = oldBridge;
     globalThis.location = oldLocation;
   }
+});
+
+test('removed renderer environment aliases cannot override the canonical connection', () => {
+  assert.equal(resolveBackendBaseUrl(undefined, { env: { VITE_BACKEND_BASE_URL: 'http://localhost:9999' } }), 'http://127.0.0.1:8000');
+  assert.equal(resolveBackendBaseUrl(undefined, { env: { VANTAGE_BACKEND_URL: 'http://localhost:8765', VITE_BACKEND_BASE_URL: 'http://localhost:9999' } }), 'http://localhost:8765');
 });

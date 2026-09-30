@@ -49,7 +49,7 @@ test('ActionPlanContainer exposes a dedicated usage sub-tab', () => {
 });
 
 test('UsagePanel fetches backend usage aggregates and renders primary sections', () => {
-  assert.ok(usagePanelSource.includes("fetchBackendJson('/api/usage'"));
+  assert.ok(usagePanelSource.includes("fetchBackendJson('/api/v1/usage'"));
   assert.ok(usagePanelSource.includes("t('usage.summary.total_tokens')"));
   assert.ok(usagePanelSource.includes("t('usage.summary.prompt_tokens')"));
   assert.ok(usagePanelSource.includes("t('usage.summary.completion_tokens')"));

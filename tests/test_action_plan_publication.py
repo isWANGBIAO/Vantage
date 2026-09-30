@@ -34,14 +34,14 @@ def _save(history, payload, suffix="old"):
     return path
 
 
-def _read_both():
-    return asyncio.run(action_plans.get_today_action_plan()), asyncio.run(action_plans.get_action_plan_content())
+def _read_saved_plan():
+    return (asyncio.run(action_plans.get_today_action_plan()),)
 
 
 def _fresh_process_reads(history):
     script = (
-        "import asyncio,json; from src.backend.action_plans import get_today_action_plan,get_action_plan_content; "
-        "print(json.dumps([asyncio.run(get_today_action_plan()),asyncio.run(get_action_plan_content())]))"
+        "import asyncio,json; from src.backend.action_plans import get_today_action_plan; "
+        "print(json.dumps([asyncio.run(get_today_action_plan())]))"
     )
     env = {**os.environ, "VANTAGE_HISTORY_DIR": str(history)}
     result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True, check=True)
@@ -50,7 +50,7 @@ def _fresh_process_reads(history):
 
 @pytest.mark.parametrize("has_previous", [False, True])
 @pytest.mark.parametrize("failure", ["stream_error", "nonzero", "missing_done", "cancelled", "incomplete"])
-def test_unconfirmed_files_never_reach_today_or_content(monkeypatch, tmp_path, has_previous, failure):
+def test_unconfirmed_files_never_reach_saved_plan_reader(monkeypatch, tmp_path, has_previous, failure):
     monkeypatch.setattr(Config, "get_history_dir", staticmethod(lambda: tmp_path))
     if has_previous:
         _save(tmp_path, _payload("old"))
@@ -67,7 +67,7 @@ def test_unconfirmed_files_never_reach_today_or_content(monkeypatch, tmp_path, h
                 output["plan"]["body"] = ""
             (staging_directory / "action_plan.json").write_text(json.dumps(output))
             (staging_directory / "latest_context.json").write_text('[{"role":"assistant","content":"unconfirmed"}]')
-            observed.extend([await action_plans.get_today_action_plan(), await action_plans.get_action_plan_content()])
+            observed.append(await action_plans.get_today_action_plan())
             if failure == "cancelled":
                 raise asyncio.CancelledError
             if failure == "stream_error":
@@ -95,7 +95,7 @@ def test_unconfirmed_files_never_reach_today_or_content(monkeypatch, tmp_path, h
     else:
         events = asyncio.run(exercise())
         assert not any(isinstance(event, dict) and event.get("done") for event in events)
-    observed.extend(_read_both())
+    observed.extend(_read_saved_plan())
     observed.extend(_fresh_process_reads(tmp_path))
     assert all(item["exists"] is has_previous for item in observed)
     if has_previous:
@@ -114,7 +114,7 @@ def test_crashed_staging_is_invisible_after_fresh_process_reload(monkeypatch, tm
     pending = ActionPlanStore(tmp_path).begin()
     pending.output_file.write_text(json.dumps(_payload()))
     # Simulate process death: deliberately do not publish or discard this session.
-    for item in (*_read_both(), *_fresh_process_reads(tmp_path)):
+    for item in (*_read_saved_plan(), *_fresh_process_reads(tmp_path)):
         assert item["exists"] is has_previous
         if has_previous:
             assert item["id"] == "old"
@@ -154,7 +154,7 @@ def test_only_confirmed_success_atomically_publishes_new_file(monkeypatch, tmp_p
 
     assert asyncio.run(exercise())[-1] == {"done": True}
     assert all(item["id"] == "old" for item in checkpoints)  # Even raw done must exhaust first.
-    for item in (*_read_both(), *_fresh_process_reads(tmp_path)):
+    for item in (*_read_saved_plan(), *_fresh_process_reads(tmp_path)):
         assert item["id"] == "new" and item["exists"] is True
     assert previous.exists() is not replace_today
     assert usage.read_bytes() == b"usage-is-preserved"
@@ -304,7 +304,7 @@ def test_real_child_cannot_publish_before_verified_exit(monkeypatch, tmp_path, o
     expected = "new" if outcome == "success" else "old"
     assert result["status"] == ("succeeded" if outcome == "success" else "failed")
     assert any(event.get("done") for event in events) is (outcome == "success")
-    for item in (*_read_both(), *_fresh_process_reads(tmp_path)):
+    for item in (*_read_saved_plan(), *_fresh_process_reads(tmp_path)):
         assert item["id"] == expected
 
 
@@ -369,5 +369,5 @@ def test_coarse_filesystem_timestamps_still_select_new_publication(monkeypatch, 
     pending.output_file.write_text(json.dumps(_payload()))
     published = store.publish(pending)
     assert published.path.stat().st_mtime_ns > previous.stat().st_mtime_ns
-    assert all(item["id"] == "new" for item in _read_both())
+    assert all(item["id"] == "new" for item in _read_saved_plan())
     store.discard(pending)

@@ -6,13 +6,15 @@ from unittest.mock import patch
 
 import numpy as np
 
-from src import server
+from src.backend import camera as _backend_camera
+from src.backend import media as _backend_media
+from src.backend import runtime as _backend_runtime
 
 
 def _write_synthetic_jpeg(path):
     image = np.zeros((9, 13, 3), dtype=np.uint8)
     image[:, :, 1] = 180
-    encoded_ok, encoded = server.get_cv2_module().imencode(".jpg", image)
+    encoded_ok, encoded = _backend_camera.get_cv2_module().imencode(".jpg", image)
     if not encoded_ok:
         raise AssertionError("OpenCV failed to encode synthetic JPEG")
     path.write_bytes(encoded.tobytes())
@@ -25,7 +27,7 @@ class LatestImagesEndpointTests(unittest.TestCase):
             photo_path = Path(tmpdir) / "合成照片-测试.jpg"
             expected_shape = _write_synthetic_jpeg(photo_path)
 
-            image = server._read_image_file(photo_path)
+            image = _backend_media._read_image_file(photo_path)
 
         self.assertIsInstance(image, np.ndarray)
         self.assertEqual(image.shape, expected_shape)
@@ -36,11 +38,11 @@ class LatestImagesEndpointTests(unittest.TestCase):
             expected_shape = _write_synthetic_jpeg(photo_path)
 
             with patch.object(
-                server,
+                _backend_media,
                 "detect_presence_count",
                 return_value=1,
             ) as detect_presence:
-                contains_person = server._saved_photo_contains_person(photo_path)
+                contains_person = _backend_media._saved_photo_contains_person(photo_path)
 
         self.assertTrue(contains_person)
         detected_image = detect_presence.call_args.args[0]
@@ -48,7 +50,7 @@ class LatestImagesEndpointTests(unittest.TestCase):
         self.assertEqual(detected_image.shape, expected_shape)
         self.assertEqual(
             detect_presence.call_args.kwargs["conf"],
-            server.PRESENCE_DETECTION_CONFIDENCE,
+            _backend_media.PRESENCE_DETECTION_CONFIDENCE,
         )
 
     def test_saved_photo_rejects_corrupt_and_unreadable_files(self):
@@ -62,33 +64,33 @@ class LatestImagesEndpointTests(unittest.TestCase):
 
             for photo_path in (empty_path, corrupt_path, unreadable_path):
                 with self.subTest(photo_path=photo_path):
-                    self.assertIsNone(server._read_image_file(photo_path))
+                    self.assertIsNone(_backend_media._read_image_file(photo_path))
                     with patch.object(
-                        server,
+                        _backend_media,
                         "detect_presence_count",
                         create=True,
                     ) as detect_presence:
-                        self.assertFalse(server._saved_photo_contains_person(photo_path))
+                        self.assertFalse(_backend_media._saved_photo_contains_person(photo_path))
                     detect_presence.assert_not_called()
 
     def test_get_latest_images_reports_scan_truncation_flag(self):
-        original_paths = dict(server.state.paths)
-        original_photos_path = server.state.photos_path
-        original_screenshots_path = server.state.screenshots_path
-        original_latest_media_scan_truncated = server.state.latest_media_scan_truncated
+        original_paths = dict(_backend_runtime.state.paths)
+        original_photos_path = _backend_runtime.state.photos_path
+        original_screenshots_path = _backend_runtime.state.screenshots_path
+        original_latest_media_scan_truncated = _backend_runtime.state.latest_media_scan_truncated
 
         try:
-            server.state.paths = {"photo": None, "screenshot": None}
-            server.state.photos_path = None
-            server.state.screenshots_path = None
-            server.state.latest_media_scan_truncated = True
+            _backend_runtime.state.paths = {"photo": None, "screenshot": None}
+            _backend_runtime.state.photos_path = None
+            _backend_runtime.state.screenshots_path = None
+            _backend_runtime.state.latest_media_scan_truncated = True
 
-            payload = server.get_latest_images()
+            payload = _backend_media.get_latest_images()
         finally:
-            server.state.paths = original_paths
-            server.state.photos_path = original_photos_path
-            server.state.screenshots_path = original_screenshots_path
-            server.state.latest_media_scan_truncated = original_latest_media_scan_truncated
+            _backend_runtime.state.paths = original_paths
+            _backend_runtime.state.photos_path = original_photos_path
+            _backend_runtime.state.screenshots_path = original_screenshots_path
+            _backend_runtime.state.latest_media_scan_truncated = original_latest_media_scan_truncated
 
         self.assertTrue(payload["latest_media_scan_truncated"])
 
@@ -102,27 +104,27 @@ class LatestImagesEndpointTests(unittest.TestCase):
             (photos_dir / "photo.jpg").write_bytes(b"a")
             (screenshots_dir / "screen.png").write_bytes(b"b")
 
-            original_paths = dict(server.state.paths)
-            original_photos_path = server.state.photos_path
-            original_screenshots_path = server.state.screenshots_path
-            original_latest_media_scan_truncated = server.state.latest_media_scan_truncated
+            original_paths = dict(_backend_runtime.state.paths)
+            original_photos_path = _backend_runtime.state.photos_path
+            original_screenshots_path = _backend_runtime.state.screenshots_path
+            original_latest_media_scan_truncated = _backend_runtime.state.latest_media_scan_truncated
 
             try:
-                server.state.paths = {"photo": None, "screenshot": None}
-                server.state.photos_path = str(photos_dir)
-                server.state.screenshots_path = str(screenshots_dir)
-                server.state.latest_media_scan_truncated = False
+                _backend_runtime.state.paths = {"photo": None, "screenshot": None}
+                _backend_runtime.state.photos_path = str(photos_dir)
+                _backend_runtime.state.screenshots_path = str(screenshots_dir)
+                _backend_runtime.state.latest_media_scan_truncated = False
 
-                with patch.object(server, "_saved_photo_contains_person", return_value=True):
-                    server.initialize_latest_media_state()
+                with patch.object(_backend_media, "_saved_photo_contains_person", return_value=True):
+                    _backend_media.initialize_latest_media_state()
             finally:
-                truncated = server.state.latest_media_scan_truncated
-                photo_path = server.state.paths.get("photo")
-                screenshot_path = server.state.paths.get("screenshot")
-                server.state.paths = original_paths
-                server.state.photos_path = original_photos_path
-                server.state.screenshots_path = original_screenshots_path
-                server.state.latest_media_scan_truncated = original_latest_media_scan_truncated
+                truncated = _backend_runtime.state.latest_media_scan_truncated
+                photo_path = _backend_runtime.state.paths.get("photo")
+                screenshot_path = _backend_runtime.state.paths.get("screenshot")
+                _backend_runtime.state.paths = original_paths
+                _backend_runtime.state.photos_path = original_photos_path
+                _backend_runtime.state.screenshots_path = original_screenshots_path
+                _backend_runtime.state.latest_media_scan_truncated = original_latest_media_scan_truncated
 
         self.assertFalse(truncated)
         self.assertTrue(str(photo_path).endswith("photo.jpg"))
@@ -138,26 +140,26 @@ class LatestImagesEndpointTests(unittest.TestCase):
             (photos_dir / "empty-room.jpg").write_bytes(b"a")
             (screenshots_dir / "screen.png").write_bytes(b"b")
 
-            original_paths = dict(server.state.paths)
-            original_photos_path = server.state.photos_path
-            original_screenshots_path = server.state.screenshots_path
-            original_latest_media_scan_truncated = server.state.latest_media_scan_truncated
+            original_paths = dict(_backend_runtime.state.paths)
+            original_photos_path = _backend_runtime.state.photos_path
+            original_screenshots_path = _backend_runtime.state.screenshots_path
+            original_latest_media_scan_truncated = _backend_runtime.state.latest_media_scan_truncated
 
             try:
-                server.state.paths = {"photo": None, "screenshot": None}
-                server.state.photos_path = str(photos_dir)
-                server.state.screenshots_path = str(screenshots_dir)
-                server.state.latest_media_scan_truncated = False
+                _backend_runtime.state.paths = {"photo": None, "screenshot": None}
+                _backend_runtime.state.photos_path = str(photos_dir)
+                _backend_runtime.state.screenshots_path = str(screenshots_dir)
+                _backend_runtime.state.latest_media_scan_truncated = False
 
-                with patch.object(server, "_saved_photo_contains_person", return_value=False):
-                    server.initialize_latest_media_state()
+                with patch.object(_backend_media, "_saved_photo_contains_person", return_value=False):
+                    _backend_media.initialize_latest_media_state()
             finally:
-                photo_path = server.state.paths.get("photo")
-                screenshot_path = server.state.paths.get("screenshot")
-                server.state.paths = original_paths
-                server.state.photos_path = original_photos_path
-                server.state.screenshots_path = original_screenshots_path
-                server.state.latest_media_scan_truncated = original_latest_media_scan_truncated
+                photo_path = _backend_runtime.state.paths.get("photo")
+                screenshot_path = _backend_runtime.state.paths.get("screenshot")
+                _backend_runtime.state.paths = original_paths
+                _backend_runtime.state.photos_path = original_photos_path
+                _backend_runtime.state.screenshots_path = original_screenshots_path
+                _backend_runtime.state.latest_media_scan_truncated = original_latest_media_scan_truncated
 
         self.assertIsNone(photo_path)
         self.assertIsNone(screenshot_path)
@@ -177,25 +179,25 @@ class LatestImagesEndpointTests(unittest.TestCase):
             os.utime(primary, (100, 100))
             os.utime(secondary, (101, 101))
 
-            original_paths = dict(server.state.paths)
-            original_photos_path = server.state.photos_path
-            original_screenshots_path = server.state.screenshots_path
-            original_latest_media_scan_truncated = server.state.latest_media_scan_truncated
+            original_paths = dict(_backend_runtime.state.paths)
+            original_photos_path = _backend_runtime.state.photos_path
+            original_screenshots_path = _backend_runtime.state.screenshots_path
+            original_latest_media_scan_truncated = _backend_runtime.state.latest_media_scan_truncated
 
             try:
-                server.state.paths = {"photo": None, "screenshot": None}
-                server.state.photos_path = str(photos_dir)
-                server.state.screenshots_path = str(screenshots_dir)
-                server.state.latest_media_scan_truncated = False
+                _backend_runtime.state.paths = {"photo": None, "screenshot": None}
+                _backend_runtime.state.photos_path = str(photos_dir)
+                _backend_runtime.state.screenshots_path = str(screenshots_dir)
+                _backend_runtime.state.latest_media_scan_truncated = False
 
-                with patch.object(server, "_saved_photo_contains_person", return_value=True):
-                    server.initialize_latest_media_state()
-                screenshot_path = server.state.paths.get("screenshot")
+                with patch.object(_backend_media, "_saved_photo_contains_person", return_value=True):
+                    _backend_media.initialize_latest_media_state()
+                screenshot_path = _backend_runtime.state.paths.get("screenshot")
             finally:
-                server.state.paths = original_paths
-                server.state.photos_path = original_photos_path
-                server.state.screenshots_path = original_screenshots_path
-                server.state.latest_media_scan_truncated = original_latest_media_scan_truncated
+                _backend_runtime.state.paths = original_paths
+                _backend_runtime.state.photos_path = original_photos_path
+                _backend_runtime.state.screenshots_path = original_screenshots_path
+                _backend_runtime.state.latest_media_scan_truncated = original_latest_media_scan_truncated
 
         self.assertEqual(Path(screenshot_path).name, primary.name)
 

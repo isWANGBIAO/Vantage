@@ -133,6 +133,102 @@
           "title": "ActionPlanJobRequest",
           "type": "object"
         },
+        "ActionPlanMetadata": {
+          "additionalProperties": true,
+          "properties": {
+            "generated_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Generated At"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "provider_route": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Route"
+            },
+            "requested_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Model"
+            },
+            "requested_provider_route": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Provider Route"
+            },
+            "fallback_used": {
+              "default": false,
+              "title": "Fallback Used",
+              "type": "boolean"
+            },
+            "reasoning_effort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoning Effort"
+            },
+            "input": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Input",
+              "type": "object"
+            },
+            "stats": {
+              "additionalProperties": true,
+              "title": "Stats",
+              "type": "object"
+            }
+          },
+          "title": "ActionPlanMetadata",
+          "type": "object"
+        },
         "ActionPlanResult": {
           "additionalProperties": true,
           "properties": {
@@ -143,41 +239,35 @@
             "analysis": {
               "anyOf": [
                 {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/$defs/ActionPlanSection"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "default": null,
-              "title": "Analysis"
+              "default": null
             },
             "plan": {
               "anyOf": [
                 {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/$defs/ActionPlanSection"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "default": null,
-              "title": "Plan"
+              "default": null
             },
             "meta": {
               "anyOf": [
                 {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/$defs/ActionPlanMetadata"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "default": null,
-              "title": "Meta"
+              "default": null
             },
             "date": {
               "anyOf": [
@@ -203,6 +293,30 @@
               "default": null,
               "title": "Filename"
             },
+            "timestamp": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Timestamp"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Error"
+            },
             "id": {
               "anyOf": [
                 {
@@ -223,6 +337,20 @@
             "exists"
           ],
           "title": "ActionPlanResult",
+          "type": "object"
+        },
+        "ActionPlanSection": {
+          "additionalProperties": true,
+          "properties": {
+            "body": {
+              "title": "Body",
+              "type": "string"
+            }
+          },
+          "required": [
+            "body"
+          ],
+          "title": "ActionPlanSection",
           "type": "object"
         },
         "JobError": {
@@ -367,6 +495,918 @@
       "title": "ActionPlanJob",
       "type": "object"
     },
+    "ActionPlanJobs": {
+      "$defs": {
+        "ActionPlanJob": {
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "queued",
+                "running",
+                "cancelling",
+                "succeeded",
+                "failed",
+                "cancelled"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "trigger": {
+              "title": "Trigger",
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/ActionPlanJobRequest"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "updated_at": {
+              "title": "Updated At",
+              "type": "string"
+            },
+            "progress": {
+              "$ref": "#/$defs/JobProgress"
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ActionPlanResult"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/JobError"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "source_revision": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Revision"
+            },
+            "result_identity": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Result Identity"
+            },
+            "event_cursor": {
+              "title": "Event Cursor",
+              "type": "integer"
+            },
+            "reused": {
+              "default": false,
+              "title": "Reused",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "status",
+            "trigger",
+            "request",
+            "created_at",
+            "updated_at",
+            "progress",
+            "event_cursor"
+          ],
+          "title": "ActionPlanJob",
+          "type": "object"
+        },
+        "ActionPlanJobRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "reasoning_effort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoning Effort"
+            },
+            "service_tier": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Service Tier"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "provider_route": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Route"
+            },
+            "replace_today": {
+              "default": false,
+              "title": "Replace Today",
+              "type": "boolean"
+            },
+            "wait_for_provider_ready": {
+              "default": false,
+              "title": "Wait For Provider Ready",
+              "type": "boolean"
+            }
+          },
+          "title": "ActionPlanJobRequest",
+          "type": "object"
+        },
+        "ActionPlanMetadata": {
+          "additionalProperties": true,
+          "properties": {
+            "generated_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Generated At"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "provider_route": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Route"
+            },
+            "requested_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Model"
+            },
+            "requested_provider_route": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Provider Route"
+            },
+            "fallback_used": {
+              "default": false,
+              "title": "Fallback Used",
+              "type": "boolean"
+            },
+            "reasoning_effort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoning Effort"
+            },
+            "input": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Input",
+              "type": "object"
+            },
+            "stats": {
+              "additionalProperties": true,
+              "title": "Stats",
+              "type": "object"
+            }
+          },
+          "title": "ActionPlanMetadata",
+          "type": "object"
+        },
+        "ActionPlanResult": {
+          "additionalProperties": true,
+          "properties": {
+            "exists": {
+              "title": "Exists",
+              "type": "boolean"
+            },
+            "analysis": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ActionPlanSection"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "plan": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ActionPlanSection"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "meta": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ActionPlanMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "date": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Date"
+            },
+            "filename": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Filename"
+            },
+            "timestamp": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Timestamp"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Error"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Id"
+            }
+          },
+          "required": [
+            "exists"
+          ],
+          "title": "ActionPlanResult",
+          "type": "object"
+        },
+        "ActionPlanSection": {
+          "additionalProperties": true,
+          "properties": {
+            "body": {
+              "title": "Body",
+              "type": "string"
+            }
+          },
+          "required": [
+            "body"
+          ],
+          "title": "ActionPlanSection",
+          "type": "object"
+        },
+        "JobError": {
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "JobError",
+          "type": "object"
+        },
+        "JobProgress": {
+          "additionalProperties": true,
+          "properties": {
+            "phase": {
+              "title": "Phase",
+              "type": "string"
+            },
+            "events_received": {
+              "default": 0,
+              "title": "Events Received",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "phase"
+          ],
+          "title": "JobProgress",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "jobs": {
+          "items": {
+            "$ref": "#/$defs/ActionPlanJob"
+          },
+          "title": "Jobs",
+          "type": "array"
+        },
+        "active": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionPlanJob"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "jobs",
+        "active"
+      ],
+      "title": "ActionPlanJobs",
+      "type": "object"
+    },
+    "ActionPlanResult": {
+      "$defs": {
+        "ActionPlanMetadata": {
+          "additionalProperties": true,
+          "properties": {
+            "generated_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Generated At"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "provider_route": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Route"
+            },
+            "requested_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Model"
+            },
+            "requested_provider_route": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Requested Provider Route"
+            },
+            "fallback_used": {
+              "default": false,
+              "title": "Fallback Used",
+              "type": "boolean"
+            },
+            "reasoning_effort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoning Effort"
+            },
+            "input": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Input",
+              "type": "object"
+            },
+            "stats": {
+              "additionalProperties": true,
+              "title": "Stats",
+              "type": "object"
+            }
+          },
+          "title": "ActionPlanMetadata",
+          "type": "object"
+        },
+        "ActionPlanSection": {
+          "additionalProperties": true,
+          "properties": {
+            "body": {
+              "title": "Body",
+              "type": "string"
+            }
+          },
+          "required": [
+            "body"
+          ],
+          "title": "ActionPlanSection",
+          "type": "object"
+        }
+      },
+      "additionalProperties": true,
+      "properties": {
+        "exists": {
+          "title": "Exists",
+          "type": "boolean"
+        },
+        "analysis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionPlanSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionPlanSection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "meta": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionPlanMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Date"
+        },
+        "filename": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filename"
+        },
+        "timestamp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timestamp"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        }
+      },
+      "required": [
+        "exists"
+      ],
+      "title": "ActionPlanResult",
+      "type": "object"
+    },
+    "ActionPlanStreamEvent": {
+      "$defs": {
+        "JobDoneEvent": {
+          "additionalProperties": true,
+          "properties": {
+            "sequence": {
+              "minimum": 1,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "timestamp": {
+              "title": "Timestamp",
+              "type": "string"
+            },
+            "done": {
+              "const": true,
+              "title": "Done",
+              "type": "boolean"
+            },
+            "job_status": {
+              "const": "succeeded",
+              "title": "Job Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence",
+            "timestamp",
+            "done",
+            "job_status"
+          ],
+          "title": "JobDoneEvent",
+          "type": "object"
+        },
+        "JobErrorEvent": {
+          "additionalProperties": true,
+          "properties": {
+            "sequence": {
+              "minimum": 1,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "timestamp": {
+              "title": "Timestamp",
+              "type": "string"
+            },
+            "error": {
+              "title": "Error",
+              "type": "string"
+            },
+            "error_code": {
+              "title": "Error Code",
+              "type": "string"
+            },
+            "job_status": {
+              "const": "failed",
+              "title": "Job Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence",
+            "timestamp",
+            "error",
+            "error_code",
+            "job_status"
+          ],
+          "title": "JobErrorEvent",
+          "type": "object"
+        },
+        "JobLogEvent": {
+          "additionalProperties": true,
+          "properties": {
+            "sequence": {
+              "minimum": 1,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "timestamp": {
+              "title": "Timestamp",
+              "type": "string"
+            },
+            "log": {
+              "title": "Log",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence",
+            "timestamp",
+            "log"
+          ],
+          "title": "JobLogEvent",
+          "type": "object"
+        },
+        "JobStateEvent": {
+          "additionalProperties": true,
+          "properties": {
+            "sequence": {
+              "minimum": 1,
+              "title": "Sequence",
+              "type": "integer"
+            },
+            "timestamp": {
+              "title": "Timestamp",
+              "type": "string"
+            },
+            "job_status": {
+              "enum": [
+                "queued",
+                "running",
+                "cancelling",
+                "cancelled"
+              ],
+              "title": "Job Status",
+              "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Phase"
+            }
+          },
+          "required": [
+            "sequence",
+            "timestamp",
+            "job_status"
+          ],
+          "title": "JobStateEvent",
+          "type": "object"
+        },
+        "JobTruncatedEvent": {
+          "additionalProperties": true,
+          "properties": {
+            "truncated": {
+              "const": true,
+              "title": "Truncated",
+              "type": "boolean"
+            },
+            "cursor": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Cursor"
+            },
+            "sequence": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sequence"
+            },
+            "timestamp": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Timestamp"
+            },
+            "job_status": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Job Status"
+            },
+            "event_truncated": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Event Truncated"
+            }
+          },
+          "required": [
+            "truncated"
+          ],
+          "title": "JobTruncatedEvent",
+          "type": "object"
+        }
+      },
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JobLogEvent"
+        },
+        {
+          "$ref": "#/$defs/JobErrorEvent"
+        },
+        {
+          "$ref": "#/$defs/JobDoneEvent"
+        },
+        {
+          "$ref": "#/$defs/JobStateEvent"
+        },
+        {
+          "$ref": "#/$defs/JobTruncatedEvent"
+        }
+      ],
+      "description": "One JSON object per UTF-8 NDJSON line, never a JSON array.",
+      "title": "ActionPlanStreamEvent"
+    },
     "BackendCapabilities": {
       "properties": {
         "api_version": {
@@ -416,6 +1456,1496 @@
       },
       "title": "BackendCapabilities",
       "type": "object"
+    },
+    "SettingsState": {
+      "$defs": {
+        "MaskedProvider": {
+          "additionalProperties": true,
+          "properties": {
+            "route": {
+              "title": "Route",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            },
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "api_key": {
+              "enum": [
+                "",
+                "********"
+              ],
+              "title": "Api Key",
+              "type": "string"
+            },
+            "base_url": {
+              "title": "Base Url",
+              "type": "string"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "models": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Models",
+              "type": "array"
+            },
+            "last_refreshed_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Last Refreshed At"
+            },
+            "context_window_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Context Window Tokens"
+            },
+            "max_output_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Output Tokens"
+            }
+          },
+          "required": [
+            "route",
+            "name",
+            "type",
+            "enabled",
+            "api_key",
+            "base_url",
+            "model",
+            "models"
+          ],
+          "title": "MaskedProvider",
+          "type": "object"
+        },
+        "MigrationState": {
+          "additionalProperties": true,
+          "properties": {
+            "completed": {
+              "title": "Completed",
+              "type": "boolean"
+            },
+            "source_path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Path"
+            },
+            "imported_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Imported At"
+            }
+          },
+          "required": [
+            "completed",
+            "source_path",
+            "imported_at"
+          ],
+          "title": "MigrationState",
+          "type": "object"
+        },
+        "ModelProfile": {
+          "additionalProperties": true,
+          "properties": {
+            "parameters": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "title": "Parameters",
+              "type": "object"
+            },
+            "omit_parameters": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Omit Parameters",
+              "type": "array"
+            },
+            "extra": {
+              "additionalProperties": true,
+              "title": "Extra",
+              "type": "object"
+            },
+            "max_tokens": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Max Tokens"
+            },
+            "reasoning_tiers": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Reasoning Tiers",
+              "type": "array"
+            },
+            "reasoning_aliases": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Reasoning Aliases",
+              "type": "object"
+            }
+          },
+          "title": "ModelProfile",
+          "type": "object"
+        },
+        "ProviderState": {
+          "additionalProperties": true,
+          "properties": {
+            "version": {
+              "title": "Version",
+              "type": "integer"
+            },
+            "selected_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Selected Provider"
+            },
+            "sampling_defaults": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "title": "Sampling Defaults",
+              "type": "object"
+            },
+            "model_profiles": {
+              "additionalProperties": {
+                "$ref": "#/$defs/ModelProfile"
+              },
+              "title": "Model Profiles",
+              "type": "object"
+            },
+            "providers": {
+              "additionalProperties": {
+                "$ref": "#/$defs/MaskedProvider"
+              },
+              "title": "Providers",
+              "type": "object"
+            }
+          },
+          "required": [
+            "version",
+            "selected_provider",
+            "sampling_defaults",
+            "model_profiles",
+            "providers"
+          ],
+          "title": "ProviderState",
+          "type": "object"
+        },
+        "SettingsValues": {
+          "additionalProperties": true,
+          "properties": {
+            "version": {
+              "title": "Version",
+              "type": "integer"
+            },
+            "onboarding_completed": {
+              "title": "Onboarding Completed",
+              "type": "boolean"
+            },
+            "launch_at_login": {
+              "title": "Launch At Login",
+              "type": "boolean"
+            },
+            "display_language": {
+              "enum": [
+                "system",
+                "zh-CN",
+                "en-US"
+              ],
+              "title": "Display Language",
+              "type": "string"
+            },
+            "theme": {
+              "enum": [
+                "dark",
+                "light"
+              ],
+              "title": "Theme",
+              "type": "string"
+            },
+            "theme_mode": {
+              "enum": [
+                "dark",
+                "light",
+                "auto"
+              ],
+              "title": "Theme Mode",
+              "type": "string"
+            },
+            "action_plan_auto_generate": {
+              "title": "Action Plan Auto Generate",
+              "type": "boolean"
+            },
+            "action_plan_check_interval_minutes": {
+              "maximum": 35791,
+              "minimum": 0,
+              "title": "Action Plan Check Interval Minutes",
+              "type": "integer"
+            },
+            "voice_provider_mode": {
+              "enum": [
+                "inherit_ai",
+                "custom"
+              ],
+              "title": "Voice Provider Mode",
+              "type": "string"
+            },
+            "voice_base_url": {
+              "title": "Voice Base Url",
+              "type": "string"
+            },
+            "voice_api_key": {
+              "enum": [
+                "",
+                "********"
+              ],
+              "title": "Voice Api Key",
+              "type": "string"
+            },
+            "voice_has_api_key": {
+              "title": "Voice Has Api Key",
+              "type": "boolean"
+            },
+            "voice_model": {
+              "title": "Voice Model",
+              "type": "string"
+            },
+            "voice_models": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Voice Models",
+              "type": "array"
+            },
+            "voice_last_refreshed_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Voice Last Refreshed At"
+            },
+            "image_provider_mode": {
+              "enum": [
+                "inherit_ai",
+                "custom"
+              ],
+              "title": "Image Provider Mode",
+              "type": "string"
+            },
+            "image_base_url": {
+              "title": "Image Base Url",
+              "type": "string"
+            },
+            "image_api_key": {
+              "enum": [
+                "",
+                "********"
+              ],
+              "title": "Image Api Key",
+              "type": "string"
+            },
+            "image_has_api_key": {
+              "title": "Image Has Api Key",
+              "type": "boolean"
+            },
+            "image_model": {
+              "title": "Image Model",
+              "type": "string"
+            },
+            "image_models": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Image Models",
+              "type": "array"
+            },
+            "image_last_refreshed_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Image Last Refreshed At"
+            }
+          },
+          "required": [
+            "version",
+            "onboarding_completed",
+            "launch_at_login",
+            "display_language",
+            "theme",
+            "theme_mode",
+            "action_plan_auto_generate",
+            "action_plan_check_interval_minutes",
+            "voice_provider_mode",
+            "voice_base_url",
+            "voice_api_key",
+            "voice_has_api_key",
+            "voice_model",
+            "voice_models",
+            "voice_last_refreshed_at",
+            "image_provider_mode",
+            "image_base_url",
+            "image_api_key",
+            "image_has_api_key",
+            "image_model",
+            "image_models",
+            "image_last_refreshed_at"
+          ],
+          "title": "SettingsValues",
+          "type": "object"
+        }
+      },
+      "additionalProperties": true,
+      "properties": {
+        "settings": {
+          "$ref": "#/$defs/SettingsValues"
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderState"
+        },
+        "migration": {
+          "$ref": "#/$defs/MigrationState"
+        },
+        "runtime_paths": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Runtime Paths",
+          "type": "object"
+        }
+      },
+      "required": [
+        "settings",
+        "provider",
+        "migration",
+        "runtime_paths"
+      ],
+      "title": "SettingsState",
+      "type": "object"
+    },
+    "OnboardingState": {
+      "properties": {
+        "completed": {
+          "title": "Completed",
+          "type": "boolean"
+        },
+        "launchAtLogin": {
+          "title": "Launchatlogin",
+          "type": "boolean"
+        },
+        "displayLanguage": {
+          "enum": [
+            "system",
+            "zh-CN",
+            "en-US"
+          ],
+          "title": "Displaylanguage",
+          "type": "string"
+        },
+        "providerConfigured": {
+          "title": "Providerconfigured",
+          "type": "boolean"
+        },
+        "migrationCompleted": {
+          "title": "Migrationcompleted",
+          "type": "boolean"
+        },
+        "legacyRoot": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Legacyroot"
+        }
+      },
+      "required": [
+        "completed",
+        "launchAtLogin",
+        "displayLanguage",
+        "providerConfigured",
+        "migrationCompleted",
+        "legacyRoot"
+      ],
+      "title": "OnboardingState",
+      "type": "object"
+    },
+    "OnboardingCompletion": {
+      "$defs": {
+        "OnboardingMigration": {
+          "properties": {
+            "imported": {
+              "title": "Imported",
+              "type": "boolean"
+            },
+            "completed": {
+              "title": "Completed",
+              "type": "boolean"
+            },
+            "sourcePath": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sourcepath"
+            }
+          },
+          "required": [
+            "imported",
+            "completed",
+            "sourcePath"
+          ],
+          "title": "OnboardingMigration",
+          "type": "object"
+        },
+        "OnboardingPreferences": {
+          "properties": {
+            "display_language": {
+              "enum": [
+                "system",
+                "zh-CN",
+                "en-US"
+              ],
+              "title": "Display Language",
+              "type": "string"
+            },
+            "theme": {
+              "enum": [
+                "dark",
+                "light"
+              ],
+              "title": "Theme",
+              "type": "string"
+            },
+            "theme_mode": {
+              "enum": [
+                "dark",
+                "light",
+                "auto"
+              ],
+              "title": "Theme Mode",
+              "type": "string"
+            },
+            "launch_at_login": {
+              "title": "Launch At Login",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "display_language",
+            "theme",
+            "theme_mode",
+            "launch_at_login"
+          ],
+          "title": "OnboardingPreferences",
+          "type": "object"
+        },
+        "OnboardingProvider": {
+          "properties": {
+            "selected_provider": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Selected Provider"
+            },
+            "providers": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Providers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "selected_provider",
+            "providers"
+          ],
+          "title": "OnboardingProvider",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "completed": {
+          "const": true,
+          "title": "Completed",
+          "type": "boolean"
+        },
+        "launchAtLogin": {
+          "title": "Launchatlogin",
+          "type": "boolean"
+        },
+        "providerConfigured": {
+          "title": "Providerconfigured",
+          "type": "boolean"
+        },
+        "migration": {
+          "$ref": "#/$defs/OnboardingMigration"
+        },
+        "settings": {
+          "$ref": "#/$defs/OnboardingPreferences"
+        },
+        "provider": {
+          "$ref": "#/$defs/OnboardingProvider"
+        }
+      },
+      "required": [
+        "completed",
+        "launchAtLogin",
+        "providerConfigured",
+        "migration",
+        "settings",
+        "provider"
+      ],
+      "title": "OnboardingCompletion",
+      "type": "object"
+    },
+    "DisplayLanguageState": {
+      "properties": {
+        "display_language": {
+          "enum": [
+            "system",
+            "zh-CN",
+            "en-US"
+          ],
+          "title": "Display Language",
+          "type": "string"
+        }
+      },
+      "required": [
+        "display_language"
+      ],
+      "title": "DisplayLanguageState",
+      "type": "object"
+    },
+    "ChatContextResponse": {
+      "$defs": {
+        "VisibleChatMessage": {
+          "properties": {
+            "role": {
+              "enum": [
+                "user",
+                "assistant"
+              ],
+              "title": "Role",
+              "type": "string"
+            },
+            "content": {
+              "title": "Content",
+              "type": "string"
+            }
+          },
+          "required": [
+            "role",
+            "content"
+          ],
+          "title": "VisibleChatMessage",
+          "type": "object"
+        }
+      },
+      "additionalProperties": true,
+      "properties": {
+        "base_context_version": {
+          "title": "Base Context Version",
+          "type": "string"
+        },
+        "context_version": {
+          "title": "Context Version",
+          "type": "string"
+        },
+        "has_action_plan_context": {
+          "title": "Has Action Plan Context",
+          "type": "boolean"
+        },
+        "display_messages": {
+          "items": {
+            "$ref": "#/$defs/VisibleChatMessage"
+          },
+          "title": "Display Messages",
+          "type": "array"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/VisibleChatMessage"
+          },
+          "title": "Messages",
+          "type": "array"
+        },
+        "stats": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stats"
+        },
+        "preferred_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Model"
+        },
+        "preferred_provider_route": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Provider Route"
+        },
+        "preferred_model_option_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Model Option Id"
+        }
+      },
+      "required": [
+        "base_context_version",
+        "context_version",
+        "has_action_plan_context",
+        "display_messages",
+        "messages"
+      ],
+      "title": "ChatContextResponse",
+      "type": "object"
+    },
+    "ChatRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "provider_route": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Route"
+        },
+        "context_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context File"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Effort"
+        },
+        "service_tier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Tier"
+        },
+        "client_sent_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Sent At"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "title": "ChatRequest",
+      "type": "object"
+    },
+    "ChatStreamEvent": {
+      "$defs": {
+        "StreamDoneEvent": {
+          "additionalProperties": true,
+          "properties": {
+            "done": {
+              "const": true,
+              "title": "Done",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "done"
+          ],
+          "title": "StreamDoneEvent",
+          "type": "object"
+        },
+        "StreamErrorEvent": {
+          "additionalProperties": true,
+          "properties": {
+            "error": {
+              "title": "Error",
+              "type": "string"
+            },
+            "error_code": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Error Code"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "title": "StreamErrorEvent",
+          "type": "object"
+        },
+        "StreamLogEvent": {
+          "additionalProperties": true,
+          "properties": {
+            "log": {
+              "title": "Log",
+              "type": "string"
+            }
+          },
+          "required": [
+            "log"
+          ],
+          "title": "StreamLogEvent",
+          "type": "object"
+        }
+      },
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StreamLogEvent"
+        },
+        {
+          "$ref": "#/$defs/StreamErrorEvent"
+        },
+        {
+          "$ref": "#/$defs/StreamDoneEvent"
+        }
+      ],
+      "description": "One chat stream record; EOF alone does not confirm completion.",
+      "title": "ChatStreamEvent"
+    },
+    "SchedulerState": {
+      "$defs": {
+        "JobError": {
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "JobError",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "running": {
+          "title": "Running",
+          "type": "boolean"
+        },
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "startup_auto_generate": {
+          "title": "Startup Auto Generate",
+          "type": "boolean"
+        },
+        "onboarding_completed": {
+          "title": "Onboarding Completed",
+          "type": "boolean"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "check_interval_minutes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Check Interval Minutes"
+        },
+        "date": {
+          "title": "Date",
+          "type": "string"
+        },
+        "baseline_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Baseline Revision"
+        },
+        "generated_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Generated Revision"
+        }
+      },
+      "required": [
+        "running",
+        "enabled",
+        "startup_auto_generate",
+        "onboarding_completed",
+        "outcome",
+        "error",
+        "check_interval_minutes",
+        "date",
+        "baseline_revision",
+        "generated_revision"
+      ],
+      "title": "SchedulerState",
+      "type": "object"
+    },
+    "ConfigurationErrorResponse": {
+      "properties": {
+        "code": {
+          "const": "configuration_unreadable",
+          "title": "Code",
+          "type": "string"
+        },
+        "error": {
+          "title": "Error",
+          "type": "string"
+        },
+        "original_preserved": {
+          "const": true,
+          "title": "Original Preserved",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "error",
+        "original_preserved"
+      ],
+      "title": "ConfigurationErrorResponse",
+      "type": "object"
+    },
+    "ContextErrorResponse": {
+      "$defs": {
+        "ContextErrorDetail": {
+          "properties": {
+            "code": {
+              "const": "CONTEXT_UNREADABLE",
+              "title": "Code",
+              "type": "string"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "ContextErrorDetail",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "detail": {
+          "$ref": "#/$defs/ContextErrorDetail"
+        }
+      },
+      "required": [
+        "detail"
+      ],
+      "title": "ContextErrorResponse",
+      "type": "object"
+    },
+    "SettingsUpdateRequest": {
+      "type": "object",
+      "properties": {
+        "display_language": {
+          "type": "string",
+          "description": "Display language preference.",
+          "enum": [
+            "system",
+            "zh-CN",
+            "en-US"
+          ]
+        },
+        "theme": {
+          "type": "string",
+          "description": "Window theme.",
+          "enum": [
+            "light",
+            "dark"
+          ]
+        },
+        "theme_mode": {
+          "type": "string",
+          "description": "Theme selection mode.",
+          "enum": [
+            "auto",
+            "dark",
+            "light"
+          ]
+        },
+        "launch_at_login": {
+          "type": "boolean",
+          "description": "Start Vantage after Windows login when supported."
+        },
+        "action_plan_auto_generate": {
+          "type": "boolean",
+          "description": "Enable automatic action-plan generation."
+        },
+        "action_plan_check_interval_minutes": {
+          "type": "integer",
+          "description": "Automatic action-plan check interval in minutes (0 disables it).",
+          "minimum": 0,
+          "maximum": 35791
+        },
+        "voice_provider_mode": {
+          "type": "string",
+          "description": "Voice provider selection mode.",
+          "enum": [
+            "custom",
+            "inherit_ai"
+          ]
+        },
+        "voice_base_url": {
+          "type": "string",
+          "description": "Voice provider API base URL."
+        },
+        "voice_api_key": {
+          "type": "string",
+          "description": "Voice provider API key.",
+          "writeOnly": true
+        },
+        "voice_model": {
+          "type": "string",
+          "description": "Voice transcription model identifier."
+        },
+        "voice_models": {
+          "type": "array",
+          "description": "Available voice model identifiers.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "voice_last_refreshed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Timestamp of the last voice-model catalog refresh, or null if it has not been refreshed."
+        },
+        "image_provider_mode": {
+          "type": "string",
+          "description": "Image provider selection mode.",
+          "enum": [
+            "custom",
+            "inherit_ai"
+          ]
+        },
+        "image_base_url": {
+          "type": "string",
+          "description": "Image provider API base URL."
+        },
+        "image_api_key": {
+          "type": "string",
+          "description": "Image provider API key.",
+          "writeOnly": true
+        },
+        "image_model": {
+          "type": "string",
+          "description": "Image model identifier."
+        },
+        "image_models": {
+          "type": "array",
+          "description": "Available image model identifiers.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "image_last_refreshed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Timestamp of the last image-model catalog refresh, or null if it has not been refreshed."
+        },
+        "provider_config": {
+          "type": "object",
+          "description": "Optional partial provider configuration; omitted top-level members retain existing values. If providers is omitted, existing providers are kept; a supplied providers map replaces the complete provider set. API keys are write-only.",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "type": "integer",
+              "description": "Provider-configuration schema version.",
+              "minimum": 1
+            },
+            "selected_provider": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sampling_defaults": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "temperature": {
+                  "type": "number",
+                  "description": "Default model temperature."
+                },
+                "top_p": {
+                  "type": "number",
+                  "description": "Default nucleus-sampling probability."
+                },
+                "top_k": {
+                  "type": "integer",
+                  "description": "Default top-k sampling count.",
+                  "minimum": 1
+                },
+                "presence_penalty": {
+                  "type": "number",
+                  "description": "Default presence penalty."
+                },
+                "repetition_penalty": {
+                  "type": "number",
+                  "description": "Default repetition penalty."
+                }
+              }
+            },
+            "model_profiles": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "parameters": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": [
+                        "number",
+                        "string",
+                        "boolean"
+                      ]
+                    }
+                  },
+                  "omit_parameters": {
+                    "type": "array",
+                    "description": "Sampling parameter names omitted for this model.",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "extra": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "max_tokens": {
+                    "type": "integer",
+                    "description": "Optional model output-token limit.",
+                    "minimum": 1
+                  },
+                  "reasoning_tiers": {
+                    "type": "array",
+                    "description": "Reasoning levels supported by this model.",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "reasoning_aliases": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "providers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "route": {
+                    "type": "string",
+                    "description": "Stable provider route identifier."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "User-facing provider name."
+                  },
+                  "type": {
+                    "type": "string",
+                    "description": "Provider protocol type.",
+                    "enum": [
+                      "openai-compatible"
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Whether this provider may be selected."
+                  },
+                  "api_key": {
+                    "type": "string",
+                    "description": "Write-only provider key; omission or masking preserves it only at the same destination, and an explicit empty value clears it.",
+                    "writeOnly": true
+                  },
+                  "base_url": {
+                    "type": "string",
+                    "description": "Provider API base URL."
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "Default model identifier."
+                  },
+                  "models": {
+                    "type": "array",
+                    "description": "Known model identifiers for this provider.",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "last_refreshed_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Timestamp of the last model catalog refresh, or null if it has not been refreshed."
+                  },
+                  "context_window_tokens": {
+                    "type": "integer",
+                    "description": "Optional provider context-window capacity in tokens.",
+                    "minimum": 1
+                  },
+                  "max_output_tokens": {
+                    "type": "integer",
+                    "description": "Optional provider maximum output-token limit.",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "DisplayLanguageUpdateRequest": {
+      "type": "object",
+      "properties": {
+        "display_language": {
+          "type": "string",
+          "description": "Display language preference.",
+          "enum": [
+            "system",
+            "zh-CN",
+            "en-US"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "display_language"
+      ]
+    },
+    "OnboardingCompleteRequest": {
+      "type": "object",
+      "properties": {
+        "display_language": {
+          "type": "string",
+          "description": "Display language preference.",
+          "enum": [
+            "system",
+            "zh-CN",
+            "en-US"
+          ]
+        },
+        "launch_at_login": {
+          "type": "boolean",
+          "description": "Start Vantage after Windows login when supported."
+        },
+        "selected_provider": {
+          "type": "string",
+          "description": "Selected provider route.",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "base_url": {
+          "type": "string",
+          "description": "Provider API base URL."
+        },
+        "api_key": {
+          "type": "string",
+          "description": "Provider API key.",
+          "writeOnly": true
+        },
+        "model": {
+          "type": "string",
+          "description": "Default model identifier."
+        },
+        "skip_chat_setup": {
+          "type": "boolean",
+          "description": "Required explicit choice: true skips chat setup and preserves existing providers; false requires selected_provider."
+        },
+        "import_legacy_data": {
+          "type": "boolean",
+          "description": "Copy missing history/state files from legacy_root into the configured user-data directory; when true, legacy_root is required."
+        },
+        "legacy_root": {
+          "type": "string",
+          "format": "path",
+          "description": "Explicit source directory required when legacy-history import is enabled.",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "skip_chat_setup"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "skip_chat_setup": {
+              "enum": [
+                true
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "skip_chat_setup": {
+              "enum": [
+                false
+              ]
+            }
+          },
+          "required": [
+            "selected_provider"
+          ]
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "import_legacy_data": {
+                "const": true
+              }
+            },
+            "required": [
+              "import_legacy_data"
+            ]
+          },
+          "then": {
+            "required": [
+              "legacy_root"
+            ]
+          }
+        }
+      ]
     }
   }
 }

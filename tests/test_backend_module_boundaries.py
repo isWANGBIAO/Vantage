@@ -1,4 +1,4 @@
-"""Composition, import and compatibility contracts for the backend domains."""
+"""Composition and direct domain-import contracts for the backend."""
 import ast
 import asyncio
 import subprocess
@@ -9,6 +9,8 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from src.backend import camera as _backend_camera
+from src.backend import runtime as _backend_runtime
 from src import server
 from src.backend import application, camera, chat, plots, providers, runtime, settings
 
@@ -25,6 +27,16 @@ def test_server_is_only_a_composition_root():
         assert module.router.routes
         for route in module.router.routes:
             assert route.endpoint.__module__ == module.__name__
+
+
+def test_public_http_api_uses_only_the_canonical_namespace():
+    paths = server.app.openapi()["paths"]
+    assert "/api/v1/action-plan/jobs" in paths
+    assert "/api/v1/action-plan/today" in paths
+    assert all(not path.startswith("/api/") or path.startswith("/api/v1/") for path in paths)
+    assert "/api/action_plan" not in paths
+    assert "/api/action_plan_content" not in paths
+    assert "/api/automation/settings" not in paths
 
 
 def test_backend_domains_do_not_import_the_legacy_server():
@@ -52,56 +64,58 @@ def test_domains_import_without_composing_the_http_app():
     assert result.returncode == 0, result.stderr
 
 
-def test_legacy_exports_reference_real_domain_functions():
-    assert server.ChatRequest is chat.ChatRequest
-    assert server.get_camera_index is camera.get_camera_index
-    assert server.startup_event is runtime.startup_event
-    assert server.update_automation_settings is settings.update_automation_settings
-    assert server.get_camera_index.__globals__ is vars(camera)
+def test_server_does_not_reexport_domain_functions_or_mutable_state():
+    for name in ("ChatRequest", "get_camera_index", "startup_event", "update_automation_settings",
+                 "load_settings", "_cv2_module", "_plot_dashboard_cache_key", "state",
+                 "_legacy_export_owners"):
+        assert not hasattr(server, name), name
+    assert not (ROOT / "src/backend/compat.py").exists()
+    assert camera.get_camera_index.__globals__ is vars(camera)
 
 
-def test_legacy_dependency_override_reaches_all_consumers(monkeypatch):
+def test_dependency_overrides_are_scoped_to_the_domain_owner(monkeypatch):
+    original_provider_settings = providers.load_settings
     fake_settings = lambda: {"display_language": "en-US"}
-    monkeypatch.setattr(server, "load_settings", fake_settings)
+    monkeypatch.setattr(settings, "load_settings", fake_settings)
     assert settings.load_settings is fake_settings
-    assert providers.load_settings is fake_settings
-    assert server.get_automation_display_language() == {"display_language": "en-US"}
+    assert providers.load_settings is original_provider_settings
+    assert settings.get_automation_display_language() == {"display_language": "en-US"}
 
 
-def test_legacy_create_true_patch_restores_original_domain_value():
-    original = server._cv2_module
+def test_direct_domain_patch_restores_original_value():
+    original = camera._cv2_module
     replacement = object()
-    with patch.object(server, "_cv2_module", replacement, create=True):
+    with patch.object(camera, "_cv2_module", replacement):
         assert camera._cv2_module is replacement
     assert camera._cv2_module is original
-    assert server._cv2_module is original
+    assert not hasattr(server, "_cv2_module")
 
 
-def test_mutable_domain_globals_are_live_in_the_facade(monkeypatch):
+def test_mutable_domain_globals_remain_owned_by_the_domain(monkeypatch):
     marker = object()
     monkeypatch.setattr(plots, "_plot_dashboard_cache_key", marker)
-    assert server._plot_dashboard_cache_key is marker
-    assert vars(server)["_plot_dashboard_cache_key"] is marker
+    assert plots._plot_dashboard_cache_key is marker
+    assert "_plot_dashboard_cache_key" not in vars(server)
     replacement = object()
-    with patch.object(server, "_plot_dashboard_cache_key", replacement):
+    with patch.object(plots, "_plot_dashboard_cache_key", replacement):
         assert plots._plot_dashboard_cache_key is replacement
     assert plots._plot_dashboard_cache_key is marker
 
 
 def test_http_routes_execute_the_domain_code(monkeypatch):
-    monkeypatch.setattr(server, "_camera_online", lambda: False)
-    monkeypatch.setattr(server, "_build_camera_frame_diagnostics", lambda: {
+    monkeypatch.setattr(_backend_camera, "_camera_online", lambda: False)
+    monkeypatch.setattr(_backend_camera, "_build_camera_frame_diagnostics", lambda: {
         "available": False, "dark": False, "mean_luma": None,
     })
-    response = TestClient(server.app).get("/api/status")
+    response = TestClient(server.app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 12345)).get("/api/v1/system/status")
     assert response.status_code == 200
     assert response.json()["camera_online"] is False
-    assert "/api/automation/settings" in server.app.openapi()["paths"]
+    assert "/api/v1/settings" in server.app.openapi()["paths"]
 
 
-@pytest.mark.parametrize("path", ["/api/automation/settings", "/api/v1/capabilities"])
+@pytest.mark.parametrize("path", ["/api/v1/settings", "/api/v1/capabilities"])
 def test_private_api_rejects_non_loopback_clients(path):
-    response = TestClient(server.app, client=("203.0.113.10", 50000)).get(path)
+    response = TestClient(server.app, base_url="http://127.0.0.1:8000", client=("203.0.113.10", 50000)).get(path)
     assert response.status_code == 403
 
 
@@ -123,8 +137,8 @@ def test_lifespan_owns_application_and_hardware_cleanup(monkeypatch, start_fails
     async def stop_hardware():
         calls.append("hardware-stop")
 
-    monkeypatch.setattr(server, "startup_event", start_hardware)
-    monkeypatch.setattr(server, "shutdown_event", stop_hardware)
+    monkeypatch.setattr(_backend_runtime, "startup_event", start_hardware)
+    monkeypatch.setattr(_backend_runtime, "shutdown_event", stop_hardware)
     monkeypatch.setattr(application, "start", start_application)
     monkeypatch.setattr(application, "stop", stop_application)
 
@@ -151,10 +165,10 @@ def test_main_uses_the_shared_backend_address(monkeypatch):
 
 
 @pytest.mark.parametrize('origin', ['https://untrusted.example', 'null', 'http://localhost.attacker.example:5173'])
-@pytest.mark.parametrize('path', ['/api/action_plan', '/api/v1/action-plan/jobs/missing/cancel', '/api/automation/settings'])
+@pytest.mark.parametrize('path', ['/api/v1/action-plan/jobs', '/api/v1/action-plan/jobs/missing/cancel', '/api/v1/settings'])
 def test_mutations_reject_cross_site_browser_origins_before_dispatch(origin, path):
     # Do not enter the lifespan: this transport test must never start hardware.
-    client = TestClient(server.app, client=('127.0.0.1', 12345))
+    client = TestClient(server.app, base_url="http://127.0.0.1:8000", client=('127.0.0.1', 12345))
     response = client.post(path, headers={'Origin': origin, 'Host': '127.0.0.1:8000'}, content='')
     assert response.status_code == 403
     assert response.json()['error'] == 'Untrusted browser origin'
@@ -165,6 +179,6 @@ def test_native_and_trusted_browser_can_read_versioned_contract(origin):
     headers = {'Host': '127.0.0.1:8000'}
     if origin is not None:
         headers['Origin'] = origin
-    response = TestClient(server.app, client=('127.0.0.1', 12345)).get('/api/v1/capabilities', headers=headers)
+    response = TestClient(server.app, base_url="http://127.0.0.1:8000", client=('127.0.0.1', 12345)).get('/api/v1/capabilities', headers=headers)
     assert response.status_code == 200
     assert response.json()['api_version'] == '1.0'

@@ -708,13 +708,13 @@ export default function Plots({ theme = 'dark' }) {
 
     try {
       if (refresh) {
-        await fetchBackendJson('/api/plots/refresh', {
+        await fetchBackendJson('/api/v1/plots/refresh', {
           method: 'POST',
           retryPolicy: 'mutation',
         });
       }
 
-      const data = await fetchBackendJson('/api/plots/data');
+      const data = await fetchBackendJson('/api/v1/plots/data');
       setCharts(Array.isArray(data?.charts) ? data.charts : []);
       setWarnings(Array.isArray(data?.warnings) ? data.warnings : []);
       setGeneratedAt(data?.generated_at || null);

@@ -174,7 +174,7 @@ def test_cli_parses_schema_derived_nested_arrays_nullable_and_boolean_values(mon
 def test_cli_accepts_global_options_before_command_and_boolean_shorthand(monkeypatch, capsys):
     from src import cli
 
-    client = _RecordingClient(result=iter([{"accepted": True}]))
+    client = _RecordingClient(result={"accepted": True})
 
     def make_client(base_url=None):
         client.base_url = base_url
@@ -189,7 +189,8 @@ def test_cli_accepts_global_options_before_command_and_boolean_shorthand(monkeyp
             "--base-url",
             "http://127.0.0.1:8123",
             "action-plan",
-            "generate",
+            "jobs",
+            "create",
             "--replace-today",
         ]
     )
@@ -197,7 +198,7 @@ def test_cli_accepts_global_options_before_command_and_boolean_shorthand(monkeyp
     output = capsys.readouterr()
     assert result == 0
     assert client.base_url == "http://127.0.0.1:8123"
-    assert client.calls == [("action_plan.generate", {"replace_today": True})]
+    assert client.calls == [("action_plan.jobs.create", {"replace_today": True})]
     assert json.loads(output.out) == {"accepted": True}
     assert output.err == ""
 
@@ -492,10 +493,10 @@ def test_cli_warns_when_nested_write_only_fields_are_encoded_in_json_flags(capsy
         )
         return " ".join(lines[start:end])
 
-    for option in ("--provider JSON_OBJECT", "--provider-config JSON_OBJECT"):
-        description = option_help(option)
-        assert "shell history" in description
-        assert "--input-json -" in description
+    description = option_help("--provider-config JSON_OBJECT")
+    assert "shell history" in description
+    assert "--input-json -" in description
+    assert not any(line.lstrip().startswith("--provider ") for line in lines)
 
 
 def test_cli_writes_each_stream_record_immediately_as_ndjson(monkeypatch):

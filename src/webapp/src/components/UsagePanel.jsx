@@ -530,7 +530,7 @@ export default function UsagePanel({ isVisible = true } = {}) {
   const loadUsageDashboard = useCallback(async () => {
     try {
       setError('');
-      const data = await fetchBackendJson('/api/usage', { retryPolicy: 'load' });
+      const data = await fetchBackendJson('/api/v1/usage', { retryPolicy: 'load' });
       setDashboard(data);
     } catch (loadError) {
       console.error('Failed to load usage dashboard.', loadError);

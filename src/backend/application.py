@@ -18,7 +18,10 @@ from src.backend.api_contracts import (
     ActionPlanJobRequest,
     ActionPlanJobs,
     BackendCapabilities,
+    ActionPlanStreamEvent,
+    SchedulerState,
 )
+from src.backend.responses import NDJSONResponse, ndjson_openapi
 from src.core.config import Config
 from src.core.user_config import load_settings
 from src.services.action_plan_jobs import ActionPlanJobService
@@ -117,10 +120,8 @@ def _job_or_404(job_id):
         raise HTTPException(status_code=404, detail="Job not found or no longer retained.") from None
 
 
-async def _event_stream(job_id, after=0, *, legacy=False):
+async def _event_stream(job_id, after=0):
     async for event in get_services().jobs.iterate_events(job_id, after=after):
-        if legacy and isinstance(event.get("error"), dict):
-            event = {**event, "error": event["error"]["message"]}
         yield json.dumps(event, ensure_ascii=False) + "\n"
 
 
@@ -161,7 +162,9 @@ def build_router():
     async def read_job(job_id: str):
         return _job_or_404(job_id)
 
-    @router.get("/api/v1/action-plan/jobs/{job_id}/events")
+    @router.get("/api/v1/action-plan/jobs/{job_id}/events", response_class=NDJSONResponse,
+                responses={200: {"model": ActionPlanStreamEvent, "description": "UTF-8 NDJSON; one typed event per line."}},
+                openapi_extra=ndjson_openapi(ActionPlanStreamEvent))
     async def read_events(job_id: str, after: int = Query(default=0, ge=0)):
         _job_or_404(job_id)
         return StreamingResponse(_event_stream(job_id, after), media_type="application/x-ndjson",
@@ -172,14 +175,9 @@ def build_router():
         _job_or_404(job_id)
         return await get_services().jobs.cancel(job_id)
 
-    @router.get("/api/v1/action-plan/scheduler")
+    @router.get("/api/v1/action-plan/scheduler", response_model=SchedulerState)
     async def scheduler_state():
         return get_services().scheduler.status()
 
-    @router.post("/api/action_plan", tags=["Compatibility"])
-    async def legacy_generate(request: ActionPlanJobRequest | None = None):
-        job = await get_services().jobs.start((request or ActionPlanJobRequest()).model_dump())
-        return StreamingResponse(_event_stream(job["id"], legacy=True), media_type="application/x-ndjson",
-                                 headers={"Cache-Control": "no-store", "X-Vantage-Job-Id": job["id"]})
 
     return router

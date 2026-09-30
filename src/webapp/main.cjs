@@ -23,7 +23,6 @@ const { APP_SCHEME, APP_ORIGIN, APP_ENTRY_URL, APP_SCHEME_PRIVILEGES, installApp
 
 // Must precede app readiness; no CSP bypass or insecure web preferences.
 protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: APP_SCHEME_PRIVILEGES }]);
-const { mapPayloadFields, toBackendSettingsPayload, fromBackendSettings, ONBOARDING_PAYLOAD_FIELDS } = require('./src/utils/configurationProtocol.cjs');
 const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimePaths.cjs');
 const { applyLaunchAtLoginSetting } = require('./src/utils/autoLaunch.cjs');
 const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
@@ -135,15 +134,6 @@ function getPlatformDescriptor() {
             dataDir: runtimePaths.dataDir,
         },
     };
-}
-
-function buildElectronSettingsState(payload) {
-    canonicalSettings = { ...DEFAULT_SETTINGS, ...(payload.settings || {}) };
-    return fromBackendSettings(payload, {
-        mode: 'electron',
-        app: getPlatformDescriptor().app,
-        systemLocale: app.getLocale(),
-    });
 }
 
 function sanitizeDisplayLanguage(value) {
@@ -391,7 +381,7 @@ function postRendererCameraFrame(frameBytes) {
     };
 
     const request = (backendConnection.protocol === 'https:' ? https : http).request(
-        buildConnectionUrl(backendConnection, '/api/renderer_camera/frame'),
+        buildConnectionUrl(backendConnection, '/api/v1/camera/frame'),
         {
             method: 'POST',
             timeout: 3000,
@@ -451,8 +441,13 @@ function resolveAllowedSettingsPath(pathKey) {
     return allowedPaths.includes(resolvedPath) ? resolvedPath : null;
 }
 
-async function getSettingsStatePayload() {
-    return buildElectronSettingsState(await requestBackendJson('GET', '/api/automation/settings'));
+async function readSavedPreferences() {
+    const payload = await requestBackendJson('GET', '/api/v1/settings');
+    if (!payload?.settings || typeof payload.settings !== 'object' || Array.isArray(payload.settings)) {
+        throw new Error('Vantage backend returned invalid preferences.');
+    }
+    canonicalSettings = { ...DEFAULT_SETTINGS, ...payload.settings };
+    return canonicalSettings;
 }
 
 function syncTrayMenu() {
@@ -492,19 +487,6 @@ function syncTrayMenu() {
     tray.setContextMenu(contextMenu);
 }
 
-async function syncLaunchAtLoginSetting() {
-    if (!shouldManageLoginItem) {
-        log.info('Launch-at-login management skipped outside packaged installs');
-        return null;
-    }
-
-    const settingsPayload = await requestBackendJson('GET', '/api/automation/settings');
-    const state = buildElectronSettingsState(settingsPayload);
-    const enabled = applyLaunchAtLoginSetting({ app, enabled: state.settings.launchAtLogin });
-    log.info(`Launch at login ${enabled ? 'enabled' : 'disabled'} from saved settings`);
-    return state;
-}
-
 process.on('uncaughtException', (error) => {
     log.error('Uncaught Exception', error);
 });
@@ -532,9 +514,9 @@ let nativePreferencesInFlight = null;
 function applySavedNativePreferences() {
     if (!nativePreferencesInFlight) {
         nativePreferencesInFlight = (async () => {
-            const state = await getSettingsStatePayload();
+            const settings = await readSavedPreferences();
             if (shouldManageLoginItem) {
-                applyLaunchAtLoginSetting({ app, enabled: state.settings.launchAtLogin });
+                applyLaunchAtLoginSetting({ app, enabled: settings.launch_at_login });
             }
             syncTrayMenu();
             if (mainWindow && process.platform === 'win32' && typeof mainWindow.setTitleBarOverlay === 'function') {
@@ -553,19 +535,15 @@ ipcMain.handle('platform:apply-saved-preferences', async (event) => {
     return applySavedNativePreferences();
 });
 
-ipcMain.on('show-notification', (event, { title, body } = {}) => {
+ipcMain.on('platform:show-notification', (event, { title, body } = {}) => {
     if (event.sender === mainWindow?.webContents && Notification.isSupported()) {
         new Notification({ title: String(title || 'Vantage'), body: String(body || '') }).show();
     }
 });
 
-ipcMain.on('minimize-to-tray', (event) => {
+ipcMain.on('platform:minimize-to-tray', (event) => {
     if (event.sender === mainWindow?.webContents) mainWindow.hide();
 });
-
-ipcMain.handle('onboarding:get-state', async () => requestBackendJson('GET', '/api/automation/onboarding'));
-
-ipcMain.handle('settings:get-state', async () => getSettingsStatePayload());
 
 ipcMain.on(CAMERA_FRAME_CHANNEL, (event, frameBytes) => {
     if (event.sender !== mainWindow?.webContents) {
@@ -597,32 +575,8 @@ ipcMain.on(CAMERA_FRAME_BRIDGE_ERROR_CHANNEL, (event, result = {}) => {
     log.warn(`Renderer camera frame capture failed: ${errorMessage}`);
 });
 
-ipcMain.handle('settings:save', async (event, payload) => {
-    const response = await requestBackendJson(
-        'PUT',
-        '/api/automation/settings',
-        toBackendSettingsPayload(payload),
-    );
-    const state = buildElectronSettingsState(response);
-
-    if (shouldManageLoginItem) {
-        applyLaunchAtLoginSetting({
-            app,
-            enabled: state.settings.launchAtLogin,
-        });
-        log.info(`Launch at login ${state.settings.launchAtLogin ? 'enabled' : 'disabled'} from settings`);
-    } else {
-        log.info('Launch-at-login settings save skipped outside packaged installs');
-    }
-
-    syncTrayMenu();
-    if (mainWindow && process.platform === 'win32' && typeof mainWindow.setTitleBarOverlay === 'function') {
-        mainWindow.setTitleBarOverlay(getTitleBarOverlayOptions(resolveEffectiveThemeForMain()));
-    }
-    return state;
-});
-
-ipcMain.handle('settings:open-path', async (event, pathKey) => {
+ipcMain.handle('platform:open-settings-path', async (event, pathKey) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('Unsupported renderer.');
     const targetPath = resolveAllowedSettingsPath(pathKey);
     if (!targetPath) {
         return { opened: false, error: 'Path is not allowed.' };
@@ -637,7 +591,8 @@ ipcMain.handle('settings:open-path', async (event, pathKey) => {
     };
 });
 
-ipcMain.handle('onboarding:pick-legacy-root', async () => {
+ipcMain.handle('platform:pick-legacy-root', async (event) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('Unsupported renderer.');
     const copy = getMainProcessCopy();
     const result = await dialog.showOpenDialog({
         properties: ['openDirectory'],
@@ -649,34 +604,13 @@ ipcMain.handle('onboarding:pick-legacy-root', async () => {
     };
 });
 
-ipcMain.handle('settings:get-display-language-state', async () => {
-    const settings = await requestBackendJson('GET', '/api/automation/settings/display-language');
-    canonicalSettings.display_language = settings.display_language;
-    return {
-        displayLanguage: sanitizeDisplayLanguage(settings.display_language),
-        systemLocale: app.getLocale(),
-    };
+ipcMain.handle('platform:get-system-locale', async (event) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('Unsupported renderer.');
+    return app.getLocale();
 });
 
-ipcMain.handle('settings:set-display-language', async (event, displayLanguage) => {
-    const nextDisplayLanguage = sanitizeDisplayLanguage(displayLanguage);
-    const settings = await requestBackendJson(
-        'PUT',
-        '/api/automation/settings/display-language',
-        { display_language: nextDisplayLanguage },
-    );
-    canonicalSettings.display_language = settings.display_language;
-    syncTrayMenu();
-
-    return {
-        displayLanguage: settings.display_language,
-        systemLocale: app.getLocale(),
-    };
-});
-
-ipcMain.handle('settings:get-system-locale', async () => app.getLocale());
-
-ipcMain.handle('window:set-title-bar-theme', async (event, theme) => {
+ipcMain.handle('platform:set-title-bar-theme', async (event, theme) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('Unsupported renderer.');
     const sourceWindow = BrowserWindow.fromWebContents(event.sender);
     if (!sourceWindow || process.platform !== 'win32' || typeof sourceWindow.setTitleBarOverlay !== 'function') {
         return { applied: false };
@@ -684,26 +618,6 @@ ipcMain.handle('window:set-title-bar-theme', async (event, theme) => {
 
     sourceWindow.setTitleBarOverlay(getTitleBarOverlayOptions(theme === 'light' ? 'light' : 'dark'));
     return { applied: true };
-});
-
-ipcMain.handle('onboarding:complete', async (event, submission) => {
-    const result = await requestBackendJson(
-        'POST',
-        '/api/automation/onboarding/complete',
-        mapPayloadFields(submission, ONBOARDING_PAYLOAD_FIELDS),
-    );
-    canonicalSettings = { ...canonicalSettings, ...(result.settings || {}) };
-
-    if (shouldManageLoginItem) {
-        applyLaunchAtLoginSetting({
-            app,
-            enabled: result.launchAtLogin,
-        });
-        log.info(`Launch at login ${result.launchAtLogin ? 'enabled' : 'disabled'} from onboarding`);
-    }
-
-    syncTrayMenu();
-    return result;
 });
 
 function isTrustedRendererDocument(value) {
@@ -885,11 +799,7 @@ if (!gotTheLock) {
                         : `Bundled backend reused: ${backendBootstrap.reason}`,
                 );
                 try {
-                    await syncLaunchAtLoginSetting();
-                    syncTrayMenu();
-                    if (mainWindow && process.platform === 'win32' && typeof mainWindow.setTitleBarOverlay === 'function') {
-                        mainWindow.setTitleBarOverlay(getTitleBarOverlayOptions(resolveEffectiveThemeForMain()));
-                    }
+                    await applySavedNativePreferences();
                 } catch (error) {
                     log.warn(`Failed to load shared settings from backend: ${error.message}`);
                 }

@@ -6,7 +6,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-from src import server
+from src.backend import camera as _backend_camera
+from src.backend import runtime as _backend_runtime
+from src.backend import system as _backend_system
 
 
 class _FakeRequest:
@@ -35,45 +37,45 @@ class _OpenPhysicalCapture:
 
 class RendererCameraFrameTests(unittest.TestCase):
     def setUp(self):
-        self.original_camera = server.state.camera
-        self.original_renderer_camera = getattr(server.state, "renderer_camera", None)
-        self.original_renderer_frame = getattr(server.state, "renderer_camera_frame", None)
-        self.original_renderer_last_seen_at = getattr(server.state, "renderer_camera_last_seen_at", None)
-        self.original_latest_frame = getattr(server.state, "latest_frame", None)
+        self.original_camera = _backend_runtime.state.camera
+        self.original_renderer_camera = getattr(_backend_runtime.state, "renderer_camera", None)
+        self.original_renderer_frame = getattr(_backend_runtime.state, "renderer_camera_frame", None)
+        self.original_renderer_last_seen_at = getattr(_backend_runtime.state, "renderer_camera_last_seen_at", None)
+        self.original_latest_frame = getattr(_backend_runtime.state, "latest_frame", None)
         self.original_latest_frame_published_at = getattr(
-            server.state,
+            _backend_runtime.state,
             "latest_frame_published_at",
             None,
         )
-        self.original_is_running = server.state.is_running
-        self.original_release_queue = list(server.state.camera_release_queue)
-        self.original_release_ids = set(server.state.camera_release_ids)
+        self.original_is_running = _backend_runtime.state.is_running
+        self.original_release_queue = list(_backend_runtime.state.camera_release_queue)
+        self.original_release_ids = set(_backend_runtime.state.camera_release_ids)
 
     def tearDown(self):
-        server.state.camera = self.original_camera
-        server.state.renderer_camera = self.original_renderer_camera
-        server.state.renderer_camera_frame = self.original_renderer_frame
-        server.state.renderer_camera_last_seen_at = self.original_renderer_last_seen_at
-        server.state.latest_frame = self.original_latest_frame
-        server.state.latest_frame_published_at = self.original_latest_frame_published_at
-        server.state.is_running = self.original_is_running
-        server.state.camera_release_queue = self.original_release_queue
-        server.state.camera_release_ids = self.original_release_ids
+        _backend_runtime.state.camera = self.original_camera
+        _backend_runtime.state.renderer_camera = self.original_renderer_camera
+        _backend_runtime.state.renderer_camera_frame = self.original_renderer_frame
+        _backend_runtime.state.renderer_camera_last_seen_at = self.original_renderer_last_seen_at
+        _backend_runtime.state.latest_frame = self.original_latest_frame
+        _backend_runtime.state.latest_frame_published_at = self.original_latest_frame_published_at
+        _backend_runtime.state.is_running = self.original_is_running
+        _backend_runtime.state.camera_release_queue = self.original_release_queue
+        _backend_runtime.state.camera_release_ids = self.original_release_ids
 
     def test_renderer_camera_frame_updates_backend_camera_state(self):
         frame = np.full((6, 8, 3), 127, dtype=np.uint8)
-        ok, encoded = server.cv2.imencode(".jpg", frame)
+        ok, encoded = _backend_camera.cv2.imencode(".jpg", frame)
         self.assertTrue(ok)
         published_at = time.monotonic()
 
-        with patch.object(server.time, "monotonic", return_value=published_at):
+        with patch.object(_backend_camera.time, "monotonic", return_value=published_at):
             payload = asyncio.run(
-                server.receive_renderer_camera_frame(
+                _backend_camera.receive_renderer_camera_frame(
                     _FakeRequest(
                         encoded.tobytes(),
                         {
                             "content-type": "image/jpeg",
-                            "x-vantage-intent": server.RENDERER_CAMERA_FRAME_INTENT,
+                            "x-vantage-intent": _backend_camera.RENDERER_CAMERA_FRAME_INTENT,
                         },
                     )
                 )
@@ -83,111 +85,111 @@ class RendererCameraFrameTests(unittest.TestCase):
         self.assertTrue(payload["camera_online"])
         self.assertEqual(payload["width"], 8)
         self.assertEqual(payload["height"], 6)
-        self.assertTrue(server._camera_online())
-        self.assertIs(server.state.camera, server.state.renderer_camera)
+        self.assertTrue(_backend_camera._camera_online())
+        self.assertIs(_backend_runtime.state.camera, _backend_runtime.state.renderer_camera)
 
-        success, captured = server.state.camera.read()
+        success, captured = _backend_runtime.state.camera.read()
         self.assertTrue(success)
         self.assertEqual(captured.shape, (6, 8, 3))
-        self.assertEqual(server.state.latest_frame.shape, (6, 8, 3))
-        self.assertEqual(server.state.renderer_camera_last_seen_at, published_at)
-        self.assertEqual(server.state.latest_frame_published_at, published_at)
+        self.assertEqual(_backend_runtime.state.latest_frame.shape, (6, 8, 3))
+        self.assertEqual(_backend_runtime.state.renderer_camera_last_seen_at, published_at)
+        self.assertEqual(_backend_runtime.state.latest_frame_published_at, published_at)
 
     def test_renderer_liveness_ignores_wall_clock_jumps(self):
-        server.state.renderer_camera_frame = np.full((2, 2, 3), 1, dtype=np.uint8)
-        server.state.renderer_camera_last_seen_at = 100.0
+        _backend_runtime.state.renderer_camera_frame = np.full((2, 2, 3), 1, dtype=np.uint8)
+        _backend_runtime.state.renderer_camera_last_seen_at = 100.0
 
         for wall_clock in (-1_000_000_000.0, 1_000_000_000.0):
             with self.subTest(wall_clock=wall_clock), patch.object(
-                server.time,
+                _backend_camera.time,
                 "time",
                 return_value=wall_clock,
-            ), patch.object(server.time, "monotonic", return_value=104.0):
-                self.assertTrue(server.is_renderer_camera_active())
+            ), patch.object(_backend_camera.time, "monotonic", return_value=104.0):
+                self.assertTrue(_backend_camera.is_renderer_camera_active())
 
     def test_renderer_liveness_expires_from_monotonic_age(self):
-        server.state.renderer_camera_frame = np.full((2, 2, 3), 1, dtype=np.uint8)
-        server.state.renderer_camera_last_seen_at = 100.0
+        _backend_runtime.state.renderer_camera_frame = np.full((2, 2, 3), 1, dtype=np.uint8)
+        _backend_runtime.state.renderer_camera_last_seen_at = 100.0
 
-        self.assertFalse(server.is_renderer_camera_active(105.001))
+        self.assertFalse(_backend_camera.is_renderer_camera_active(105.001))
 
     def test_renderer_liveness_rejects_future_monotonic_timestamp(self):
-        server.state.renderer_camera_frame = np.full((2, 2, 3), 1, dtype=np.uint8)
-        server.state.renderer_camera_last_seen_at = 100.001
+        _backend_runtime.state.renderer_camera_frame = np.full((2, 2, 3), 1, dtype=np.uint8)
+        _backend_runtime.state.renderer_camera_last_seen_at = 100.001
 
-        self.assertFalse(server.is_renderer_camera_active(100.0))
+        self.assertFalse(_backend_camera.is_renderer_camera_active(100.0))
 
     def test_renderer_upload_atomically_takes_ownership_from_open_physical_capture(self):
         renderer_input = np.full((6, 8, 3), 127, dtype=np.uint8)
-        ok, encoded = server.cv2.imencode(".jpg", renderer_input)
+        ok, encoded = _backend_camera.cv2.imencode(".jpg", renderer_input)
         self.assertTrue(ok)
         payloads = []
 
         def upload_renderer_during_physical_read():
             payloads.append(
                 asyncio.run(
-                    server.receive_renderer_camera_frame(
+                    _backend_camera.receive_renderer_camera_frame(
                         _FakeRequest(
                             encoded.tobytes(),
                             {
                                 "content-type": "image/jpeg",
-                                "x-vantage-intent": server.RENDERER_CAMERA_FRAME_INTENT,
+                                "x-vantage-intent": _backend_camera.RENDERER_CAMERA_FRAME_INTENT,
                             },
                         )
                     )
                 )
             )
-            server.state.is_running = False
+            _backend_runtime.state.is_running = False
             return True, np.full((6, 8, 3), 240, dtype=np.uint8)
 
         physical_camera = _OpenPhysicalCapture(
             on_read=upload_renderer_during_physical_read
         )
-        server.state.camera = physical_camera
-        server.state.is_running = True
+        _backend_runtime.state.camera = physical_camera
+        _backend_runtime.state.is_running = True
 
-        with patch.object(server.time, "sleep", return_value=None):
-            server.camera_loop()
+        with patch.object(_backend_camera.time, "sleep", return_value=None):
+            _backend_camera.camera_loop()
 
-        published_renderer_frame = server.state.renderer_camera_frame.copy()
+        published_renderer_frame = _backend_runtime.state.renderer_camera_frame.copy()
 
         self.assertTrue(payloads[0]["ok"])
-        self.assertIs(server.state.camera, server.state.renderer_camera)
+        self.assertIs(_backend_runtime.state.camera, _backend_runtime.state.renderer_camera)
         self.assertTrue(
-            np.array_equal(server.state.latest_frame, published_renderer_frame)
+            np.array_equal(_backend_runtime.state.latest_frame, published_renderer_frame)
         )
-        self.assertIsNotNone(server.state.renderer_camera_last_seen_at)
+        self.assertIsNotNone(_backend_runtime.state.renderer_camera_last_seen_at)
         self.assertEqual(
-            server.state.latest_frame_published_at,
-            server.state.renderer_camera_last_seen_at,
+            _backend_runtime.state.latest_frame_published_at,
+            _backend_runtime.state.renderer_camera_last_seen_at,
         )
         self.assertEqual(physical_camera.release_count, 1)
 
     def test_shutdown_drains_physical_capture_displaced_by_renderer_upload(self):
         physical_camera = _OpenPhysicalCapture()
-        server.state.camera = physical_camera
+        _backend_runtime.state.camera = physical_camera
         renderer_input = np.full((6, 8, 3), 127, dtype=np.uint8)
-        ok, encoded = server.cv2.imencode(".jpg", renderer_input)
+        ok, encoded = _backend_camera.cv2.imencode(".jpg", renderer_input)
         self.assertTrue(ok)
 
         asyncio.run(
-            server.receive_renderer_camera_frame(
+            _backend_camera.receive_renderer_camera_frame(
                 _FakeRequest(
                     encoded.tobytes(),
                     {
                         "content-type": "image/jpeg",
-                        "x-vantage-intent": server.RENDERER_CAMERA_FRAME_INTENT,
+                        "x-vantage-intent": _backend_camera.RENDERER_CAMERA_FRAME_INTENT,
                     },
                 )
             )
         )
-        asyncio.run(server.shutdown_event())
+        asyncio.run(_backend_runtime.shutdown_event())
 
         self.assertEqual(physical_camera.release_count, 1)
-        self.assertEqual(server.state.camera_release_queue, [])
-        self.assertEqual(server.state.camera_release_ids, set())
-        self.assertIsNone(server.state.latest_frame)
-        self.assertIsNone(server.state.latest_frame_published_at)
+        self.assertEqual(_backend_runtime.state.camera_release_queue, [])
+        self.assertEqual(_backend_runtime.state.camera_release_ids, set())
+        self.assertIsNone(_backend_runtime.state.latest_frame)
+        self.assertIsNone(_backend_runtime.state.latest_frame_published_at)
 
     def test_shutdown_waits_for_inflight_read_and_releases_capture_once(self):
         read_started = threading.Event()
@@ -200,22 +202,22 @@ class RendererCameraFrameTests(unittest.TestCase):
             return False, None
 
         physical_camera = _OpenPhysicalCapture(on_read=blocking_read)
-        server.state.camera = physical_camera
-        server.state.is_running = True
-        camera_thread = threading.Thread(target=server.camera_loop)
+        _backend_runtime.state.camera = physical_camera
+        _backend_runtime.state.is_running = True
+        camera_thread = threading.Thread(target=_backend_camera.camera_loop)
 
         def run_shutdown():
-            asyncio.run(server.shutdown_event())
+            asyncio.run(_backend_runtime.shutdown_event())
             shutdown_finished.set()
 
         shutdown_thread = threading.Thread(target=run_shutdown)
-        with patch.object(server.time, "sleep", return_value=None):
+        with patch.object(_backend_camera.time, "sleep", return_value=None):
             camera_thread.start()
             self.assertTrue(read_started.wait(timeout=2))
             shutdown_thread.start()
 
             deadline = time.monotonic() + 2
-            while server.state.is_running and time.monotonic() < deadline:
+            while _backend_runtime.state.is_running and time.monotonic() < deadline:
                 time.sleep(0.01)
             shutdown_completed_while_read_blocked = shutdown_finished.wait(timeout=0.1)
 
@@ -227,12 +229,12 @@ class RendererCameraFrameTests(unittest.TestCase):
         self.assertFalse(camera_thread.is_alive())
         self.assertFalse(shutdown_thread.is_alive())
         self.assertEqual(physical_camera.release_count, 1)
-        self.assertEqual(server.state.camera_release_queue, [])
-        self.assertEqual(server.state.camera_release_ids, set())
+        self.assertEqual(_backend_runtime.state.camera_release_queue, [])
+        self.assertEqual(_backend_runtime.state.camera_release_ids, set())
 
     def test_renderer_camera_frame_requires_local_intent_header(self):
         response = asyncio.run(
-            server.receive_renderer_camera_frame(
+            _backend_camera.receive_renderer_camera_frame(
                 _FakeRequest(
                     b"not a frame",
                     {
@@ -245,9 +247,9 @@ class RendererCameraFrameTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_status_reports_dark_camera_frame(self):
-        server.state.latest_frame = np.zeros((6, 8, 3), dtype=np.uint8)
+        _backend_runtime.state.latest_frame = np.zeros((6, 8, 3), dtype=np.uint8)
 
-        payload = server._build_status_payload()
+        payload = _backend_system._build_status_payload()
 
         self.assertTrue(payload["camera_frame_available"])
         self.assertTrue(payload["camera_frame_dark"])

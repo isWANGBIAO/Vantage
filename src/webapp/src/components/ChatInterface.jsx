@@ -10,11 +10,8 @@ import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import { loadSettingsState } from '../utils/settingsState';
 import {
   CHAT_CONTEXT_BASE_UPDATED_EVENT,
-  buildInitialEmbeddedChatState,
-  loadStoredChatMessages,
-  reconcileChatHistoryWithBaseVersion,
-  saveStoredChatMessages,
-  storeChatContextBaseVersion,
+  normalizeBackendChatContext,
+  retainChatPresentation,
 } from '../utils/chatContextState';
 import {
     loadStoredActionPlanReasoningEffort,
@@ -245,19 +242,13 @@ function getMessageKey(message, index) {
 export default function ChatInterface({ embedded = false } = {}) {
     const { t } = useDisplayLanguage();
 
-    const [initialEmbeddedChatState] = useState(() => buildInitialEmbeddedChatState());
-    const [messages, setMessages] = useState(() => (
-        embedded
-            ? initialEmbeddedChatState.messages
-            : loadStoredChatMessages()
-    ));
-    const [baseMessages, setBaseMessages] = useState(() => (
-        embedded
-            ? initialEmbeddedChatState.baseMessages
-            : []
-    ));
-
-    const [chatBaseVersion, setChatBaseVersion] = useState('empty');
+    const [messages, setMessages] = useState([]);
+    const [baseMessages, setBaseMessages] = useState([]);
+    const [contextReady, setContextReady] = useState(false);
+    const [chatError, setChatError] = useState('');
+    const syncChatContextRef = useRef(null);
+    const chatAbortControllerRef = useRef(null);
+    const contextRequestVersionRef = useRef(0);
 
     const [stats, setStats] = useState(null);
 
@@ -392,36 +383,21 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     useEffect(() => {
 
-        const syncChatContext = async ({ baseVersionOverride = null, baseMessagesOverride = null } = {}) => {
-
-            if (baseVersionOverride) {
-
-                const syncedState = reconcileChatHistoryWithBaseVersion({
-                    nextBaseVersion: baseVersionOverride,
-                    baseMessages: baseMessagesOverride,
-                });
-
-                setMessages(syncedState.messages);
-                setBaseMessages(Array.isArray(baseMessagesOverride) ? baseMessagesOverride : []);
-                setChatBaseVersion(syncedState.baseVersion);
-                return;
-
-            }
-
+        let cancelled = false;
+        const syncChatContext = async () => {
+            const version = ++contextRequestVersionRef.current;
+            setContextReady(false);
             try {
 
-                const data = await fetchBackendJson('/api/chat/context', {
+                const data = await fetchBackendJson('/api/v1/chat/context', {
                     retryPolicy: 'load',
                 });
 
-                const syncedState = reconcileChatHistoryWithBaseVersion({
-                    nextBaseVersion: data?.base_context_version,
-                    baseMessages: data?.display_messages,
-                });
-
-                setMessages(syncedState.messages);
-                setBaseMessages(Array.isArray(data?.display_messages) ? data.display_messages : []);
-                setChatBaseVersion(syncedState.baseVersion);
+                if (cancelled || version !== contextRequestVersionRef.current) return;
+                const syncedState = normalizeBackendChatContext(data);
+                setMessages((previous) => retainChatPresentation(syncedState.messages, previous));
+                setBaseMessages(syncedState.baseMessages);
+                setContextReady(true);
                 setStats(data?.stats || null);
                 const preferredModelRef = (
                     data?.preferred_model_option_id
@@ -439,8 +415,10 @@ export default function ChatInterface({ embedded = false } = {}) {
             } catch (error) {
 
                 console.error('Failed to sync chat context:', error);
-                setMessages(loadStoredChatMessages());
-                setStats(null);
+                if (!cancelled && version === contextRequestVersionRef.current) {
+                    setContextReady(false);
+                    setChatError(String(error.message || error));
+                }
 
             }
 
@@ -479,7 +457,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
             try {
 
-                const data = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load' });
+                const data = await fetchBackendJson('/api/v1/models', { retryPolicy: 'load' });
                 applyModelCatalog(data);
 
             } catch (error) {
@@ -492,6 +470,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
 
 
+        syncChatContextRef.current = syncChatContext;
         initializeModels();
         void syncChatContext();
 
@@ -516,15 +495,17 @@ export default function ChatInterface({ embedded = false } = {}) {
                     setSelectedModel(inheritedOption.id);
                 }
             }
-            void syncChatContext({
-                baseVersionOverride: event?.detail?.baseContextVersion ?? null,
-                baseMessagesOverride: event?.detail?.displayMessages ?? [],
-            });
+            chatAbortControllerRef.current?.abort();
+            void syncChatContext();
         };
 
         window.addEventListener(CHAT_CONTEXT_BASE_UPDATED_EVENT, handleChatContextBaseUpdated);
 
         return () => {
+            cancelled = true;
+            contextRequestVersionRef.current += 1;
+            chatAbortControllerRef.current?.abort();
+            syncChatContextRef.current = null;
             window.removeEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
             window.removeEventListener(CHAT_CONTEXT_BASE_UPDATED_EVENT, handleChatContextBaseUpdated);
         };
@@ -535,19 +516,11 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     useEffect(() => {
 
-        saveStoredChatMessages(messages);
-
         if (!embedded || isLoading) {
             scrollToBottom();
         }
 
     }, [embedded, isLoading, messages]);
-
-    useEffect(() => {
-
-        storeChatContextBaseVersion(chatBaseVersion);
-
-    }, [chatBaseVersion]);
 
     useEffect(() => {
         if (!isLoading || !stats?.startTime) {
@@ -576,18 +549,17 @@ export default function ChatInterface({ embedded = false } = {}) {
 
         try {
 
-            const data = await fetchBackendJson('/api/chat/context', {
+            const data = await fetchBackendJson('/api/v1/chat/context', {
                 method: 'DELETE',
                 retryPolicy: 'mutation',
             });
 
-            const syncedState = reconcileChatHistoryWithBaseVersion({
-                nextBaseVersion: data?.base_context_version,
-                baseMessages: data?.display_messages,
-            });
-            setChatBaseVersion(syncedState.baseVersion);
+            contextRequestVersionRef.current += 1;
+            const syncedState = normalizeBackendChatContext(data);
             setMessages(syncedState.messages);
-            setBaseMessages(Array.isArray(data?.display_messages) ? data.display_messages : []);
+            setBaseMessages(syncedState.baseMessages);
+            setContextReady(true);
+            setChatError('');
             setStats(data?.stats || null);
 
         } catch (error) {
@@ -678,6 +650,7 @@ export default function ChatInterface({ embedded = false } = {}) {
             streamState = consumeChatStreamChunk(streamState, chunk);
 
             if (streamState.error) {
+                setChatError(streamState.error);
                 syncAssistantMessage(t('common.error_prefix', { error: streamState.error }), streamState.assistantThinking);
                 return false;
             }
@@ -700,6 +673,7 @@ export default function ChatInterface({ embedded = false } = {}) {
         }
 
         if (streamState.error) {
+            setChatError(streamState.error);
             syncAssistantMessage(t('common.error_prefix', { error: streamState.error }), streamState.assistantThinking);
             return false;
         }
@@ -717,7 +691,9 @@ export default function ChatInterface({ embedded = false } = {}) {
 
     const sendMessage = async () => {
 
-        if (!input.trim() || isLoading) return;
+        if (!input.trim() || isLoading || !contextReady || chatAbortControllerRef.current) return;
+        contextRequestVersionRef.current += 1;
+        setChatError('');
 
 
 
@@ -770,7 +746,10 @@ export default function ChatInterface({ embedded = false } = {}) {
 
 
 
-            const res = await fetchBackend('/api/chat', {
+            const controller = new AbortController();
+            chatAbortControllerRef.current = controller;
+            const res = await fetchBackend('/api/v1/chat', {
+                signal: controller.signal,
 
                 method: 'POST',
 
@@ -789,16 +768,17 @@ export default function ChatInterface({ embedded = false } = {}) {
 
 
         } catch (err) {
-
+            if (err.name === 'AbortError') return;
+            setChatError(String(err.message || err));
             setMessages(prev => [...prev, {
                 role: 'assistant',
                 content: t('common.network_error', { error: err.message }),
             }]);
 
         } finally {
-
+            chatAbortControllerRef.current = null;
             setIsLoading(false);
-
+            void syncChatContextRef.current?.();
         }
 
     };
@@ -893,7 +873,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                 try {
 
-                    const transcribeResponse = await fetchBackend('/api/transcribe', {
+                    const transcribeResponse = await fetchBackend('/api/v1/media/transcribe', {
 
                         method: 'POST',
 
@@ -973,7 +953,10 @@ export default function ChatInterface({ embedded = false } = {}) {
                                 chatPayload.service_tier = serviceTier;
                             }
 
-                            const chatRes = await fetchBackend("/api/chat", {
+                            const controller = new AbortController();
+                            chatAbortControllerRef.current = controller;
+                            const chatRes = await fetchBackend("/api/v1/chat", {
+                                signal: controller.signal,
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify(chatPayload),
@@ -982,11 +965,16 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                             await processStreamResponse(chatRes, nextStats);
                         } catch (chatErr) {
+                            if (chatErr.name === 'AbortError') return;
+                            setChatError(String(chatErr.message || chatErr));
                             console.error("[Voice] Chat error:", chatErr);
                             setMessages(prev => [...prev, {
                                 role: 'assistant',
                                 content: t('common.network_error', { error: chatErr.message }),
                             }]);
+                        } finally {
+                            chatAbortControllerRef.current = null;
+                            void syncChatContextRef.current?.();
                         }
                     } else {
                         console.warn("[Voice] Transcription empty or failed");
@@ -1167,7 +1155,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                 className={isRecording ? 'pulse-animation' : ''}
 
-                disabled={isLoading && !isRecording} // Disable start if loading, but allow stop if recording
+                disabled={(isLoading || !contextReady) && !isRecording} // Disable start if loading, but allow stop if recording
 
                 style={{
 
@@ -1281,7 +1269,7 @@ export default function ChatInterface({ embedded = false } = {}) {
 
                 onClick={sendMessage}
 
-                disabled={!input.trim() || isLoading}
+                disabled={!input.trim() || isLoading || !contextReady}
 
                 style={{
 
@@ -1315,6 +1303,12 @@ export default function ChatInterface({ embedded = false } = {}) {
 
             </button>
 
+            {chatError ? (
+                <span role="alert" style={{ color: 'var(--warning-color, #f59e0b)', fontSize: '0.78rem' }}>
+                    {t('common.error_prefix', { error: chatError })}
+                    {!contextReady && !isLoading ? <button onClick={() => { setChatError(''); void syncChatContextRef.current?.(); }}>{t('project_progress.retry')}</button> : null}
+                </span>
+            ) : null}
             {voiceError ? (
                 <span style={{ alignSelf: 'center', color: 'var(--warning-color, #f59e0b)', fontSize: '0.78rem' }}>
                     {voiceError}

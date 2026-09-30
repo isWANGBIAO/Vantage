@@ -57,7 +57,7 @@ def test_action_plan_cancellation_survives_child_exit_race(monkeypatch, tmp_path
     monkeypatch.setattr(action_plans, "_get_missing_action_plan_data_sources", lambda: [])
 
     async def exercise():
-        response = await action_plans.generate_action_plan(action_plans.ActionPlanRequest())
+        response = await action_plans.create_action_plan_stream(action_plans.ActionPlanRequest())
         with pytest.raises(asyncio.CancelledError):
             await anext(response.body_iterator)
 

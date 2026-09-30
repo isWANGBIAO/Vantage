@@ -17,7 +17,7 @@ test('connection accepts loopback URLs and safe optional prefixes only', () => {
     assert.equal(normalizeBackendBaseUrl(`${url}/`), url);
   }
   const connection = resolveBackendConnection({ baseUrl: 'http://localhost:8123/vantage' });
-  assert.equal(buildConnectionUrl(connection, '/api/status'), 'http://localhost:8123/vantage/api/status');
+  assert.equal(buildConnectionUrl(connection, '/api/v1/system/status'), 'http://localhost:8123/vantage/api/v1/system/status');
 });
 
 test('connection rejects non-loopback, deceptive authority, credentials, redirects, and invalid ports', () => {

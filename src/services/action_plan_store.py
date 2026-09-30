@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.services.action_plan_jobs import complete_plan, normalize_plan_date
+from src.core.context import context_transaction, replace_context_file
 
 LOGGER = logging.getLogger(__name__)
 STAGING_ENV = "VANTAGE_ACTION_PLAN_STAGING_DIR"
@@ -135,12 +136,17 @@ class ActionPlanStore:
         context_updated = len(contexts) == len(CONTEXT_FILENAMES)
         if not context_updated:
             LOGGER.warning("Published plan, but some chat context files were not produced")
-        for path in contexts:
-            try:
-                os.replace(path, self.history_dir / path.name)
-            except OSError:
-                context_updated = False
-                LOGGER.warning("Published plan, but a chat context file could not be refreshed")
+        try:
+            with context_transaction(self.history_dir / "latest_context.json"):
+                for path in contexts:
+                    try:
+                        replace_context_file(path, self.history_dir / path.name)
+                    except OSError:
+                        context_updated = False
+                        LOGGER.warning("Published plan, but a chat context file could not be refreshed")
+        except OSError:
+            context_updated = False
+            LOGGER.warning("Published plan, but chat context publication could not acquire its storage lock")
         if replace_today:
             for path in pending.previous_files:
                 match = _PLAN_NAME.fullmatch(path.name)

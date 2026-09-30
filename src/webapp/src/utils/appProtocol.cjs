@@ -76,7 +76,7 @@ function createAppProtocolHandler({ assetRoot, connection, waitUntilReady = asyn
             return errorResponse(403, 'Untrusted app request.');
         }
         const method = request.method.toUpperCase();
-        if (pathname.startsWith('/api/') || pathname.startsWith('/static/')) {
+        if (pathname.startsWith('/api/v1/') || pathname.startsWith('/static/')) {
             if (!verifyRequest(request)) return errorResponse(403, 'Untrusted backend request.');
             if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method)
                 || (pathname.startsWith('/static/') && !['GET', 'HEAD'].includes(method))) {

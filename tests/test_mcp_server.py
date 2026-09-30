@@ -155,7 +155,7 @@ def test_json_backend_result_is_returned_as_text_and_structured_content():
     assert isinstance(result.content[0], TextContent)
     assert json.loads(result.content[0].text) == payload
     assert "😀" in result.content[0].text
-    assert session.calls[0][1].endswith("/api/status")
+    assert session.calls[0][1].endswith("/api/v1/system/status")
 
 
 def test_stream_output_preserves_each_ndjson_event_in_order():
@@ -633,4 +633,4 @@ def test_real_stdio_subprocess_round_trip_keeps_stdout_protocol_clean():
     assert "system.status.read" in {item.name for item in tools.tools}
     assert result.is_error is False
     assert result.structured_content == {"status": "ready", "message": "stdio works"}
-    assert _StatusHandler.calls == ["/api/status", "/api/status"]
+    assert _StatusHandler.calls == ["/api/v1/system/status", "/api/v1/system/status"]

@@ -22,8 +22,6 @@ EXPECTED_OPERATION_NAMES = {
     "action_plan.jobs.events",
     "action_plan.jobs.cancel",
     "action_plan.scheduler.read",
-    "action_plan.content.read",
-    "action_plan.generate",
     "action_plan.today.read",
     "chat.context.read",
     "chat.context.reset",
@@ -69,7 +67,7 @@ EXPECTED_OPERATION_NAMES = {
 }
 
 FRONTEND_PLUMBING_ROUTES = {
-    "/api/stream",
+    "/api/v1/camera/stream",
 }
 
 
@@ -93,6 +91,8 @@ def _frontend_api_routes():
         routes.update(
             _normalized_route(match.group(1))
             for match in route_pattern.finditer(source)
+            # The transport validates this namespace prefix; it is not an endpoint.
+            if _normalized_route(match.group(1)) != "/api/v1"
         )
     return routes
 
@@ -188,11 +188,11 @@ def test_catalog_api_routes_exist_and_cover_every_frontend_api_call():
     catalog_paths = {path for _method, path in catalog_routes}
     assert frontend_routes - FRONTEND_PLUMBING_ROUTES <= catalog_paths
     assert frontend_routes & FRONTEND_PLUMBING_ROUTES == FRONTEND_PLUMBING_ROUTES
-    assert ("POST", "/api/renderer_camera/frame") not in catalog_routes
-    assert "/api/renderer_camera/frame" not in {operation.path for operation in OPERATIONS}
-    assert "/api/stream" not in {operation.path for operation in OPERATIONS}
-    assert "/api/image_proxy" not in {operation.path for operation in OPERATIONS}
-    assert "/api/action_plan/source_revision" in {operation.path for operation in OPERATIONS}
+    assert ("POST", "/api/v1/camera/frame") not in catalog_routes
+    assert "/api/v1/camera/frame" not in {operation.path for operation in OPERATIONS}
+    assert "/api/v1/camera/stream" not in {operation.path for operation in OPERATIONS}
+    assert "/api/v1/media/image" not in {operation.path for operation in OPERATIONS}
+    assert "/api/v1/action-plan/source-revision" in {operation.path for operation in OPERATIONS}
 
 
 def test_catalog_http_methods_match_frontend_calls_on_shared_routes():
@@ -201,9 +201,9 @@ def test_catalog_http_methods_match_frontend_calls_on_shared_routes():
         (method, path)
         for method, path in frontend_calls
         if path in {
-            "/api/chat/context",
-            "/api/balance_sheet/purchase_recommendations/dismissed",
-            "/api/balance_sheet/purchase_recommendations/dismissed/{}",
+            "/api/v1/chat/context",
+            "/api/v1/finance/purchase-recommendations/dismissed",
+            "/api/v1/finance/purchase-recommendations/dismissed/{}",
         }
     }
     catalog_calls = {
@@ -218,11 +218,11 @@ def test_catalog_http_methods_match_frontend_calls_on_shared_routes():
     }
 
     assert duplicated_frontend_calls == {
-        ("GET", "/api/chat/context"),
-        ("DELETE", "/api/chat/context"),
-        ("GET", "/api/balance_sheet/purchase_recommendations/dismissed"),
-        ("DELETE", "/api/balance_sheet/purchase_recommendations/dismissed"),
-        ("DELETE", "/api/balance_sheet/purchase_recommendations/dismissed/{}"),
+        ("GET", "/api/v1/chat/context"),
+        ("DELETE", "/api/v1/chat/context"),
+        ("GET", "/api/v1/finance/purchase-recommendations/dismissed"),
+        ("DELETE", "/api/v1/finance/purchase-recommendations/dismissed"),
+        ("DELETE", "/api/v1/finance/purchase-recommendations/dismissed/{}"),
     }
     assert duplicated_frontend_calls <= catalog_calls
     assert {
@@ -235,15 +235,15 @@ def test_catalog_http_methods_match_frontend_calls_on_shared_routes():
             "finance.recommendations.dismissed.clear"
         ],
     } == {
-        "chat.context.read": ("GET", "/api/chat/context"),
-        "chat.context.reset": ("DELETE", "/api/chat/context"),
+        "chat.context.read": ("GET", "/api/v1/chat/context"),
+        "chat.context.reset": ("DELETE", "/api/v1/chat/context"),
         "finance.recommendations.dismissed.list": (
             "GET",
-            "/api/balance_sheet/purchase_recommendations/dismissed",
+            "/api/v1/finance/purchase-recommendations/dismissed",
         ),
         "finance.recommendations.dismissed.clear": (
             "DELETE",
-            "/api/balance_sheet/purchase_recommendations/dismissed",
+            "/api/v1/finance/purchase-recommendations/dismissed",
         ),
     }
 
@@ -264,12 +264,14 @@ def test_catalog_covers_electron_invoke_operations_without_renderer_transport():
 
 def test_catalog_marks_streams_downloads_and_mutations_explicitly():
     chat = get_operation("chat.send")
-    action_plan = get_operation("action_plan.generate")
+    action_plan = get_operation("action_plan.jobs.create")
+    action_plan_events = get_operation("action_plan.jobs.events")
     export = get_operation("face.export")
     model_discovery = get_operation("models.discover")
 
     assert (chat.output_kind, chat.stream, chat.mutation) == ("stream", True, True)
-    assert (action_plan.output_kind, action_plan.stream, action_plan.mutation) == ("stream", True, True)
+    assert (action_plan.output_kind, action_plan.stream, action_plan.mutation) == ("json", False, True)
+    assert (action_plan_events.output_kind, action_plan_events.stream, action_plan_events.mutation) == ("stream", True, False)
     assert (export.output_kind, export.download, export.mutation) == ("file", True, True)
     assert model_discovery.mutation is False
 
@@ -281,7 +283,7 @@ def test_local_open_folder_intent_and_native_desktop_operations_are_explicit():
     assert open_folder.required_headers == {"X-Vantage-Intent": "open-folder"}
     assert open_folder.side_effect is True
     assert picker.desktop_only is True
-    assert picker.source_ipc_channel == "onboarding:pick-legacy-root"
+    assert picker.source_ipc_channel == "platform:pick-legacy-root"
 
 
 def test_sensitive_user_data_operations_are_marked_sensitive():
@@ -301,12 +303,12 @@ def test_sensitive_user_data_operations_are_marked_sensitive():
 
 def test_shared_settings_and_onboarding_operations_are_dispatchable_but_native_actions_are_not():
     backend_operations = {
-        "settings.state.read": ("GET", "/api/automation/settings"),
-        "settings.update": ("PUT", "/api/automation/settings"),
-        "settings.display_language.read": ("GET", "/api/automation/settings/display-language"),
-        "settings.display_language.update": ("PUT", "/api/automation/settings/display-language"),
-        "onboarding.state.read": ("GET", "/api/automation/onboarding"),
-        "onboarding.complete": ("POST", "/api/automation/onboarding/complete"),
+        "settings.state.read": ("GET", "/api/v1/settings"),
+        "settings.update": ("PUT", "/api/v1/settings"),
+        "settings.display_language.read": ("GET", "/api/v1/settings/display-language"),
+        "settings.display_language.update": ("PUT", "/api/v1/settings/display-language"),
+        "onboarding.state.read": ("GET", "/api/v1/onboarding"),
+        "onboarding.complete": ("POST", "/api/v1/onboarding/complete"),
     }
     desktop_only_operations = {
         "settings.open_path",
@@ -321,7 +323,8 @@ def test_shared_settings_and_onboarding_operations_are_dispatchable_but_native_a
         assert operation.dispatchable is True
         assert (operation.method, operation.path) == target
         assert operation.config_handler is None
-        assert operation.source_ipc_channel
+        assert operation.source_ipc_channel is None
+        assert operation.ipc_input_mapping == {}
     for name in desktop_only_operations:
         operation = get_operation(name)
         assert operation.availability == "desktop_only"
@@ -332,35 +335,26 @@ def test_shared_settings_and_onboarding_operations_are_dispatchable_but_native_a
         assert operation.source_ipc_channel
 
 
-def test_electron_input_field_mapping_is_explicit_and_reversible():
+def test_configuration_catalog_exposes_canonical_fields_without_ipc_aliases():
     settings = get_operation("settings.update")
     onboarding = get_operation("onboarding.complete")
 
-    settings_mapping = settings.ipc_input_mapping
-    assert set(settings_mapping) == set(settings.input_schema["properties"])
-    assert settings_mapping["display_language"] == "displayLanguage"
-    assert settings_mapping["action_plan_check_interval_minutes"] == "actionPlanCheckIntervalMinutes"
-    assert settings_mapping["provider_config"] == "providerConfig"
+    for operation in (settings, onboarding):
+        assert operation.source_ipc_channel is None
+        assert operation.ipc_input_mapping == {}
+        assert all(re.fullmatch(r"[a-z][a-z0-9_]*", name)
+                   for name in operation.input_schema["properties"])
 
-    sample_public_arguments = {
-        "display_language": "zh-CN",
-        "action_plan_check_interval_minutes": 15,
-        "provider_config": {"selected_provider": "local"},
-    }
-    sample_ipc_arguments = {
-        settings_mapping[name]: value
-        for name, value in sample_public_arguments.items()
-    }
-    round_trip = {
-        name: sample_ipc_arguments[settings_mapping[name]]
-        for name in sample_public_arguments
-    }
-    assert round_trip == sample_public_arguments
+    assert {"display_language", "action_plan_check_interval_minutes", "provider_config"} <= set(
+        settings.input_schema["properties"]
+    )
+    assert "provider" not in settings.input_schema["properties"]
+    assert {"selected_provider", "legacy_root", "skip_chat_setup"} <= set(onboarding.input_schema["properties"])
 
-    onboarding_mapping = onboarding.ipc_input_mapping
-    assert set(onboarding_mapping) == set(onboarding.input_schema["properties"])
-    assert onboarding_mapping["selected_provider"] == "selectedProvider"
-    assert onboarding_mapping["legacy_root"] == "legacyRoot"
+    titlebar = get_operation("window.title_bar_theme.update")
+    assert titlebar.source_ipc_channel == "platform:set-title-bar-theme"
+    assert titlebar.ipc_input_mapping == {"theme": "$argument"}
+    assert titlebar.ipc_argument_style == "single"
 
 
 def test_transcription_declares_the_multipart_upload_field_adapter():

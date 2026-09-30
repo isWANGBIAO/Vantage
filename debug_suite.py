@@ -55,7 +55,7 @@ def wait_for_server(timeout=WAIT_FOR_SERVER_TIMEOUT_SECONDS):
     start = time.time()
     while time.time() - start < timeout:
         try:
-            requests.get(f"{BASE_URL}/api/status", timeout=1)
+            requests.get(f"{BASE_URL}/api/v1/system/status", timeout=1)
             console_print("Backend is READY.")
             return True
         except requests.exceptions.ConnectionError:
@@ -110,7 +110,7 @@ def main():
         console_print("Port 8000 is already in use. Assuming user's server is running.")
         existing_server = True
         if not wait_for_server(timeout=WAIT_FOR_SERVER_TIMEOUT_SECONDS):
-            console_print("Port is used but /api/status is not responding. Aborting.")
+            console_print("Port is used but /api/v1/system/status is not responding. Aborting.")
             return
     else:
         server_process = start_server()
@@ -120,10 +120,10 @@ def main():
 
     try:
         results = []
-        results.append(test_api("System Status", "/api/status"))
-        results.append(test_api("System Stats (CPU/Mem)", "/api/sys_stats"))
-        results.append(test_api("Action Plan History", "/api/action_plan_content"))
-        results.append(test_api("System Logs", "/api/system_logs"))
+        results.append(test_api("System Status", "/api/v1/system/status"))
+        results.append(test_api("System Stats (CPU/Mem)", "/api/v1/system/statistics"))
+        results.append(test_api("Action Plan History", "/api/v1/action-plan/today"))
+        results.append(test_api("System Logs", "/api/v1/system/logs"))
 
         console_print("\n" + "=" * 40)
         console_print(f"Debug Summary: {sum(results)}/{len(results)} Passed")

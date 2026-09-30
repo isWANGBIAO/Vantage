@@ -1,4 +1,5 @@
 import asyncio
+import os
 import tempfile
 import unittest
 from datetime import date
@@ -7,6 +8,8 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from src.backend import finance_data as _backend_finance_data
+from src.backend import finance_recommendations as _backend_finance_recommendations
 from src import server
 from tests.backend_helpers import iter_registered_routes
 
@@ -14,8 +17,13 @@ from tests.backend_helpers import iter_registered_routes
 class BalanceSheetEndpointTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
+        runtime_environment = patch.dict(os.environ, {
+            "VANTAGE_DATA_DIR": str(Path(self.temp_dir.name) / "runtime-data"),
+        })
+        runtime_environment.start()
+        self.addCleanup(runtime_environment.stop)
         self.llm_provider_chain_patch = patch.object(
-            server.LLMClient,
+            _backend_finance_recommendations.LLMClient,
             "_build_provider_chain",
             side_effect=self._fake_llm_provider_chain,
         )
@@ -39,16 +47,16 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         ]
 
     def test_parse_required_flag_checks_optional_words_before_required_substrings(self):
-        self.assertFalse(server._parse_required_flag("非必须"))
-        self.assertFalse(server._parse_required_flag("不必须"))
-        self.assertFalse(server._parse_required_flag("not required"))
-        self.assertTrue(server._parse_required_flag("必须"))
-        self.assertTrue(server._parse_required_flag("yes"))
+        self.assertFalse(_backend_finance_data._parse_required_flag("非必须"))
+        self.assertFalse(_backend_finance_data._parse_required_flag("不必须"))
+        self.assertFalse(_backend_finance_data._parse_required_flag("not required"))
+        self.assertTrue(_backend_finance_data._parse_required_flag("必须"))
+        self.assertTrue(_backend_finance_data._parse_required_flag("yes"))
 
     def test_find_first_column_prefers_exact_match_over_partial_match(self):
         columns = ["股票资产", "现金及现金等价物+股票", "期间支出", "日均支出"]
 
-        selected = server._find_first_column(columns, ["现金及现金等价物+股票", "现金及现金等价物", "现金", "股票"])
+        selected = _backend_finance_data._find_first_column(columns, ["现金及现金等价物+股票", "现金及现金等价物", "现金", "股票"])
 
         self.assertEqual(selected, "现金及现金等价物+股票")
 
@@ -60,7 +68,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             }
         )
 
-        payload = server._sheet_to_payload(frame, max_rows=200)
+        payload = _backend_finance_data._sheet_to_payload(frame, max_rows=200)
 
         self.assertTrue(payload["truncated"])
         self.assertEqual(payload["row_count"], 205)
@@ -75,7 +83,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             }
         )
 
-        payload = server._sheet_to_payload(frame, max_rows=None)
+        payload = _backend_finance_data._sheet_to_payload(frame, max_rows=None)
 
         self.assertFalse(payload["truncated"])
         self.assertEqual(payload["row_count"], 205)
@@ -94,13 +102,13 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             }
         )
 
-        payload = server._sheet_to_payload(frame, max_rows=None)
+        payload = _backend_finance_data._sheet_to_payload(frame, max_rows=None)
 
         self.assertEqual(payload["columns"], ["Name", "Spacer", "Amount"])
         self.assertEqual(payload["rows"], [["Laptop", None, 1000.0], ["Phone", None, 500.0]])
 
     def test_balance_sheet_route_is_registered_and_returns_payload(self):
-        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet"), None)
+        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/v1/finance/balance-sheet"), None)
 
         self.assertIsNotNone(route)
 
@@ -114,8 +122,8 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             )
         }
 
-        with patch.object(server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")), patch.object(
-            server.DataLoader, "load_excel_sheets", return_value=fake_sheets
+        with patch.object(_backend_finance_recommendations.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")), patch.object(
+            _backend_finance_recommendations.DataLoader, "load_excel_sheets", return_value=fake_sheets
         ):
             payload = asyncio.run(route.endpoint())
 
@@ -131,24 +139,24 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertIn(list(fake_sheets["Summary"].columns)[1], payload["prompt_payload"]["sheets"][0]["non_null_counts"])
 
     def test_balance_sheet_route_builds_payload_in_background_thread(self):
-        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet"), None)
+        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/v1/finance/balance-sheet"), None)
         calls = []
 
         async def fake_to_thread(func, *args, **kwargs):
             calls.append(func)
             return {"status": "ready"}
 
-        with patch.object(server.asyncio, "to_thread", side_effect=fake_to_thread):
+        with patch.object(_backend_finance_recommendations.asyncio, "to_thread", side_effect=fake_to_thread):
             payload = asyncio.run(route.endpoint())
 
         self.assertEqual(payload, {"status": "ready"})
-        self.assertEqual(calls, [server._build_balance_sheet_payload])
+        self.assertEqual(calls, [_backend_finance_data._build_balance_sheet_payload])
 
     def test_balance_sheet_route_returns_unavailable_payload_when_workbook_is_missing(self):
-        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet"), None)
+        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/v1/finance/balance-sheet"), None)
 
-        with patch.object(server.DataLoader, "resolve_data_path", return_value=Path("/Users/example/OneDrive/Balance Sheet.xlsx")), patch.object(
-            server.DataLoader,
+        with patch.object(_backend_finance_recommendations.DataLoader, "resolve_data_path", return_value=Path("/Users/example/OneDrive/Balance Sheet.xlsx")), patch.object(
+            _backend_finance_recommendations.DataLoader,
             "load_excel_sheets",
             side_effect=FileNotFoundError("Excel file not found: /Users/example/OneDrive/Balance Sheet.xlsx"),
         ):
@@ -162,12 +170,12 @@ class BalanceSheetEndpointTests(unittest.TestCase):
 
     def test_purchase_recommendations_return_unavailable_payload_when_workbook_is_missing(self):
         route = next(
-            (route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet/purchase_recommendations"),
+            (route for route in iter_registered_routes(server.app) if route.path == "/api/v1/finance/purchase-recommendations"),
             None,
         )
 
-        with patch.object(server.DataLoader, "resolve_data_path", return_value=Path("/Users/example/OneDrive/Balance Sheet.xlsx")), patch.object(
-            server.DataLoader,
+        with patch.object(_backend_finance_recommendations.DataLoader, "resolve_data_path", return_value=Path("/Users/example/OneDrive/Balance Sheet.xlsx")), patch.object(
+            _backend_finance_recommendations.DataLoader,
             "load_excel_sheets",
             side_effect=FileNotFoundError("Excel file not found: /Users/example/OneDrive/Balance Sheet.xlsx"),
         ):
@@ -181,7 +189,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
 
     def test_purchase_recommendations_uses_cache_for_same_balance_sheet_hash(self):
         route = next(
-            (route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet/purchase_recommendations"),
+            (route for route in iter_registered_routes(server.app) if route.path == "/api/v1/finance/purchase-recommendations"),
             None,
         )
 
@@ -201,11 +209,11 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             ],
         }
 
-        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
-            server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")
-        ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(server.LLMClient, "chat", side_effect=[
-            {"content": server.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
-            {"content": server.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+        with patch.object(_backend_finance_recommendations.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            _backend_finance_recommendations.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")
+        ), patch.object(_backend_finance_recommendations.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(_backend_finance_recommendations.LLMClient, "chat", side_effect=[
+            {"content": _backend_finance_recommendations.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+            {"content": _backend_finance_recommendations.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
         ]) as chat:
             first_payload = asyncio.run(route.endpoint())
             second_payload = asyncio.run(route.endpoint())
@@ -222,7 +230,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             (
                 route
                 for route in iter_registered_routes(server.app)
-                if route.path == "/api/balance_sheet/purchase_recommendations/dismiss"
+                if route.path == "/api/v1/finance/purchase-recommendations/dismiss"
             ),
             None,
         )
@@ -230,7 +238,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             (
                 route
                 for route in iter_registered_routes(server.app)
-                if route.path == "/api/balance_sheet/purchase_recommendations/dismissed"
+                if route.path == "/api/v1/finance/purchase-recommendations/dismissed"
                 and "GET" in getattr(route, "methods", set())
             ),
             None,
@@ -239,7 +247,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertIsNotNone(dismiss_route)
         self.assertIsNotNone(list_route)
 
-        request = server.PurchaseRecommendationDismissRequest(
+        request = _backend_finance_recommendations.PurchaseRecommendationDismissRequest(
             cache_key="sheet-hash",
             group_key="wishlist",
             item={
@@ -253,7 +261,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             },
         )
 
-        with patch.object(server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)):
+        with patch.object(_backend_finance_recommendations.Config, "get_history_dir", return_value=Path(self.temp_dir.name)):
             first = asyncio.run(dismiss_route.endpoint(request))
             second = asyncio.run(dismiss_route.endpoint(request))
             listed = asyncio.run(list_route.endpoint())
@@ -271,7 +279,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             (
                 route
                 for route in iter_registered_routes(server.app)
-                if route.path == "/api/balance_sheet/purchase_recommendations/dismiss"
+                if route.path == "/api/v1/finance/purchase-recommendations/dismiss"
             ),
             None,
         )
@@ -279,7 +287,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             (
                 route
                 for route in iter_registered_routes(server.app)
-                if route.path == "/api/balance_sheet/purchase_recommendations/dismissed"
+                if route.path == "/api/v1/finance/purchase-recommendations/dismissed"
                 and "GET" in getattr(route, "methods", set())
             ),
             None,
@@ -288,19 +296,19 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             (
                 route
                 for route in iter_registered_routes(server.app)
-                if route.path == "/api/balance_sheet/purchase_recommendations/dismissed"
+                if route.path == "/api/v1/finance/purchase-recommendations/dismissed"
                 and "DELETE" in getattr(route, "methods", set())
             ),
             None,
         )
 
-        request = server.PurchaseRecommendationDismissRequest(
+        request = _backend_finance_recommendations.PurchaseRecommendationDismissRequest(
             cache_key="sheet-hash",
             group_key="practical",
             item={"name": "升降桌", "category": "人体工学"},
         )
 
-        with patch.object(server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)):
+        with patch.object(_backend_finance_recommendations.Config, "get_history_dir", return_value=Path(self.temp_dir.name)):
             asyncio.run(dismiss_route.endpoint(request))
             before = asyncio.run(list_route.endpoint())
             cleared = asyncio.run(clear_route.endpoint())
@@ -332,15 +340,15 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             "## Balance Sheet Data (JSON)\n\n```json\n{\"sheets\":[]}\n```\n\n# Goals\n\nReduce impulse shopping."
         )
 
-        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
-            server.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)
-        ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(
-            server.DataLoader, "construct_prompt", return_value=context_prompt
-        ), patch.object(server.LLMClient, "chat", side_effect=[
-            {"content": server.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 123}, "model": "gpt-5.5"},
-            {"content": server.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 123}, "model": "gpt-5.5"},
+        with patch.object(_backend_finance_recommendations.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            _backend_finance_recommendations.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)
+        ), patch.object(_backend_finance_recommendations.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(
+            _backend_finance_recommendations.DataLoader, "construct_prompt", return_value=context_prompt
+        ), patch.object(_backend_finance_recommendations.LLMClient, "chat", side_effect=[
+            {"content": _backend_finance_recommendations.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 123}, "model": "gpt-5.5"},
+            {"content": _backend_finance_recommendations.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 123}, "model": "gpt-5.5"},
         ]) as chat:
-            payload = server._build_purchase_recommendations_payload(
+            payload = _backend_finance_recommendations._build_purchase_recommendations_payload(
                 request_config={
                     "recommendation_count": 9,
                     "model": "gpt-5.5",
@@ -375,20 +383,20 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertIn("total of 5", random_call["messages"][1]["content"])
 
     def test_purchase_context_prompt_uses_bounded_time_window(self):
-        with patch.object(server.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)), patch.object(
-            server.DataLoader,
+        with patch.object(_backend_finance_recommendations.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)), patch.object(
+            _backend_finance_recommendations.DataLoader,
             "construct_prompt",
             return_value="bounded context",
         ) as construct_prompt:
-            context = server._build_purchase_context_prompt({"sheet_count": 1})
+            context = _backend_finance_recommendations._build_purchase_context_prompt({"sheet_count": 1})
 
         self.assertEqual(context, "bounded context")
-        self.assertEqual(construct_prompt.call_args.kwargs["days"], server.PURCHASE_CONTEXT_TIME_SERIES_DAYS)
+        self.assertEqual(construct_prompt.call_args.kwargs["days"], _backend_finance_recommendations.PURCHASE_CONTEXT_TIME_SERIES_DAYS)
         self.assertIsNone(construct_prompt.call_args.kwargs["start_date"])
 
     def test_purchase_recommendation_mix_uses_random_half_rounded_up(self):
-        self.assertEqual(server._purchase_recommendation_mode_counts(12), {"random": 6, "contextual": 6})
-        self.assertEqual(server._purchase_recommendation_mode_counts(7), {"random": 4, "contextual": 3})
+        self.assertEqual(_backend_finance_recommendations._purchase_recommendation_mode_counts(12), {"random": 6, "contextual": 6})
+        self.assertEqual(_backend_finance_recommendations._purchase_recommendation_mode_counts(7), {"random": 4, "contextual": 3})
 
     def test_purchase_recommendation_groups_are_trimmed_to_total_count(self):
         raw_groups = [
@@ -397,7 +405,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             {"key": "wishlist", "items": [{"name": f"w-{index}"} for index in range(4)]},
         ]
 
-        groups = server._normalize_purchase_recommendation_groups(raw_groups, recommendation_count=7)
+        groups = _backend_finance_recommendations._normalize_purchase_recommendation_groups(raw_groups, recommendation_count=7)
 
         self.assertEqual(sum(len(group["items"]) for group in groups), 7)
         self.assertTrue(all(len(group["items"]) >= 2 for group in groups))
@@ -433,20 +441,20 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             ],
         }
 
-        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
-            server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)
-        ), patch.object(server.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)), patch.object(
-            server.DataLoader, "load_excel_sheets", return_value=fake_sheets
+        with patch.object(_backend_finance_recommendations.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            _backend_finance_recommendations.Config, "get_history_dir", return_value=Path(self.temp_dir.name)
+        ), patch.object(_backend_finance_recommendations.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)), patch.object(
+            _backend_finance_recommendations.DataLoader, "load_excel_sheets", return_value=fake_sheets
         ), patch.object(
-            server.DataLoader,
+            _backend_finance_recommendations.DataLoader,
             "construct_prompt",
             return_value="## Time Series Data (JSON)\n{}\n\n## Balance Sheet Data (JSON)\n{}",
-        ), patch.object(server.LLMClient, "chat", side_effect=[
-            {"content": server.json.dumps(underfilled_payload), "usage": {"total_tokens": 30}, "model": "gpt-5.5"},
-            {"content": server.json.dumps(full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
-            {"content": server.json.dumps(random_full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
+        ), patch.object(_backend_finance_recommendations.LLMClient, "chat", side_effect=[
+            {"content": _backend_finance_recommendations.json.dumps(underfilled_payload), "usage": {"total_tokens": 30}, "model": "gpt-5.5"},
+            {"content": _backend_finance_recommendations.json.dumps(full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
+            {"content": _backend_finance_recommendations.json.dumps(random_full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
         ]) as chat:
-            payload = server._build_purchase_recommendations_payload(request_config={"recommendation_count": 8})
+            payload = _backend_finance_recommendations._build_purchase_recommendations_payload(request_config={"recommendation_count": 8})
 
         self.assertEqual(chat.call_count, 3)
         retry_messages = chat.call_args_list[1].kwargs["messages"]
@@ -486,23 +494,23 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             ],
         }
 
-        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
-            server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)
-        ), patch.object(server.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)), patch.object(
-            server.DataLoader, "load_excel_sheets", return_value=fake_sheets
+        with patch.object(_backend_finance_recommendations.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            _backend_finance_recommendations.Config, "get_history_dir", return_value=Path(self.temp_dir.name)
+        ), patch.object(_backend_finance_recommendations.DataLoader, "resolve_data_path", side_effect=lambda name: Path(name)), patch.object(
+            _backend_finance_recommendations.DataLoader, "load_excel_sheets", return_value=fake_sheets
         ), patch.object(
-            server.DataLoader,
+            _backend_finance_recommendations.DataLoader,
             "construct_prompt",
             return_value="## Time Series Data (JSON)\n{}\n\n## Balance Sheet Data (JSON)\n{}",
-        ), patch.object(server, "_load_purchase_recommendation_cache", return_value=underfilled_cached), patch.object(
-            server.LLMClient,
+        ), patch.object(_backend_finance_recommendations, "_load_purchase_recommendation_cache", return_value=underfilled_cached), patch.object(
+            _backend_finance_recommendations.LLMClient,
             "chat",
             side_effect=[
-                {"content": server.json.dumps(full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
-                {"content": server.json.dumps(random_full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
+                {"content": _backend_finance_recommendations.json.dumps(full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
+                {"content": _backend_finance_recommendations.json.dumps(random_full_payload), "usage": {"total_tokens": 60}, "model": "gpt-5.5"},
             ],
         ) as chat:
-            payload = server._build_purchase_recommendations_payload(request_config={"recommendation_count": 6})
+            payload = _backend_finance_recommendations._build_purchase_recommendations_payload(request_config={"recommendation_count": 6})
 
         self.assertEqual(chat.call_count, 2)
         self.assertFalse(payload["from_cache"])
@@ -510,7 +518,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertFalse(payload["recommendation_count_underfilled"])
 
     def test_purchase_recommendation_prompt_uses_context_and_does_not_request_cover_prompt(self):
-        messages = server._build_purchase_recommendation_messages(
+        messages = _backend_finance_recommendations._build_purchase_recommendation_messages(
             "## Time Series Data (JSON)\n\n```json\n{}\n```\n\n## Balance Sheet Data (JSON)\n\n```json\n{}\n```",
             recommendation_count=7,
             dismissed_items=[{"name": "restore-me", "category": "test"}],
@@ -534,17 +542,17 @@ class BalanceSheetEndpointTests(unittest.TestCase):
     def test_contextual_purchase_prompt_keeps_variable_parts_after_the_context(self):
         """数据块在前；会变的数量与 dismissed 列表排在它之后。"""
         context = "## Time Series Data (JSON)\n\n```json\n{\"columns\":[],\"rows\":[]}\n```"
-        first = server._build_purchase_recommendation_messages(
+        first = _backend_finance_recommendations._build_purchase_recommendation_messages(
             context,
             dismissed_items=[{"name": "blocked thing", "category": "blocked category"}],
             recommendation_count=15,
         )
-        second = server._build_purchase_recommendation_messages(
+        second = _backend_finance_recommendations._build_purchase_recommendation_messages(
             context,
             dismissed_items=[{"name": "another thing", "category": "other"}],
             recommendation_count=15,
         )
-        third = server._build_purchase_recommendation_messages(
+        third = _backend_finance_recommendations._build_purchase_recommendation_messages(
             context,
             dismissed_items=[{"name": "blocked thing", "category": "blocked category"}],
             recommendation_count=7,
@@ -570,12 +578,12 @@ class BalanceSheetEndpointTests(unittest.TestCase):
     def test_random_purchase_recommendation_seed_stays_at_the_cacheable_tail(self):
         """每次变化的 seed 必须排在最后，不能作废它前面的恒定前缀。"""
         dismissed = [{"name": "blocked thing", "category": "blocked category"}]
-        first = server._build_purchase_random_recommendation_messages(
+        first = _backend_finance_recommendations._build_purchase_random_recommendation_messages(
             dismissed_items=dismissed,
             recommendation_count=5,
             random_seed="seed-aaa",
         )
-        second = server._build_purchase_random_recommendation_messages(
+        second = _backend_finance_recommendations._build_purchase_random_recommendation_messages(
             dismissed_items=dismissed,
             recommendation_count=5,
             random_seed="seed-bbb",
@@ -593,7 +601,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
 
         # The dismissed list is a separate variable input, so it must also sit
         # after the fixed instructions rather than ahead of them.
-        other = server._build_purchase_random_recommendation_messages(
+        other = _backend_finance_recommendations._build_purchase_random_recommendation_messages(
             dismissed_items=[{"name": "another thing", "category": "other"}],
             recommendation_count=5,
             random_seed="seed-aaa",
@@ -606,7 +614,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(first_user[:prefix_end], other_user[:prefix_end])
 
     def test_random_purchase_recommendation_prompt_excludes_context_bundle(self):
-        messages = server._build_purchase_random_recommendation_messages(
+        messages = _backend_finance_recommendations._build_purchase_random_recommendation_messages(
             dismissed_items=[{"name": "blocked thing", "category": "blocked category"}],
             recommendation_count=5,
             random_seed="seed-123",
@@ -633,7 +641,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             }
         ]
 
-        filtered = server._filter_dismissed_purchase_groups(
+        filtered = _backend_finance_recommendations._filter_dismissed_purchase_groups(
             groups,
             [
                 {"name": "blocked exact", "category": "other"},
@@ -644,27 +652,27 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in filtered[0]["items"]], ["safe idea"])
 
     def test_purchase_recommendation_dismissal_can_be_deleted_by_id(self):
-        dismiss_route = next(route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet/purchase_recommendations/dismiss")
+        dismiss_route = next(route for route in iter_registered_routes(server.app) if route.path == "/api/v1/finance/purchase-recommendations/dismiss")
         delete_route = next(
             route
             for route in iter_registered_routes(server.app)
-            if route.path == "/api/balance_sheet/purchase_recommendations/dismissed/{item_id}"
+            if route.path == "/api/v1/finance/purchase-recommendations/dismissed/{item_id}"
             and "DELETE" in getattr(route, "methods", set())
         )
         list_route = next(
             route
             for route in iter_registered_routes(server.app)
-            if route.path == "/api/balance_sheet/purchase_recommendations/dismissed"
+            if route.path == "/api/v1/finance/purchase-recommendations/dismissed"
             and "GET" in getattr(route, "methods", set())
         )
 
-        request = server.PurchaseRecommendationDismissRequest(
+        request = _backend_finance_recommendations.PurchaseRecommendationDismissRequest(
             cache_key="sheet-hash",
             group_key="wishlist",
             item={"name": "restore-me", "category": "test"},
         )
 
-        with patch.object(server.Config, "get_history_dir", return_value=Path(self.temp_dir.name)):
+        with patch.object(_backend_finance_recommendations.Config, "get_history_dir", return_value=Path(self.temp_dir.name)):
             created = asyncio.run(dismiss_route.endpoint(request))
             item_id = created["item"]["id"]
             deleted = asyncio.run(delete_route.endpoint(item_id))
@@ -676,14 +684,14 @@ class BalanceSheetEndpointTests(unittest.TestCase):
 
     def test_purchase_recommendation_routes_build_off_event_loop(self):
         route = next(
-            (route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet/purchase_recommendations"),
+            (route for route in iter_registered_routes(server.app) if route.path == "/api/v1/finance/purchase-recommendations"),
             None,
         )
 
         async def fake_to_thread(func, *args, **kwargs):
             return {"status": "ready", "func": func.__name__, "args": args, "kwargs": kwargs}
 
-        with patch.object(server.asyncio, "to_thread", side_effect=fake_to_thread) as to_thread:
+        with patch.object(_backend_finance_recommendations.asyncio, "to_thread", side_effect=fake_to_thread) as to_thread:
             payload = asyncio.run(route.endpoint())
 
         self.assertEqual(payload["status"], "ready")
@@ -698,7 +706,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             (
                 route
                 for route in iter_registered_routes(server.app)
-                if route.path == "/api/balance_sheet/purchase_recommendations/regenerate"
+                if route.path == "/api/v1/finance/purchase-recommendations/regenerate"
             ),
             None,
         )
@@ -721,13 +729,13 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             ],
         }
 
-        with patch.object(server.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
-            server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")
-        ), patch.object(server.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(server.LLMClient, "chat", side_effect=[
-            {"content": server.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
-            {"content": server.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
-            {"content": server.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
-            {"content": server.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+        with patch.object(_backend_finance_recommendations.Config, "get_cache_dir", return_value=Path(self.temp_dir.name)), patch.object(
+            _backend_finance_recommendations.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")
+        ), patch.object(_backend_finance_recommendations.DataLoader, "load_excel_sheets", return_value=fake_sheets), patch.object(_backend_finance_recommendations.LLMClient, "chat", side_effect=[
+            {"content": _backend_finance_recommendations.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+            {"content": _backend_finance_recommendations.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+            {"content": _backend_finance_recommendations.json.dumps(llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
+            {"content": _backend_finance_recommendations.json.dumps(random_llm_payload, ensure_ascii=False), "usage": {"total_tokens": 50}, "model": "gpt-5.5"},
         ]) as chat:
             first_payload = asyncio.run(route.endpoint())
             second_payload = asyncio.run(route.endpoint())
@@ -737,7 +745,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(chat.call_count, 4)
 
     def test_balance_sheet_route_returns_full_trend_points_when_sheet_rows_are_truncated(self):
-        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet"), None)
+        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/v1/finance/balance-sheet"), None)
 
         self.assertIsNotNone(route)
 
@@ -750,8 +758,8 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             }
         )
 
-        with patch.object(server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")), patch.object(
-            server.DataLoader, "load_excel_sheets", return_value={"开销": expense_sheet}
+        with patch.object(_backend_finance_recommendations.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")), patch.object(
+            _backend_finance_recommendations.DataLoader, "load_excel_sheets", return_value={"开销": expense_sheet}
         ):
             payload = asyncio.run(route.endpoint())
 
@@ -782,8 +790,8 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             }
         )
 
-        summary = server._build_balance_summary({"开销": expense_sheet})
-        trend_points = server._build_expense_trend_points({"开销": expense_sheet})
+        summary = _backend_finance_data._build_balance_summary({"开销": expense_sheet})
+        trend_points = _backend_finance_data._build_expense_trend_points({"开销": expense_sheet})
 
         self.assertEqual(summary["time_cost"]["latest_date"], "2026-04-30")
         self.assertEqual(summary["time_cost"]["daily_average"], 129.36)
@@ -793,7 +801,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(trend_points[0]["date"], "2026-04-30")
 
     def test_balance_sheet_route_splits_actual_trend_from_forecast_points(self):
-        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet"), None)
+        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/v1/finance/balance-sheet"), None)
 
         self.assertIsNotNone(route)
 
@@ -813,8 +821,8 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             }
         )
 
-        with patch.object(server.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")), patch.object(
-            server.DataLoader, "load_excel_sheets", return_value={"开销": expense_sheet}
+        with patch.object(_backend_finance_recommendations.DataLoader, "resolve_data_path", return_value=Path("Balance Sheet.xlsx")), patch.object(
+            _backend_finance_recommendations.DataLoader, "load_excel_sheets", return_value={"开销": expense_sheet}
         ):
             payload = asyncio.run(route.endpoint())
 
@@ -854,7 +862,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
             }
         )
 
-        forecast_points = server._build_balance_forecast_points(
+        forecast_points = _backend_finance_data._build_balance_forecast_points(
             {"开销": expense_sheet},
             as_of=date(2026, 5, 1),
         )

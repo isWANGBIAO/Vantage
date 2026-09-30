@@ -8,15 +8,13 @@ const { resolveBackendConnection, normalizeBackendBaseUrl, isLoopbackHost, build
 export function resolveBackendBaseUrl(locationLike = globalThis?.location, {
   platform = getPlatformAdapter(),
   env = import.meta.env || {},
-  runtimeConfig = globalThis.window?.vantageConfig ?? globalThis.vantageConfig ?? {},
 } = {}) {
   const rendererOrigin = platform.backend.connection?.rendererOrigin;
   if (rendererOrigin && locationLike && `${locationLike.protocol}//${locationLike.host}` === rendererOrigin) {
     return '';
   }
   // The native host's live connection wins over stale build-time values.
-  const baseUrl = platform.backend.connection?.baseUrl || runtimeConfig.backendBaseUrl
-    || env.VANTAGE_BACKEND_URL || env.VITE_BACKEND_BASE_URL;
+  const baseUrl = platform.backend.connection?.baseUrl || env.VANTAGE_BACKEND_URL;
   if (baseUrl || env.VANTAGE_BACKEND_HOST || env.VANTAGE_BACKEND_PORT) {
     return resolveBackendConnection({ baseUrl, env }).baseUrl;
   }

@@ -78,7 +78,7 @@ export default function Dashboard({ isVisible = false }) {
 
   const fetchStats = useCallback(async () => {
     try {
-      const data = await fetchBackendJson('/api/sys_stats', { retryPolicy: 'poll' });
+      const data = await fetchBackendJson('/api/v1/system/statistics', { retryPolicy: 'poll' });
       setStats(data);
     } catch (err) {
       logPollErrorOnce('stats', 'Failed to fetch stats', err);
@@ -87,7 +87,7 @@ export default function Dashboard({ isVisible = false }) {
 
   const fetchLatestImages = useCallback(async () => {
     try {
-      const data = await fetchBackendJson('/api/latest_images', { retryPolicy: 'poll' });
+      const data = await fetchBackendJson('/api/v1/media/latest', { retryPolicy: 'poll' });
 
       if (data.photo?.startsWith('/')) {
         data.photo = buildBackendUrl(data.photo);
@@ -110,7 +110,7 @@ export default function Dashboard({ isVisible = false }) {
   const fetchAqiBackend = useCallback(async (position = null) => {
     try {
       const locationQuery = buildBrowserLocationQuery(position);
-      const url = locationQuery ? `/api/aqi?${locationQuery}` : '/api/aqi';
+      const url = locationQuery ? `/api/v1/system/air-quality?${locationQuery}` : '/api/v1/system/air-quality';
 
       const res = await fetchBackend(url, { retryPolicy: 'poll', allowHttpError: true });
       if (!res.ok) {
@@ -156,7 +156,7 @@ export default function Dashboard({ isVisible = false }) {
 
   const fetchHealth = useCallback(async () => {
     try {
-      const res = await fetchBackend('/api/health/sedentary', {
+      const res = await fetchBackend('/api/v1/health/sedentary', {
         retryPolicy: 'poll',
         allowHttpError: true,
       });
@@ -179,7 +179,7 @@ export default function Dashboard({ isVisible = false }) {
 
   const openFolder = async (type) => {
     try {
-      const res = await fetchBackend('/api/open_folder', {
+      const res = await fetchBackend('/api/v1/media/open-folder', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

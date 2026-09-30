@@ -37,7 +37,8 @@ def test_vantage_skill_routes_operations_through_cli_mcp_and_visual_ui():
         "--format json",
         "system.status.read",
         "settings.update",
-        "action_plan.generate",
+        "action_plan.jobs.create",
+        "action_plan.jobs.events",
         "action_plan.today.read",
         "computer use",
     ):

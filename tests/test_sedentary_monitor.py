@@ -7,7 +7,9 @@ import numpy as np
 import pytest
 
 from src.manager.manager_main import Monitor
-from src import server
+from src.backend import camera as _backend_camera
+from src.backend import health as _backend_health
+from src.backend import runtime as _backend_runtime
 
 
 def _make_monitor(tmp_path, *, state_path=None):
@@ -653,13 +655,13 @@ def test_invalid_v2_state_is_rejected_and_removed(invalid_fields, tmp_path):
 
 
 def _get_sedentary_api_result(monitor, *, now):
-    original_monitor = server.state.monitor
+    original_monitor = _backend_runtime.state.monitor
     try:
-        server.state.monitor = monitor
-        with patch("src.server.time.time", return_value=now):
-            return server.get_sedentary_stats()
+        _backend_runtime.state.monitor = monitor
+        with patch('src.backend.health.time.time', return_value=now):
+            return _backend_health.get_sedentary_stats()
     finally:
-        server.state.monitor = original_monitor
+        _backend_runtime.state.monitor = original_monitor
 
 
 @pytest.mark.parametrize(
@@ -1357,19 +1359,19 @@ def test_monitor_capture_cycle_downgrades_slow_completed_inference_to_unknown(
     camera = object()
     frame = np.full((4, 4, 3), 31, dtype=np.uint8)
     original_state = (
-        server.state.monitor,
-        server.state.camera,
-        server.state.latest_frame,
-        server.state.latest_frame_published_at,
-        server.state.paths,
+        _backend_runtime.state.monitor,
+        _backend_runtime.state.camera,
+        _backend_runtime.state.latest_frame,
+        _backend_runtime.state.latest_frame_published_at,
+        _backend_runtime.state.paths,
     )
     try:
-        with server.state.lock:
-            server.state.monitor = monitor
-            server.state.camera = camera
-            server.state.latest_frame = frame
-            server.state.latest_frame_published_at = 99.0
-            server.state.paths = {}
+        with _backend_runtime.state.lock:
+            _backend_runtime.state.monitor = monitor
+            _backend_runtime.state.camera = camera
+            _backend_runtime.state.latest_frame = frame
+            _backend_runtime.state.latest_frame_published_at = 99.0
+            _backend_runtime.state.paths = {}
 
         with (
             patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
@@ -1377,13 +1379,13 @@ def test_monitor_capture_cycle_downgrades_slow_completed_inference_to_unknown(
             patch(
                 "src.manager.manager_main.take_and_save_screenshots"
             ) as screenshot_mock,
-            patch.object(server.time, "monotonic", side_effect=[100.0, 106.0]),
+            patch.object(_backend_health.time, "monotonic", side_effect=[100.0, 106.0]),
             patch(
                 "src.manager.manager_main.time.time",
                 side_effect=[1000.0, 1006.0],
             ),
         ):
-            trusted = server.run_monitor_capture_cycle()
+            trusted = _backend_camera.run_monitor_capture_cycle()
 
         assert trusted is False
         assert monitor.last_observation_status == Monitor.UNKNOWN
@@ -1391,13 +1393,13 @@ def test_monitor_capture_cycle_downgrades_slow_completed_inference_to_unknown(
         assert monitor.away_elapsed_seconds == 0.0
         screenshot_mock.assert_not_called()
     finally:
-        with server.state.lock:
+        with _backend_runtime.state.lock:
             (
-                server.state.monitor,
-                server.state.camera,
-                server.state.latest_frame,
-                server.state.latest_frame_published_at,
-                server.state.paths,
+                _backend_runtime.state.monitor,
+                _backend_runtime.state.camera,
+                _backend_runtime.state.latest_frame,
+                _backend_runtime.state.latest_frame_published_at,
+                _backend_runtime.state.paths,
             ) = original_state
 
 
@@ -1408,26 +1410,26 @@ def test_monitor_capture_cycle_downgrades_observation_when_frame_is_cleared(
     camera = object()
     frame = np.full((4, 4, 3), 32, dtype=np.uint8)
     original_state = (
-        server.state.monitor,
-        server.state.camera,
-        server.state.latest_frame,
-        server.state.latest_frame_published_at,
-        server.state.paths,
+        _backend_runtime.state.monitor,
+        _backend_runtime.state.camera,
+        _backend_runtime.state.latest_frame,
+        _backend_runtime.state.latest_frame_published_at,
+        _backend_runtime.state.paths,
     )
 
     def clear_frame_during_inference(*_args, **_kwargs):
-        with server.state.lock:
-            server.state.latest_frame = None
-            server.state.latest_frame_published_at = None
+        with _backend_runtime.state.lock:
+            _backend_runtime.state.latest_frame = None
+            _backend_runtime.state.latest_frame_published_at = None
         return True, None
 
     try:
-        with server.state.lock:
-            server.state.monitor = monitor
-            server.state.camera = camera
-            server.state.latest_frame = frame
-            server.state.latest_frame_published_at = 99.0
-            server.state.paths = {}
+        with _backend_runtime.state.lock:
+            _backend_runtime.state.monitor = monitor
+            _backend_runtime.state.camera = camera
+            _backend_runtime.state.latest_frame = frame
+            _backend_runtime.state.latest_frame_published_at = 99.0
+            _backend_runtime.state.paths = {}
 
         with (
             patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
@@ -1435,26 +1437,26 @@ def test_monitor_capture_cycle_downgrades_observation_when_frame_is_cleared(
                 "src.manager.manager_main.take_photo",
                 side_effect=clear_frame_during_inference,
             ),
-            patch.object(server.time, "monotonic", side_effect=[100.0, 101.0]),
+            patch.object(_backend_health.time, "monotonic", side_effect=[100.0, 101.0]),
             patch(
                 "src.manager.manager_main.time.time",
                 side_effect=[1000.0, 1001.0],
             ),
         ):
-            trusted = server.run_monitor_capture_cycle()
+            trusted = _backend_camera.run_monitor_capture_cycle()
 
         assert trusted is False
         assert monitor.last_observation_status == Monitor.UNKNOWN
         assert monitor.focus_elapsed_seconds == 0.0
         assert monitor.away_elapsed_seconds == 0.0
     finally:
-        with server.state.lock:
+        with _backend_runtime.state.lock:
             (
-                server.state.monitor,
-                server.state.camera,
-                server.state.latest_frame,
-                server.state.latest_frame_published_at,
-                server.state.paths,
+                _backend_runtime.state.monitor,
+                _backend_runtime.state.camera,
+                _backend_runtime.state.latest_frame,
+                _backend_runtime.state.latest_frame_published_at,
+                _backend_runtime.state.paths,
             ) = original_state
 
 
@@ -1467,19 +1469,19 @@ def test_monitor_capture_cycle_rejects_replacement_after_source_camera_retires(
     frame = np.full((4, 4, 3), 35, dtype=np.uint8)
     replacement_frame = np.full((4, 4, 3), 36, dtype=np.uint8)
     original_state = (
-        server.state.monitor,
-        server.state.camera,
-        server.state.latest_frame,
-        server.state.latest_frame_published_at,
-        server.state.paths,
-        list(server.state.camera_release_queue),
-        set(server.state.camera_release_ids),
+        _backend_runtime.state.monitor,
+        _backend_runtime.state.camera,
+        _backend_runtime.state.latest_frame,
+        _backend_runtime.state.latest_frame_published_at,
+        _backend_runtime.state.paths,
+        list(_backend_runtime.state.camera_release_queue),
+        set(_backend_runtime.state.camera_release_ids),
     )
 
     def replace_camera_during_inference(*_args, **_kwargs):
-        assert server._retire_camera_capture(source_camera) is True
-        assert server._install_camera_capture(replacement_camera) is True
-        assert server._publish_camera_frame(
+        assert _backend_camera._retire_camera_capture(source_camera) is True
+        assert _backend_camera._install_camera_capture(replacement_camera) is True
+        assert _backend_camera._publish_camera_frame(
             replacement_camera,
             replacement_frame,
             published_at=100.5,
@@ -1487,12 +1489,12 @@ def test_monitor_capture_cycle_rejects_replacement_after_source_camera_retires(
         return True, None
 
     try:
-        with server.state.lock:
-            server.state.monitor = monitor
-            server.state.camera = source_camera
-            server.state.latest_frame = frame
-            server.state.latest_frame_published_at = 99.0
-            server.state.paths = {}
+        with _backend_runtime.state.lock:
+            _backend_runtime.state.monitor = monitor
+            _backend_runtime.state.camera = source_camera
+            _backend_runtime.state.latest_frame = frame
+            _backend_runtime.state.latest_frame_published_at = 99.0
+            _backend_runtime.state.paths = {}
 
         with (
             patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
@@ -1503,30 +1505,30 @@ def test_monitor_capture_cycle_rejects_replacement_after_source_camera_retires(
             patch(
                 "src.manager.manager_main.take_and_save_screenshots"
             ) as screenshot_mock,
-            patch.object(server.time, "monotonic", side_effect=[100.0, 101.0]),
+            patch.object(_backend_health.time, "monotonic", side_effect=[100.0, 101.0]),
             patch(
                 "src.manager.manager_main.time.time",
                 side_effect=[1000.0, 1001.0],
             ),
         ):
-            trusted = server.run_monitor_capture_cycle()
+            trusted = _backend_camera.run_monitor_capture_cycle()
 
         assert trusted is False
         assert monitor.last_observation_status == Monitor.UNKNOWN
         screenshot_mock.assert_not_called()
     finally:
-        with server.state.lock:
+        with _backend_runtime.state.lock:
             (
-                server.state.monitor,
-                server.state.camera,
-                server.state.latest_frame,
-                server.state.latest_frame_published_at,
-                server.state.paths,
+                _backend_runtime.state.monitor,
+                _backend_runtime.state.camera,
+                _backend_runtime.state.latest_frame,
+                _backend_runtime.state.latest_frame_published_at,
+                _backend_runtime.state.paths,
                 release_queue,
                 release_ids,
             ) = original_state
-            server.state.camera_release_queue = release_queue
-            server.state.camera_release_ids = release_ids
+            _backend_runtime.state.camera_release_queue = release_queue
+            _backend_runtime.state.camera_release_ids = release_ids
 
 
 @pytest.mark.parametrize("real_person", [True, False], ids=("present", "absent"))
@@ -1539,26 +1541,26 @@ def test_monitor_capture_cycle_accepts_newer_frame_while_original_is_still_fresh
     original_frame = np.full((4, 4, 3), 33, dtype=np.uint8)
     newer_frame = np.full((4, 4, 3), 34, dtype=np.uint8)
     original_state = (
-        server.state.monitor,
-        server.state.camera,
-        server.state.latest_frame,
-        server.state.latest_frame_published_at,
-        server.state.paths,
+        _backend_runtime.state.monitor,
+        _backend_runtime.state.camera,
+        _backend_runtime.state.latest_frame,
+        _backend_runtime.state.latest_frame_published_at,
+        _backend_runtime.state.paths,
     )
 
     def publish_newer_frame_during_inference(*_args, **_kwargs):
-        with server.state.lock:
-            server.state.latest_frame = newer_frame
-            server.state.latest_frame_published_at = 100.5
+        with _backend_runtime.state.lock:
+            _backend_runtime.state.latest_frame = newer_frame
+            _backend_runtime.state.latest_frame_published_at = 100.5
         return real_person, None
 
     try:
-        with server.state.lock:
-            server.state.monitor = monitor
-            server.state.camera = camera
-            server.state.latest_frame = original_frame
-            server.state.latest_frame_published_at = 99.0
-            server.state.paths = {}
+        with _backend_runtime.state.lock:
+            _backend_runtime.state.monitor = monitor
+            _backend_runtime.state.camera = camera
+            _backend_runtime.state.latest_frame = original_frame
+            _backend_runtime.state.latest_frame_published_at = 99.0
+            _backend_runtime.state.paths = {}
 
         with (
             patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
@@ -1570,26 +1572,26 @@ def test_monitor_capture_cycle_accepts_newer_frame_while_original_is_still_fresh
                 "src.manager.manager_main.take_and_save_screenshots",
                 return_value=None,
             ),
-            patch.object(server.time, "monotonic", side_effect=[100.0, 101.0]),
+            patch.object(_backend_health.time, "monotonic", side_effect=[100.0, 101.0]),
             patch(
                 "src.manager.manager_main.time.time",
                 side_effect=[1000.0, 1001.0],
             ),
         ):
-            trusted = server.run_monitor_capture_cycle()
+            trusted = _backend_camera.run_monitor_capture_cycle()
 
         assert trusted is True
         assert monitor.last_observation_status == (
             Monitor.PRESENT if real_person else Monitor.ABSENT
         )
     finally:
-        with server.state.lock:
+        with _backend_runtime.state.lock:
             (
-                server.state.monitor,
-                server.state.camera,
-                server.state.latest_frame,
-                server.state.latest_frame_published_at,
-                server.state.paths,
+                _backend_runtime.state.monitor,
+                _backend_runtime.state.camera,
+                _backend_runtime.state.latest_frame,
+                _backend_runtime.state.latest_frame_published_at,
+                _backend_runtime.state.paths,
             ) = original_state
 
 
@@ -1604,18 +1606,18 @@ def test_monitor_capture_cycle_uses_fresh_copy_and_returns_trusted_status(status
             assert observation_validator() is True
             return status
 
-    original_monitor = server.state.monitor
-    original_frame = server.state.latest_frame
-    original_published_at = getattr(server.state, "latest_frame_published_at", None)
-    original_paths = server.state.paths
+    original_monitor = _backend_runtime.state.monitor
+    original_frame = _backend_runtime.state.latest_frame
+    original_published_at = getattr(_backend_runtime.state, "latest_frame_published_at", None)
+    original_paths = _backend_runtime.state.paths
     try:
-        server.state.monitor = RecordingMonitor()
-        server.state.latest_frame = published_frame
-        server.state.latest_frame_published_at = 98.0
-        server.state.paths = {}
+        _backend_runtime.state.monitor = RecordingMonitor()
+        _backend_runtime.state.latest_frame = published_frame
+        _backend_runtime.state.latest_frame_published_at = 98.0
+        _backend_runtime.state.paths = {}
 
-        with patch.object(server.time, "monotonic", return_value=100.0):
-            trusted = server.run_monitor_capture_cycle()
+        with patch.object(_backend_health.time, "monotonic", return_value=100.0):
+            trusted = _backend_camera.run_monitor_capture_cycle()
         published_frame.fill(0)
 
         assert trusted is True
@@ -1623,10 +1625,10 @@ def test_monitor_capture_cycle_uses_fresh_copy_and_returns_trusted_status(status
         assert received_frames[0] is not published_frame
         assert np.all(received_frames[0] == 41)
     finally:
-        server.state.monitor = original_monitor
-        server.state.latest_frame = original_frame
-        server.state.latest_frame_published_at = original_published_at
-        server.state.paths = original_paths
+        _backend_runtime.state.monitor = original_monitor
+        _backend_runtime.state.latest_frame = original_frame
+        _backend_runtime.state.latest_frame_published_at = original_published_at
+        _backend_runtime.state.paths = original_paths
 
 
 @pytest.mark.parametrize(
@@ -1652,26 +1654,26 @@ def test_monitor_capture_cycle_rejects_untrustworthy_frame_metadata(
             received_frames.append(pre_captured_frame)
             return Monitor.UNKNOWN
 
-    original_monitor = server.state.monitor
-    original_frame = server.state.latest_frame
-    original_published_at = getattr(server.state, "latest_frame_published_at", None)
-    original_paths = server.state.paths
+    original_monitor = _backend_runtime.state.monitor
+    original_frame = _backend_runtime.state.latest_frame
+    original_published_at = getattr(_backend_runtime.state, "latest_frame_published_at", None)
+    original_paths = _backend_runtime.state.paths
     try:
-        server.state.monitor = RecordingMonitor()
-        server.state.latest_frame = published_frame
-        server.state.latest_frame_published_at = published_at
-        server.state.paths = {}
+        _backend_runtime.state.monitor = RecordingMonitor()
+        _backend_runtime.state.latest_frame = published_frame
+        _backend_runtime.state.latest_frame_published_at = published_at
+        _backend_runtime.state.paths = {}
 
-        with patch.object(server.time, "monotonic", return_value=100.0):
-            trusted = server.run_monitor_capture_cycle()
+        with patch.object(_backend_health.time, "monotonic", return_value=100.0):
+            trusted = _backend_camera.run_monitor_capture_cycle()
 
         assert trusted is False
         assert received_frames == [None]
     finally:
-        server.state.monitor = original_monitor
-        server.state.latest_frame = original_frame
-        server.state.latest_frame_published_at = original_published_at
-        server.state.paths = original_paths
+        _backend_runtime.state.monitor = original_monitor
+        _backend_runtime.state.latest_frame = original_frame
+        _backend_runtime.state.latest_frame_published_at = original_published_at
+        _backend_runtime.state.paths = original_paths
 
 
 def test_monitor_capture_cycle_returns_false_for_unknown_fresh_observation():
@@ -1682,23 +1684,23 @@ def test_monitor_capture_cycle_returns_false_for_unknown_fresh_observation():
             assert np.array_equal(pre_captured_frame, frame)
             return Monitor.UNKNOWN
 
-    original_monitor = server.state.monitor
-    original_frame = server.state.latest_frame
-    original_published_at = getattr(server.state, "latest_frame_published_at", None)
-    original_paths = server.state.paths
+    original_monitor = _backend_runtime.state.monitor
+    original_frame = _backend_runtime.state.latest_frame
+    original_published_at = getattr(_backend_runtime.state, "latest_frame_published_at", None)
+    original_paths = _backend_runtime.state.paths
     try:
-        server.state.monitor = UnknownMonitor()
-        server.state.latest_frame = frame
-        server.state.latest_frame_published_at = 99.0
-        server.state.paths = {}
+        _backend_runtime.state.monitor = UnknownMonitor()
+        _backend_runtime.state.latest_frame = frame
+        _backend_runtime.state.latest_frame_published_at = 99.0
+        _backend_runtime.state.paths = {}
 
-        with patch.object(server.time, "monotonic", return_value=100.0):
-            assert server.run_monitor_capture_cycle() is False
+        with patch.object(_backend_health.time, "monotonic", return_value=100.0):
+            assert _backend_camera.run_monitor_capture_cycle() is False
     finally:
-        server.state.monitor = original_monitor
-        server.state.latest_frame = original_frame
-        server.state.latest_frame_published_at = original_published_at
-        server.state.paths = original_paths
+        _backend_runtime.state.monitor = original_monitor
+        _backend_runtime.state.latest_frame = original_frame
+        _backend_runtime.state.latest_frame_published_at = original_published_at
+        _backend_runtime.state.paths = original_paths
 
 
 @pytest.mark.parametrize(
@@ -1720,55 +1722,55 @@ def test_monitor_loop_selects_interval_from_observation_trust(
 ):
     class OneCycleMonitor:
         def run_task(self, *, pre_captured_frame, observation_validator):
-            server.state.is_running = False
+            _backend_runtime.state.is_running = False
             return status
 
-    original_monitor = server.state.monitor
-    original_frame = server.state.latest_frame
-    original_published_at = getattr(server.state, "latest_frame_published_at", None)
-    original_paths = server.state.paths
-    original_running = server.state.is_running
+    original_monitor = _backend_runtime.state.monitor
+    original_frame = _backend_runtime.state.latest_frame
+    original_published_at = getattr(_backend_runtime.state, "latest_frame_published_at", None)
+    original_paths = _backend_runtime.state.paths
+    original_running = _backend_runtime.state.is_running
     try:
-        server.state.monitor = OneCycleMonitor()
-        server.state.latest_frame = frame
-        server.state.latest_frame_published_at = published_at
-        server.state.paths = {}
-        server.state.is_running = True
+        _backend_runtime.state.monitor = OneCycleMonitor()
+        _backend_runtime.state.latest_frame = frame
+        _backend_runtime.state.latest_frame_published_at = published_at
+        _backend_runtime.state.paths = {}
+        _backend_runtime.state.is_running = True
 
         with (
-            patch.object(server.time, "monotonic", side_effect=[100.0, 100.0, 100.25]),
-            patch.object(server, "sleep_while_running") as sleep_mock,
+            patch.object(_backend_health.time, "monotonic", side_effect=[100.0, 100.0, 100.25]),
+            patch.object(_backend_runtime, "sleep_while_running") as sleep_mock,
         ):
-            server.monitor_loop()
+            _backend_camera.monitor_loop()
 
         sleep_mock.assert_called_once_with(expected_sleep)
     finally:
-        server.state.monitor = original_monitor
-        server.state.latest_frame = original_frame
-        server.state.latest_frame_published_at = original_published_at
-        server.state.paths = original_paths
-        server.state.is_running = original_running
+        _backend_runtime.state.monitor = original_monitor
+        _backend_runtime.state.latest_frame = original_frame
+        _backend_runtime.state.latest_frame_published_at = original_published_at
+        _backend_runtime.state.paths = original_paths
+        _backend_runtime.state.is_running = original_running
 
 
 def test_monitor_loop_retries_quickly_after_exception():
-    original_running = server.state.is_running
+    original_running = _backend_runtime.state.is_running
     try:
-        server.state.is_running = True
+        _backend_runtime.state.is_running = True
 
         def fail_once():
-            server.state.is_running = False
+            _backend_runtime.state.is_running = False
             raise RuntimeError("detector failed")
 
         with (
-            patch.object(server, "run_monitor_capture_cycle", side_effect=fail_once),
-            patch.object(server.time, "monotonic", side_effect=[100.0, 100.25]),
-            patch.object(server, "sleep_while_running") as sleep_mock,
+            patch.object(_backend_camera, "run_monitor_capture_cycle", side_effect=fail_once),
+            patch.object(_backend_health.time, "monotonic", side_effect=[100.0, 100.25]),
+            patch.object(_backend_runtime, "sleep_while_running") as sleep_mock,
         ):
-            server.monitor_loop()
+            _backend_camera.monitor_loop()
 
         sleep_mock.assert_called_once_with(1.75)
     finally:
-        server.state.is_running = original_running
+        _backend_runtime.state.is_running = original_running
 
 
 def test_monitor_capture_cycle_without_published_frame_records_unknown_without_camera_read(
@@ -1781,15 +1783,15 @@ def test_monitor_capture_cycle_without_published_frame_records_unknown_without_c
     monitor = _make_monitor(tmp_path)
     monitor.camera = ReadFailingCamera()
     _record(monitor, True, 100.0)
-    original_monitor = server.state.monitor
-    original_frame = server.state.latest_frame
-    original_published_at = getattr(server.state, "latest_frame_published_at", None)
-    original_paths = server.state.paths
+    original_monitor = _backend_runtime.state.monitor
+    original_frame = _backend_runtime.state.latest_frame
+    original_published_at = getattr(_backend_runtime.state, "latest_frame_published_at", None)
+    original_paths = _backend_runtime.state.paths
     try:
-        server.state.monitor = monitor
-        server.state.latest_frame = None
-        server.state.latest_frame_published_at = None
-        server.state.paths = {}
+        _backend_runtime.state.monitor = monitor
+        _backend_runtime.state.latest_frame = None
+        _backend_runtime.state.latest_frame_published_at = None
+        _backend_runtime.state.paths = {}
 
         with (
             patch("src.manager.manager_main.get_location", return_value=(0.0, 0.0)),
@@ -1799,17 +1801,17 @@ def test_monitor_capture_cycle_without_published_frame_records_unknown_without_c
             ) as mock_capture,
             patch("src.manager.manager_main.time.time", return_value=200.0),
         ):
-            assert server.run_monitor_capture_cycle() is False
+            assert _backend_camera.run_monitor_capture_cycle() is False
 
         mock_capture.assert_not_called()
         assert monitor.continuous_sit_start == 100.0
         assert monitor.last_observation_status == "UNKNOWN"
         assert monitor.last_missing_time is None
     finally:
-        server.state.monitor = original_monitor
-        server.state.latest_frame = original_frame
-        server.state.latest_frame_published_at = original_published_at
-        server.state.paths = original_paths
+        _backend_runtime.state.monitor = original_monitor
+        _backend_runtime.state.latest_frame = original_frame
+        _backend_runtime.state.latest_frame_published_at = original_published_at
+        _backend_runtime.state.paths = original_paths
 
 
 @pytest.mark.parametrize("new_screenshot_path", [None, ""])
@@ -1928,9 +1930,9 @@ def test_get_sedentary_stats_reports_detection_state_and_trusted_duration(
     expected_is_sitting,
     expected_duration_seconds,
 ):
-    original_monitor = server.state.monitor
+    original_monitor = _backend_runtime.state.monitor
     try:
-        server.state.monitor = SimpleNamespace(
+        _backend_runtime.state.monitor = SimpleNamespace(
             continuous_sit_start=100.0,
             last_presence_time=400.0,
             last_observation_status=observation_status,
@@ -1940,8 +1942,8 @@ def test_get_sedentary_stats_reports_detection_state_and_trusted_duration(
             monitor_stale_timeout=2 * 60,
         )
 
-        with patch("src.server.time.time", return_value=600.0):
-            result = server.get_sedentary_stats()
+        with patch('src.backend.health.time.time', return_value=600.0):
+            result = _backend_health.get_sedentary_stats()
 
         assert result == {
             "status": "active",
@@ -1953,9 +1955,9 @@ def test_get_sedentary_stats_reports_detection_state_and_trusted_duration(
             "active_timer": "focus",
             "threshold_minutes": 20,
         }
-        assert server.state.monitor.continuous_sit_start == 100.0
+        assert _backend_runtime.state.monitor.continuous_sit_start == 100.0
     finally:
-        server.state.monitor = original_monitor
+        _backend_runtime.state.monitor = original_monitor
 
 
 @pytest.mark.parametrize(
@@ -1972,9 +1974,9 @@ def test_get_sedentary_stats_reports_detection_state_and_trusted_duration(
 def test_get_sedentary_stats_fails_closed_for_invalid_heartbeat(
     heartbeat_attributes,
 ):
-    original_monitor = server.state.monitor
+    original_monitor = _backend_runtime.state.monitor
     try:
-        server.state.monitor = SimpleNamespace(
+        _backend_runtime.state.monitor = SimpleNamespace(
             continuous_sit_start=100.0,
             last_presence_time=400.0,
             last_observation_status="PRESENT",
@@ -1984,8 +1986,8 @@ def test_get_sedentary_stats_fails_closed_for_invalid_heartbeat(
             **heartbeat_attributes,
         )
 
-        with patch("src.server.time.time", return_value=600.0):
-            result = server.get_sedentary_stats()
+        with patch('src.backend.health.time.time', return_value=600.0):
+            result = _backend_health.get_sedentary_stats()
 
         assert result == {
             "status": "active",
@@ -1997,9 +1999,9 @@ def test_get_sedentary_stats_fails_closed_for_invalid_heartbeat(
             "active_timer": "focus",
             "threshold_minutes": 20,
         }
-        assert server.state.monitor.continuous_sit_start == 100.0
+        assert _backend_runtime.state.monitor.continuous_sit_start == 100.0
     finally:
-        server.state.monitor = original_monitor
+        _backend_runtime.state.monitor = original_monitor
 
 
 @pytest.mark.parametrize(
@@ -2010,9 +2012,9 @@ def test_get_sedentary_stats_fails_closed_for_invalid_heartbeat(
 def test_get_sedentary_stats_fails_closed_for_invalid_stale_timeout(
     stale_timeout,
 ):
-    original_monitor = server.state.monitor
+    original_monitor = _backend_runtime.state.monitor
     try:
-        server.state.monitor = SimpleNamespace(
+        _backend_runtime.state.monitor = SimpleNamespace(
             continuous_sit_start=100.0,
             last_presence_time=400.0,
             last_observation_status="PRESENT",
@@ -2022,8 +2024,8 @@ def test_get_sedentary_stats_fails_closed_for_invalid_stale_timeout(
             monitor_stale_timeout=stale_timeout,
         )
 
-        with patch("src.server.time.time", return_value=600.0):
-            result = server.get_sedentary_stats()
+        with patch('src.backend.health.time.time', return_value=600.0):
+            result = _backend_health.get_sedentary_stats()
 
         assert result == {
             "status": "active",
@@ -2036,7 +2038,7 @@ def test_get_sedentary_stats_fails_closed_for_invalid_stale_timeout(
             "threshold_minutes": 20,
         }
     finally:
-        server.state.monitor = original_monitor
+        _backend_runtime.state.monitor = original_monitor
 
 
 @pytest.mark.parametrize(
@@ -2053,9 +2055,9 @@ def test_get_sedentary_stats_fails_closed_for_invalid_stale_timeout(
 def test_get_sedentary_stats_fails_closed_until_current_observation_completes(
     observation_attributes,
 ):
-    original_monitor = server.state.monitor
+    original_monitor = _backend_runtime.state.monitor
     try:
-        server.state.monitor = SimpleNamespace(
+        _backend_runtime.state.monitor = SimpleNamespace(
             continuous_sit_start=100.0,
             last_presence_time=400.0,
             last_observation_status="PRESENT",
@@ -2065,8 +2067,8 @@ def test_get_sedentary_stats_fails_closed_until_current_observation_completes(
             **observation_attributes,
         )
 
-        with patch("src.server.time.time", return_value=600.0):
-            result = server.get_sedentary_stats()
+        with patch('src.backend.health.time.time', return_value=600.0):
+            result = _backend_health.get_sedentary_stats()
 
         assert result == {
             "status": "active",
@@ -2078,15 +2080,15 @@ def test_get_sedentary_stats_fails_closed_until_current_observation_completes(
             "active_timer": "focus",
             "threshold_minutes": 20,
         }
-        assert server.state.monitor.continuous_sit_start == 100.0
+        assert _backend_runtime.state.monitor.continuous_sit_start == 100.0
     finally:
-        server.state.monitor = original_monitor
+        _backend_runtime.state.monitor = original_monitor
 
 
 def test_get_sedentary_stats_does_not_reuse_present_status_after_stale_gap_reset():
-    original_monitor = server.state.monitor
+    original_monitor = _backend_runtime.state.monitor
     try:
-        server.state.monitor = SimpleNamespace(
+        _backend_runtime.state.monitor = SimpleNamespace(
             continuous_sit_start=None,
             last_presence_time=None,
             last_observation_status="PRESENT",
@@ -2096,8 +2098,8 @@ def test_get_sedentary_stats_does_not_reuse_present_status_after_stale_gap_reset
             monitor_stale_timeout=2 * 60,
         )
 
-        with patch("src.server.time.time", return_value=600.0):
-            result = server.get_sedentary_stats()
+        with patch('src.backend.health.time.time', return_value=600.0):
+            result = _backend_health.get_sedentary_stats()
 
         assert result == {
             "status": "active",
@@ -2110,7 +2112,7 @@ def test_get_sedentary_stats_does_not_reuse_present_status_after_stale_gap_reset
             "threshold_minutes": 20,
         }
     finally:
-        server.state.monitor = original_monitor
+        _backend_runtime.state.monitor = original_monitor
 
 
 @pytest.mark.parametrize(
@@ -2121,9 +2123,9 @@ def test_get_sedentary_stats_does_not_reuse_present_status_after_stale_gap_reset
 def test_get_sedentary_stats_prioritizes_stale_over_incomplete_observation(
     heartbeat,
 ):
-    original_monitor = server.state.monitor
+    original_monitor = _backend_runtime.state.monitor
     try:
-        server.state.monitor = SimpleNamespace(
+        _backend_runtime.state.monitor = SimpleNamespace(
             continuous_sit_start=100.0,
             last_presence_time=400.0,
             last_observation_status="PRESENT",
@@ -2133,8 +2135,8 @@ def test_get_sedentary_stats_prioritizes_stale_over_incomplete_observation(
             monitor_stale_timeout=2 * 60,
         )
 
-        with patch("src.server.time.time", return_value=600.0):
-            result = server.get_sedentary_stats()
+        with patch('src.backend.health.time.time', return_value=600.0):
+            result = _backend_health.get_sedentary_stats()
 
         assert result == {
             "status": "active",
@@ -2146,9 +2148,9 @@ def test_get_sedentary_stats_prioritizes_stale_over_incomplete_observation(
             "active_timer": "focus",
             "threshold_minutes": 20,
         }
-        assert server.state.monitor.continuous_sit_start == 100.0
+        assert _backend_runtime.state.monitor.continuous_sit_start == 100.0
     finally:
-        server.state.monitor = original_monitor
+        _backend_runtime.state.monitor = original_monitor
 
 
 @pytest.mark.parametrize(
@@ -2173,9 +2175,9 @@ def test_get_sedentary_stats_rejects_untrusted_duration_timestamps(
     last_presence,
     observation_status,
 ):
-    original_monitor = server.state.monitor
+    original_monitor = _backend_runtime.state.monitor
     try:
-        server.state.monitor = SimpleNamespace(
+        _backend_runtime.state.monitor = SimpleNamespace(
             continuous_sit_start=start,
             last_presence_time=last_presence,
             last_observation_status=observation_status,
@@ -2185,11 +2187,11 @@ def test_get_sedentary_stats_rejects_untrusted_duration_timestamps(
             monitor_stale_timeout=2 * 60,
         )
 
-        with patch("src.server.time.time", return_value=600.0):
-            result = server.get_sedentary_stats()
+        with patch('src.backend.health.time.time', return_value=600.0):
+            result = _backend_health.get_sedentary_stats()
 
         assert result["duration_seconds"] == 0
         assert result["duration_minutes"] == 0
         assert result["is_sitting"] is False
     finally:
-        server.state.monitor = original_monitor
+        _backend_runtime.state.monitor = original_monitor

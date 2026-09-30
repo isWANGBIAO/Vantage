@@ -3,18 +3,18 @@ import json
 import os
 from unittest.mock import patch
 
-from src import server
+from src.backend import action_plans as _backend_action_plans
 
 
 def _revision():
-    return asyncio.run(server.get_action_plan_source_revision())
+    return asyncio.run(_backend_action_plans.get_action_plan_source_revision())
 
 
 def test_revision_tracks_content_even_if_size_and_timestamp_are_unchanged(tmp_path):
     source = tmp_path / "Time.xlsx"
     source.write_bytes(b"first")
     original_stat = source.stat()
-    with patch.object(server.DataLoader, "resolve_data_path", return_value=source):
+    with patch.object(_backend_action_plans.DataLoader, "resolve_data_path", return_value=source):
         first = _revision()
         assert first.status_code == 200
         assert first.headers["cache-control"] == "no-store"
@@ -27,7 +27,7 @@ def test_revision_tracks_content_even_if_size_and_timestamp_are_unchanged(tmp_pa
 
 def test_missing_source_returns_retryable_error_without_private_path(tmp_path):
     source = tmp_path / "private" / "Time.xlsx"
-    with patch.object(server.DataLoader, "resolve_data_path", return_value=source):
+    with patch.object(_backend_action_plans.DataLoader, "resolve_data_path", return_value=source):
         result = _revision()
     assert result.status_code == 503
     assert str(tmp_path) not in result.body.decode()
@@ -35,7 +35,7 @@ def test_missing_source_returns_retryable_error_without_private_path(tmp_path):
 
 
 def test_unreadable_source_returns_retryable_error():
-    with patch.object(server, "_compute_action_plan_source_revision", side_effect=PermissionError("private")):
+    with patch.object(_backend_action_plans, "_compute_action_plan_source_revision", side_effect=PermissionError("private")):
         result = _revision()
     assert result.status_code == 503
     assert b"private" not in result.body
@@ -49,8 +49,8 @@ def test_source_modified_during_hash_is_rejected(tmp_path):
     after = source.stat()
     snapshot = tmp_path / "snapshot.xlsx"
     snapshot.write_bytes(b"initial")
-    with patch.object(server.DataLoader, "_safe_copy_excel", return_value=snapshot), patch.object(server.DataLoader, "resolve_data_path", return_value=source), patch.object(
-        server.Path, "stat", side_effect=[before, after]
+    with patch.object(_backend_action_plans.DataLoader, "_safe_copy_excel", return_value=snapshot), patch.object(_backend_action_plans.DataLoader, "resolve_data_path", return_value=source), patch.object(
+        _backend_action_plans.Path, "stat", side_effect=[before, after]
     ):
         result = _revision()
     assert result.status_code == 503
@@ -61,7 +61,7 @@ def test_locked_workbook_uses_snapshot_and_removes_it(tmp_path):
     source.write_bytes(b"workbook")
     snapshot = tmp_path / "snapshot.xlsx"
     snapshot.write_bytes(b"workbook")
-    original_open = server.Path.open
+    original_open = _backend_action_plans.Path.open
 
     def locked_open(path, *args, **kwargs):
         if path == source:
@@ -70,13 +70,13 @@ def test_locked_workbook_uses_snapshot_and_removes_it(tmp_path):
 
     def resolve(name, *args, **kwargs):
         target = tmp_path / name
-        if target.exists() or name in server.ACTION_PLAN_CONTENT_FILES:
+        if target.exists() or name in _backend_action_plans.ACTION_PLAN_CONTENT_FILES:
             return target
         raise FileNotFoundError(name)
 
-    with patch.object(server.DataLoader, "resolve_data_path", side_effect=resolve), patch.object(
-        server.DataLoader, "_safe_copy_excel", return_value=snapshot
-    ) as copy, patch.object(server.Path, "open", locked_open):
+    with patch.object(_backend_action_plans.DataLoader, "resolve_data_path", side_effect=resolve), patch.object(
+        _backend_action_plans.DataLoader, "_safe_copy_excel", return_value=snapshot
+    ) as copy, patch.object(_backend_action_plans.Path, "open", locked_open):
         result = _revision()
     assert result.status_code == 200
     assert copy.call_count >= 1
@@ -95,8 +95,8 @@ def test_revision_covers_every_source_the_action_plan_reads(tmp_path):
             return target
         raise FileNotFoundError(name)
 
-    with patch.object(server.DataLoader, "resolve_data_path", side_effect=resolve), patch.object(
-        server.DataLoader, "_safe_copy_excel", side_effect=lambda p: _snapshot(p, tmp_path)
+    with patch.object(_backend_action_plans.DataLoader, "resolve_data_path", side_effect=resolve), patch.object(
+        _backend_action_plans.DataLoader, "_safe_copy_excel", side_effect=lambda p: _snapshot(p, tmp_path)
     ):
         baseline = _revision().body
 
@@ -118,8 +118,8 @@ def test_revision_ignores_files_that_do_not_exist(tmp_path):
             return target
         raise FileNotFoundError(name)
 
-    with patch.object(server.DataLoader, "resolve_data_path", side_effect=resolve), patch.object(
-        server.DataLoader, "_safe_copy_excel", side_effect=lambda p: _snapshot(p, tmp_path)
+    with patch.object(_backend_action_plans.DataLoader, "resolve_data_path", side_effect=resolve), patch.object(
+        _backend_action_plans.DataLoader, "_safe_copy_excel", side_effect=lambda p: _snapshot(p, tmp_path)
     ):
         first = _revision()
         assert first.status_code == 200
@@ -137,5 +137,5 @@ def _snapshot(path, tmp_path):
 
 
 def test_copy_failure_returns_retryable_error():
-    with patch.object(server, "_compute_action_plan_source_revision", side_effect=server.subprocess.CalledProcessError(1, "copy")):
+    with patch.object(_backend_action_plans, "_compute_action_plan_source_revision", side_effect=_backend_action_plans.subprocess.CalledProcessError(1, "copy")):
         assert _revision().status_code == 503

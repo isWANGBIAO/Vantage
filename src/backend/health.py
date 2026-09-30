@@ -17,7 +17,7 @@ def _is_finite_nonnegative_number(value):
         and value >= 0
     )
 
-@router.get("/api/health/sedentary")
+@router.get("/api/v1/health/sedentary")
 def get_sedentary_stats():
     """Returns the current continuous sitting duration from the monitor."""
     try:

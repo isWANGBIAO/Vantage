@@ -10,7 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from src import server
+from src.backend import chat as _backend_chat
+from src.backend import media as _backend_media
+from src.backend import observability as _backend_observability
+from src.backend import plots as _backend_plots
+from src.backend import processes as _backend_processes
+from src.backend import runtime as _backend_runtime
+from src.backend import system as _backend_system
 from src.core.media_storage import get_media_paths_settings_file, save_media_paths_settings
 from src.scripts import plot
 from src.utils.data_loader import DataLoader
@@ -46,23 +52,23 @@ class BackendPathResolutionTests(unittest.TestCase):
             runtime_history = tmp_path / "appdata" / "history"
             project_root = tmp_path / "repo"
 
-            with patch.object(server.Config, "get_logs_dir", return_value=runtime_logs), patch.object(
-                server.Config,
+            with patch.object(_backend_runtime.Config, "get_logs_dir", return_value=runtime_logs), patch.object(
+                _backend_runtime.Config,
                 "get_plot_dir",
                 return_value=runtime_plots,
             ), patch.object(
-                server.Config,
+                _backend_runtime.Config,
                 "get_history_dir",
                 return_value=runtime_history,
             ), patch.object(
-                server.Config,
+                _backend_runtime.Config,
                 "get_project_root",
                 return_value=project_root,
             ):
-                self.assertEqual(server._runtime_logs_root(), runtime_logs)
-                self.assertEqual(server._get_plot_dir(), runtime_plots)
-                self.assertEqual(server._get_history_dir(), str(runtime_history))
-                self.assertEqual(server._get_runtime_workdir(), project_root)
+                self.assertEqual(_backend_observability._runtime_logs_root(), runtime_logs)
+                self.assertEqual(_backend_plots._get_plot_dir(), runtime_plots)
+                self.assertEqual(_backend_chat._get_history_dir(), str(runtime_history))
+                self.assertEqual(_backend_processes._get_runtime_workdir(), project_root)
 
     def test_aqi_endpoint_degrades_when_upstream_times_out(self):
         location_sample = LocationSample(
@@ -73,15 +79,15 @@ class BackendPathResolutionTests(unittest.TestCase):
             source="wi_fi",
         )
         with patch.object(
-            server,
+            _backend_system,
             "get_trusted_location_sample_async",
             return_value=location_sample,
         ) as mock_location, patch.object(
-            server.asyncio,
+            _backend_system.asyncio,
             "to_thread",
             side_effect=TimeoutError("boom"),
         ):
-            response = asyncio.run(server.get_aqi_stats())
+            response = asyncio.run(_backend_system.get_aqi_stats())
 
         self.assertIsInstance(response, dict)
         payload = response
@@ -100,7 +106,7 @@ class BackendPathResolutionTests(unittest.TestCase):
             photos_dir.mkdir(parents=True)
             screenshots_dir.mkdir(parents=True)
 
-            actual_photos, actual_screenshots = server.identify_logs_folder(
+            actual_photos, actual_screenshots = _backend_media.identify_logs_folder(
                 config_dir=config_dir,
                 user_home=str(tmp / "home"),
                 onedrive_env=None,
@@ -136,7 +142,7 @@ class BackendPathResolutionTests(unittest.TestCase):
             (newer_root / "Pictures" / "本机照片").mkdir(parents=True)
             (newer_root / "Pictures" / "Screenshots").mkdir(parents=True)
 
-            actual_photos, actual_screenshots = server.identify_logs_folder(
+            actual_photos, actual_screenshots = _backend_media.identify_logs_folder(
                 config_dir=config_dir,
                 user_home=str(tmp / "home"),
                 onedrive_env=None,
@@ -157,47 +163,47 @@ class BackendPathResolutionTests(unittest.TestCase):
             screenshots_dir.mkdir(parents=True)
 
             started_threads = []
-            original_paths = dict(server.state.paths)
-            original_status = dict(server.state.background_thread_status)
-            original_monitor = server.state.monitor
-            original_photos_path = server.state.photos_path
-            original_screenshots_path = server.state.screenshots_path
-            original_running = server.state.is_running
+            original_paths = dict(_backend_runtime.state.paths)
+            original_status = dict(_backend_runtime.state.background_thread_status)
+            original_monitor = _backend_runtime.state.monitor
+            original_photos_path = _backend_runtime.state.photos_path
+            original_screenshots_path = _backend_runtime.state.screenshots_path
+            original_running = _backend_runtime.state.is_running
 
             try:
                 with patch.object(
-                    server,
+                    _backend_media,
                     "identify_logs_folder",
                     return_value=(str(photos_dir), str(screenshots_dir)),
                 ), patch.object(
-                    server,
+                    _backend_runtime,
                     "Monitor",
                     return_value=object(),
                 ), patch.object(
-                    server,
+                    _backend_runtime,
                     "_mount_static_once",
                     return_value=False,
                 ), patch.object(
-                    server,
+                    _backend_plots,
                     "_get_plot_dir",
                     return_value=plot_dir,
                 ), patch.object(
-                    server,
+                    _backend_runtime,
                     "_start_background_thread_once",
                     side_effect=lambda name, target: started_threads.append(name) or True,
                 ), patch.object(
-                    server,
+                    _backend_media,
                     "find_latest_file_recursive",
                     side_effect=AssertionError("startup should not scan latest files synchronously"),
                 ):
-                    asyncio.run(server.startup_event())
+                    asyncio.run(_backend_runtime.startup_event())
             finally:
-                server.state.paths = original_paths
-                server.state.background_thread_status = original_status
-                server.state.monitor = original_monitor
-                server.state.photos_path = original_photos_path
-                server.state.screenshots_path = original_screenshots_path
-                server.state.is_running = original_running
+                _backend_runtime.state.paths = original_paths
+                _backend_runtime.state.background_thread_status = original_status
+                _backend_runtime.state.monitor = original_monitor
+                _backend_runtime.state.photos_path = original_photos_path
+                _backend_runtime.state.screenshots_path = original_screenshots_path
+                _backend_runtime.state.is_running = original_running
 
         self.assertIn("initialize_latest_media_state", started_threads)
 

@@ -17,9 +17,11 @@ import subprocess
 from contextlib import suppress
 from fastapi import APIRouter
 
+from .api_contracts import ActionPlanResult
+
 router = APIRouter()
 
-@router.get("/api/action_plan/today")
+@router.get("/api/v1/action-plan/today", response_model=ActionPlanResult, response_model_exclude_unset=True)
 async def get_today_action_plan():
     """Return today's latest action plan if it exists"""
     today = datetime.now().strftime("%Y%m%d")
@@ -54,6 +56,7 @@ async def get_today_action_plan():
             "meta": payload.get("meta"),
             "date": payload.get("date") or today,
             "filename": os.path.basename(latest_file),
+            "timestamp": os.path.getctime(latest_file),
             "id": payload.get("id"),
         }
     except Exception as e:
@@ -227,7 +230,7 @@ def _compute_action_plan_source_revision():
         _hash_action_plan_source(path, filename, digest)
     return digest.hexdigest()
 
-@router.get("/api/action_plan/source_revision")
+@router.get("/api/v1/action-plan/source-revision")
 async def get_action_plan_source_revision():
     try:
         revision = await asyncio.to_thread(_compute_action_plan_source_revision)
@@ -390,35 +393,8 @@ async def create_action_plan_stream(
 
     return StreamingResponse(process_stream(), media_type="application/x-ndjson")
 
-@router.get("/api/action_plan_content")
-async def get_action_plan_content():
-    try:
-        latest_file = _get_latest_action_plan_file()
-        if latest_file is None:
-            return {"exists": False, "analysis": None, "plan": None, "meta": None}
-
-        payload = _load_action_plan_payload(latest_file)
-        if not payload:
-            return {"exists": False, "analysis": None, "plan": None, "meta": None}
-
-        return {
-            "exists": True,
-            "analysis": payload.get("analysis"),
-            "plan": payload.get("plan"),
-            "meta": payload.get("meta"),
-            "timestamp": os.path.getctime(latest_file),
-            "filename": os.path.basename(latest_file),
-            "id": payload.get("id"),
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
 # Module-qualified references keep shared state and dependency overrides live.
 from . import chat as _chat
 from . import observability as _observability
 from . import processes as _processes
 from . import providers as _providers
-
-
-# Compatibility for Python integrations; HTTP generation is registered by application.py.
-generate_action_plan = create_action_plan_stream

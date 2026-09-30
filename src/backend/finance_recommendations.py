@@ -879,7 +879,7 @@ def _build_purchase_recommendations_payload(force_regenerate=False, request_conf
     _save_purchase_recommendation_cache(payload)
     return _with_dismissed_purchase_filter(payload, dismissed_items)
 
-@router.get("/api/balance_sheet/purchase_recommendations")
+@router.get("/api/v1/finance/purchase-recommendations")
 async def get_balance_sheet_purchase_recommendations(
     recommendation_count: Optional[int] = None,
     model: Optional[str] = None,
@@ -913,7 +913,7 @@ async def get_balance_sheet_purchase_recommendations(
             },
         )
 
-@router.post("/api/balance_sheet/purchase_recommendations/regenerate")
+@router.post("/api/v1/finance/purchase-recommendations/regenerate")
 async def regenerate_balance_sheet_purchase_recommendations(request: Optional[PurchaseRecommendationRequest] = None):
     request_payload = None
     if request is not None:
@@ -938,7 +938,7 @@ async def regenerate_balance_sheet_purchase_recommendations(request: Optional[Pu
             },
         )
 
-@router.post("/api/balance_sheet/purchase_recommendations/dismiss")
+@router.post("/api/v1/finance/purchase-recommendations/dismiss")
 async def dismiss_balance_sheet_purchase_recommendation(request: PurchaseRecommendationDismissRequest):
     try:
         return _record_purchase_recommendation_dismissal(
@@ -954,7 +954,7 @@ async def dismiss_balance_sheet_purchase_recommendation(request: PurchaseRecomme
             content={"ok": False, "error": "Failed to dismiss purchase recommendation.", "details": str(exc)},
         )
 
-@router.get("/api/balance_sheet/purchase_recommendations/dismissed")
+@router.get("/api/v1/finance/purchase-recommendations/dismissed")
 async def get_dismissed_balance_sheet_purchase_recommendations():
     try:
         return _build_purchase_dismissed_payload()
@@ -964,7 +964,7 @@ async def get_dismissed_balance_sheet_purchase_recommendations():
             content={"items": [], "count": 0, "error": "Failed to load dismissed recommendations.", "details": str(exc)},
         )
 
-@router.delete("/api/balance_sheet/purchase_recommendations/dismissed")
+@router.delete("/api/v1/finance/purchase-recommendations/dismissed")
 async def clear_dismissed_balance_sheet_purchase_recommendations():
     try:
         return _clear_purchase_recommendation_dismissals()
@@ -974,7 +974,7 @@ async def clear_dismissed_balance_sheet_purchase_recommendations():
             content={"ok": False, "error": "Failed to clear dismissed recommendations.", "details": str(exc)},
         )
 
-@router.delete("/api/balance_sheet/purchase_recommendations/dismissed/{item_id}")
+@router.delete("/api/v1/finance/purchase-recommendations/dismissed/{item_id}")
 async def delete_dismissed_balance_sheet_purchase_recommendation(item_id: int):
     try:
         return _delete_purchase_recommendation_dismissal(item_id)

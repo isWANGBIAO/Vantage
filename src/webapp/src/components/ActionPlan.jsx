@@ -355,7 +355,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
 
   const loadTodaysPlan = useCallback(async (signal) => {
     try {
-      const data = await fetchBackendJson('/api/action_plan/today', {
+      const data = await fetchBackendJson('/api/v1/action-plan/today', {
         retryPolicy: 'load',
         signal,
       });
@@ -454,7 +454,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
 
   const refreshChatContextBase = useCallback(async () => {
     try {
-      const data = await fetchBackendJson('/api/chat/context', {
+      const data = await fetchBackendJson('/api/v1/chat/context', {
         retryPolicy: 'load',
       });
 
@@ -665,7 +665,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
 
     const initializeModels = async () => {
       try {
-        const data = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load', signal: controller.signal });
+        const data = await fetchBackendJson('/api/v1/models', { retryPolicy: 'load', signal: controller.signal });
         if (!controller.signal.aborted) return applyModelCatalog(data);
       } catch (error) {
         console.error('Failed to load model list:', error);
@@ -719,7 +719,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
         setAutoRefreshStatus(t('action_plan.job.unavailable'));
         // Job history is process-local, but committed plans survive a backend
         // restart. Recover that saved view without inventing a job outcome.
-        const saved = await fetchBackendJson('/api/action_plan/today', {
+        const saved = await fetchBackendJson('/api/v1/action-plan/today', {
           signal: controller.signal, retryPolicy: 'none',
         });
         if (controller.signal.aborted || displayedJobIdRef.current !== job.id || isGeneratingRef.current) return;

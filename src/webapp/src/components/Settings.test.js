@@ -34,7 +34,7 @@ test('Settings exposes automatic theme mode and independent voice provider contr
   assert.ok(settingsSource.includes('settings.voice_provider.model'));
   assert.ok(settingsSource.includes('settings.provider.mode.inherit_ai'));
   assert.ok(settingsSource.includes('refreshSpecialProviderModels'));
-  assert.ok(settingsSource.includes('/api/provider_models/discover'));
+  assert.ok(settingsSource.includes('/api/v1/providers/models/discover'));
 });
 
 test('Settings no longer exposes image generation provider controls', () => {
@@ -54,7 +54,7 @@ test('Settings masks provider API key until the user reveals it', () => {
 
 test('Settings saves provider config and refreshes available LLM models', () => {
   assert.ok(settingsSource.includes('saveSettingsState'));
-  assert.ok(settingsSource.includes('/api/llm_models'));
+  assert.ok(settingsSource.includes('/api/v1/models'));
   assert.ok(settingsSource.includes("vantage:llm-models-updated"));
   assert.ok(settingsSource.includes('providerConfig'));
   assert.ok(settingsSource.includes('default_model'));
@@ -82,7 +82,7 @@ test('Settings renders multi-provider controls and discover refresh', () => {
   assert.ok(settingsSource.includes('deleteProvider'));
   assert.ok(settingsSource.includes('setDefaultProvider'));
   assert.ok(settingsSource.includes('toggleProviderEnabled'));
-  assert.ok(settingsSource.includes('/api/llm_models/discover'));
+  assert.ok(settingsSource.includes('/api/v1/models/discover'));
   assert.ok(settingsSource.includes('refreshProviderModels'));
   assert.ok(settingsSource.includes('settings-provider-model-select'));
   assert.ok(settingsSource.includes('currentProvider.models'));

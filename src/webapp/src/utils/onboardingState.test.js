@@ -26,7 +26,7 @@ test('completeOnboardingSetup submits the canonical backend contract', async () 
     return { completed: true, launchAtLogin: true };
   });
   assert.deepEqual(await completeOnboardingSetup({ launchAtLogin: true, skipChatSetup: true }, platform), { completed: true, launchAtLogin: true });
-  assert.deepEqual(received, { method: 'POST', path: '/api/automation/onboarding/complete', payload: { launch_at_login: true, skip_chat_setup: true } });
+  assert.deepEqual(received, { method: 'POST', path: '/api/v1/onboarding/complete', payload: { launch_at_login: true, skip_chat_setup: true } });
 });
 
 test('legacy picker uses a narrow optional platform capability', async () => {

@@ -97,7 +97,7 @@ def _load_recent_git_commits(project_root, days=14):
 
     return recent_commits
 
-@router.get("/api/project_progress")
+@router.get("/api/v1/projects/progress")
 async def get_project_progress():
     """Parse Prompt_Project_Management.md and git logs to return project momentum."""
     try:

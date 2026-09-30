@@ -32,7 +32,7 @@ export default function SystemLogs({ isVisible = false }) {
         let timer;
         const fetchLogs = async () => {
             try {
-                const data = await fetchBackendJson('/api/system_logs', {
+                const data = await fetchBackendJson('/api/v1/system/logs', {
                     retryPolicy: 'poll', signal: controller.signal,
                 });
                 if (!controller.signal.aborted && Array.isArray(data.logs)) {

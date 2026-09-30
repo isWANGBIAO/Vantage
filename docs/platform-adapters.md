@@ -4,8 +4,8 @@
 
 设置、provider 配置、显示语言和首次运行引导的权威状态都由本地后端保存。
 React/browser、Electron、CLI 和 MCP 读取、修改的是同一组
-`/api/automation/settings`、`/api/automation/settings/display-language`、
-`/api/automation/onboarding` 和 `/api/automation/onboarding/complete` API。
+`/api/v1/settings`、`/api/v1/settings/display-language`、
+`/api/v1/onboarding` 和 `/api/v1/onboarding/complete` API。
 
 - `src/webapp/src/utils/configurationProtocol.cjs` 只做 camelCase UI 与 snake_case
   HTTP DTO 之间的转换。配置验证、provider 合并、数据迁移和持久化不在前端实现
@@ -13,16 +13,15 @@ React/browser、Electron、CLI 和 MCP 读取、修改的是同一组
   和 `displayLanguageState.js` 提供 UI 使用的视图数据
 - browser 通过 `fetchBackendJson` 访问真实 HTTP API。没有 localStorage 设置后备库，
   不会在后端不可用时把 onboarding 视为完成，也不会把语言保存失败当作成功。
-  旧 browser 设置缓存不自动导入共享后端，避免旧值覆盖现有权威配置
-- Electron 配置兼容 transport 使用精确 allowlist 的
+- Electron 配置 transport 使用精确 allowlist 的
   `backend:configuration-request` IPC 转发相同的 canonical DTO。
   该 IPC 只接受六种固定 method/path 组合，不提供任意 URL、文件或 IPC 调用能力
 - 两种 transport 都拒绝 redirect；写操作不自动重试。无法确认持久化、返回非法
   状态或 native 同步失败时，调用者必须处理错误，不能宣布全部设置已生效
 
-旧 `window.electronAPI` 与 Settings/Onboarding IPC 作为兼容层保留，但新 UI 不使用。
-替换整个前端时，可直接按 HTTP API/canonical catalog 实现，无需复制 React 或 Electron
-中的业务实现。本文不会把目录工具函数中的历史测试兼容代码视为权威状态入口。
+UI 只使用 `window.vantagePlatform` 窄平台入口，不提供第二套 Electron 业务 IPC。
+替换整个前端时，可直接按 `/api/v1` HTTP API/canonical catalog 实现，无需复制
+React 或 Electron 中的业务实现。不提供旧 HTTP 路径、旧 origin 存储或旧桥接兼容层。
 
 ## 平台能力
 
@@ -74,14 +73,13 @@ URL 必须是 HTTP(S)，host 必须为 `localhost`、127/8 的标准点分 IPv4 
 
 - Electron preload 把 main 的实际连接描述传给 renderer。它优先于构建时 URL，避免
   安装后修改端口时 renderer 继续使用旧地址
-- 普通 browser 的 HTTP(S) 页面默认使用同源 `/api`、`/static` 路由，且页面源必须是
+- 普通 browser 的 HTTP(S) 页面默认使用同源 `/api/v1`、`/static` 路由，且页面源必须是
   loopback。Vite 代理按上述 canonical 环境变量连接后端
-- 旧 `VITE_BACKEND_PROXY_TARGET` / `VITE_BACKEND_BASE_URL` 仍作为未提供 canonical
-  配置时的兼容入口，仍受 loopback 验证。canonical Vite 配置覆盖旧 renderer URL
-- 静态前端如需直接连接，可以在 UI 代码加载前配置
-  `window.vantageConfig = { backendBaseUrl: 'http://127.0.0.1:8765' }`。
-  直连 browser 仍受后端 CORS 白名单限制；优先使用可信 loopback 同源反向代理，
-  不应放宽 CORS 到任意来源或关闭 TLS 验证
+- Vite 只读取 `VANTAGE_BACKEND_URL` / `VANTAGE_BACKEND_HOST` /
+  `VANTAGE_BACKEND_PORT` 配置同源代理，没有另一组 renderer/proxy 环境变量别名
+- 非 Electron 宿主可通过 `window.vantagePlatform.descriptor.backend` 提供 live
+  connection。普通 browser 优先使用可信 loopback 同源反向代理；不得放宽 CORS
+  到任意来源或关闭 TLS 验证
 - HTTPS 或带路径前缀的既有服务可以复用。如果无法连接，Electron 不会尝试把
   plain HTTP bundled backend 启动成一个不兼容的 HTTPS/prefixed endpoint
 
@@ -91,7 +89,7 @@ URL 必须是 HTTP(S)，host 必须为 `localhost`、127/8 的标准点分 IPv4 
 `appProtocol.cjs` 注册 standard、secure、Fetch 和 streaming 能力，保留 CSP 与
 `webSecurity`，不开放 `Origin: null` 或通配 CORS。
 
-- `vantage://app` 的 `/api/`、`/static/` 由主进程仅代理到已验证的 loopback 后端；
+- `vantage://app` 的 `/api/v1/`、`/static/` 由主进程仅代理到已验证的 loopback 后端；
   `/static/` 只读，其他 URL 只服务真实路径仍在 `dist` 内的已知静态资源类型
 - asset realpath 验证阻止符号链接逃逸；host、credentials、路径穿越与代理 redirect
   都被拒绝。代理仅转发必要的内容/范围/intent headers，不传 Cookie、Authorization、

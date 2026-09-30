@@ -208,7 +208,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       try {
         const [nextState, modelCatalog] = await Promise.all([
           loadSettingsState(),
-          fetchBackendJson('/api/llm_models', { retryPolicy: 'load' }).catch(() => null),
+          fetchBackendJson('/api/v1/models', { retryPolicy: 'load' }).catch(() => null),
         ]);
         if (cancelled) {
           return;
@@ -443,7 +443,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     setRefreshingModels(true);
     setSaveStatus('');
     try {
-      const payload = await fetchBackendJson('/api/llm_models/discover', {
+      const payload = await fetchBackendJson('/api/v1/models/discover', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -489,7 +489,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     setRefreshingSpecialModels(kind);
     setSaveStatus('');
     try {
-      const payload = await fetchBackendJson('/api/provider_models/discover', {
+      const payload = await fetchBackendJson('/api/v1/providers/models/discover', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -582,7 +582,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       window.dispatchEvent(new CustomEvent('vantage:settings-updated', {
         detail: savedState.settings,
       }));
-      const modelCatalog = await fetchBackendJson('/api/llm_models', { retryPolicy: 'poll' }).catch(() => null);
+      const modelCatalog = await fetchBackendJson('/api/v1/models', { retryPolicy: 'poll' }).catch(() => null);
       window.dispatchEvent(new CustomEvent('vantage:llm-models-updated', {
         detail: modelCatalog || {
           models: [],

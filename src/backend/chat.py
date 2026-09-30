@@ -5,15 +5,22 @@ import hashlib
 import json
 import logging
 import os
+import re
+import weakref
 from contextlib import suppress
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
 
+from src.backend.api_contracts import ChatContextResponse, ChatRequest, ChatStreamEvent, ContextErrorResponse
+from src.backend.responses import NDJSONResponse, ndjson_openapi
 from src.core.config import Config
+from src.core.context import (
+    ContextReadError, atomic_write_json, context_revision, context_transaction,
+    read_context_snapshot, write_context_messages,
+)
 from src.services.model_call_recorder import (
     get_session_usage_summary,
     get_usage_dashboard_snapshot,
@@ -25,14 +32,15 @@ from . import processes as _processes
 
 router = APIRouter()
 
-class ChatRequest(BaseModel):
-    message: str
-    model: Optional[str] = None
-    provider_route: Optional[str] = None
-    context_file: Optional[str] = None
-    reasoning_effort: Optional[str] = None
-    service_tier: Optional[str] = None
-    client_sent_at: Optional[str] = None
+# A turn owns the session until its subprocess is reaped. Distinct event loops
+# (including test clients) never reuse an asyncio primitive bound to another loop.
+_chat_session_locks = weakref.WeakKeyDictionary()
+
+
+def _chat_session_lock():
+    loop = asyncio.get_running_loop()
+    locks = _chat_session_locks.setdefault(loop, {})
+    return locks.setdefault(str(Path(_get_latest_context_file()).resolve()), asyncio.Lock())
 
 _VALID_REASONING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 
@@ -96,9 +104,7 @@ def _read_context_session_id(path: str):
 
 def _write_context_session_payload(path: str, payload):
     session_path = _get_context_session_file(path)
-    session_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(session_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    atomic_write_json(session_path, payload)
 
 def _remove_context_session_payload(path: str):
     session_path = _get_context_session_file(path)
@@ -120,23 +126,18 @@ def _load_context_session_stats(path: str):
         return None
 
 def _load_context_messages(path: str):
-    context_path = Path(path)
-    if not context_path.exists():
-        return []
+    return read_context_snapshot(path)[0]
 
-    try:
-        with open(context_path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, json.JSONDecodeError, TypeError):
-        return []
 
-    return payload if isinstance(payload, list) else []
+def _unreadable_context_error():
+    return HTTPException(status_code=503, detail={
+        "code": "CONTEXT_UNREADABLE",
+        "message": "Conversation context is unreadable; original files were preserved.",
+    })
+
 
 def _write_context_messages(path: str, messages):
-    context_path = Path(path)
-    context_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(context_path, "w", encoding="utf-8") as handle:
-        json.dump(messages, handle, ensure_ascii=False, indent=2)
+    write_context_messages(path, messages)
 
 def _build_chat_display_messages(messages):
     display_messages = []
@@ -180,55 +181,92 @@ def _build_preferred_chat_model_fields(stats=None):
         "preferred_model_option_id": preferred_option_id,
     }
 
+def _visible_chat_history(messages, action_plan_messages, session):
+    """Expose only plan replies and actual chat turns, never model input prompts."""
+    base = _build_chat_display_messages(action_plan_messages)
+    if action_plan_messages:
+        # A mismatched base can occur after a interrupted publication. Do not
+        # guess which user-role entries are private analysis prompts.
+        if messages[:len(action_plan_messages)] != action_plan_messages:
+            return base
+        tail = messages[len(action_plan_messages):]
+    elif session.get("source") == "chat":
+        tail = messages
+    else:
+        return []
+    visible = list(base)
+    for message in tail:
+        if not isinstance(message, dict) or message.get("role") not in {"user", "assistant"}:
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        if message["role"] == "user":
+            content = re.sub(r"^\[Message timestamp: [^\r\n]*\]\n", "", content, count=1)
+        visible.append({"role": message["role"], "content": content})
+    return visible
+
+
 def _build_chat_context_payload():
-    action_plan_context_path = Path(_action_plans._get_action_plan_context_file())
-    stats = _load_context_session_stats(_get_latest_context_file())
-    preferred_fields = _build_preferred_chat_model_fields(stats)
-    if not action_plan_context_path.exists():
+    latest_path = _get_latest_context_file()
+    with context_transaction(latest_path):
+        action_plan_context_path = Path(_action_plans._get_action_plan_context_file())
+        action_plan_messages = _load_context_messages(str(action_plan_context_path))
+        latest_messages = _load_context_messages(latest_path)
+        session = _read_context_session_payload(latest_path) or {}
+        stats = _load_context_session_stats(latest_path)
+        try:
+            digest = hashlib.sha1(action_plan_context_path.read_bytes()).hexdigest()
+        except OSError:
+            digest = "empty"
         return {
-            "base_context_version": "empty",
-            "has_action_plan_context": False,
-            "display_messages": [],
+            "base_context_version": digest,
+            "context_version": context_revision(latest_path),
+            "has_action_plan_context": action_plan_context_path.exists(),
+            "display_messages": _build_chat_display_messages(action_plan_messages),
+            "messages": _visible_chat_history(latest_messages, action_plan_messages, session),
             "stats": stats,
-            **preferred_fields,
+            **_build_preferred_chat_model_fields(stats),
         }
 
-    try:
-        digest = hashlib.sha1(action_plan_context_path.read_bytes()).hexdigest()
-    except OSError:
-        digest = "empty"
 
-    action_plan_messages = _load_context_messages(str(action_plan_context_path))
-    return {
-        "base_context_version": digest or "empty",
-        "has_action_plan_context": True,
-        "display_messages": _build_chat_display_messages(action_plan_messages),
-        "stats": stats,
-        **preferred_fields,
-    }
-
-@router.get("/api/chat/context")
+@router.get("/api/v1/chat/context", response_model=ChatContextResponse, responses={503: {"model": ContextErrorResponse}})
 async def get_chat_context():
-    return _build_chat_context_payload()
+    async with _chat_session_lock():
+        try:
+            return _build_chat_context_payload()
+        except ContextReadError:
+            raise _unreadable_context_error() from None
 
-@router.delete("/api/chat/context")
+
+@router.delete("/api/v1/chat/context", response_model=ChatContextResponse, responses={503: {"model": ContextErrorResponse}})
 async def reset_chat_context():
-    action_plan_messages = _load_context_messages(_action_plans._get_action_plan_context_file())
-    _write_context_messages(_get_latest_context_file(), action_plan_messages)
-    action_plan_session_payload = _read_context_session_payload(_action_plans._get_action_plan_context_file())
-    if action_plan_session_payload:
-        _write_context_session_payload(_get_latest_context_file(), action_plan_session_payload)
-    else:
-        _remove_context_session_payload(_get_latest_context_file())
-    return _build_chat_context_payload()
+    async with _chat_session_lock():
+        try:
+            with context_transaction(_get_latest_context_file()):
+                # Validate both files before any destructive reset. A corrupt
+                # base/latest file is recoverable data, not an empty session.
+                _load_context_messages(_get_latest_context_file())
+                action_plan_messages = _load_context_messages(_action_plans._get_action_plan_context_file())
+                _write_context_messages(_get_latest_context_file(), action_plan_messages)
+                action_plan_session_payload = _read_context_session_payload(_action_plans._get_action_plan_context_file())
+                if action_plan_session_payload:
+                    _write_context_session_payload(_get_latest_context_file(), action_plan_session_payload)
+                else:
+                    _remove_context_session_payload(_get_latest_context_file())
+                return _build_chat_context_payload()
+        except ContextReadError:
+            raise _unreadable_context_error() from None
 
-@router.get("/api/usage")
+@router.get("/api/v1/usage")
 async def get_usage_dashboard():
     return get_usage_dashboard_snapshot(
         db_file=Path(Config.get_history_dir()) / "state.db",
     )
 
-@router.post("/api/chat")
+@router.post("/api/v1/chat", response_class=NDJSONResponse,
+             responses={200: {"model": ChatStreamEvent, "description": "UTF-8 NDJSON; one chat event per line."}},
+             openapi_extra=ndjson_openapi(ChatStreamEvent))
 async def chat_endpoint(request: ChatRequest):
     try:
         context_file = _resolve_chat_context_file(request.context_file)
@@ -306,7 +344,16 @@ async def chat_endpoint(request: ChatRequest):
                         logging.warning("Killing orphan chat subprocess")
                     await _processes.reap_subprocess(proc)
 
+    async def serialized_chat_stream():
+        async with _chat_session_lock():
+            iterator = process_chat_stream()
+            try:
+                async for event in iterator:
+                    yield event
+            finally:
+                await iterator.aclose()
+
     try:
-        return StreamingResponse(process_chat_stream(), media_type="application/x-ndjson")
+        return StreamingResponse(serialized_chat_stream(), media_type="application/x-ndjson")
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})

@@ -21,7 +21,7 @@ set "BACKEND_RUNTIME_SYNC=%PROJECT_ROOT%src\scripts\sync_backend_runtime_environ
 set "BACKEND_RUNTIME_LOCK_RUNNER=%PROJECT_ROOT%src\scripts\run_with_backend_runtime_lock.py"
 set "BACKEND_RUNTIME_BACKGROUND_LAUNCHER=%PROJECT_ROOT%src\scripts\launch_locked_backend_background.py"
 set "FRONTEND_ROOT=%PROJECT_ROOT%src\webapp"
-set "BACKEND_STATUS_URL=http://127.0.0.1:8000/api/status"
+set "BACKEND_STATUS_URL=http://127.0.0.1:8000/api/v1/system/status"
 set "BACKEND_WAIT_TIMEOUT=60"
 set "SERVER_LATEST_POINTER=%PROJECT_ROOT%logs\server.latest.log"
 

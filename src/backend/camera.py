@@ -863,11 +863,11 @@ def generate_frames():
     finally:
         unregister_video_stream_client()
 
-@router.get("/api/stream")
+@router.get("/api/v1/camera/stream")
 async def video_feed():
     return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
-@router.post("/api/renderer_camera/frame")
+@router.post("/api/v1/camera/frame")
 async def receive_renderer_camera_frame(request: Request):
     if not _security._has_local_action_intent(request.headers, RENDERER_CAMERA_FRAME_INTENT):
         return JSONResponse(status_code=403, content={"error": "Missing local action intent"})
@@ -913,7 +913,7 @@ async def receive_renderer_camera_frame(request: Request):
         "height": int(frame.shape[0]),
     }
 
-@router.post("/api/toggle_detection")
+@router.post("/api/v1/camera/detection/toggle")
 async def toggle_detection():
     with _runtime.state.lock:
         _runtime.state.show_person_box = not _runtime.state.show_person_box

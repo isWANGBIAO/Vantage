@@ -89,7 +89,7 @@ function requestBackendStatus({
   timeoutMs = 5000,
 } = {}) {
   const connection = resolveBackendConnection({ env });
-  const targetUrl = url || buildConnectionUrl(connection, '/api/status');
+  const targetUrl = url || buildConnectionUrl(connection, '/api/v1/system/status');
   const target = new URL(targetUrl);
   resolveBackendConnection({ baseUrl: target.origin });
   return new Promise((resolve, reject) => {

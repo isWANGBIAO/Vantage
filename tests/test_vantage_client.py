@@ -78,7 +78,7 @@ def test_json_operation_defaults_to_loopback_backend_and_returns_json():
     assert session.calls == [
         (
             "GET",
-            "http://127.0.0.1:8000/api/status",
+            "http://127.0.0.1:8000/api/v1/system/status",
             {"allow_redirects": False, "timeout": 30.0},
         )
     ]
@@ -120,7 +120,7 @@ def test_path_parameters_are_substituted_and_removed_from_request_arguments():
 
     method, url, kwargs = session.calls[0]
     assert method == "DELETE"
-    assert url.endswith("/api/balance_sheet/purchase_recommendations/dismissed/17")
+    assert url.endswith("/api/v1/finance/purchase-recommendations/dismissed/17")
     assert kwargs == {"allow_redirects": False, "timeout": 30.0}
 
 
@@ -358,7 +358,7 @@ def test_backend_redirect_is_reported_without_contacting_external_location():
 
     assert len(adapter.sent_requests) == 1
     url, method, body = adapter.sent_requests[0]
-    assert url == "http://127.0.0.1:8000/api/llm_models/discover"
+    assert url == "http://127.0.0.1:8000/api/v1/models/discover"
     assert method == "POST"
     body_text = body.decode("utf-8") if isinstance(body, bytes) else str(body)
     assert request_secret in body_text
@@ -372,7 +372,7 @@ def test_stream_operations_yield_decoded_ndjson_records_and_close_response():
     )
     session = RecordingSession(response)
 
-    result = list(VantageClient(session=session).invoke("action_plan.generate"))
+    result = list(VantageClient(session=session).invoke("action_plan.jobs.events", {"job_id": "test-job"}))
 
     assert result == [{"event": "progress", "value": 0.5}, {"event": "done"}]
     assert session.calls[0][2]["stream"] is True

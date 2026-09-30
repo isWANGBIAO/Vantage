@@ -346,7 +346,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
     }
 
     try {
-      const json = await fetchBackendJson('/api/face/report', {
+      const json = await fetchBackendJson('/api/v1/face/report', {
         retryPolicy: 'load',
         signal: controller.signal,
       });
@@ -365,7 +365,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
 
   const fetchLive = useCallback(async () => {
     try {
-      const json = await fetchBackendJson(`/api/face/live?active=${isVisible ? '1' : '0'}`, {
+      const json = await fetchBackendJson(`/api/v1/face/live?active=${isVisible ? '1' : '0'}`, {
         retryPolicy: 'poll',
       });
       setLiveData({
@@ -403,7 +403,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetchBackend('/api/face/progress', {
+        const res = await fetchBackend('/api/v1/face/progress', {
           retryPolicy: 'poll',
           allowHttpError: true,
         });
@@ -438,7 +438,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
       setLoading(true);
       setError(null);
       setProgress({ percent: 0, status: 'starting', current_file: '' });
-      await fetchBackend('/api/face/analyze', {
+      await fetchBackend('/api/v1/face/analyze', {
         method: 'POST',
         retryPolicy: 'mutation',
       });
@@ -452,7 +452,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
   const handleExport = async () => {
     try {
       setError(null);
-      const res = await fetchBackend('/api/face/export_excel', {
+      const res = await fetchBackend('/api/v1/face/export', {
         retryPolicy: 'download',
         allowHttpError: true,
       });

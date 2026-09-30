@@ -16,7 +16,7 @@ const ProjectProgress = () => {
         setLoading(true);
         setError(null);
         try {
-            const result = await fetchBackendJson('/api/project_progress', { retryPolicy: 'load' });
+            const result = await fetchBackendJson('/api/v1/projects/progress', { retryPolicy: 'load' });
             setData(result);
         } catch (error) {
             setError('project_progress.error.body');

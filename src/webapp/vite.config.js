@@ -5,20 +5,11 @@ import connectionContract from './src/utils/backendConnection.cjs'
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '')
-  const canonicalConnection = env.VANTAGE_BACKEND_URL || env.VANTAGE_BACKEND_HOST || env.VANTAGE_BACKEND_PORT
-  const backendProxyTarget = connectionContract.resolveBackendConnection({
-    env,
-    baseUrl: canonicalConnection ? undefined : env.VITE_BACKEND_PROXY_TARGET || env.VITE_BACKEND_BASE_URL,
-  }).baseUrl
+  const backendProxyTarget = connectionContract.resolveBackendConnection({ env }).baseUrl
 
   return {
     base: './',
     plugins: [react()],
-    define: {
-      // Canonical connection settings configure the same-origin proxy and must
-      // not be overridden by a stale legacy renderer URL from a .env file.
-      'import.meta.env.VITE_BACKEND_BASE_URL': JSON.stringify(canonicalConnection ? '' : env.VITE_BACKEND_BASE_URL || ''),
-    },
     build: {
       chunkSizeWarningLimit: 900,
       rollupOptions: {
@@ -51,7 +42,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       proxy: {
-        '/api': {
+        '/api/v1': {
           target: backendProxyTarget,
           changeOrigin: true,
           secure: true,

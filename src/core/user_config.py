@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 import threading
 from copy import deepcopy
 from pathlib import Path
@@ -144,23 +146,43 @@ def build_default_migration_state() -> dict:
     return deepcopy(DEFAULT_MIGRATION_STATE)
 
 
+class ConfigurationReadError(RuntimeError):
+    """Existing unreadable configuration is preserved for recovery."""
+
+
 def _read_json_payload(target_file: str | Path) -> dict | None:
     resolved_file = Path(target_file)
-    if not resolved_file.exists():
-        return None
-
     try:
-        payload = json.loads(resolved_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, TypeError):
+        raw = resolved_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return None
+    except (OSError, UnicodeError) as exc:
+        raise ConfigurationReadError("Configuration cannot be read; the original file was preserved.") from exc
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise ConfigurationReadError("Configuration is invalid JSON; the original file was preserved.") from exc
+    if not isinstance(payload, dict):
+        raise ConfigurationReadError("Configuration must be a JSON object; the original file was preserved.")
+    return payload
 
-    return payload if isinstance(payload, dict) else None
+
+def _atomic_write_bytes(target_file: str | Path, content: bytes) -> None:
+    resolved_file = Path(target_file)
+    resolved_file.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{resolved_file.name}.", dir=resolved_file.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, resolved_file)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def _write_json_payload(target_file: str | Path, payload: dict) -> dict:
-    resolved_file = Path(target_file)
-    resolved_file.parent.mkdir(parents=True, exist_ok=True)
-    resolved_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_bytes(target_file, json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
     return payload
 
 

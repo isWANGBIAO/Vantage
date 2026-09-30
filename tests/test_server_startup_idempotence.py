@@ -4,6 +4,10 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from src.backend import face as _backend_face
+from src.backend import media as _backend_media
+from src.backend import plots as _backend_plots
+from src.backend import runtime as _backend_runtime
 from src import server
 
 STATIC_ROUTE_PATHS = (
@@ -50,12 +54,12 @@ def _static_route_directories():
 
 def test_startup_registers_media_roots_before_logging_or_monitor_creation():
     original_routes = list(server.app.router.routes)
-    original_photos = server.state.photos_path
-    original_screenshots = server.state.screenshots_path
-    original_monitor = server.state.monitor
-    original_paths = dict(server.state.paths)
-    original_running = server.state.is_running
-    original_background_thread_status = dict(server.state.background_thread_status)
+    original_photos = _backend_runtime.state.photos_path
+    original_screenshots = _backend_runtime.state.screenshots_path
+    original_monitor = _backend_runtime.state.monitor
+    original_paths = dict(_backend_runtime.state.paths)
+    original_running = _backend_runtime.state.is_running
+    original_background_thread_status = dict(_backend_runtime.state.background_thread_status)
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -80,24 +84,24 @@ def test_startup_registers_media_roots_before_logging_or_monitor_creation():
 
             with (
                 patch.object(
-                    server,
+                    _backend_media,
                     "identify_logs_folder",
                     return_value=(str(photos_path), str(screenshots_path)),
                 ),
                 patch.object(
-                    server,
+                    _backend_runtime,
                     "register_runtime_log_path_prefixes",
                     side_effect=register_prefixes,
                     create=True,
                 ),
-                patch.object(server, "Monitor", side_effect=create_monitor),
-                patch.object(server, "prewarm_runtime_models"),
-                patch.object(server, "_start_background_thread_once"),
-                patch.object(server, "_mount_static_once"),
-                patch.object(server, "_get_plot_dir", return_value=tmp_path / "plots"),
+                patch.object(_backend_runtime, "Monitor", side_effect=create_monitor),
+                patch.object(_backend_face, "prewarm_runtime_models"),
+                patch.object(_backend_runtime, "_start_background_thread_once"),
+                patch.object(_backend_runtime, "_mount_static_once"),
+                patch.object(_backend_plots, "_get_plot_dir", return_value=tmp_path / "plots"),
                 patch("builtins.print", side_effect=record_print),
             ):
-                asyncio.run(server.startup_event())
+                asyncio.run(_backend_runtime.startup_event())
 
             assert events[0] == (
                 "register",
@@ -114,21 +118,21 @@ def test_startup_registers_media_roots_before_logging_or_monitor_creation():
             ]
     finally:
         server.app.router.routes[:] = original_routes
-        server.state.photos_path = original_photos
-        server.state.screenshots_path = original_screenshots
-        server.state.monitor = original_monitor
-        server.state.paths = original_paths
-        server.state.is_running = original_running
-        server.state.background_thread_status = original_background_thread_status
+        _backend_runtime.state.photos_path = original_photos
+        _backend_runtime.state.screenshots_path = original_screenshots
+        _backend_runtime.state.monitor = original_monitor
+        _backend_runtime.state.paths = original_paths
+        _backend_runtime.state.is_running = original_running
+        _backend_runtime.state.background_thread_status = original_background_thread_status
 
 
 def test_startup_event_is_idempotent_for_static_mounts_and_threads():
     original_routes = list(server.app.router.routes)
-    original_photos = server.state.photos_path
-    original_screenshots = server.state.screenshots_path
-    original_monitor = server.state.monitor
-    original_paths = dict(server.state.paths)
-    original_background_thread_status = dict(server.state.background_thread_status)
+    original_photos = _backend_runtime.state.photos_path
+    original_screenshots = _backend_runtime.state.screenshots_path
+    original_monitor = _backend_runtime.state.monitor
+    original_paths = dict(_backend_runtime.state.paths)
+    original_background_thread_status = dict(_backend_runtime.state.background_thread_status)
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -146,16 +150,16 @@ def test_startup_event_is_idempotent_for_static_mounts_and_threads():
                 return object()
 
             with (
-                patch.object(server, "identify_logs_folder", return_value=(str(photos_path), str(screenshots_path))),
-                patch.object(server, "find_latest_file_recursive", return_value=None),
-                patch.object(server, "Monitor", side_effect=create_monitor),
-                patch.object(server.threading, "Thread", _DummyThread),
-                patch.object(server.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
-                patch.object(server.Config, "get_runtime_dir", return_value=tmp_path / "runtime"),
+                patch.object(_backend_media, "identify_logs_folder", return_value=(str(photos_path), str(screenshots_path))),
+                patch.object(_backend_media, "find_latest_file_recursive", return_value=None),
+                patch.object(_backend_runtime, "Monitor", side_effect=create_monitor),
+                patch.object(_backend_runtime.threading, "Thread", _DummyThread),
+                patch.object(_backend_runtime.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
+                patch.object(_backend_runtime.Config, "get_runtime_dir", return_value=tmp_path / "runtime"),
             ):
-                asyncio.run(server.startup_event())
+                asyncio.run(_backend_runtime.startup_event())
                 after_first_startup = _static_route_directories()
-                asyncio.run(server.startup_event())
+                asyncio.run(_backend_runtime.startup_event())
                 after_second_startup = _static_route_directories()
 
             assert after_first_startup == {
@@ -172,20 +176,20 @@ def test_startup_event_is_idempotent_for_static_mounts_and_threads():
             )
     finally:
         server.app.router.routes[:] = original_routes
-        server.state.photos_path = original_photos
-        server.state.screenshots_path = original_screenshots
-        server.state.monitor = original_monitor
-        server.state.paths = original_paths
-        server.state.background_thread_status = original_background_thread_status
+        _backend_runtime.state.photos_path = original_photos
+        _backend_runtime.state.screenshots_path = original_screenshots
+        _backend_runtime.state.monitor = original_monitor
+        _backend_runtime.state.paths = original_paths
+        _backend_runtime.state.background_thread_status = original_background_thread_status
 
 
 def test_startup_event_prewarms_runtime_models_before_background_threads():
     original_routes = list(server.app.router.routes)
-    original_photos = server.state.photos_path
-    original_screenshots = server.state.screenshots_path
-    original_monitor = server.state.monitor
-    original_paths = dict(server.state.paths)
-    original_background_thread_status = dict(server.state.background_thread_status)
+    original_photos = _backend_runtime.state.photos_path
+    original_screenshots = _backend_runtime.state.screenshots_path
+    original_monitor = _backend_runtime.state.monitor
+    original_paths = dict(_backend_runtime.state.paths)
+    original_background_thread_status = dict(_backend_runtime.state.background_thread_status)
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -208,34 +212,34 @@ def test_startup_event_prewarms_runtime_models_before_background_threads():
                     events.append(f"thread:{getattr(self.target, '__name__', 'unknown')}")
 
             with (
-                patch.object(server, "identify_logs_folder", return_value=(str(photos_path), str(screenshots_path))),
-                patch.object(server, "find_latest_file_recursive", return_value=None),
-                patch.object(server, "Monitor", side_effect=lambda *args, **kwargs: object()),
-                patch.object(server, "prewarm_runtime_models", side_effect=record_prewarm),
-                patch.object(server.threading, "Thread", _RecordingThread),
-                patch.object(server.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
+                patch.object(_backend_media, "identify_logs_folder", return_value=(str(photos_path), str(screenshots_path))),
+                patch.object(_backend_media, "find_latest_file_recursive", return_value=None),
+                patch.object(_backend_runtime, "Monitor", side_effect=lambda *args, **kwargs: object()),
+                patch.object(_backend_face, "prewarm_runtime_models", side_effect=record_prewarm),
+                patch.object(_backend_runtime.threading, "Thread", _RecordingThread),
+                patch.object(_backend_runtime.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
             ):
-                asyncio.run(server.startup_event())
+                asyncio.run(_backend_runtime.startup_event())
 
             assert events[0] == "prewarm"
             assert any(event.startswith("thread:") for event in events[1:])
     finally:
         server.app.router.routes[:] = original_routes
-        server.state.photos_path = original_photos
-        server.state.screenshots_path = original_screenshots
-        server.state.monitor = original_monitor
-        server.state.paths = original_paths
-        server.state.background_thread_status = original_background_thread_status
+        _backend_runtime.state.photos_path = original_photos
+        _backend_runtime.state.screenshots_path = original_screenshots
+        _backend_runtime.state.monitor = original_monitor
+        _backend_runtime.state.paths = original_paths
+        _backend_runtime.state.background_thread_status = original_background_thread_status
 
 
 def test_startup_event_retries_partial_failure_without_duplicate_threads():
     original_routes = list(server.app.router.routes)
-    original_photos = server.state.photos_path
-    original_screenshots = server.state.screenshots_path
-    original_monitor = server.state.monitor
-    original_paths = dict(server.state.paths)
-    original_running = server.state.is_running
-    original_background_thread_status = dict(server.state.background_thread_status)
+    original_photos = _backend_runtime.state.photos_path
+    original_screenshots = _backend_runtime.state.screenshots_path
+    original_monitor = _backend_runtime.state.monitor
+    original_paths = dict(_backend_runtime.state.paths)
+    original_running = _backend_runtime.state.is_running
+    original_background_thread_status = dict(_backend_runtime.state.background_thread_status)
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -256,14 +260,14 @@ def test_startup_event_retries_partial_failure_without_duplicate_threads():
                 return None
 
             with (
-                patch.object(server, "identify_logs_folder", return_value=(str(photos_path), str(screenshots_path))),
-                patch.object(server, "find_latest_file_recursive", side_effect=flaky_find_latest_file_recursive),
-                patch.object(server, "Monitor", side_effect=lambda *args, **kwargs: object()),
-                patch.object(server.threading, "Thread", _DummyThread),
-                patch.object(server.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
+                patch.object(_backend_media, "identify_logs_folder", return_value=(str(photos_path), str(screenshots_path))),
+                patch.object(_backend_media, "find_latest_file_recursive", side_effect=flaky_find_latest_file_recursive),
+                patch.object(_backend_runtime, "Monitor", side_effect=lambda *args, **kwargs: object()),
+                patch.object(_backend_runtime.threading, "Thread", _DummyThread),
+                patch.object(_backend_runtime.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
             ):
-                asyncio.run(server.startup_event())
-                asyncio.run(server.startup_event())
+                asyncio.run(_backend_runtime.startup_event())
+                asyncio.run(_backend_runtime.startup_event())
                 after_retry = _static_route_directories()
 
             assert after_retry == {
@@ -274,22 +278,22 @@ def test_startup_event_retries_partial_failure_without_duplicate_threads():
             assert _DummyThread.started_count == 7
     finally:
         server.app.router.routes[:] = original_routes
-        server.state.photos_path = original_photos
-        server.state.screenshots_path = original_screenshots
-        server.state.monitor = original_monitor
-        server.state.paths = original_paths
-        server.state.is_running = original_running
-        server.state.background_thread_status = original_background_thread_status
+        _backend_runtime.state.photos_path = original_photos
+        _backend_runtime.state.screenshots_path = original_screenshots
+        _backend_runtime.state.monitor = original_monitor
+        _backend_runtime.state.paths = original_paths
+        _backend_runtime.state.is_running = original_running
+        _backend_runtime.state.background_thread_status = original_background_thread_status
 
 
 def test_startup_event_updates_static_mounts_after_shutdown():
     original_routes = list(server.app.router.routes)
-    original_photos = server.state.photos_path
-    original_screenshots = server.state.screenshots_path
-    original_monitor = server.state.monitor
-    original_paths = dict(server.state.paths)
-    original_running = server.state.is_running
-    original_background_thread_status = dict(server.state.background_thread_status)
+    original_photos = _backend_runtime.state.photos_path
+    original_screenshots = _backend_runtime.state.screenshots_path
+    original_monitor = _backend_runtime.state.monitor
+    original_paths = dict(_backend_runtime.state.paths)
+    original_running = _backend_runtime.state.is_running
+    original_background_thread_status = dict(_backend_runtime.state.background_thread_status)
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -305,22 +309,22 @@ def test_startup_event_updates_static_mounts_after_shutdown():
 
             with (
                 patch.object(
-                    server,
+                    _backend_media,
                     "identify_logs_folder",
                     side_effect=[
                         (str(photos_path_1), str(screenshots_path_1)),
                         (str(photos_path_2), str(screenshots_path_2)),
                     ],
                 ),
-                patch.object(server, "find_latest_file_recursive", return_value=None),
-                patch.object(server, "Monitor", side_effect=lambda *args, **kwargs: object()),
-                patch.object(server.threading, "Thread", _DummyThread),
-                patch.object(server.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
+                patch.object(_backend_media, "find_latest_file_recursive", return_value=None),
+                patch.object(_backend_runtime, "Monitor", side_effect=lambda *args, **kwargs: object()),
+                patch.object(_backend_runtime.threading, "Thread", _DummyThread),
+                patch.object(_backend_runtime.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
             ):
-                asyncio.run(server.startup_event())
+                asyncio.run(_backend_runtime.startup_event())
                 first_mounts = _static_route_directories()
-                asyncio.run(server.shutdown_event())
-                asyncio.run(server.startup_event())
+                asyncio.run(_backend_runtime.shutdown_event())
+                asyncio.run(_backend_runtime.startup_event())
                 second_mounts = _static_route_directories()
 
             assert first_mounts == {
@@ -336,22 +340,22 @@ def test_startup_event_updates_static_mounts_after_shutdown():
             assert _DummyThread.started_count == 14
     finally:
         server.app.router.routes[:] = original_routes
-        server.state.photos_path = original_photos
-        server.state.screenshots_path = original_screenshots
-        server.state.monitor = original_monitor
-        server.state.paths = original_paths
-        server.state.is_running = original_running
-        server.state.background_thread_status = original_background_thread_status
+        _backend_runtime.state.photos_path = original_photos
+        _backend_runtime.state.screenshots_path = original_screenshots
+        _backend_runtime.state.monitor = original_monitor
+        _backend_runtime.state.paths = original_paths
+        _backend_runtime.state.is_running = original_running
+        _backend_runtime.state.background_thread_status = original_background_thread_status
 
 
 def test_startup_event_resumes_only_missing_threads_after_partial_start_failure():
     original_routes = list(server.app.router.routes)
-    original_photos = server.state.photos_path
-    original_screenshots = server.state.screenshots_path
-    original_monitor = server.state.monitor
-    original_paths = dict(server.state.paths)
-    original_running = server.state.is_running
-    original_background_thread_status = dict(server.state.background_thread_status)
+    original_photos = _backend_runtime.state.photos_path
+    original_screenshots = _backend_runtime.state.screenshots_path
+    original_monitor = _backend_runtime.state.monitor
+    original_paths = dict(_backend_runtime.state.paths)
+    original_running = _backend_runtime.state.is_running
+    original_background_thread_status = dict(_backend_runtime.state.background_thread_status)
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -365,15 +369,15 @@ def test_startup_event_resumes_only_missing_threads_after_partial_start_failure(
             _PartiallyFailingThread.failure_seen = False
 
             with (
-                patch.object(server, "identify_logs_folder", return_value=(str(photos_path), str(screenshots_path))),
-                patch.object(server, "find_latest_file_recursive", return_value=None),
-                patch.object(server, "Monitor", side_effect=lambda *args, **kwargs: object()),
-                patch.object(server.threading, "Thread", _PartiallyFailingThread),
-                patch.object(server.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
+                patch.object(_backend_media, "identify_logs_folder", return_value=(str(photos_path), str(screenshots_path))),
+                patch.object(_backend_media, "find_latest_file_recursive", return_value=None),
+                patch.object(_backend_runtime, "Monitor", side_effect=lambda *args, **kwargs: object()),
+                patch.object(_backend_runtime.threading, "Thread", _PartiallyFailingThread),
+                patch.object(_backend_runtime.Config, "get_plot_dir", return_value=tmp_path / "plot_outputs"),
             ):
-                asyncio.run(server.startup_event())
+                asyncio.run(_backend_runtime.startup_event())
                 after_first_startup = dict(_PartiallyFailingThread.start_counts)
-                asyncio.run(server.startup_event())
+                asyncio.run(_backend_runtime.startup_event())
                 after_retry = dict(_PartiallyFailingThread.start_counts)
 
             assert after_first_startup == {
@@ -398,9 +402,9 @@ def test_startup_event_resumes_only_missing_threads_after_partial_start_failure(
             }
     finally:
         server.app.router.routes[:] = original_routes
-        server.state.photos_path = original_photos
-        server.state.screenshots_path = original_screenshots
-        server.state.monitor = original_monitor
-        server.state.paths = original_paths
-        server.state.is_running = original_running
-        server.state.background_thread_status = original_background_thread_status
+        _backend_runtime.state.photos_path = original_photos
+        _backend_runtime.state.screenshots_path = original_screenshots
+        _backend_runtime.state.monitor = original_monitor
+        _backend_runtime.state.paths = original_paths
+        _backend_runtime.state.is_running = original_running
+        _backend_runtime.state.background_thread_status = original_background_thread_status

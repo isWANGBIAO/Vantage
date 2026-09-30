@@ -10,7 +10,7 @@ function nativePlatform(requestConfiguration) {
 test('settings adapter translates canonical payloads for every UI without owning persistence', async () => {
   let saved;
   const platform = nativePlatform(async (method, path, payload) => {
-    assert.equal(path, '/api/automation/settings');
+    assert.equal(path, '/api/v1/settings');
     if (method === 'PUT') saved = payload;
     return { settings: { theme: 'light', action_plan_check_interval_minutes: 0, voice_api_key: '********', voice_has_api_key: true } };
   });

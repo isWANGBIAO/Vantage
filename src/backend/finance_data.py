@@ -770,6 +770,6 @@ def _build_balance_sheet_payload():
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
-@router.get("/api/balance_sheet")
+@router.get("/api/v1/finance/balance-sheet")
 async def get_balance_sheet():
     return await asyncio.to_thread(_build_balance_sheet_payload)

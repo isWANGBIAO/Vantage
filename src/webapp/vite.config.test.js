@@ -15,3 +15,8 @@ test('vite config splits chart and markdown heavy code into separate chunks', ()
   assert.ok(viteConfigSource.includes('charts-vendor'));
   assert.ok(viteConfigSource.includes('markdown-vendor'));
 });
+
+test('vite proxy has one canonical backend environment contract', () => {
+  assert.match(viteConfigSource, /resolveBackendConnection\(\{ env \}\)/);
+  assert.doesNotMatch(viteConfigSource, /VITE_BACKEND|canonicalConnection/);
+});

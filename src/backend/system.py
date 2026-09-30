@@ -48,11 +48,11 @@ def _build_status_payload():
         },
     }
 
-@router.get("/api/status")
+@router.get("/api/v1/system/status")
 async def get_status():
     return _build_status_payload()
 
-@router.get("/api/sys_stats")
+@router.get("/api/v1/system/statistics")
 async def get_sys_stats():
     try:
         cpu_usage = psutil.cpu_percent(interval=None)
@@ -77,7 +77,7 @@ async def get_sys_stats():
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@router.get("/api/aqi")
+@router.get("/api/v1/system/air-quality")
 async def get_aqi_stats(
     lat: Optional[float] = None,
     lon: Optional[float] = None,

@@ -1,11 +1,12 @@
-"""Loopback-only automation boundary and explicit local-action intent checks."""
+"""Local-only HTTP/WebSocket boundary and explicit local-action intent checks."""
 
 import ipaddress
 import os
 import re
 
-from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 DEFAULT_BACKEND_BIND_HOST = "127.0.0.1"
 
@@ -53,7 +54,7 @@ def _normalize_host_value(value):
 
 def _is_loopback_host(value):
     host = _normalize_host_value(value)
-    if host in {"localhost", "testclient", "testserver"}:
+    if host == "localhost":
         return True
     if not host:
         return False
@@ -73,24 +74,50 @@ def _has_local_action_intent(headers, expected_intent):
     return actual == expected_intent
 
 TRUSTED_BROWSER_ORIGINS = frozenset({
-    "http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000",
+    "http://localhost:5173", "http://127.0.0.1:5173",
 })
 
 
-async def enforce_loopback_backend_access(request: Request, call_next):
-    protected = request.url.path.startswith(("/api/automation/", "/api/v1/"))
-    protected = protected or request.url.path == "/api/action_plan"
-    if not protected:
-        return await call_next(request)
-
-    client_host = getattr(request.client, "host", "")
-    host_header = request.headers.get("host", "")
-    if not _is_loopback_host(client_host) or not _is_loopback_host(host_header):
-        return JSONResponse(status_code=403, content={"error": "Local backend access only"})
+def _backend_access_error(scope: Scope) -> str | None:
+    headers = Headers(scope=scope)
+    client = scope.get("client")
+    client_host = client[0] if client else ""
+    # Reject ambiguous routing/source headers rather than depending on which
+    # duplicate value a proxy, ASGI server, or application happens to select.
+    hosts = headers.getlist("host")
+    if len(hosts) != 1 or not _is_loopback_host(client_host) or not _is_loopback_host(hosts[0]):
+        return "Local backend access only"
     # CORS only controls reading responses; simple cross-site POSTs still reach
     # handlers. Native clients omit Origin, and the trusted app-scheme proxy
     # deliberately does not forward browser-controlled origin headers.
-    origin = request.headers.get("origin")
-    if origin is not None and origin not in TRUSTED_BROWSER_ORIGINS:
-        return JSONResponse(status_code=403, content={"error": "Untrusted browser origin"})
-    return await call_next(request)
+    origins = headers.getlist("origin")
+    if len(origins) > 1 or (origins and origins[0] not in TRUSTED_BROWSER_ORIGINS):
+        return "Untrusted browser origin"
+    # Browser image/navigation requests can omit Origin. Fetch Metadata still
+    # identifies cross-site requests; native clients and the app proxy omit it.
+    if not origins and headers.get("sec-fetch-site", "").lower() == "cross-site":
+        return "Untrusted browser origin"
+    return None
+
+
+class LoopbackAccessMiddleware:
+    """Protect every route, mounted private file, and WebSocket before dispatch.
+
+    This is intentionally path-independent: new API versions and mounted media
+    must not accidentally fall outside the application's local IPC boundary.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] in {"http", "websocket"}:
+            error = _backend_access_error(scope)
+            if error is not None:
+                if scope["type"] == "websocket":
+                    # Closing before accept denies the handshake (HTTP 403).
+                    await send({"type": "websocket.close", "code": 1008, "reason": error})
+                else:
+                    await JSONResponse(status_code=403, content={"error": error})(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
