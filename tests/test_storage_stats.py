@@ -162,10 +162,11 @@ class StorageStatsTests(unittest.TestCase):
                     server.state.storage_scan_truncated,
                 ) = original_state
 
-        self.assertEqual(
-            snapshots,
-            [(1, 4, True, 60), (3, 4, True, 60), (3, 4, False, 60)],
-        )
+        # scandir ordering is filesystem-dependent; either file may be first.
+        # Exact cumulative totals and the final completion marker remain fixed.
+        self.assertEqual(len(snapshots), 3)
+        self.assertIn(snapshots[0], [(1, 4, True, 60), (2, 4, True, 60)])
+        self.assertEqual(snapshots[1:], [(3, 4, True, 60), (3, 4, False, 60)])
 
     def test_update_storage_stats_restarts_scanner_when_path_changes(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import re
+import shutil
 import subprocess
 
 import pytest
@@ -14,7 +15,7 @@ def _assert_fragments_in_order(content, fragments):
 
 
 def test_run_bat_release_flow_keeps_source_cleanup_scoped():
-    content = Path("run.bat").read_text(encoding="utf-8")
+    content = Path("RUN.bat").read_text(encoding="utf-8")
 
     assert 'taskkill /F /IM electron.exe' not in content
     assert 'find ":5173"' not in content
@@ -61,6 +62,7 @@ def test_windows_development_launchers_use_shared_dependency_and_runtime_contrac
     assert "Start-Process" not in start_webapp
 
 
+@pytest.mark.skipif(shutil.which("cmd") is None, reason="Windows cmd is required to execute batch launchers")
 def test_start_webapp_delegates_arguments_and_exit_status(tmp_path):
     start_webapp = tmp_path / "START_WEBAPP.bat"
     start_webapp.write_text(
@@ -113,7 +115,7 @@ def test_run_dev_sh_detaches_backend_from_terminal_session():
 
 
 def test_run_bat_builds_and_silently_installs_latest_package():
-    run_bat = Path("run.bat").read_text(encoding="utf-8")
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
 
     assert ".venv-backend-runtime-gpu" in run_bat
     assert "requirements-backend-runtime-gpu.txt" in run_bat
@@ -135,7 +137,7 @@ def test_run_bat_builds_and_silently_installs_latest_package():
 
 
 def test_run_bat_retries_electron_downloads_with_mirror_fallback():
-    run_bat = Path("run.bat").read_text(encoding="utf-8")
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
 
     assert "VANTAGE_ELECTRON_MIRROR_FALLBACK" in run_bat
     assert "scripts\\sync-dependencies.cjs" in run_bat
@@ -233,7 +235,7 @@ def test_macos_frontend_sync_invalidates_native_stamp_before_resigning():
 
 
 def test_run_bat_primes_custom_nsis_archive_cache():
-    run_bat = Path("run.bat").read_text(encoding="utf-8")
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
 
     assert "CUSTOM_NSIS_BINARY_URL" in run_bat
     assert "CUSTOM_NSIS_BINARY_SHA256=374cfc092fd1bd1898472df627549ecc165b0d6ba88e82deba085673aec95336" in run_bat
@@ -242,7 +244,7 @@ def test_run_bat_primes_custom_nsis_archive_cache():
 
 
 def test_run_bat_loads_windows_file_hash_command_despite_module_path_pollution(tmp_path):
-    run_bat = Path("run.bat").read_text(encoding="utf-8")
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
     import_match = re.search(
         r"(?P<statement>Import-Module .*? -ErrorAction Stop); \$override",
         run_bat,
@@ -515,7 +517,7 @@ def test_macos_backend_signing_finishes_before_target_venv_consumers_start():
 
 
 def test_run_bat_restores_source_build_info_after_packaging():
-    run_bat = Path("run.bat").read_text(encoding="utf-8")
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
 
     assert "WEBAPP_BUILD_INFO" in run_bat
     assert "RUN_BUILD_INFO_BACKUP" in run_bat
@@ -529,7 +531,7 @@ def test_run_bat_restores_source_build_info_after_packaging():
 
 
 def test_run_bat_prints_step_timings():
-    run_bat = Path("run.bat").read_text(encoding="utf-8")
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
 
     assert ":StepStart" in run_bat
     assert ":StepDone" in run_bat
@@ -549,7 +551,7 @@ def test_packaging_build_orchestrator_runs_frontend_and_backend_builds_in_parall
 
 
 def test_run_bat_exposes_parallel_build_worker_control():
-    run_bat = Path("run.bat").read_text(encoding="utf-8")
+    run_bat = Path("RUN.bat").read_text(encoding="utf-8")
 
     assert "VANTAGE_BUILD_WORKERS" in run_bat
     assert "--workers" in run_bat

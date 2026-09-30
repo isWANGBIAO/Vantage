@@ -396,7 +396,10 @@ allow_self_lock = pathlib.Path(sys.argv[3])
 child_locked = pathlib.Path(sys.argv[4])
 stop = pathlib.Path(sys.argv[5])
 done = pathlib.Path(sys.argv[6])
-started.write_text(str(os.getpid()), encoding="utf-8")
+# Publish the PID only after its contents are complete, not at open(O_CREAT).
+started_pending = started.with_suffix(".tmp")
+started_pending.write_text(str(os.getpid()), encoding="utf-8")
+os.replace(started_pending, started)
 while not allow_self_lock.exists():
     time.sleep(0.02)
 with backend_runtime_lock(root, mode="shared", timeout_seconds=2):

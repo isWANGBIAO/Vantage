@@ -13,7 +13,11 @@ async function until(fn) {
   throw Error("condition timed out");
 }
 async function fixture(t) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "never-stop-directory-"));
+  // Windows TEMP may use an 8.3 alias (RUNNER~1). Match Runner's canonical
+  // roots so strict cwd assertions and path-based failure injection stay exact.
+  const dir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "never-stop-directory-")),
+  );
   const old = path.join(dir, "old"),
     next = path.join(dir, "next");
   await fs.mkdir(old);

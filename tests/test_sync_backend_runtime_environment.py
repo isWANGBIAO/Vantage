@@ -807,6 +807,7 @@ def _quarantines(project_root: Path) -> list[Path]:
     return sorted(project_root.glob(".venv-backend-runtime-gpu.quarantine-*"))
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Requires Windows junction/reparse-point filesystem semantics")
 def test_root_reparse_is_quarantined_without_recursive_deletion(tmp_path):
     external = tmp_path / "external-root"
     external.mkdir()
@@ -829,6 +830,7 @@ def test_root_reparse_is_quarantined_without_recursive_deletion(tmp_path):
     assert len(_quarantines(tmp_path)) == 1
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Requires Windows junction/reparse-point filesystem semantics")
 def test_nested_reparse_retains_quarantine_and_external_data(tmp_path):
     external = tmp_path / "external-nested"
     external.mkdir()
@@ -876,6 +878,43 @@ def test_posix_venv_nested_python_symlink_is_unlinked_without_following_target(
     assert external.read_text(encoding="utf-8") == "external interpreter"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Requires real POSIX directory-symlink cleanup semantics")
+@pytest.mark.parametrize("replace_after_validation", [False, True])
+def test_posix_nested_directory_symlink_cleanup_preserves_external_tree(
+    tmp_path, replace_after_validation,
+):
+    external = tmp_path / "external-posix-directory"
+    external.mkdir()
+    sentinel = external / "outside-sentinel.txt"
+    sentinel.write_text("preserve", encoding="utf-8")
+    nested_external = external / "nested"
+    nested_external.mkdir()
+    (nested_external / "child.txt").write_text("preserve child", encoding="utf-8")
+    venv = tmp_path / ".venv-backend-runtime-gpu"
+    venv.mkdir()
+    link = venv / "directory-link"
+    if replace_after_validation:
+        link.mkdir()
+        (link / "old.txt").write_text("old runtime", encoding="utf-8")
+    else:
+        _create_directory_symlink(link, external)
+
+    def race_hook(stage: str, quarantine: Path) -> None:
+        if replace_after_validation and stage == "before_recursive_remove":
+            shutil.rmtree(quarantine / "directory-link")
+            _create_directory_symlink(quarantine / "directory-link", external)
+
+    with _runtime_lock(tmp_path):
+        safe_remove_backend_runtime_venv(
+            tmp_path, venv, platform_name="posix", race_hook=race_hook,
+        )
+
+    assert not venv.exists()
+    assert _quarantines(tmp_path) == []
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert (nested_external / "child.txt").read_text(encoding="utf-8") == "preserve child"
+
+
 def test_posix_root_symlink_is_quarantined_without_following_target(tmp_path):
     external = tmp_path / "external-posix-root"
     external.mkdir()
@@ -899,6 +938,7 @@ def test_posix_root_symlink_is_quarantined_without_following_target(tmp_path):
     assert sentinel.read_text(encoding="utf-8") == "preserve"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Requires Windows junction/reparse-point filesystem semantics")
 def test_reparse_swap_after_validation_is_detected_before_recursive_remove(tmp_path):
     external = tmp_path / "external-race"
     external.mkdir()

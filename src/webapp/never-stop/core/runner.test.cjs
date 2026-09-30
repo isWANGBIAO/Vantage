@@ -14,7 +14,11 @@ async function until(fn, timeout = 15000) {
   throw Error("condition timed out");
 }
 async function fixture(t, mode = "normal") {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "never-stop-runner-"));
+  // Windows TEMP may use an 8.3 alias (RUNNER~1). Match Runner's canonical
+  // roots so strict cwd assertions and path-based failure injection stay exact.
+  const dir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "never-stop-runner-")),
+  );
   const root = path.join(dir, "project");
   await fs.mkdir(root);
   const fake = path.join(dir, "fake.cjs");

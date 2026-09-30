@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
 
 
 def test_locked_backend_background_command_uses_bootstrap_supervisor_and_runtime_python(
@@ -25,9 +26,18 @@ def test_locked_backend_background_command_uses_bootstrap_supervisor_and_runtime
     ]
 
 
-def test_locked_backend_background_launch_is_detached_and_returns_pid(tmp_path):
+def test_locked_backend_background_launch_is_detached_and_returns_pid(tmp_path, monkeypatch):
     from src.scripts.launch_locked_backend_background import launch_locked_backend_background
 
+    # Model Windows capabilities explicitly; these attributes are absent from
+    # subprocess on POSIX even when platform_name="nt" is injected.
+    windows_flags = {
+        "DETACHED_PROCESS": 0x00000008,
+        "CREATE_NEW_PROCESS_GROUP": 0x00000200,
+        "CREATE_NO_WINDOW": 0x08000000,
+    }
+    for name, value in windows_flags.items():
+        monkeypatch.setattr(subprocess, name, value, raising=False)
     calls = []
 
     def fake_popen(command, **kwargs):
@@ -52,4 +62,8 @@ def test_locked_backend_background_launch_is_detached_and_returns_pid(tmp_path):
     assert kwargs["stderr"] is not None
     assert kwargs["close_fds"] is True
     assert kwargs["start_new_session"] is False
-    assert kwargs["creationflags"] != 0
+    assert kwargs["creationflags"] == (
+        windows_flags["DETACHED_PROCESS"]
+        | windows_flags["CREATE_NEW_PROCESS_GROUP"]
+        | windows_flags["CREATE_NO_WINDOW"]
+    )
