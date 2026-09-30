@@ -1,4 +1,5 @@
 import AppKit
+import ScreenCaptureKit
 import VantageCore
 
 /// Real-window CI smoke entry point. Uses only an explicitly provided synthetic
@@ -13,32 +14,42 @@ enum NativeSmoke {
         var pages: [[String: Any]] = []
         var flows: [[String: Any]] = []
         let snapshots = target.deletingPathExtension().appendingPathExtension("screenshots")
+        let started = Date()
+        let partial = target.deletingPathExtension().appendingPathExtension("partial.json")
+        func checkpoint(_ phase: String) {
+            let payload: [String: Any] = ["success": false, "phase": phase, "elapsed_seconds": Date().timeIntervalSince(started), "page_loads": model.pageLoads, "pages": pages, "flows": flows, "errors": errors]
+            if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: partial, options: .atomic) }
+            FileHandle.standardOutput.write(Data("[native-smoke] \(phase) elapsed=\(Date().timeIntervalSince(started)) loads=\(model.pageLoads)\n".utf8))
+        }
         do {
             guard ProcessInfo.processInfo.environment["VANTAGE_BACKEND_URL"] != nil else { throw APIError.http(400, "Smoke mode requires VANTAGE_BACKEND_URL pointing to the isolated fixture server.") }
             guard model.connected, model.onboarding?.completed == true else { throw APIError.http(503, model.error ?? "Backend or onboarding is not ready.") }
             try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: snapshots, withIntermediateDirectories: true)
             for page in AppPage.allCases {
+                let id = page == .plan ? "action-plan" : page == .expenses ? "finance" : page.rawValue
+                checkpoint("navigate/" + id)
                 model.pageLoads.removeValue(forKey: page.rawValue)
                 model.page = page
-                let deadline = Date().addingTimeInterval(30)
+                // Reload the actual window's detail view, including the first
+                // already-selected page. This is not an offscreen replacement.
+                model.pageReloadID = UUID()
+                let deadline = Date().addingTimeInterval(15)
+                checkpoint("load/" + id + "/start")
                 while model.pageLoads[page.rawValue] == nil, Date() < deadline { try await Task.sleep(for: .milliseconds(100)) }
                 let loaded = model.pageLoads[page.rawValue] == "loaded"
-                let id = page == .plan ? "action-plan" : page == .expenses ? "finance" : page.rawValue
-                try await Task.sleep(for: .milliseconds(350))
-                var screenshot = ""
-                if let window = NSApp.windows.filter({ $0.isVisible && !($0 is NSPanel) }).max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }), let view = window.contentView {
-                    view.layoutSubtreeIfNeeded()
-                    if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-                        view.cacheDisplay(in: view.bounds, to: bitmap)
-                        if let data = bitmap.representation(using: .png, properties: [:]) {
-                            let url = snapshots.appendingPathComponent("\(id).png"); try data.write(to: url); screenshot = url.path
-                        }
-                    }
+                checkpoint("load/" + id + "/end")
+                guard loaded else { throw APIError.http(503, id + ": actual API-backed page did not finish loading") }
+                try await Task.sleep(for: .milliseconds(250))
+                guard let window = NSApp.windows.filter({ $0.isVisible && !($0 is NSPanel) }).max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
+                    throw APIError.http(503, "The native application window is not visible.")
                 }
-                if !loaded { errors.append("\(id): API-backed page did not finish loading") }
-                if screenshot.isEmpty { errors.append("\(id): native window snapshot unavailable") }
-                pages.append(["id": id, "loaded": loaded, "screenshot": screenshot])
+                checkpoint("capture/" + id + "/start")
+                let data = try await captureOwnWindow(window)
+                let destination = snapshots.appendingPathComponent(id + ".png")
+                try data.write(to: destination)
+                pages.append(["id": id, "loaded": true, "screenshot": destination.path, "capture": "ScreenCaptureKit current-process real window"])
+                checkpoint("capture/" + id + "/end")
             }
             // The private fixture route must be present before exercising writes.
             // A normal Vantage backend does not expose it and fails closed here.
@@ -49,6 +60,7 @@ enum NativeSmoke {
                 if !passed { errors.append("Flow failed: " + id) }
             }
             for mode in ["success", "disconnect", "truncated", "failed", "cancelled"] {
+                checkpoint("flow/action-plan-" + mode + "/start")
                 let _: JSONValue = try await model.api.request(path: "/__test__/reset", method: "POST", body: .object(["job_mode": .string(mode)]))
                 model.page = .plan
                 await model.generate(replace: false)
@@ -59,7 +71,10 @@ enum NativeSmoke {
                 }
                 let expected: JobStatus = mode == "failed" ? .failed : mode == "cancelled" ? .cancelled : .succeeded
                 record("action-plan-" + mode, model.observationSettled && model.job?.status == expected && (expected != .succeeded || (model.plan?.isComplete == true && model.verifiedResultJobID == model.job?.id)))
+                checkpoint("flow/action-plan-" + mode + "/end")
+                if !errors.isEmpty { throw APIError.http(503, "Action-plan flow failed; see partial report.") }
             }
+            checkpoint("flow/chat/start")
             model.page = .chat
             try await model.refreshChat()
             let before = model.chat?.messages.count ?? 0
@@ -76,11 +91,52 @@ enum NativeSmoke {
             try await model.completeOnboarding(.object(["skip_chat_setup": .bool(true), "display_language": .string("en-US")]))
             record("onboarding-complete", model.onboarding?.completed == true)
             if let error = model.error { errors.append(error) }
-        } catch { errors.append(SensitiveText.redact(error.localizedDescription)) }
+        } catch { errors.append(SensitiveText.redact(error.localizedDescription)); checkpoint("failed") }
+        checkpoint(errors.isEmpty ? "completed" : "failed")
         let result: [String: Any] = ["success": errors.isEmpty, "pages": pages, "flows": flows, "errors": errors, "renderer": "SwiftUI/AppKit", "synthetic_data": true]
         do { try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: target) }
         catch { fputs("Could not write native smoke report\n", stderr) }
         model.shutdown()
         exit(errors.isEmpty ? 0 : 1)
+    }
+    private static func captureOwnWindow(_ window: NSWindow) async throws -> Data {
+        guard #available(macOS 14.4, *) else { throw APIError.http(503, "Permission-free own-window smoke capture requires macOS 14.4 or later.") }
+        let content: SCShareableContent = try await withCheckedThrowingContinuation { continuation in
+            let gate = SmokeContinuation(continuation)
+            SCShareableContent.getCurrentProcessShareableContent { content, error in
+                if let content { gate.finish(.success(content)) }
+                else { gate.finish(.failure(error ?? APIError.http(503, "Own-window content is unavailable."))) }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) { gate.finish(.failure(APIError.http(504, "Own-window discovery timed out."))) }
+        }
+        guard let own = content.windows.first(where: { $0.windowID == CGWindowID(window.windowNumber) && $0.owningApplication?.processID == ProcessInfo.processInfo.processIdentifier }) else {
+            throw APIError.http(503, "The app's window is not available from current-process capture.")
+        }
+        let filter = SCContentFilter(desktopIndependentWindow: own)
+        let configuration = SCStreamConfiguration()
+        configuration.width = max(1, Int(own.frame.width * window.backingScaleFactor))
+        configuration.height = max(1, Int(own.frame.height * window.backingScaleFactor))
+        configuration.showsCursor = false
+        let captured: CGImage = try await withCheckedThrowingContinuation { continuation in
+            let gate = SmokeContinuation(continuation)
+            SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) { image, error in
+                if let image { gate.finish(.success(image)) }
+                else { gate.finish(.failure(error ?? APIError.http(503, "Own-window capture returned no pixels."))) }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) { gate.finish(.failure(APIError.http(504, "Own-window screenshot timed out."))) }
+        }
+        guard let data = NSBitmapImageRep(cgImage: captured).representation(using: .png, properties: [:]) else { throw APIError.http(503, "Window PNG encoding failed.") }
+        return data
+    }
+
+}
+
+private final class SmokeContinuation<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+    init(_ continuation: CheckedContinuation<Value, Error>) { self.continuation = continuation }
+    func finish(_ result: Result<Value, Error>) {
+        lock.lock(); let pending = continuation; continuation = nil; lock.unlock()
+        pending?.resume(with: result)
     }
 }

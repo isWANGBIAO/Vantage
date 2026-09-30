@@ -3,9 +3,6 @@ from __future__ import annotations
 import locale
 import os
 from pathlib import Path
-import shutil
-import signal
-import subprocess
 import tempfile
 import gi
 
@@ -63,44 +60,7 @@ def open_folder(path):
     Gio.AppInfo.launch_default_for_uri(target.absolute().as_uri(), None)
 
 
-class Recorder:
-    """Explicit user-started local recording. No automatic microphone access."""
-    def __init__(self):
-        self.process = None
-        self.path = None
-        self.tool = shutil.which("pw-record") or shutil.which("arecord")
-
-    def start(self):
-        if not self.tool:
-            raise RuntimeError("录音需要 PipeWire 的 pw-record 或 ALSA arecord；也可选择音频文件")
-        if self.process:
-            return
-        fd, self.path = tempfile.mkstemp(prefix="vantage-voice-", suffix=".wav")
-        os.close(fd)
-        args = [self.tool, "--rate", "16000", "--channels", "1", self.path] if Path(self.tool).name == "pw-record" else [self.tool, "-q", "-f", "S16_LE", "-r", "16000", "-c", "1", self.path]
-        self.process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    def stop(self):
-        if self.process:
-            self.process.send_signal(signal.SIGINT)
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
-            code = self.process.returncode
-            self.process = None
-            if code not in {0, -signal.SIGINT}:
-                self.discard()
-                raise RuntimeError("麦克风不可用或权限被拒绝 / Microphone unavailable or permission denied")
-        return self.path
-
-    def discard(self):
-        if self.process:
-            self.stop()
-        if self.path:
-            Path(self.path).unlink(missing_ok=True)
-            self.path = None
+from .recorder import Recorder
 
 
 TRAY_XML = '''<node><interface name="org.kde.StatusNotifierItem">

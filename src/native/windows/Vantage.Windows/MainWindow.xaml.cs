@@ -44,7 +44,7 @@ public sealed partial class MainWindow : Window
         var args = Environment.GetCommandLineArgs();
         var i = Array.IndexOf(args, "--smoke-test"); smokeOutput = i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
         AppWindow.Resize(new global::Windows.Graphics.SizeInt32(1240, 900));
-        AppWindow.Closing += (_, e) =>
+        AppWindow.Closing += (sender, e) =>
         {
             if (!quitting && smokeOutput is null && tray is not null) { e.Cancel = true; AppWindow.Hide(); }
             else if (!shutdownComplete) { e.Cancel = true; _ = ShutdownAsync(); }

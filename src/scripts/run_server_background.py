@@ -1,10 +1,34 @@
 import atexit
+import faulthandler
 import importlib
 import os
 import runpy
 import sys
 from datetime import datetime
 from pathlib import Path
+
+
+def _start_isolated_stack_diagnostics(*, env=None):
+    """Opt-in diagnostics for an isolated packaging smoke, never normal runs."""
+    env = os.environ if env is None else env
+    if env.get("VANTAGE_RUNTIME_STACK_DIAGNOSTICS") != "1" or not env.get("VANTAGE_RUNTIME_DIR"):
+        return None
+    root = Path(env["VANTAGE_RUNTIME_DIR"])
+    root.mkdir(parents=True, exist_ok=True)
+    handle = (root / f"startup-stacks-{os.getpid()}.log").open("w", encoding="utf-8")
+    faulthandler.enable(file=handle)
+    faulthandler.dump_traceback_later(30, repeat=True, file=handle)
+
+    def close():
+        faulthandler.cancel_dump_traceback_later()
+        faulthandler.disable()
+        handle.close()
+
+    atexit.register(close)
+    return handle
+
+
+_ISOLATED_STACK_LOG = _start_isolated_stack_diagnostics()
 
 
 def _ensure_project_root_on_sys_path(

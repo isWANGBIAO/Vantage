@@ -90,7 +90,7 @@ struct RootView: View {
                         case .projects: ProjectsView(); case .expenses: ExpensesView(); case .plots: PlotsView()
                         case .face: FaceView(); case .usage: UsageView(); case .logs: LogsView(); case .settings: SettingsView()
                         }
-                    }.navigationTitle((model.page ?? .dashboard).title(model))
+                    }.id(model.pageReloadID).navigationTitle((model.page ?? .dashboard).title(model))
                 }
             }
         }

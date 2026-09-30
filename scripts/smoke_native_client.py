@@ -91,10 +91,18 @@ def main(argv: list[str] | None = None) -> int:
             if code:
                 raise RuntimeError(f"Native application exited with status {code}; see smoke evidence.")
             validate_report(json.loads(report_path.read_text(encoding="utf-8")))
-            (output / "requests.json").write_text(
-                json.dumps(server.state["requests"], indent=2), encoding="utf-8",
-            )
+    except BaseException as exc:
+        (output / "runner-error.json").write_text(
+            json.dumps({"success": False, "error_type": type(exc).__name__, "message": str(exc)}, indent=2),
+            encoding="utf-8",
+        )
+        raise
     finally:
+        # Preserve the narrow method/path trace on timeout or early app exit as
+        # well as success. The fixture never records payloads or credentials.
+        (output / "requests.json").write_text(
+            json.dumps(server.state["requests"], indent=2), encoding="utf-8",
+        )
         server.shutdown()
         server.server_close()
     print("Native window smoke passed against synthetic data; no live model/hardware checks were performed.")

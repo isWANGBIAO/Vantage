@@ -10,6 +10,7 @@ final class AppModel: ObservableObject {
     @Published var state: SettingsState?
     @Published var onboarding: OnboardingState?
     @Published var page: AppPage? = .dashboard
+    @Published var pageReloadID = UUID()
     @Published var models: [ModelOption] = []
     @Published var selectedModel = ""
     @Published var reasoning = "high"
@@ -131,8 +132,9 @@ final class AppModel: ObservableObject {
             let result: JobList = try await client.request(path: "/api/v1/action-plan/jobs")
             guard connectionID == epoch, !Task.isCancelled else { return }; plan = saved
             if let active = result.active { if job?.id != active.id || observation == nil { observe(active) } }
-            else if job?.status.terminal == false {
-                observation?.cancel(); observation = nil; job = result.jobs.first
+            else if job?.status.terminal == false && observation == nil {
+                // A read begun before create must not cancel a newer observer.
+                job = result.jobs.first
                 planConnection = text("后端任务已结束或已重启；已重新读取保存结果", "Job ended or backend restarted; saved result reloaded")
             }
             pageLoads[AppPage.plan.rawValue] = "loaded"

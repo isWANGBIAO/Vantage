@@ -68,6 +68,10 @@ jobs:
             requirements-backend-runtime-gpu.txt
       - name: Test native protocol and state machines
         run: dotnet test src/native/windows/Vantage.Core.Tests/Vantage.Core.Tests.csproj -c Release --logger trx
+      - name: Compile WinUI before backend packaging
+        run: dotnet publish src/native/windows/Vantage.Windows/Vantage.Windows.csproj -c Release -r win-x64 -p:Platform=x64 -p:WindowsPackageType=None --self-contained true -o build/native-preflight/windows
+      - name: Exercise the compiled native window before packaging
+        run: python scripts/smoke_native_client.py --client build/native-preflight/windows/Vantage.Windows.exe --output build/native-smoke/windows-source
       - name: Build and smoke-test shared packaged backend
         run: python scripts/build_native_backend.py
       - name: Build self-contained WinUI package
@@ -88,6 +92,7 @@ jobs:
           path: |
             src/native/windows/**/TestResults/*.trx
             build/native-smoke/windows/
+            build/native-smoke/windows-source/
           if-no-files-found: warn
           retention-days: 14
 
@@ -116,6 +121,10 @@ jobs:
             requirements-backend-runtime-gpu.txt
       - name: Test native protocol and state machines
         run: swift test --package-path src/native/macos
+      - name: Exercise the compiled native window before backend packaging
+        run: |
+          BIN="$(swift build --package-path src/native/macos --show-bin-path)"
+          python scripts/smoke_native_client.py --client "$BIN/VantageMac" --output build/native-smoke/macos-source
       - name: Build and smoke-test shared packaged backend
         run: python scripts/build_native_backend.py
       - name: Build native application bundle
@@ -134,7 +143,12 @@ jobs:
         if: always()
         with:
           name: Native-macOS-${{ matrix.arch }}-evidence-${{ github.sha }}
-          path: build/native-smoke/macos/
+          path: |
+            build/native-smoke/macos/
+            build/native-smoke/macos-source/
+            build/backend-runtime/verification/**/backend-runtime-smoke.log
+            build/backend-runtime/verification/**/data/logs/server/*.log
+            build/backend-runtime/verification/**/data/runtime/startup-stacks-*.log
           if-no-files-found: warn
           retention-days: 14
 

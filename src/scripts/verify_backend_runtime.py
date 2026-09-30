@@ -117,6 +117,7 @@ def _build_smoke_environment(
         env["VANTAGE_BACKEND_URL"] = f"http://127.0.0.1:{isolated_port}"
         env["VANTAGE_BACKEND_HOST"] = "127.0.0.1"
         env["VANTAGE_BACKEND_PORT"] = str(isolated_port)
+        env["VANTAGE_RUNTIME_STACK_DIAGNOSTICS"] = "1"
         for key, suffix in {
             "HISTORY": "history", "LOG": "logs", "PLOT": "plot_outputs",
             "CACHE": "cache", "RUNTIME": "runtime", "MIGRATION": "migration",
@@ -157,11 +158,13 @@ def _unused_loopback_port() -> int:
 
 
 def _wait_for_status(
-    timeout_seconds: int, base_url: str = "http://127.0.0.1:8000",
+    timeout_seconds: int, base_url: str = "http://127.0.0.1:8000", *, process=None,
 ) -> dict[str, object]:
     deadline = time.time() + timeout_seconds
     last_error = None
     while time.time() < deadline:
+        if process is not None and process.poll() is not None:
+            raise RuntimeError(f"Packaged backend exited before readiness (exit={process.returncode}).")
         try:
             with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/v1/system/status", timeout=5) as response:
                 payload = json.loads(response.read().decode("utf-8"))
@@ -432,14 +435,24 @@ def _main_without_backend_runtime_lock() -> int:
     try:
         try:
             from src.core.backend_connection import resolve_backend_url
-            status_payload = _wait_for_status(args.timeout_seconds, resolve_backend_url(env=env))
+            status_payload = _wait_for_status(args.timeout_seconds, resolve_backend_url(env=env), process=process)
         except Exception as exc:  # noqa: BLE001
+            exit_code = process.poll()
             _terminate_process_tree(process.pid)
             log_tail = _tail_text_file(smoke_log_path)
             print(str(exc))
+            print(f"Packaged backend process status before cleanup: {exit_code}")
             if log_tail:
                 print("--- smoke log tail ---")
                 print(log_tail)
+            runtime_log = _resolve_runtime_server_log(smoke_data_dir)
+            if runtime_log:
+                print("--- isolated runtime log tail ---")
+                print(_tail_text_file(runtime_log))
+            stack_file = Path(env["VANTAGE_RUNTIME_DIR"]) / f"startup-stacks-{process.pid}.log" if args.isolated else None
+            if stack_file and stack_file.exists():
+                print("--- isolated startup stack tail ---")
+                print(_tail_text_file(stack_file, max_lines=100))
             return 1
 
         try:

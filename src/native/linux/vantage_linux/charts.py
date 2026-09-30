@@ -1,5 +1,7 @@
 """Native Cairo rendering of backend chart series (no embedded browser)."""
 import math
+import textwrap
+import unicodedata
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("PangoCairo", "1.0")
@@ -11,11 +13,11 @@ COLORS = [(0.27, 0.79, 0.69), (0.51, 0.65, 1), (0.98, 0.70, 0.35), (0.85, 0.48, 
 from .chart_data import numeric, series_points, prepare_chart, normalized_y
 
 
-def draw_text(cr, text):
+def draw_text(cr, text, font="Sans 9"):
     """Pango provides fontconfig CJK fallback; Cairo's toy API does not."""
     x, baseline = cr.get_current_point()
     layout = PangoCairo.create_layout(cr)
-    layout.set_font_description(Pango.FontDescription.from_string("Sans 9"))
+    layout.set_font_description(Pango.FontDescription.from_string(font))
     layout.set_text(str(text), -1)
     cr.save()
     cr.move_to(x, baseline - 11)
@@ -86,7 +88,7 @@ class Chart(Gtk.Box):
         if any(s.get("type") == "radar" for s in series_list):
             return self.draw_radar(cr, width, height, series_list)
         prepared = prepare_chart(self.option, self.limit)
-        left, right, top, bottom = 65, width - 35 - 45 * max(0, len(prepared["axes"]) - 1), 25, height - 38
+        left, right, top, bottom = 65, width - 35 - 45 * max(0, len(prepared["axes"]) - 1), 48, height - 38
         x = lambda value: left + (value - prepared["xmin"]) / (prepared["xmax"] - prepared["xmin"]) * (right - left)
         y = lambda value, axis: top + normalized_y(value, axis) * (bottom - top)
         cr.set_font_size(10)
@@ -102,8 +104,11 @@ class Chart(Gtk.Box):
                 cr.set_source_rgb(*COLORS[index % len(COLORS)])
                 cr.move_to(5 if index == 0 else right + 8 + (index - 1) * 45, pos + 4)
                 draw_text(cr, f"{val:.1f}")
-            cr.move_to(5 if index == 0 else right + 5 + (index - 1) * 45, 12)
-            draw_text(cr, str(axis["name"])[:12])
+            title = str(axis["name"])
+            wrap_width = 4 if any(unicodedata.east_asian_width(c) in {"W", "F"} for c in title) else 7
+            for line_index, line in enumerate(textwrap.wrap(title, width=wrap_width)[:3]):
+                cr.move_to(5 if index == 0 else right + 5 + (index - 1) * 45, 12 + line_index * 11)
+                draw_text(cr, line, "Sans 7")
         if prepared["keys"]:
             cr.set_source_rgb(0.65, 0.70, 0.75)
             for key, pos in [(prepared["keys"][0], left), (prepared["keys"][-1], right - 65)]:

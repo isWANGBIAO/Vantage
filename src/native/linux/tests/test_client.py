@@ -268,3 +268,40 @@ class NativeMarkdownTests(unittest.TestCase):
         self.assertIn(('code', 'code'), runs)
         self.assertIn(('site (https://example.test)', 'link'), runs)
         self.assertEqual(inline_runs('<script>value</script>'), [('<script>value</script>', None)])
+
+class RecorderCleanupTests(unittest.TestCase):
+    def recorder(self, code=1):
+        import tempfile
+        from unittest.mock import Mock
+        from vantage_linux.recorder import Recorder
+        recorder = Recorder()
+        handle = tempfile.NamedTemporaryFile(prefix='vantage-recorder-test-', suffix='.wav', delete=False)
+        handle.close()
+        recorder.path = handle.name
+        recorder.process = Mock(returncode=code)
+        return recorder
+    def test_permission_failure_cleanup_never_blocks_quit(self):
+        recorder = self.recorder(1)
+        path = Path(recorder.path)
+        recorder.discard()
+        self.assertIsNone(recorder.process)
+        self.assertIsNone(recorder.path)
+        self.assertFalse(path.exists())
+        recorder.discard()  # Navigation + quit can clean up twice.
+    def test_explicit_stop_reports_permission_failure_and_cleans_file(self):
+        recorder = self.recorder(1)
+        path = Path(recorder.path)
+        with self.assertRaisesRegex(RuntimeError, 'permission denied'):
+            recorder.stop()
+        self.assertFalse(path.exists())
+        self.assertIsNone(recorder.process)
+    def test_spawn_failure_cleans_created_recording_file(self):
+        from unittest.mock import patch
+        from vantage_linux.recorder import Recorder
+        recorder = Recorder()
+        recorder.tool = '/synthetic/pw-record'
+        with patch('vantage_linux.recorder.subprocess.Popen', side_effect=PermissionError()):
+            with self.assertRaisesRegex(RuntimeError, 'Could not start'):
+                recorder.start()
+        self.assertIsNone(recorder.path)
+        self.assertIsNone(recorder.process)

@@ -563,8 +563,19 @@ class Window(Gtk.ApplicationWindow):
             thought_box.append(self.chat_thinking)
             thought.set_child(thought_box)
             content.append(thought)
+            content.append(label(self.tr("输入消息 · Ctrl+Enter 发送", "Message · Ctrl+Enter to send"), "dim-label"))
             scroll, self.chat_input = text_view(draft, editable=True, height=90)
-            content.append(scroll)
+            composer_frame = Gtk.Frame()
+            composer_frame.set_child(scroll)
+            content.append(composer_frame)
+            keyboard = Gtk.EventControllerKey()
+            def composer_key(controller, keyval, keycode, modifiers):
+                if keyval in {Gdk.KEY_Return, Gdk.KEY_KP_Enter} and modifiers & Gdk.ModifierType.CONTROL_MASK:
+                    self.send_chat()
+                    return True
+                return False
+            keyboard.connect("key-pressed", composer_key)
+            self.chat_input.add_controller(keyboard)
             actions = box(horizontal=True)
             actions.append(button(self.tr("发送", "Send"), self.send_chat, True))
             actions.append(button(self.tr("停止", "Stop"), self.stop_chat))
