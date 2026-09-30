@@ -155,6 +155,8 @@ public sealed partial class MainWindow
         var clear = ActionButton(T("清空对话", "Clear chat"), async () =>
         {
             if (!await ConfirmAsync(T("清空对话", "Clear chat"), T("清空已保存的对话历史？行动计划上下文会保留。", "Clear saved messages? The action-plan context is retained."))) return;
+            // An explicit reset invalidates recovery of the in-flight request, without erasing a newer draft.
+            draftRevision++;
             chatLifetime?.Cancel(); if (sending is not null) await sending;
             Display(await api.ClearChatAsync(ct));
         });

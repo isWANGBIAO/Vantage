@@ -32,5 +32,31 @@ public class ChartTests
         var value = PlotText.Localize(JsonData.Element(new { name = "体重", value = 65.2 }), true);
         Assert.Equal("Weight", value.Field("name").Text()); Assert.Equal(65.2, value.Field("value").Number());
     }
+    [Fact] public void RadarLegendLabelsEveryDatumWithStablePaletteIndices()
+    {
+        var option = JsonData.ChartElement(new { series = new[] { new { name = "Activity", type = "radar", data = new[] { new { name = "Today", value = new[] { 70, 40, 80 } }, new { name = "Goal", value = new[] { 80, 60, 90 } } } } } });
+        var entries = ChartMath.RadarLegend(option);
+        Assert.Equal(new[] { "Today", "Goal" }, entries.Select(x => x.Label));
+        Assert.Equal(new[] { 0, 1 }, entries.Select(x => x.ColorIndex));
+        Assert.Equal(new[] { 0, 1 }, entries.Select(x => x.DatumIndex));
+        Assert.All(entries, x => Assert.Equal(0, x.SeriesIndex));
+    }
+    [Fact] public void HidingAnotherRadarSeriesDoesNotRenumberColors()
+    {
+        var option = JsonData.ChartElement(new { series = new[] { new { name = "First", type = "radar", data = new[] { new { name = "A", value = new[] { 1, 2, 3 } } } }, new { name = "Second", type = "radar", data = new[] { new { name = "B", value = new[] { 3, 2, 1 } } } } } });
+        var visible = ChartMath.RadarLegend(option).Where(x => x.SeriesIndex != 0).ToArray();
+        Assert.Single(visible); Assert.Equal("B", visible[0].Label); Assert.Equal(1, visible[0].ColorIndex);
+    }
+    [Theory]
+    [InlineData(false, 20, 0)]
+    [InlineData(true, 0, 20)]
+    public void AxisTicksMatchPlotProjection(bool inverse, double top, double bottom)
+    {
+        Assert.Equal(top, ChartMath.AxisTickValue(0, 20, 0, inverse));
+        Assert.Equal(bottom, ChartMath.AxisTickValue(0, 20, 1, inverse));
+        Assert.Equal(10, ChartMath.AxisTickValue(0, 20, .5, inverse));
+        Assert.Equal(0, ChartMath.YRatio(top, 0, 20, inverse));
+        Assert.Equal(1, ChartMath.YRatio(bottom, 0, 20, inverse));
+    }
     [Fact] public void GroupedBarsDoNotOverlay() { Assert.Equal(-20, ChartMath.GroupedBarOffset(0, 2, 80)); Assert.Equal(20, ChartMath.GroupedBarOffset(1, 2, 80)); }
 }

@@ -89,8 +89,44 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def read_body(self):
-        length = min(int(self.headers.get("Content-Length", 0)), 32 * 1024 * 1024)
-        raw = self.rfile.read(length)
+        # HttpClient JsonContent streams HTTP/1.1 requests with chunked transfer
+        # encoding. A fixture that reads only Content-Length silently discards
+        # those bodies and can make a native write test pass with wrong inputs.
+        limit = 32 * 1024 * 1024
+        encoding = self.headers.get("Transfer-Encoding", "").lower().strip()
+        if encoding:
+            if encoding != "chunked" or self.headers.get("Content-Length") is not None:
+                raise ValueError("Ambiguous or unsupported request framing")
+            chunks = bytearray()
+            while True:
+                line = self.rfile.readline(130)
+                if len(line) > 128 or not line.endswith(b"\r\n"):
+                    raise ValueError("Invalid chunk header")
+                size = int(line.split(b";", 1)[0].strip(), 16)
+                if size < 0 or len(chunks) + size > limit:
+                    raise ValueError("Request exceeds fixture body limit")
+                if size == 0:
+                    trailer_size = 0
+                    while True:
+                        trailer = self.rfile.readline(8193)
+                        trailer_size += len(trailer)
+                        if trailer_size > 8192 or not trailer.endswith(b"\r\n"):
+                            raise ValueError("Invalid chunk trailers")
+                        if trailer == b"\r\n":
+                            break
+                    break
+                data = self.rfile.read(size)
+                if len(data) != size or self.rfile.read(2) != b"\r\n":
+                    raise ValueError("Incomplete chunk body")
+                chunks.extend(data)
+            raw = bytes(chunks)
+        else:
+            length = int(self.headers.get("Content-Length", 0))
+            if not 0 <= length <= limit:
+                raise ValueError("Request exceeds fixture body limit")
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ValueError("Incomplete request body")
         if self.headers.get("Content-Type", "").startswith("application/json"):
             return json.loads(raw) if raw else {}
         return {}
@@ -118,7 +154,11 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch(self, method):
         path = urlsplit(self.path).path
         s = self.server.state
-        body = self.read_body() if method in {"POST", "PUT"} else {}
+        try:
+            body = self.read_body() if method in {"POST", "PUT"} else {}
+        except (ValueError, UnicodeError):
+            self.close_connection = True
+            return self.respond({"detail": "Invalid request framing or JSON"}, 400)
         # Never retain bodies or credentials; a smoke test may exercise writes.
         s["requests"].append({"method": method, "path": path})
         if path == "/__test__/reset" and method == "POST":

@@ -18,18 +18,22 @@ done
 [[ "$(sw_vers -productVersion | cut -d. -f1)" -ge 15 ]] || { echo "The complete backend/app bundle is built and validated for macOS 15+." >&2; exit 1; }
 [[ "$CONFIGURATION" == release || "$CONFIGURATION" == debug ]] || { echo "Invalid build configuration" >&2; exit 2; }
 [[ -n "$RUNTIME" && -x "$RUNTIME/VantageBackend" ]] || { echo "A complete backend runtime directory containing executable VantageBackend is required." >&2; exit 1; }
-RUNTIME="$(cd "$RUNTIME" && pwd)"
+OUTPUT="$(python3 "$PACKAGE/scripts/validate_output.py" --runtime "$RUNTIME" --output "$OUTPUT" --repository "$ROOT")"
+RUNTIME="$(cd "$RUNTIME" && pwd -P)"
 python3 "$ROOT/scripts/validate_native_runtime.py" --runtime "$RUNTIME" --platform darwin --architecture "$(uname -m)"
 swift build --package-path "$PACKAGE" -c "$CONFIGURATION"
 BIN="$(swift build --package-path "$PACKAGE" -c "$CONFIGURATION" --show-bin-path)"
 mkdir -p "$OUTPUT"
 OUTPUT="$(cd "$OUTPUT" && pwd)"
 STAGE="$(mktemp -d "$OUTPUT/.vantage-package.XXXXXX")"
+# Staging belongs only to this invocation. Previous bundles are never placed
+# here, so a failed build cannot delete an existing output through this trap.
 trap 'rm -rf "$STAGE"' EXIT
 APP="$STAGE/Vantage.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/backend-runtime"
 cp "$BIN/VantageMac" "$APP/Contents/MacOS/Vantage"
 cp "$PACKAGE/Resources/Info.plist" "$APP/Contents/Info.plist"
+printf '%s\n' '{"format":"vantage-native-macos-bundle","version":1}' > "$APP/Contents/Resources/vantage-native-package.json"
 # Preserve the complete PyInstaller onedir layout; never copy only its launcher.
 ditto "$RUNTIME" "$APP/Contents/Resources/backend-runtime/VantageBackend"
 ICONSET="$STAGE/Vantage.iconset"
@@ -45,6 +49,8 @@ plutil -lint "$APP/Contents/Info.plist"
 codesign --force --sign - "$APP/Contents/MacOS/Vantage"
 codesign --force --sign - "$APP"
 codesign --verify "$APP"
-if [[ -e "$OUTPUT/Vantage.app" ]]; then mv "$OUTPUT/Vantage.app" "$STAGE/previous.app"; fi
-mv "$APP" "$OUTPUT/Vantage.app"
+# Revalidate after the build in case another process changed the destination.
+python3 "$PACKAGE/scripts/validate_output.py" --runtime "$RUNTIME" --output "$OUTPUT" --repository "$ROOT" >/dev/null
+BACKUP="$(python3 "$PACKAGE/scripts/publish_bundle.py" --app "$APP" --target "$OUTPUT/Vantage.app")"
 echo "Packaged $OUTPUT/Vantage.app"
+if [[ -n "$BACKUP" ]]; then echo "Previous generated bundle retained at $BACKUP"; fi

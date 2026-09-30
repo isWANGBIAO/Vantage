@@ -19,10 +19,11 @@ public sealed class NativeChart : StackPanel
     readonly Slider start = new() { Header = "起点 / Start %", Minimum = 0, Maximum = 99, Value = 0, MinWidth = 180 };
     readonly Slider end = new() { Header = "终点 / End %", Minimum = 1, Maximum = 100, Value = 100, MinWidth = 180 };
     readonly JsonElement[] series;
+    readonly RadarLegendEntry[] radarLegend;
     public NativeChart(JsonElement option, bool english = false)
     {
         start.Header = english ? "Start %" : "起点 %"; end.Header = english ? "End %" : "终点 %";
-        this.option = option; series = option.Field("series").Items().ToArray(); Spacing = 10;
+        this.option = option; series = option.Field("series").Items().ToArray(); radarLegend = ChartMath.RadarLegend(option); Spacing = 10;
         var legend = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14 };
         for (var index = 0; index < series.Length; index++)
         {
@@ -30,6 +31,17 @@ public sealed class NativeChart : StackPanel
             checkbox.Checked += (_, _) => { hidden.Remove(id); Draw(); }; checkbox.Unchecked += (_, _) => { hidden.Add(id); Draw(); }; legend.Children.Add(checkbox);
         }
         Children.Add(new ScrollViewer { Content = legend, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled });
+        if (radarLegend.Length > 0)
+        {
+            var names = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 18 };
+            foreach (var entry in radarLegend)
+            {
+                var name = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+                name.Children.Add(new Rectangle { Width = 12, Height = 12, Fill = Brush(entry.ColorIndex), VerticalAlignment = VerticalAlignment.Center });
+                name.Children.Add(new TextBlock { Text = entry.Label, Foreground = Brush(entry.ColorIndex), VerticalAlignment = VerticalAlignment.Center }); names.Children.Add(name);
+            }
+            Children.Add(new ScrollViewer { Content = names, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled });
+        }
         Children.Add(canvas);
         var controls = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 16 }; controls.Children.Add(start); controls.Children.Add(end); Children.Add(controls);
         start.ValueChanged += (_, _) => Draw(); end.ValueChanged += (_, _) => Draw();
@@ -50,8 +62,10 @@ public sealed class NativeChart : StackPanel
     ChartPoint[] Points(JsonElement s) => ChartMath.ExtractPoints(s, option.Field("xAxis"));
     void DrawCartesian()
     {
-        const double left = 65, top = 20, bottom = 42; var width = Math.Max(100, canvas.ActualWidth - left - 80); var height = canvas.Height - top - bottom;
+        const double left = 65, top = 20, bottom = 42;
         var active = series.Select((s, i) => (s, i, points: Points(s))).Where(x => !hidden.Contains(x.i)).ToArray();
+        var extraAxes = active.Select(x => (int)(x.s.Field("yAxisIndex").Number() ?? 0)).Where(x => x != 0).Distinct().Order().ToArray();
+        var width = Math.Max(100, canvas.ActualWidth - left - 80 - Math.Max(0, extraAxes.Length - 1) * 80); var height = canvas.Height - top - bottom;
         var all = active.SelectMany(x => x.points).ToArray(); if (all.Length == 0) { Label("暂无数据 / No data", left, top); return; }
         var minX = all.Min(p => p.X); var maxX = all.Max(p => p.X);
         if (active.Any(x => x.s.Field("type").Text() == "bar")) { var xs = all.Select(p => p.X).Distinct().Order().ToArray(); var pad = xs.Length > 1 ? (xs[1] - xs[0]) / 2 : .5; minX -= pad; maxX += pad; }
@@ -73,14 +87,24 @@ public sealed class NativeChart : StackPanel
             var min = axis.Field("min").Number() ?? (group.Any(x => x.s.Field("type").Text() == "bar") ? Math.Min(0, values.Min()) : values.Min());
             var max = axis.Field("max").Number() ?? values.Max(); if (min == max) max = min + 1;
             ranges[group.Key] = (min, max);
-            Label($"{axis.Field("name").Text($"Y{group.Key + 1}")}: {min:0.##} … {max:0.##}", group.Key == 0 ? left : left + width - 140, top - 20 + group.Key * 14);
+            var titleX = group.Key == 0 ? left : left + width + 8 + Array.IndexOf(extraAxes, group.Key) * 80;
+            Label(axis.Field("name").Text($"Y{group.Key + 1}"), titleX, top - 20, Brush(group.First().i));
         }
         double X(double x) => left + (x - lowX) / (highX - lowX) * width;
         double Y(double y, int axis) { var (min, max) = ranges[axis]; var inverse = axis < axisArray.Length && axisArray[axis].Field("inverse").ValueKind == JsonValueKind.True; return top + ChartMath.YRatio(y, min, max, inverse) * height; }
         for (var k = 0; k <= 4; k++)
         {
             var y = top + height * k / 4; Line(left, y, left + width, y, new SolidColorBrush(Color.FromArgb(50, 128, 128, 128)), 1);
-            if (ranges.TryGetValue(0, out var r)) { var inverse = axisArray.Length > 0 && axisArray[0].Field("inverse").ValueKind == JsonValueKind.True; var tick = inverse ? r.min + (r.max - r.min) * k / 4 : r.max - (r.max - r.min) * k / 4; Label($"{tick:0.##}", 0, y - 8); }
+            foreach (var (axisIndex, range) in ranges)
+            {
+                var axis = axisIndex < axisArray.Length ? axisArray[axisIndex] : default;
+                var tick = ChartMath.AxisTickValue(range.min, range.max, k / 4.0, axis.Field("inverse").ValueKind == JsonValueKind.True);
+                var number = tick.ToString("0.##"); var format = axis.Field("axisLabel").Field("formatter").Text();
+                var text = format.Contains("{value}", StringComparison.Ordinal) ? format.Replace("{value}", number, StringComparison.Ordinal) : number;
+                var x = axisIndex == 0 ? 0 : left + width + 8 + Array.IndexOf(extraAxes, axisIndex) * 80;
+                var color = Brush(active.First(a => (int)(a.s.Field("yAxisIndex").Number() ?? 0) == axisIndex).i);
+                Label(text, x, y - 8, color);
+            }
         }
         var stacks = new Dictionary<(int, string, double, bool), double>();
         string BarGroup(JsonElement s, int index) => s.Field("stack").Text() is { Length: > 0 } stack ? $"{s.Field("yAxisIndex").Number() ?? 0}:{stack}" : $"series-{index}";
@@ -123,17 +147,14 @@ public sealed class NativeChart : StackPanel
             for (var i = 0; i < indicators.Length; i++) polygon.Points.Add(At(i, radius * ring / 4)); canvas.Children.Add(polygon);
         }
         for (var i = 0; i < indicators.Length; i++) { var p = At(i, radius + 22); Label(indicators[i].Field("name").Text(), p.X - 35, p.Y - 8); }
-        var color = 0;
-        for (var index = 0; index < series.Length; index++)
+        foreach (var entry in radarLegend)
         {
-            if (hidden.Contains(index)) continue;
-            foreach (var row in series[index].Field("data").Items())
-            {
-                var values = row.Field("value").Items().Select(x => x.Number() ?? 0).ToArray();
-                var polygon = new Polygon { Stroke = Brush(color), StrokeThickness = 2, Fill = new SolidColorBrush(Color.FromArgb(35, Palette[color % Palette.Length].R, Palette[color % Palette.Length].G, Palette[color % Palette.Length].B)) };
-                for (var i = 0; i < indicators.Length; i++) polygon.Points.Add(At(i, radius * Math.Clamp((i < values.Length ? values[i] : 0) / Math.Max(1, indicators[i].Field("max").Number() ?? 100), 0, 1)));
-                ToolTipService.SetToolTip(polygon, row.Field("name").Text() + ": " + string.Join(", ", values)); canvas.Children.Add(polygon); color++;
-            }
+            if (hidden.Contains(entry.SeriesIndex)) continue;
+            var row = series[entry.SeriesIndex].Field("data").Items().ElementAt(entry.DatumIndex);
+            var values = row.Field("value").Items().Select(x => x.Number() ?? 0).ToArray(); var color = entry.ColorIndex;
+            var polygon = new Polygon { Stroke = Brush(color), StrokeThickness = 2, Fill = new SolidColorBrush(Color.FromArgb(35, Palette[color % Palette.Length].R, Palette[color % Palette.Length].G, Palette[color % Palette.Length].B)) };
+            for (var i = 0; i < indicators.Length; i++) polygon.Points.Add(At(i, radius * Math.Clamp((i < values.Length ? values[i] : 0) / Math.Max(1, indicators[i].Field("max").Number() ?? 100), 0, 1)));
+            ToolTipService.SetToolTip(polygon, entry.Label + ": " + string.Join(", ", values)); canvas.Children.Add(polygon);
         }
     }
     void DrawPie()
@@ -149,5 +170,5 @@ public sealed class NativeChart : StackPanel
         }
     }
     void Line(double x1, double y1, double x2, double y2, Brush brush, double width) => canvas.Children.Add(new Line { X1 = x1, Y1 = y1, X2 = x2, Y2 = y2, Stroke = brush, StrokeThickness = width });
-    void Label(string text, double x, double y) { var label = new TextBlock { Text = text, FontSize = 11 }; Canvas.SetLeft(label, x); Canvas.SetTop(label, y); canvas.Children.Add(label); }
+    void Label(string text, double x, double y, Brush? foreground = null) { var label = new TextBlock { Text = text, FontSize = 11 }; if (foreground is not null) label.Foreground = foreground; Canvas.SetLeft(label, x); Canvas.SetTop(label, y); canvas.Children.Add(label); }
 }

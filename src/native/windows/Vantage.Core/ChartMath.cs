@@ -2,8 +2,27 @@ using System.Globalization;
 using System.Text.Json;
 namespace Vantage.Core;
 public sealed record ChartPoint(double X, double? Y, string Label);
+public sealed record RadarLegendEntry(int SeriesIndex, int DatumIndex, string Label, int ColorIndex);
 public static class ChartMath
 {
+    public static RadarLegendEntry[] RadarLegend(JsonElement option)
+    {
+        var entries = new List<RadarLegendEntry>(); var seriesIndex = 0;
+        foreach (var series in option.Field("series").Items())
+        {
+            if (series.Field("type").Text() == "radar")
+            {
+                var datumIndex = 0;
+                foreach (var datum in series.Field("data").Items())
+                {
+                    var fallback = series.Field("name").Text("Radar") + " " + (datumIndex + 1);
+                    entries.Add(new(seriesIndex, datumIndex, datum.Field("name").Text(fallback), entries.Count)); datumIndex++;
+                }
+            }
+            seriesIndex++;
+        }
+        return entries.ToArray();
+    }
     public static ChartPoint[] ExtractPoints(JsonElement series, JsonElement xAxis)
     {
         if (xAxis.ValueKind == JsonValueKind.Array) xAxis = xAxis.Items().FirstOrDefault();
@@ -19,6 +38,8 @@ public static class ChartMath
             return new ChartPoint(x, y, label);
         }).ToArray();
     }
+    public static double AxisTickValue(double min, double max, double verticalRatio, bool inverse = false)
+        => inverse ? min + (max - min) * verticalRatio : max - (max - min) * verticalRatio;
     public static double YRatio(double value, double min, double max, bool inverse = false)
     { if (max <= min) max = min + 1; var normalized = (value - min) / (max - min); return inverse ? normalized : 1 - normalized; }
     public static (double min, double max) SignedStackExtent(IEnumerable<IEnumerable<ChartPoint>> series)

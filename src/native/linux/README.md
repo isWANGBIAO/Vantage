@@ -45,3 +45,5 @@ dbus-run-session -- xvfb-run -a /usr/bin/python3 src/native/linux/smoke_test.py 
 烟测启动纯 stdlib 合成后端，无真实模型/硬件/个人数据，在真实 GTK 窗口遍历 10 页并截图，执行任务、聊天、清空、采购建议、引导流程。退出码非零即失败；`report.json` 明确检查内容。截图仅存在指定输出目录，不提交到公共仓库。完整硬件、桌面托盘宿主、录音权限、安装后自动启动仍需目标 Linux 桌面验收。
 
 构建脚本要求预先构建的 Linux ELF `VantageBackend`，复制其完整 PyInstaller runtime 目录，输出 `Vantage-linux-<arch>.tar.gz`，同时验证 manifest/resource/fingerprint/架构、携带项目 LICENSE 和 Noto 字体许可，缺后端或字体许可时明确失败，不静默创建不可运行的包。
+
+打包输出安全：拒绝输出到源码、后端或用户数据目录，拒绝符号链接目标。归档先在目标目录内独占创建临时文件，完整写入后原子发布；只允许替换带有本打包器标记的既有产物。遇到未知同名文件或旧版无标记归档时，请选择新的输出目录，脚本不会自动删除或覆盖它。

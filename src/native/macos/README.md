@@ -26,6 +26,8 @@ src/native/macos/scripts/package.sh \
 open build/native/macos/Vantage.app
 ```
 
+打包前拒绝后端/输出路径重叠、符号链接目标和无 Vantage 产物标记的已有 `Vantage.app`；替换已识别产物时保留上一份包，失败会尝试恢复原位置。路径检查可用 `python3 src/native/macos/scripts/test_validate_output.py` 验证。
+
 脚本严格要求真实后端 runtime，将其整体复制到 `Contents/Resources/backend-runtime/VantageBackend`，可执行文件为 `Contents/MacOS/Vantage`。仅本机 ad-hoc 签名，不执行公证、发布或读取签名账号。Apple Silicon 与 Intel 必须分别构建匹配架构的客户端/后端。
 
 ## 功能与边界

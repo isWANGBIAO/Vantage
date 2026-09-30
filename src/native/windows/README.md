@@ -13,6 +13,8 @@ dotnet build src/native/windows/Vantage.Windows/Vantage.Windows.csproj -c Releas
 ./src/native/windows/build.ps1 -BackendRuntime ./build/backend-runtime/stage/VantageBackend
 ```
 
+打包器拒绝仓库、后端 bundle、用户数据目录的冲突输出，以及 junction/symlink 路径。已有目标只有带本打包器 ownership marker 才可替换；不会删除任意旧目录或孤立 archive。可独立运行 `./src/native/windows/Test-PackageSafety.ps1` 检验这些边界。
+
 输出 `build/native/windows/Vantage/Vantage.Windows.exe` 和 `Vantage-Windows-x64.zip`。包包含 .NET、Windows App SDK 与完整 `backend-runtime/VantageBackend`；不在启动时下载依赖。压缩包尚未签名，不是已发布安装器。ARM64 需匹配架构的后端 bundle。
 
 开发时先运行共享后端再启动程序，或显式设置 `VANTAGE_BACKEND_EXECUTABLE` 指向已构建的后台程序。连接优先级：显式地址 → `VANTAGE_BACKEND_URL` → host/port → `http://127.0.0.1:8000`。只允许 loopback，HTTPS/path-prefix 仅连接，不自动启动。HTTP 重定向关闭。运行目录默认 `%LOCALAPPDATA%/Vantage`，支持共享 `VANTAGE_*_DIR` 环境变量。

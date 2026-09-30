@@ -68,6 +68,9 @@ jobs:
             requirements-backend-runtime-gpu.txt
       - name: Test native protocol and state machines
         run: dotnet test src/native/windows/Vantage.Core.Tests/Vantage.Core.Tests.csproj -c Release --logger trx
+      - name: Test package destination safety without user data
+        shell: pwsh
+        run: ./src/native/windows/Test-PackageSafety.ps1
       - name: Compile WinUI before backend packaging
         run: dotnet publish src/native/windows/Vantage.Windows/Vantage.Windows.csproj -c Release -r win-x64 -p:Platform=x64 -p:WindowsPackageType=None --self-contained true -o build/native-preflight/windows
       - name: Record generated WinUI resource evidence
@@ -144,6 +147,8 @@ jobs:
             requirements-backend-runtime-gpu.txt
       - name: Test native protocol and state machines
         run: swift test --package-path src/native/macos
+      - name: Test package output ownership and input boundaries
+        run: python -m unittest discover -s src/native/macos/scripts -p 'test_*.py'
       - name: Exercise the compiled native window before backend packaging
         run: |
           BIN="$(swift build --package-path src/native/macos --show-bin-path)"
