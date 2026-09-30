@@ -182,9 +182,11 @@ final class VoiceRecorder: ObservableObject {
         guard intent == request, !Task.isCancelled else { throw CancellationError() }
         guard allowed else { throw APIError.http(403, "Enable microphone access in System Settings.") }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("vantage-voice-\(UUID().uuidString).m4a")
-        let recorder = try AVAudioRecorder(url: file, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 24000, AVNumberOfChannelsKey: 1, AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue])
-        guard recorder.record() else { throw APIError.http(503, "Microphone recording could not start.") }
-        self.file = file; self.recorder = recorder; recording = true
+        do {
+            let recorder = try AVAudioRecorder(url: file, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 24000, AVNumberOfChannelsKey: 1, AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue])
+            guard recorder.record() else { throw APIError.http(503, "Microphone recording could not start.") }
+            self.file = file; self.recorder = recorder; recording = true
+        } catch { try? FileManager.default.removeItem(at: file); throw error }
     }
     func stop() -> URL? { intent = UUID(); recorder?.stop(); recorder = nil; recording = false; return file }
     func discard() { _ = stop(); if let file { try? FileManager.default.removeItem(at: file) }; file = nil }

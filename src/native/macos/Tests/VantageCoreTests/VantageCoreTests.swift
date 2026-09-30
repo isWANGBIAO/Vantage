@@ -286,3 +286,36 @@ final class PlotLayoutTests: XCTestCase {
         XCTAssertEqual(layout.bars["2-0"]?.end, 7)
     }
 }
+
+final class AudioOperationStateTests: XCTestCase {
+    func testLateCompletionCannotClearNewTranscriptionOrDeleteItsFile() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let oldFile = directory.appendingPathComponent("old.m4a"); let newFile = directory.appendingPathComponent("new.m4a")
+        try Data([1]).write(to: oldFile); try Data([2]).write(to: newFile)
+        var state = AudioOperationState()
+        let old = state.begin(file: oldFile, ownsTemporaryFile: true, transcribing: true)
+        state.cancel()
+        let newer = state.begin(file: newFile, ownsTemporaryFile: true, transcribing: true)
+        try old.removeOwnedTemporaryFile()
+        XCTAssertFalse(state.finish(old))
+        XCTAssertTrue(state.isCurrent(newer)); XCTAssertTrue(state.transcribing); XCTAssertTrue(state.isBusy)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldFile.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: newFile.path))
+        try newer.removeOwnedTemporaryFile(); XCTAssertTrue(state.finish(newer)); XCTAssertFalse(state.isBusy)
+    }
+    func testPickedAudioIsNeverOwnedOrRemoved() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
+        try Data([1]).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
+        var state = AudioOperationState(); let ticket = state.begin(file: file, transcribing: true)
+        state.cancel(); try ticket.removeOwnedTemporaryFile()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path)); XCTAssertFalse(state.finish(ticket))
+    }
+    func testLatePermissionTaskCannotFinishNewOperation() {
+        var state = AudioOperationState(); let permission = state.begin()
+        state.cancel(); let next = state.begin(transcribing: true)
+        XCTAssertFalse(state.isCurrent(permission)); XCTAssertFalse(state.finish(permission))
+        XCTAssertTrue(state.isCurrent(next)); XCTAssertTrue(state.transcribing)
+    }
+}

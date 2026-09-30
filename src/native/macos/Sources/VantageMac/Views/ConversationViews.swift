@@ -81,11 +81,11 @@ struct ChatView: View {
     @EnvironmentObject var model: AppModel
     @StateObject private var voice = VoiceRecorder()
     @State private var confirmClear = false
-    @State private var transcribing = false
+    @State private var audioOperation = AudioOperationState()
+    private var transcribing: Bool { audioOperation.transcribing }
     @State private var showBase = false
     @State private var sendVoice = true
     @State private var recordingTask: Task<Void, Never>?
-    @State private var voiceEpoch = UUID()
     private var messages: [ChatMessage] {
         let all = model.chat?.messages ?? []
         let base = model.chat?.display_messages ?? []
@@ -137,51 +137,65 @@ struct ChatView: View {
             }.padding(.horizontal, 18).padding(.top, 10)
             HStack(alignment: .bottom, spacing: 12) {
                 TextEditor(text: $model.draft).font(.body).frame(minHeight: 60, maxHeight: 130).padding(7).background(.background, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor)))
-                Button { recordingTask = Task { await toggleRecording() } } label: { Image(systemName: voice.recording ? "stop.circle.fill" : "mic.fill").foregroundStyle(voice.recording ? .red : .primary) }.disabled(transcribing || model.sendingChat || (!model.chatReady && !voice.recording)).help(model.text("录音转文字", "Record and transcribe"))
+                Button { toggleRecording() } label: { Image(systemName: voice.recording ? "stop.circle.fill" : "mic.fill").foregroundStyle(voice.recording ? .red : .primary) }.disabled(audioOperation.isBusy || model.sendingChat || (!model.chatReady && !voice.recording)).help(model.text("录音转文字", "Record and transcribe"))
                 Button {
-                    guard let file = NativePlatform.chooseAudio() else { return }
-                    recordingTask = Task { await transcribeFile(file) }
+                    guard !audioOperation.isBusy, let file = NativePlatform.chooseAudio() else { return }
+                    let ticket = audioOperation.begin(file: file, transcribing: true)
+                    recordingTask = Task { await transcribe(ticket, sendAfter: false) }
                 } label: { Image(systemName: "waveform.badge.plus") }
-                    .disabled(voice.recording || transcribing || model.sendingChat || !model.chatReady)
+                    .disabled(voice.recording || audioOperation.isBusy || model.sendingChat || !model.chatReady)
                     .help(model.text("选择音频文件转录", "Transcribe an audio file"))
                 if transcribing {
                     ProgressView().controlSize(.small)
-                    Button(model.text("取消转录", "Cancel transcription")) { voiceEpoch = UUID(); recordingTask?.cancel(); transcribing = false }
+                    Button(model.text("取消转录", "Cancel transcription")) { audioOperation.cancel(); recordingTask?.cancel() }
                 }
                 if model.sendingChat { Button(model.text("停止", "Stop")) { model.stopChat() } }
-                else { Button(model.text("发送", "Send")) { model.sendChat() }.buttonStyle(.borderedProminent).disabled(!model.chatReady || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || voice.recording || transcribing).keyboardShortcut(.return, modifiers: .command) }
+                else { Button(model.text("发送", "Send")) { model.sendChat() }.buttonStyle(.borderedProminent).disabled(!model.chatReady || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || voice.recording || audioOperation.isBusy).keyboardShortcut(.return, modifiers: .command) }
             }.padding(18)
         }
         .task { do { try await model.refreshChat() } catch { model.report(error) } }
-        .onDisappear { voiceEpoch = UUID(); recordingTask?.cancel(); voice.discard() }
+        .onDisappear { audioOperation.cancel(); recordingTask?.cancel(); voice.discard() }
         .confirmationDialog(model.text("清空对话？行动计划上下文将保留", "Clear conversation? The action-plan context will be retained."), isPresented: $confirmClear) {
             Button(model.text("清空", "Clear"), role: .destructive) { Task { do { try await model.clearChat() } catch { model.report(error) } } }
         }
     }
-    private func transcribeFile(_ file: URL) async {
-        let epoch = voiceEpoch; let client = model.api
-        transcribing = true
+    private func transcribe(_ ticket: AudioOperationTicket, sendAfter: Bool) async {
+        guard audioOperation.isCurrent(ticket), !Task.isCancelled else {
+            try? ticket.removeOwnedTemporaryFile(); audioOperation.finish(ticket); return
+        }
+        guard let file = ticket.file else { audioOperation.finish(ticket); return }
+        let client = model.api
         let scoped = file.startAccessingSecurityScopedResource()
-        defer { if scoped { file.stopAccessingSecurityScopedResource() }; if epoch == voiceEpoch { transcribing = false } }
+        defer {
+            if scoped { file.stopAccessingSecurityScopedResource() }
+            try? ticket.removeOwnedTemporaryFile()
+            audioOperation.finish(ticket)
+        }
         do {
             let text = try await client.transcribe(file: file)
-            guard epoch == voiceEpoch, client === model.api, !Task.isCancelled else { return }
+            guard audioOperation.isCurrent(ticket), client === model.api, !Task.isCancelled else { return }
             model.draft += (model.draft.isEmpty ? "" : "\n") + text
-        } catch { if epoch == voiceEpoch { model.report(error) } }
+            if sendAfter && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { model.sendChat() }
+        } catch { if audioOperation.isCurrent(ticket) { model.report(error) } }
     }
-    private func toggleRecording() async {
-        let epoch = voiceEpoch; let client = model.api
-        do {
-            if voice.recording {
-                guard let file = voice.stop() else { return }; transcribing = true
-                defer { voice.discard(); transcribing = false }
-                let text = try await client.transcribe(file: file)
-                guard epoch == voiceEpoch, !Task.isCancelled, client === model.api else { return }
-                model.draft += (model.draft.isEmpty ? "" : "\n") + text
-                if sendVoice && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { model.sendChat() }
-            } else { try await voice.start() }
-        } catch { voice.discard(); model.report(error) }
+    private func toggleRecording() {
+        guard !audioOperation.isBusy else { return }
+        if voice.recording {
+            guard let file = voice.stop() else { return }
+            let ticket = audioOperation.begin(file: file, ownsTemporaryFile: true, transcribing: true)
+            let sendAfter = sendVoice
+            recordingTask = Task { await transcribe(ticket, sendAfter: sendAfter) }
+        } else {
+            let ticket = audioOperation.begin()
+            recordingTask = Task {
+                defer { audioOperation.finish(ticket) }
+                guard audioOperation.isCurrent(ticket), !Task.isCancelled else { return }
+                do { try await voice.start() }
+                catch { if audioOperation.isCurrent(ticket) { model.report(error) } }
+            }
+        }
     }
+
 }
 
 struct MarkdownDocument: View {

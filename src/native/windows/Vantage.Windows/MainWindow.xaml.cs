@@ -17,6 +17,11 @@ namespace Vantage.Windows;
 
 public sealed partial class MainWindow : Window
 {
+    Grid Root = null!;
+    NavigationView Navigation = null!;
+    ScrollViewer PageScroll = null!;
+    StackPanel PageContent = null!;
+    InfoBar StatusBar = null!;
     readonly ApiClient api;
     readonly BackendHost host;
     readonly CancellationTokenSource lifetime = new();
@@ -39,9 +44,9 @@ public sealed partial class MainWindow : Window
     readonly List<object> smokePages = [];
     public MainWindow()
     {
-        SmokeDiagnostics.Record("MainWindow.InitializeComponent.before");
-        InitializeComponent();
-        SmokeDiagnostics.Record("MainWindow.InitializeComponent.after");
+        SmokeDiagnostics.Record("MainWindow.InitializeShell.before");
+        InitializeShell();
+        SmokeDiagnostics.Record("MainWindow.InitializeShell.after");
         api = new ApiClient(BackendAddress.Resolve()); host = new BackendHost(api);
         var args = Environment.GetCommandLineArgs();
         var i = Array.IndexOf(args, "--smoke-test"); smokeOutput = i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
@@ -63,6 +68,27 @@ public sealed partial class MainWindow : Window
         Closed += (_, _) => { if (!shutdownComplete) { lifetime.Cancel(); host.Dispose(); } };
         Root.ActualThemeChanged += (_, _) => ApplyAppearance();
         Root.Loaded += async (_, _) => { SmokeDiagnostics.Record("Root.Loaded"); await InitializeAsync(); if (smokeOutput is not null) await RunSmokeAsync(smokeOutput); };
+    }
+    void InitializeShell()
+    {
+        Title = "Vantage";
+        SmokeDiagnostics.Record("Shell.Grid.before");
+        Root = new Grid { Style = (Style)Application.Current.Resources["VantageRootStyle"] };
+        Root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        Root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        SmokeDiagnostics.Record("Shell.NavigationView.before");
+        Navigation = new NavigationView { IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
+            PaneDisplayMode = NavigationViewPaneDisplayMode.Auto, IsSettingsVisible = true, Header = "Vantage" };
+        PageContent = new StackPanel { Padding = new Thickness(28), Spacing = 18, MaxWidth = 1500, HorizontalAlignment = HorizontalAlignment.Stretch };
+        PageScroll = new ScrollViewer { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = PageContent };
+        Navigation.Content = PageScroll;
+        Navigation.SelectionChanged += Navigation_SelectionChanged;
+        SmokeDiagnostics.Record("Shell.InfoBar.before");
+        StatusBar = new InfoBar { IsOpen = true, IsClosable = false, Severity = InfoBarSeverity.Informational,
+            Title = "Vantage", Message = "Connecting to the local backend…" };
+        Grid.SetRow(StatusBar, 1); Root.Children.Add(Navigation); Root.Children.Add(StatusBar);
+        Content = Root;
+        SmokeDiagnostics.Record("Shell.Content.assigned");
     }
     async Task InitializeAsync()
     {
@@ -173,7 +199,7 @@ public sealed partial class MainWindow : Window
     static TextBlock Heading(string value) => new() { Text = value, FontSize = 28, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
     static StackPanel Stack(params UIElement[] elements) { var s = new StackPanel { Spacing = 12 }; foreach (var e in elements) s.Children.Add(e); return s; }
     static StackPanel Row(params UIElement[] elements) { var s = Stack(elements); s.Orientation = Orientation.Horizontal; return s; }
-    static Border Card(UIElement child) => new() { Child = child, Padding = new Thickness(20), CornerRadius = new CornerRadius(12), Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"], BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"], BorderThickness = new Thickness(1) };
+    static Border Card(UIElement child) => new() { Child = child, Style = (Style)Application.Current.Resources["VantageCardStyle"] };
     static TextBox Input(string label, string value = "", bool multi = false) => new() { Header = label, Text = value, AcceptsReturn = multi, TextWrapping = multi ? TextWrapping.Wrap : TextWrapping.NoWrap, MinWidth = 240, MaxHeight = multi ? 240 : 100, HorizontalAlignment = HorizontalAlignment.Stretch };
     static ComboBox Choice(string label, IEnumerable<string> options, string? selected = null)
     { var box = new ComboBox { Header = label, MinWidth = 180 }; foreach (var item in options) box.Items.Add(item); box.SelectedItem = selected; if (box.SelectedIndex < 0 && box.Items.Count > 0) box.SelectedIndex = 0; return box; }
@@ -191,6 +217,7 @@ public sealed partial class MainWindow : Window
         var theme = settings?.Settings.String("theme_mode", "auto");
         Root.RequestedTheme = theme switch { "dark" => ElementTheme.Dark, "light" => ElementTheme.Light, _ => ElementTheme.Default };
         var dark = Root.ActualTheme == ElementTheme.Dark;
+        if (!Microsoft.UI.Windowing.AppWindowTitleBar.IsCustomizationSupported()) return;
         AppWindow.TitleBar.BackgroundColor = dark ? Colors.Black : Colors.White;
         AppWindow.TitleBar.ForegroundColor = dark ? Colors.White : Colors.Black;
         AppWindow.TitleBar.ButtonBackgroundColor = dark ? Colors.Black : Colors.White;

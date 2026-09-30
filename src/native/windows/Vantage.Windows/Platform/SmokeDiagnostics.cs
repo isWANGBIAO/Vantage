@@ -45,7 +45,7 @@ internal static class SmokeDiagnostics
     public static void Inventory()
     {
         if (ReportPath is null) return;
-        foreach (var name in new[] { "resources.pri", "Microsoft.WindowsAppRuntime.pri", "Microsoft.UI.Xaml.dll", "Microsoft.WindowsAppRuntime.Bootstrap.dll", "Microsoft.WindowsAppRuntime.dll", "Vantage.Windows.dll", "App.xbf", "MainWindow.xbf", "Assets/Vantage.ico" })
+        foreach (var name in new[] { "resources.pri", "Vantage.Windows.pri", "Vantage.Windows/App.xbf", "Vantage.Windows/MainWindow.xbf", "Microsoft.WindowsAppRuntime.pri", "Microsoft.UI.Xaml.dll", "Microsoft.WindowsAppRuntime.Bootstrap.dll", "Microsoft.WindowsAppRuntime.dll", "Vantage.Windows.dll", "App.xbf", "MainWindow.xbf", "Assets/Vantage.ico" })
         {
             var path = Path.Combine(AppContext.BaseDirectory, name);
             Record($"asset {name}: {(File.Exists(path) ? new FileInfo(path).Length.ToString() : "missing")}");
