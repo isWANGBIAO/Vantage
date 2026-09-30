@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
-import { Buffer } from 'node:buffer';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import protocol from './src/utils/configurationProtocol.cjs';
+import transport from './src/utils/backendTransport.cjs';
+import connection from './src/utils/backendConnection.cjs';
 
+const protocolSource = readFileSync(new URL('./src/utils/configurationProtocol.cjs', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('./main.cjs', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('./src/App.jsx', import.meta.url), 'utf8');
 const settingsSource = readFileSync(new URL('./src/components/Settings.jsx', import.meta.url), 'utf8');
@@ -11,29 +15,34 @@ const packageJson = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 );
 
-test('startup IPC waits for backend readiness before sending onboarding and settings requests', async () => {
+test('startup transport waits for backend readiness before sending onboarding and settings requests', async () => {
   let release;
   const backendReadyPromise = new Promise(resolve => { release = resolve; });
   const sent = [];
-  const source = mainSource.slice(mainSource.indexOf('function requestBackendJson') - (mainSource.includes('async function requestBackendJson') ? 6 : 0), mainSource.indexOf('function mapPayloadFields'));
-  const requestBackendJson = runInNewContext(`${source}; requestBackendJson`, {
-    backendReadyPromise, Buffer, BACKEND_HOST: '127.0.0.1', BACKEND_PORT: 8000,
-    http: { request(options, callback) {
-      sent.push(options.path);
-      return { setTimeout() {}, on() {}, end() {
-        callback({ statusCode: 200, on(event, listener) {
-          if (event === 'data') listener(Buffer.from('{"ready":true}'));
-          if (event === 'end') listener();
-        } });
-      } };
-    } },
+  const server = createServer((request, response) => {
+    sent.push(request.url);
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({ ready: true }));
   });
-  const requests = ['/api/automation/onboarding', '/api/automation/settings'].map(p => requestBackendJson('GET', p));
-  assert.equal(sent.length, 0, 'No connection attempt while packaged backend is starting');
-  release();
-  const responses = await Promise.all(requests);
-  assert.equal(sent.length, 2);
-  assert.ok(responses.every(response => response.ready));
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    const requestBackendJson = transport.createBackendJsonRequester({
+      connection: connection.resolveBackendConnection({ baseUrl: `http://127.0.0.1:${server.address().port}` }),
+      waitUntilReady: () => backendReadyPromise,
+    });
+    const requests = ['/api/automation/onboarding', '/api/automation/settings'].map(p => requestBackendJson('GET', p));
+    assert.equal(sent.length, 0, 'No connection attempt while packaged backend is starting');
+    release();
+    const responses = await Promise.all(requests);
+    assert.equal(sent.length, 2);
+    assert.ok(responses.every(response => response.ready));
+    await assert.rejects(requestBackendJson('POST', '/api/not-allowlisted'), /Unsupported/);
+    assert.equal(sent.length, 2);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
 });
 
 test('Electron main process loads the bounded logger factory but starts with a no-op logger', () => {
@@ -136,7 +145,7 @@ test('settings and onboarding IPC persist through canonical backend operations w
     /ipcMain\.handle\('settings:save',[\s\S]*?\n\}\);\n\nipcMain\.handle\('settings:open-path'/,
   )?.[0];
   const onboardingComplete = mainSource.match(
-    /ipcMain\.handle\('onboarding:complete',[\s\S]*?\n\}\);\n\nfunction createWindow/,
+    /ipcMain\.handle\('onboarding:complete',[\s\S]*?\n\}\);\n\nfunction (?:isTrustedRendererDocument|createWindow)/,
   )?.[0];
   const displayLanguageUpdate = mainSource.match(
     /ipcMain\.handle\('settings:set-display-language',[\s\S]*?\n\}\);\n\nipcMain\.handle\('settings:get-system-locale'/,
@@ -159,22 +168,14 @@ test('settings and onboarding IPC persist through canonical backend operations w
 });
 
 test('Electron settings mapping forwards provider context and output capability fields', () => {
-  const providerFields = mainSource.match(/const providerFields = \[([\s\S]*?)\n\s*\];/)?.[1];
+  const providerFields = protocolSource.match(/const providerFields = \[([\s\S]*?)\n\s*\];/)?.[1];
   assert.ok(providerFields);
   assert.match(providerFields, /'context_window_tokens'/);
   assert.match(providerFields, /'max_output_tokens'/);
 });
 
 test('Electron settings mapper preserves omitted provider maps and explicit replacements', () => {
-  const mapperStart = mainSource.indexOf('function mapPayloadFields(payload, fieldMap)');
-  const mapperEnd = mainSource.indexOf('\nfunction buildElectronSettingsState', mapperStart);
-  assert.ok(mapperStart >= 0 && mapperEnd > mapperStart, 'settings mapper functions should remain available');
-
-  const sandbox = { Object, SETTINGS_PAYLOAD_FIELDS: { providerConfig: 'provider_config' } };
-  runInNewContext(
-    `${mainSource.slice(mapperStart, mapperEnd)}; globalThis.mapSettings = toBackendSettingsPayload;`,
-    sandbox,
-  );
+  const sandbox = { mapSettings: protocol.toBackendSettingsPayload };
 
   const partial = sandbox.mapSettings({
     providerConfig: { sampling_defaults: { temperature: 0.7 }, model_profiles: { local: { top_p: 0.9 } } },
@@ -190,15 +191,7 @@ test('Electron settings mapper preserves omitted provider maps and explicit repl
 });
 
 test('Electron settings mapper preserves invalid null and array provider values for backend rejection', () => {
-  const mapperStart = mainSource.indexOf('function mapPayloadFields(payload, fieldMap)');
-  const mapperEnd = mainSource.indexOf('\nfunction buildElectronSettingsState', mapperStart);
-  assert.ok(mapperStart >= 0 && mapperEnd > mapperStart, 'settings mapper functions should remain available');
-
-  const sandbox = { Object, SETTINGS_PAYLOAD_FIELDS: { providerConfig: 'provider_config' } };
-  runInNewContext(
-    `${mainSource.slice(mapperStart, mapperEnd)}; globalThis.mapSettings = toBackendSettingsPayload;`,
-    sandbox,
-  );
+  const sandbox = { mapSettings: protocol.toBackendSettingsPayload };
 
   for (const providers of [null, [{ route: 'local', model: 'example-model' }]]) {
     const mapped = sandbox.mapSettings({ providerConfig: { providers } });
@@ -207,15 +200,7 @@ test('Electron settings mapper preserves invalid null and array provider values 
 });
 
 test('Electron settings mapper rejects non-record provider entries before sending a request', () => {
-  const mapperStart = mainSource.indexOf('function mapPayloadFields(payload, fieldMap)');
-  const mapperEnd = mainSource.indexOf('\nfunction buildElectronSettingsState', mapperStart);
-  assert.ok(mapperStart >= 0 && mapperEnd > mapperStart, 'settings mapper functions should remain available');
-
-  const sandbox = { Object, SETTINGS_PAYLOAD_FIELDS: { providerConfig: 'provider_config' } };
-  runInNewContext(
-    `${mainSource.slice(mapperStart, mapperEnd)}; globalThis.mapSettings = toBackendSettingsPayload;`,
-    sandbox,
-  );
+  const sandbox = { mapSettings: protocol.toBackendSettingsPayload };
 
   for (const entry of [null, false, 42, 'placeholder', []]) {
     assert.throws(
@@ -226,15 +211,7 @@ test('Electron settings mapper rejects non-record provider entries before sendin
 });
 
 test('Electron settings mapper rejects non-JSON provider entries before they can become empty replacements', () => {
-  const mapperStart = mainSource.indexOf('function mapPayloadFields(payload, fieldMap)');
-  const mapperEnd = mainSource.indexOf('\nfunction buildElectronSettingsState', mapperStart);
-  assert.ok(mapperStart >= 0 && mapperEnd > mapperStart, 'settings mapper functions should remain available');
-
-  const sandbox = { Object, SETTINGS_PAYLOAD_FIELDS: { providerConfig: 'provider_config' } };
-  runInNewContext(
-    `${mainSource.slice(mapperStart, mapperEnd)}; globalThis.mapSettings = toBackendSettingsPayload;`,
-    sandbox,
-  );
+  const sandbox = { mapSettings: protocol.toBackendSettingsPayload };
 
   for (const entry of [new Date(), new Map(), undefined]) {
     assert.throws(
@@ -275,7 +252,7 @@ test('desktop backend read failures are visible and cannot save fallback setting
   assert.match(settingsSource, /loadSettingsState\(\)[\s\S]*?catch\s*\(error\)[\s\S]*?settings\.load\.failed/);
   assert.match(settingsSource, /disabled=\{saving\s*\|\|\s*!state\}/);
   assert.match(appSource, /initializeOnboardingState[\s\S]*?catch\s*\(error\)[\s\S]*?backendError/);
-  assert.match(appSource, /if\s*\(onboardingState\.backendError\)/);
+  assert.match(appSource, /if\s*\(onboardingState\.backendError\s*\|\|\s*settingsError\)/);
   assert.match(appSource, /app\.loading\.failed/);
 });
 
@@ -321,7 +298,7 @@ test('Electron main process requests macOS camera access before bundled backend 
   assert.ok(mainSource.includes("CAMERA_FRAME_BRIDGE_START_CHANNEL = 'camera:start-frame-bridge'"));
   assert.ok(mainSource.includes("CAMERA_FRAME_CHANNEL = 'camera:renderer-frame'"));
   assert.ok(mainSource.includes("CAMERA_FRAME_BRIDGE_ERROR_CHANNEL = 'camera:frame-bridge-error'"));
-  assert.ok(mainSource.includes("path: '/api/renderer_camera/frame'"));
+  assert.ok(mainSource.includes("buildConnectionUrl(backendConnection, '/api/renderer_camera/frame')"));
   assert.ok(mainSource.includes("'x-vantage-intent': RENDERER_CAMERA_FRAME_INTENT"));
   assert.ok(mainSource.includes('Renderer camera access granted; confirming macOS camera media access'));
   assert.ok(mainSource.includes('Renderer camera frame capture failed'));
@@ -342,4 +319,22 @@ test('Electron main process requests macOS camera access before bundled backend 
     mainSource.indexOf('ensureBundledBackendReady({')
       < mainSource.indexOf('await startRendererCameraFrameBridge()'),
   );
+});
+
+test('new platform IPC forwards only canonical configuration operations and independently applies native effects', () => {
+  assert.match(mainSource, /ipcMain\.handle\('backend:configuration-request'[\s\S]*?event\.sender !== mainWindow\?\.webContents[\s\S]*?requestBackendJson\(method, apiPath, payload\)/);
+  assert.match(mainSource, /ipcMain\.handle\('platform:apply-saved-preferences'/);
+  assert.match(mainSource, /mainWindow\.on\('focus',[\s\S]*?applySavedNativePreferences/);
+  assert.match(mainSource, /Object\.hasOwn\(settingsPathAllowlist, pathKey\)/);
+});
+
+test('production uses a secure same-origin protocol and blocks document escapes', () => {
+  assert.match(mainSource, /registerSchemesAsPrivileged/);
+  assert.match(mainSource, /installAppProtocol\(\{[\s\S]*?session: session\.defaultSession/);
+  assert.match(mainSource, /loadURL\(APP_ENTRY_URL\)/);
+  assert.doesNotMatch(mainSource, /loadFile\(/);
+  assert.doesNotMatch(mainSource, /webSecurity:\s*false/);
+  assert.match(mainSource, /setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/);
+  assert.match(mainSource, /'will-navigate', preventUntrustedNavigation/);
+  assert.match(mainSource, /'will-redirect', preventUntrustedNavigation/);
 });

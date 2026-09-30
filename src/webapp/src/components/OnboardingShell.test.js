@@ -47,5 +47,5 @@ test('first-run and footer copy omit the removed provider', () => {
 
 test('OnboardingShell keeps the first-run window draggable under hidden native chrome', () => {
   assert.ok(onboardingShellSource.includes('app-layout--electron'));
-  assert.ok(onboardingShellSource.includes('window.electronAPI'));
+  assert.ok(onboardingShellSource.includes('getPlatformAdapter().capabilities.customTitleBar'));
 });

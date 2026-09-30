@@ -1,3 +1,4 @@
+import { getPlatformAdapter } from './utils/platformAdapter';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Moon, Settings as SettingsIcon, Sun } from 'lucide-react';
 import './App.css';
@@ -109,6 +110,7 @@ function AppShell() {
   const [systemTheme, setSystemTheme] = useState(() => resolveSystemTheme());
   const theme = resolveEffectiveTheme(themeMode, systemTheme);
   const [settingsState, setSettingsState] = useState(null);
+  const [settingsError, setSettingsError] = useState(null);
   const settingsReady = Boolean(settingsState);
   const [backgroundTabsReady, setBackgroundTabsReady] = useState(false);
   const shouldRenderBackgroundTabs = backgroundTabsReady;
@@ -123,7 +125,7 @@ function AppShell() {
     legacyRoot: null,
   }));
   const appLayoutClassName =
-    typeof window !== 'undefined' && window.electronAPI
+    getPlatformAdapter().capabilities.customTitleBar
       ? 'app-layout app-layout--electron'
       : 'app-layout';
 
@@ -131,7 +133,9 @@ function AppShell() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('theme', theme);
     localStorage.setItem('themeMode', themeMode);
-    void window.electronAPI?.setTitleBarTheme?.(theme);
+    void getPlatformAdapter().window.setTitleBarTheme(theme).catch((error) => {
+      console.warn('Failed to apply native title bar theme.', error);
+    });
   }, [theme, themeMode]);
 
   useEffect(() => {
@@ -181,7 +185,10 @@ function AppShell() {
       setSettingsState(nextState);
     };
 
-    void initializeSettingsState();
+    void initializeSettingsState().catch((error) => {
+      console.warn('Failed to load backend settings.', error);
+      if (!cancelled) setSettingsError(error.message || String(error));
+    });
 
     return () => {
       cancelled = true;
@@ -260,7 +267,9 @@ function AppShell() {
     lastAppliedOnboardingLanguageRef.current = onboardingState.displayLanguage;
 
     if (onboardingState.displayLanguage !== displayLanguage) {
-      void setDisplayLanguage(onboardingState.displayLanguage);
+      void setDisplayLanguage(onboardingState.displayLanguage).catch((error) => {
+        console.warn('Failed to synchronize display language.', error);
+      });
     }
   }, [displayLanguage, onboardingState.displayLanguage, onboardingState.loading, setDisplayLanguage]);
 
@@ -318,7 +327,9 @@ function AppShell() {
       setThemeMode(nextThemeMode);
     }
     if (settings?.displayLanguage) {
-      void setDisplayLanguage(settings.displayLanguage);
+      void setDisplayLanguage(settings.displayLanguage).catch((error) => {
+        console.warn('Failed to synchronize display language.', error);
+      });
     }
     if (settings) {
       setSettingsState((prev) => ({
@@ -342,7 +353,7 @@ function AppShell() {
 
   const showOnboardingShell = !onboardingState.loading && !onboardingState.completed;
 
-  if (onboardingState.backendError) {
+  if (onboardingState.backendError || settingsError) {
     return (
       <div className={appLayoutClassName}>
         <main className="app-container onboarding-loading-shell">
@@ -350,8 +361,11 @@ function AppShell() {
             <div className="onboarding-eyebrow">{t('app.loading.eyebrow')}</div>
             <h1 className="onboarding-title">{t('app.loading.title')}</h1>
             <p className="onboarding-description">
-              {t('app.loading.failed', { error: onboardingState.backendError })}
+              {t('app.loading.failed', { error: onboardingState.backendError || settingsError })}
             </p>
+            <button type="button" onClick={() => window.location.reload()}>
+              {t('project_progress.retry')}
+            </button>
           </div>
         </main>
       </div>

@@ -35,7 +35,7 @@ Computer Use 的屏幕观察和操作结果是桌面效果的验证依据；CLI/
 
 更新 provider_config 时注意：省略的顶层字段保留原值；一旦提交 providers 字典，它会替换完整 provider 集合。没有用户提供的完整目标配置时，不能把只包含一个 provider 的不完整字典写回。
 
-不要混淆 action_plan_auto_generate 和 action_plan_check_interval_minutes：前者控制桌面启动时的自动生成条件，后者控制是否及多久检查行动计划数据变化；有效范围是 0–35,791 分钟，0 表示关闭轮询。CLI/MCP 修改后再次读取 JSON 只证明持久值已保存；已打开界面的定时器不会收到外部变更通知，重载界面后新间隔才生效。
+不要混淆 action_plan_auto_generate 和 action_plan_check_interval_minutes：前者控制后端启动/跨日缺少完整计划时的自动生成条件，后者控制后端是否及多久检查行动计划数据变化；有效范围是 0–35,791 分钟，0 表示关闭轮询。CLI/MCP 修改后由后端调度动态读取；可用 action_plan.scheduler.read 核对运行时状态，无需重载界面。
 
 CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.complete 的确认仅表示 JSON 持久化成功，不代表登录启动项、托盘标签等 Electron 原生效果已应用。需要这些原生效果时，通过桌面 UI 操作并单独确认。
 
@@ -48,7 +48,7 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 
 生成返回进度流。必须持续读取到成功完成事件 done=true；如果出现 error、STREAM_ERROR、超时、流提前结束或正文不完整，就按失败处理，不报告计划已替换。成功后重新读取 action_plan.today.read，确认最新日期、分析和计划正文完整，再给用户结论。
 
-如果用户要求“定时检查数据变化，生成完整后才用新内容替换界面”，这属于桌面端自动版本轮询流程，应在 Vantage UI 中操作并观察界面。其版本接口 /api/action_plan/source_revision 尚未加入自动化目录，所以 CLI/MCP 不具备等价的自动监测能力。CLI/MCP 可用于手动生成和复核，但不得编造版本检查工具，也不得将流开始或部分输出当作完成。
+定时检查数据变化由后端负责，任何 UI 或 CLI/MCP 通过 settings.update 设置间隔后都共享同一调度。action_plan.source_revision.read 可读取来源指纹，action_plan.scheduler.read 可查看调度状态。长任务使用 action_plan.jobs.create/list/read/events/cancel；断开观察不会取消后端任务，只有显式 cancel 才取消。只有 succeeded 且完整保存结果才算完成；显示效果仍需可见 UI 单独验证。
 
 注意两个有副作用的操作：face.live.read 只有在确实需要标记实时查看器可见时才传 active=true；system.media.open_folder 会打开系统文件管理器，不是纯读取。
 

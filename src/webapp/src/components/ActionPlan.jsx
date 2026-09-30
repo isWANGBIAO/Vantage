@@ -10,10 +10,7 @@ import {
   normalizeReasoningEffortForModelContract,
   saveActionPlanReasoningEffort,
 } from '../utils/actionPlanReasoning';
-import {
-  buildActionPlanGenerationPayload,
-  shouldAutogenerateActionPlan,
-} from '../utils/actionPlanGeneration';
+import { buildActionPlanGenerationPayload } from '../utils/actionPlanGeneration';
 import {
   formatModelReasoningSupportLabel,
   parseModelReasoningSupport,
@@ -41,19 +38,24 @@ import {
 import {
   isFastModeSupportedForModel,
   loadStoredFastModeEnabled,
-  resolveFastServiceTier,
   saveFastModeEnabled,
 } from '../utils/modelServiceTier';
 import {
-  createNdjsonLineBuffer,
   createStreamRenderScheduler,
   parseActionPlanStreamLog,
 } from '../utils/actionPlanStream';
 import { redactSensitiveText } from '../utils/sensitiveText';
 import { CHAT_CONTEXT_BASE_UPDATED_EVENT } from '../utils/chatContextState';
-import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
+import { fetchBackendJson } from '../utils/backendRequest';
 import { loadSettingsState, saveSettingsState } from '../utils/settingsState';
-import { createActionPlanRevisionChecker, consumeActionPlanCompletion } from '../utils/actionPlanAutoRefresh';
+import {
+  createActionPlanJobMonitor,
+  getActionPlanJobError,
+  getCompletedActionPlanJobResult,
+  isActiveActionPlanJob,
+  isBackgroundActionPlanJob,
+  isActionPlanJobResultCurrent,
+} from '../utils/actionPlanJobs';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 const { MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES } = automationLimits;
@@ -193,13 +195,18 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const [intervalDraft, setIntervalDraft] = useState('60');
   const [autoRefreshStatus, setAutoRefreshStatus] = useState('');
   const [savingInterval, setSavingInterval] = useState(false);
-  const autoGenerationRef = useRef(false);
-  const revisionCheckerRef = useRef(createActionPlanRevisionChecker());
+  const [jobsReady, setJobsReady] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const jobMonitorRef = useRef(null);
+  const displayedJobIdRef = useRef(null);
+  const completedJobIdRef = useRef(null);
+  const truncatedJobIdRef = useRef(null);
+  const planDateRef = useRef(null);
+  const currentSectionRef = useRef('analysis');
   const [liveDurationNowMs, setLiveDurationNowMs] = useState(() => Date.now());
 
-  const abortControllerRef = useRef(null);
   const loadAbortControllerRef = useRef(null);
-  const startupGenerationTriggeredRef = useRef(false);
   const analysisEndRef = useRef(null);
   const planEndRef = useRef(null);
   const analysisContentRef = useRef('');
@@ -285,7 +292,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     };
   }, [isGenerating, stats?.startTime]);
 
-  const applyLoadedActionPlan = useCallback((data) => {
+  const applyLoadedActionPlan = useCallback((data, { keepThinking = false } = {}) => {
     const analysisBody = data.analysis?.body || '';
     const planBody = data.plan?.body || '';
     const savedStats = data.meta?.stats;
@@ -297,19 +304,20 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
         t('action_plan.placeholder.analysis_unavailable.body'),
       ),
     );
-    setAnalysisThinking('');
+    if (!keepThinking) setAnalysisThinking('');
     setPlanContentWithRef(
       planBody || buildMarkdownPlaceholder(
         t('action_plan.placeholder.plan_unavailable.title'),
         t('action_plan.placeholder.plan_unavailable.body'),
       ),
     );
-    setPlanThinking('');
+    if (!keepThinking) setPlanThinking('');
     setSystemPrompt(savedInput.system_prompt || '');
     setAnalysisPrompt(savedInput.analysis_prompt || '');
     setPlanPrompt(savedInput.plan_prompt || '');
-    setAnalysisReplyReady(Boolean(analysisBody));
-    setPlanReplyReady(Boolean(planBody));
+    const complete = Boolean(analysisBody.trim() && planBody.trim());
+    setAnalysisReplyReady(complete);
+    setPlanReplyReady(complete);
     setCopiedKey('');
     setStats(
       savedStats && typeof savedStats === 'object'
@@ -356,6 +364,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
         return { aborted: true };
       }
 
+      planDateRef.current = data.date || null;
       if (data.exists) {
         applyLoadedActionPlan(data);
         return data;
@@ -410,17 +419,19 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     }
   }, [applyLoadedActionPlan, setAnalysisContentWithRef, setPlanContentWithRef, t]);
 
-  const stopGeneration = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
+  const stopGeneration = useCallback(async () => {
+    if (!jobMonitorRef.current || isCancelling) return;
+    setIsCancelling(true);
+    try {
+      await jobMonitorRef.current.cancelActive();
+    } catch (error) {
+      if (error.name !== 'AbortError') {
+        setAutoRefreshStatus(t('common.error_prefix', { error: redactSensitiveText(getActionPlanJobError(error)) }));
+      }
+    } finally {
+      setIsCancelling(false);
     }
-
-    if (!autoGenerationRef.current) {
-      setIsGenerating(false);
-      setPlanContentWithRef((prev) => `${prev}\n\n> ${t('action_plan.placeholder.stopped')}`);
-    }
-  }, [setPlanContentWithRef, t]);
+  }, [isCancelling, t]);
 
   const handleReasoningEffortChange = (event) => {
     const nextValue = saveActionPlanReasoningEffort(
@@ -461,345 +472,172 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     }
   }, []);
 
-  const startGeneration = useCallback(async ({
-    replaceToday = false,
-    modelOverride = null,
-    waitForProviderReady = false,
-    background = false,
-  } = {}) => {
-    if (background && isGeneratingRef.current) throw new Error('Generation already running');
-    if (background) {
-      isGeneratingRef.current = true;
-      autoGenerationRef.current = true;
-      setIsGenerating(true);
-      setAutoRefreshStatus(t('action_plan.auto.generating'));
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
+  const handleJobSnapshot = useCallback((job) => {
+    const active = isActiveActionPlanJob(job);
+    const background = isBackgroundActionPlanJob(job);
+    const newJob = displayedJobIdRef.current !== job.id;
+    displayedJobIdRef.current = job.id;
+    isGeneratingRef.current = active;
+    setIsGenerating(active);
+
+    if (newJob && active && !background) {
+      currentSectionRef.current = 'analysis';
+      setAnalysisThinking('');
+      setPlanThinking('');
+      setSystemPrompt('');
+      setAnalysisPrompt('');
+      setPlanPrompt('');
+      setAnalysisReplyReady(false);
+      setPlanReplyReady(false);
+      setCopiedKey('');
+      setAnalysisContentWithRef(buildMarkdownPlaceholder(
+        t('action_plan.placeholder.analyzing.title'),
+        t('action_plan.placeholder.analyzing.body'),
+      ));
+      setPlanContentWithRef(buildMarkdownPlaceholder(
+        t('action_plan.placeholder.waiting_analysis.title'),
+        t('action_plan.placeholder.waiting_analysis.body'),
+      ));
+      setStats({
+        speed: '0 t/s',
+        total_duration: 0,
+        total_tokens: 0,
+        startTime: Date.parse(job.started_at || job.created_at) || Date.now(),
+        reasoning_effort: job.request?.reasoning_effort,
+        service_tier: job.request?.service_tier,
+      });
+    }
+
+    if (active) {
+      setAutoRefreshStatus(t(truncatedJobIdRef.current === job.id
+        ? 'action_plan.job.truncated' : `action_plan.job.${job.status}`));
+      return;
+    }
+    if (completedJobIdRef.current === job.id) return;
+    const result = getCompletedActionPlanJobResult(job);
+    if (result) {
+      completedJobIdRef.current = job.id;
+      applyLoadedActionPlan(result, { keepThinking: !background && !newJob });
+      setAutoRefreshStatus(t(background ? 'action_plan.auto.updated' : 'action_plan.job.succeeded'));
+      void refreshChatContextBase();
+    } else {
+      if (job.status !== 'succeeded') completedJobIdRef.current = job.id;
+      if (!background) {
+        setAnalysisReplyReady(false);
+        setPlanReplyReady(false);
+      }
+      if (job.status === 'cancelled') {
+        setAutoRefreshStatus(t(background ? 'action_plan.auto.stopped' : 'action_plan.job.cancelled'));
+      } else {
+        const error = job.status === 'succeeded'
+          ? t('action_plan.job.incomplete')
+          : getActionPlanJobError(job.error);
+        setAutoRefreshStatus(t(background ? 'action_plan.auto.failed' : 'action_plan.job.failed', { error: redactSensitiveText(error) }));
+      }
+    }
+  }, [applyLoadedActionPlan, refreshChatContextBase, setAnalysisContentWithRef, setPlanContentWithRef, t]);
+
+  const handleJobEvent = useCallback(async (data, job) => {
+    if (isBackgroundActionPlanJob(job)) return;
+    if (data.truncated === true || data.event_truncated === true) {
+      truncatedJobIdRef.current = job.id;
+      setAutoRefreshStatus(t('action_plan.job.truncated'));
+      return;
+    }
+    let { log } = data;
+    const appendError = (error) => {
+      const text = t('common.error_prefix', { error: redactSensitiveText(getActionPlanJobError(error)) });
+      if (currentSectionRef.current === 'analysis') setAnalysisContentWithRef((prev) => `${prev}\n\n${text}`);
+      else setPlanContentWithRef((prev) => `${prev}\n\n${text}`);
+    };
+    if (data.error) appendError(data.error);
+    if (!log) return;
+    log = redactSensitiveText(log);
+    if (log.startsWith('STATS_JSON:')) {
       try {
-        const model = selectedModelRef.current;
-        const response = await fetchBackend('/api/action_plan', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildActionPlanGenerationPayload(
-            normalizeReasoningEffortForModelContract(
-              selectedReasoningEffortRef.current,
-              model?.model,
-              model?.reasoning_tiers,
-              model?.reasoning_aliases,
-            ),
-            { replaceToday: true, model: model?.model, providerRoute: model?.provider_route,
-              fastModeEnabled: fastModeEnabledRef.current && isFastModeSupportedForModel(model?.model) },
-          )),
-          signal: controller.signal, retryPolicy: 'stream',
-        });
-        await consumeActionPlanCompletion(response);
-        const data = await fetchBackendJson('/api/action_plan/today', {
-          signal: controller.signal, retryPolicy: 'load',
-        });
-        if (!data.exists || !data.analysis?.body || !data.plan?.body) {
-          throw new Error('New plan is incomplete');
-        }
-        if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
-        applyLoadedActionPlan(data);
-        await refreshChatContextBase();
-        setAutoRefreshStatus(t('action_plan.auto.updated'));
+        const newStats = JSON.parse(log.slice('STATS_JSON:'.length).trim());
+        setStats((prev) => ({ ...prev, ...newStats }));
       } catch (error) {
-        setAutoRefreshStatus(error.name === 'AbortError'
-          ? t('action_plan.auto.stopped')
-          : t('action_plan.auto.failed', { error: redactSensitiveText(error.message) }));
-        throw error;
-      } finally {
-        autoGenerationRef.current = false;
-        isGeneratingRef.current = false;
-        setIsGenerating(false);
-        if (abortControllerRef.current === controller) abortControllerRef.current = null;
+        console.error('Stats parse error', error);
       }
       return;
     }
-    if (isGeneratingRef.current) {
-      stopGeneration();
-    }
 
-    if (loadAbortControllerRef.current) {
-      loadAbortControllerRef.current.abort();
-      loadAbortControllerRef.current = null;
+    const sectionedLog = parseActionPlanStreamLog(log);
+    if (sectionedLog) {
+      currentSectionRef.current = sectionedLog.section;
+      if (sectionedLog.kind === 'start') {
+        if (sectionedLog.section === 'analysis') {
+          setAnalysisContentWithRef('');
+          setAnalysisThinking('');
+        } else {
+          setPlanContentWithRef('');
+          setPlanThinking('');
+        }
+      } else if (sectionedLog.kind === 'thinking') {
+        if (sectionedLog.section === 'analysis') setAnalysisThinking((prev) => prev + sectionedLog.content);
+        else setPlanThinking((prev) => prev + sectionedLog.content);
+      } else if (sectionedLog.kind === 'system') {
+        setSystemPrompt((prev) => prev + sectionedLog.content);
+      } else if (sectionedLog.kind === 'prompt') {
+        if (sectionedLog.section === 'analysis') setAnalysisPrompt((prev) => prev + sectionedLog.content);
+        else setPlanPrompt((prev) => prev + sectionedLog.content);
+      } else if (sectionedLog.kind === 'metadata') {
+        if (sectionedLog.content && typeof sectionedLog.content === 'object') {
+          setStats((prev) => ({ ...prev, ...sectionedLog.content }));
+        }
+      } else if (sectionedLog.kind === 'content') {
+        if (sectionedLog.section === 'analysis') setAnalysisContentWithRef((prev) => prev + sectionedLog.content);
+        else setPlanContentWithRef((prev) => prev + sectionedLog.content);
+        const estimatedTokens = Math.max(1, Math.ceil(sectionedLog.content.length * 0.7));
+        setStats((prev) => {
+          const startTime = prev?.startTime || Date.now();
+          const duration = (Date.now() - startTime) / 1000;
+          const totalTokens = (prev?.total_tokens || 0) + estimatedTokens;
+          return {
+            ...prev,
+            startTime,
+            total_tokens: totalTokens,
+            total_duration: duration,
+            speed: duration > 0 ? `${(totalTokens / duration).toFixed(2)} t/s` : '0.00 t/s',
+          };
+        });
+      } else if (sectionedLog.kind === 'error') {
+        appendError(sectionedLog.content);
+      }
+    } else if (log.startsWith('STREAM_ERROR:')) {
+      appendError(log.slice('STREAM_ERROR:'.length));
+    } else if (!log.startsWith('STREAM_DONE:')) {
+      if (currentSectionRef.current === 'analysis') setAnalysisContentWithRef((prev) => prev + `${log}\n`);
+      else setPlanContentWithRef((prev) => prev + `${log}\n`);
     }
+    const waitForRender = createStreamRenderScheduler({
+      shouldYield: () => visibilityRef.current && !(typeof document !== 'undefined' && document.hidden),
+    });
+    await waitForRender();
+  }, [setAnalysisContentWithRef, setPlanContentWithRef, t]);
 
-    isGeneratingRef.current = true;
-    setIsGenerating(true);
-    setAnalysisThinking('');
-    setPlanThinking('');
-    setSystemPrompt('');
-    setAnalysisPrompt('');
-    setPlanPrompt('');
-    setAnalysisReplyReady(false);
-    setPlanReplyReady(false);
-    setCopiedKey('');
-    setAnalysisContentWithRef(buildMarkdownPlaceholder(
-      t('action_plan.placeholder.analyzing.title'),
-      t('action_plan.placeholder.analyzing.body'),
-    ));
-    setPlanContentWithRef(buildMarkdownPlaceholder(
-      t('action_plan.placeholder.waiting_analysis.title'),
-      t('action_plan.placeholder.waiting_analysis.body'),
-    ));
-    const effectiveModelOption = modelOverride || selectedModelRef.current;
-    const effectiveReasoningEffort = normalizeReasoningEffortForModelContract(
-      selectedReasoningEffortRef.current,
-      effectiveModelOption?.model,
-      effectiveModelOption?.reasoning_tiers,
-      effectiveModelOption?.reasoning_aliases,
+  const startGeneration = useCallback(async () => {
+    if (!jobMonitorRef.current || isGeneratingRef.current || isSubmitting) return;
+    setIsSubmitting(true);
+    const model = selectedModelRef.current;
+    const reasoningEffort = normalizeReasoningEffortForModelContract(
+      selectedReasoningEffortRef.current, model?.model, model?.reasoning_tiers, model?.reasoning_aliases,
     );
-    const effectiveFastModeEnabled = fastModeEnabledRef.current
-      && isFastModeSupportedForModel(effectiveModelOption?.model);
-    const effectiveServiceTier = resolveFastServiceTier({
-      fastModeEnabled: effectiveFastModeEnabled,
-      model: effectiveModelOption?.model,
-    });
-
-    setStats({
-      speed: '0 t/s',
-      total_duration: 0,
-      total_tokens: 0,
-      startTime: Date.now(),
-      reasoning_effort: effectiveReasoningEffort,
-      service_tier: effectiveServiceTier,
-    });
-
-    abortControllerRef.current = new AbortController();
-    const signal = abortControllerRef.current.signal;
-    let currentSection = 'analysis';
-
     try {
-      const response = await fetchBackend('/api/action_plan', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(
-          buildActionPlanGenerationPayload(effectiveReasoningEffort, {
-            replaceToday,
-            model: effectiveModelOption?.model,
-            providerRoute: effectiveModelOption?.provider_route,
-            fastModeEnabled: effectiveFastModeEnabled,
-            startupAutoGenerate: waitForProviderReady,
-          }),
-        ),
-        signal,
-        retryPolicy: 'stream',
-      });
-
-      if (!response.body) {
-        throw new Error('No response body');
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      const lineBuffer = createNdjsonLineBuffer();
-      const waitForRender = createStreamRenderScheduler({
-        shouldYield: () => {
-          if (!visibilityRef.current) {
-            return false;
-          }
-
-          return !(typeof document !== 'undefined' && document.hidden);
-        },
-      });
-
-      const processStreamLine = async (line) => {
-        let shouldYieldRender = false;
-
-        if (!line.trim()) {
-          return;
-        }
-
-        try {
-          const data = JSON.parse(line);
-          let { log } = data;
-
-          if (!log && data.error) {
-            const errorText = redactSensitiveText(String(data.error));
-            if (currentSection === 'analysis') {
-              setAnalysisContentWithRef((prev) => `${prev}\n\n${t('common.error_prefix', { error: errorText })}`);
-            } else {
-              setPlanContentWithRef((prev) => `${prev}\n\n${t('common.error_prefix', { error: errorText })}`);
-            }
-            await waitForRender();
-            return;
-          }
-
-          if (!log) {
-            return;
-          }
-
-          log = redactSensitiveText(log);
-
-          if (log.startsWith('STATS_JSON:')) {
-            try {
-              const jsonStr = log.replace('STATS_JSON:', '').trim();
-              const newStats = JSON.parse(jsonStr);
-              setStats((prev) => ({ ...prev, ...newStats }));
-            } catch (err) {
-              console.error('Stats parse error', err);
-            }
-            return;
-          }
-
-          const sectionedLog = parseActionPlanStreamLog(log);
-          if (sectionedLog) {
-            if (
-              sectionedLog.kind === 'start' ||
-              sectionedLog.kind === 'metadata' ||
-              sectionedLog.kind === 'thinking' ||
-              sectionedLog.kind === 'content' ||
-              sectionedLog.kind === 'error'
-            ) {
-              currentSection = sectionedLog.section;
-            }
-
-            if (sectionedLog.kind === 'start') {
-              if (sectionedLog.section === 'analysis') {
-                setAnalysisContentWithRef('');
-                setAnalysisThinking('');
-                setAnalysisReplyReady(false);
-              } else {
-                setAnalysisReplyReady(Boolean(analysisContentRef.current.trim()));
-                setPlanContentWithRef('');
-                setPlanThinking('');
-                setPlanReplyReady(false);
-              }
-              shouldYieldRender = true;
-            } else if (sectionedLog.kind === 'thinking') {
-              if (sectionedLog.section === 'analysis') {
-                setAnalysisThinking((prev) => prev + sectionedLog.content);
-              } else {
-                setPlanThinking((prev) => prev + sectionedLog.content);
-              }
-              shouldYieldRender = true;
-            } else if (sectionedLog.kind === 'system') {
-              setSystemPrompt((prev) => prev + sectionedLog.content);
-              shouldYieldRender = true;
-            } else if (sectionedLog.kind === 'prompt') {
-              if (sectionedLog.section === 'analysis') {
-                setAnalysisPrompt((prev) => prev + sectionedLog.content);
-              } else {
-                setPlanPrompt((prev) => prev + sectionedLog.content);
-              }
-              shouldYieldRender = true;
-            } else if (sectionedLog.kind === 'metadata') {
-              if (sectionedLog.content && typeof sectionedLog.content === 'object') {
-                setStats((prev) => ({ ...prev, ...sectionedLog.content }));
-              }
-              shouldYieldRender = true;
-            } else if (sectionedLog.kind === 'content') {
-              if (sectionedLog.section === 'analysis') {
-                setAnalysisContentWithRef((prev) => prev + sectionedLog.content);
-              } else {
-                setPlanContentWithRef((prev) => prev + sectionedLog.content);
-              }
-
-              const estimatedTokens = Math.max(1, Math.ceil(sectionedLog.content.length * 0.7));
-              setStats((prev) => {
-                const startTime = prev?.startTime || Date.now();
-                const duration = (Date.now() - startTime) / 1000;
-                const totalTokens = (prev?.total_tokens || 0) + estimatedTokens;
-                const speed = duration > 0 ? `${(totalTokens / duration).toFixed(2)} t/s` : '0.00 t/s';
-
-                return {
-                  ...prev,
-                  startTime,
-                  total_tokens: totalTokens,
-                  total_duration: duration,
-                  speed,
-                };
-              });
-              shouldYieldRender = true;
-            } else if (sectionedLog.kind === 'error') {
-              if (sectionedLog.section === 'analysis') {
-                setAnalysisContentWithRef((prev) => `${prev}\n\n${t('common.error_prefix', { error: sectionedLog.content })}`);
-              } else {
-                setPlanContentWithRef((prev) => `${prev}\n\n${t('common.error_prefix', { error: sectionedLog.content })}`);
-              }
-              shouldYieldRender = true;
-            }
-
-            if (shouldYieldRender) {
-              await waitForRender();
-            }
-            return;
-          }
-
-          if (log.startsWith('STREAM_DONE:') || log.startsWith('STREAM_ERROR:')) {
-            return;
-          }
-
-          if (currentSection === 'analysis') {
-            setAnalysisContentWithRef((prev) => prev + `${log}\n`);
-          } else {
-            setPlanContentWithRef((prev) => prev + `${log}\n`);
-          }
-          shouldYieldRender = true;
-        } catch {
-          if (currentSection === 'analysis') {
-            setAnalysisContentWithRef((prev) => prev + `${line}\n`);
-          } else {
-            setPlanContentWithRef((prev) => prev + `${line}\n`);
-          }
-          shouldYieldRender = true;
-        }
-
-        if (shouldYieldRender) {
-          await waitForRender();
-        }
-      };
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          break;
-        }
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = lineBuffer.push(chunk);
-
-        for (const line of lines) {
-          await processStreamLine(line);
-        }
-      }
-
-      const trailingChunk = decoder.decode();
-      if (trailingChunk) {
-        const trailingLines = lineBuffer.push(trailingChunk);
-        for (const line of trailingLines) {
-          await processStreamLine(line);
-        }
-      }
-
-      const finalLines = lineBuffer.flush();
-      for (const line of finalLines) {
-        await processStreamLine(line);
-      }
-
-      setAnalysisReplyReady(Boolean(analysisContentRef.current.trim()));
-      setPlanReplyReady(Boolean(planContentRef.current.trim()));
-      await refreshChatContextBase();
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        setPlanContentWithRef((prev) => `${prev}\n\n${t('common.error_prefix', { error: err.message })}`);
+      await jobMonitorRef.current.submit(buildActionPlanGenerationPayload(reasoningEffort, {
+        model: model?.model,
+        providerRoute: model?.provider_route,
+        fastModeEnabled: fastModeEnabledRef.current && isFastModeSupportedForModel(model?.model),
+      }));
+    } catch (error) {
+      if (error.name !== 'AbortError') {
+        setAutoRefreshStatus(t('common.error_prefix', { error: redactSensitiveText(getActionPlanJobError(error)) }));
       }
     } finally {
-      if (abortControllerRef.current?.signal === signal) {
-        setIsGenerating(false);
-        abortControllerRef.current = null;
-      }
+      setIsSubmitting(false);
     }
-  }, [
-    applyLoadedActionPlan,
-    refreshChatContextBase,
-    setAnalysisContentWithRef,
-    setPlanContentWithRef,
-    stopGeneration,
-    t,
-  ]);
+  }, [isSubmitting, t]);
 
   useEffect(() => {
     const applyModelCatalog = (data) => {
@@ -827,8 +665,8 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
 
     const initializeModels = async () => {
       try {
-        const data = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load' });
-        return applyModelCatalog(data);
+        const data = await fetchBackendJson('/api/llm_models', { retryPolicy: 'load', signal: controller.signal });
+        if (!controller.signal.aborted) return applyModelCatalog(data);
       } catch (error) {
         console.error('Failed to load model list:', error);
       }
@@ -849,44 +687,59 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     ));
     setPlanThinking('');
 
-    const loadStartupAutoGenerateEnabled = async () => {
+    const loadCheckInterval = async () => {
       try {
         const settingsState = await loadSettingsState();
+        if (controller.signal.aborted) return;
         const interval = settingsState.settings?.actionPlanCheckIntervalMinutes ?? 60;
         setCheckIntervalMinutes(interval);
         setIntervalDraft(String(interval));
-        return settingsState.settings?.actionPlanAutoGenerate !== false;
       } catch (error) {
+        if (controller.signal.aborted) return;
         setCheckIntervalMinutes(60);
-        console.warn('Failed to load Action Plan startup setting:', error);
-        return true;
+        console.warn('Failed to load Action Plan check interval:', error);
       }
     };
 
+    setJobsReady(false);
+    displayedJobIdRef.current = null;
+    completedJobIdRef.current = null;
+    truncatedJobIdRef.current = null;
+    const monitor = createActionPlanJobMonitor({
+      onSnapshot: handleJobSnapshot,
+      onEvent: handleJobEvent,
+      shouldDisplayResult: (job) => isActionPlanJobResultCurrent(job, planDateRef.current),
+      onMissingJob: async (job) => {
+        isGeneratingRef.current = false;
+        setIsGenerating(false);
+        if (!isBackgroundActionPlanJob(job)) {
+          setAnalysisReplyReady(false);
+          setPlanReplyReady(false);
+        }
+        setAutoRefreshStatus(t('action_plan.job.unavailable'));
+        // Job history is process-local, but committed plans survive a backend
+        // restart. Recover that saved view without inventing a job outcome.
+        const saved = await fetchBackendJson('/api/action_plan/today', {
+          signal: controller.signal, retryPolicy: 'none',
+        });
+        if (controller.signal.aborted || displayedJobIdRef.current !== job.id || isGeneratingRef.current) return;
+        if (saved.exists && saved.analysis?.body?.trim() && saved.plan?.body?.trim()) {
+          planDateRef.current = saved.date || planDateRef.current;
+          applyLoadedActionPlan(saved);
+        }
+      },
+      onObservationError: (error) => {
+        setAutoRefreshStatus(t('action_plan.job.reconnecting', {
+          error: redactSensitiveText(getActionPlanJobError(error)),
+        }));
+      },
+    });
+    jobMonitorRef.current = monitor;
     const initializeActionPlan = async () => {
-      const [initialModel, autoGenerateEnabled] = await Promise.all([
-        initializeModels(),
-        loadStartupAutoGenerateEnabled(),
-      ]);
-      const loadResult = await loadTodaysPlan(controller.signal);
-
-      if (!shouldAutogenerateActionPlan({
-        autoGenerateEnabled,
-        hasTriggered: startupGenerationTriggeredRef.current,
-        isGenerating: isGeneratingRef.current,
-        isAborted: controller.signal.aborted,
-        hasExistingPlan: loadResult?.exists === true,
-        loadFailed: Boolean(loadResult?.error),
-      })) {
-        return;
-      }
-
-      startupGenerationTriggeredRef.current = true;
-      await startGeneration({
-        replaceToday: true,
-        modelOverride: initialModel,
-        waitForProviderReady: true,
-      });
+      await Promise.all([initializeModels(), loadCheckInterval(), loadTodaysPlan(controller.signal)]);
+      if (controller.signal.aborted) return;
+      await monitor.start();
+      if (!controller.signal.aborted) setJobsReady(true);
     };
 
     void initializeActionPlan();
@@ -899,47 +752,13 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     return () => {
       window.removeEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
       controller.abort();
+      monitor.stop();
+      if (jobMonitorRef.current === monitor) jobMonitorRef.current = null;
       if (loadAbortControllerRef.current?.signal === controller.signal) {
         loadAbortControllerRef.current = null;
       }
     };
-  }, [loadTodaysPlan, setAnalysisContentWithRef, setPlanContentWithRef, startGeneration, t]);
-
-  useEffect(() => {
-    if (!(checkIntervalMinutes > 0)) return undefined;
-    let active = true;
-    let timer;
-    let initialized = false;
-    const controller = new AbortController();
-    const check = async () => {
-      try {
-        const outcome = await revisionCheckerRef.current({
-          getRevision: async () => (await fetchBackendJson('/api/action_plan/source_revision', {
-            signal: controller.signal, retryPolicy: 'load',
-          })).revision,
-          isGenerating: () => !active || isGeneratingRef.current || Boolean(loadAbortControllerRef.current),
-          generate: () => startGeneration({ background: true }),
-        });
-        if (outcome !== 'busy') initialized = true;
-      } catch (error) {
-        if (active && error.name !== 'AbortError' && !autoGenerationRef.current) {
-          initialized = true;
-          setAutoRefreshStatus(t('action_plan.auto.retry', { error: redactSensitiveText(error.message) }));
-        }
-      } finally {
-        if (active) {
-          const interval = Math.min(checkIntervalMinutes, MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES);
-          timer = window.setTimeout(check, initialized ? interval * 60000 : 1000);
-        }
-      }
-    };
-    void check();
-    return () => { active = false; controller.abort(); window.clearTimeout(timer); };
-  }, [checkIntervalMinutes, startGeneration, t]);
-
-  useEffect(() => () => {
-    if (autoGenerationRef.current) abortControllerRef.current?.abort();
-  }, []);
+  }, [applyLoadedActionPlan, handleJobEvent, handleJobSnapshot, loadTodaysPlan, setAnalysisContentWithRef, setPlanContentWithRef, t]);
 
   const saveCheckInterval = async () => {
     const value = Number(intervalDraft);
@@ -1186,6 +1005,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
 
           <button
             onClick={isGenerating ? stopGeneration : startGeneration}
+            disabled={!jobsReady || isSubmitting || isCancelling}
             style={{
               padding: '0.8rem 1.5rem',
               fontSize: '1rem',

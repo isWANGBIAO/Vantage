@@ -212,3 +212,36 @@ test('ensureBundledBackendReady leaves development mode to the existing launcher
   assert.equal(result.started, false);
   assert.equal(result.reason, 'development');
 });
+
+test('backend launch and both readiness checks use the same configured host and port', async () => {
+  const env = { VANTAGE_BACKEND_URL: 'http://127.0.0.1:8765', VANTAGE_BACKEND_PORT: '8000' };
+  let launched;
+  const observed = [];
+  await ensureBundledBackendReady({
+    isDev: false, runtimePaths, env,
+    executablePath: '/runtime/VantageBackend', fileExists: () => true,
+    platform: 'linux',
+    loadProviderConfigFn: () => ({ selected_provider: '', providers: {} }),
+    spawnProcess: (_file, _args, options) => { launched = options.env; return { unref() {} }; },
+    waitForStatusFn: async options => {
+      observed.push(options.env);
+      if (observed.length === 1) throw new Error('not running');
+      return { ready: true };
+    },
+  });
+  assert.equal(launched.VANTAGE_BACKEND_URL, 'http://127.0.0.1:8765');
+  assert.equal(launched.VANTAGE_BACKEND_HOST, '127.0.0.1');
+  assert.equal(launched.VANTAGE_BACKEND_PORT, '8765');
+  assert.deepEqual(observed, [env, env]);
+});
+
+test('an unavailable HTTPS or prefixed backend does not launch an incompatible plain HTTP runtime', async () => {
+  for (const baseUrl of ['https://localhost:9443', 'http://localhost:8765/vantage']) {
+    await assert.rejects(ensureBundledBackendReady({
+      isDev: false, runtimePaths,
+      env: { VANTAGE_BACKEND_URL: baseUrl }, executablePath: '/runtime/VantageBackend',
+      waitForStatusFn: async () => { throw new Error('offline'); },
+      spawnProcess: () => { assert.fail('must not launch incompatible server'); },
+    }), /already be running/);
+  }
+});

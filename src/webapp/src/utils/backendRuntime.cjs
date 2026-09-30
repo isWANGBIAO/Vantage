@@ -1,5 +1,7 @@
 const fs = require('fs');
 const http = require('http');
+const https = require('https');
+const { resolveBackendConnection, buildConnectionUrl } = require('./backendConnection.cjs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { loadProviderConfig, resolveActiveProviderConfig } = require('./onboardingConfig.cjs');
@@ -54,8 +56,12 @@ function buildBundledBackendEnvironment({
   loadProviderConfigFn = loadProviderConfig,
   platform = process.platform,
 } = {}) {
+  const connection = resolveBackendConnection({ env });
   const nextEnv = {
     ...env,
+    VANTAGE_BACKEND_URL: connection.baseUrl,
+    VANTAGE_BACKEND_HOST: connection.hostname,
+    VANTAGE_BACKEND_PORT: String(connection.port),
     VANTAGE_APP_MODE: 'packaged',
     VANTAGE_DATA_DIR: runtimePaths.dataDir,
     VANTAGE_CONFIG_DIR: runtimePaths.configDir,
@@ -78,11 +84,16 @@ function buildBundledBackendEnvironment({
 }
 
 function requestBackendStatus({
-  url = 'http://127.0.0.1:8000/api/status',
+  url,
+  env = process.env,
   timeoutMs = 5000,
 } = {}) {
+  const connection = resolveBackendConnection({ env });
+  const targetUrl = url || buildConnectionUrl(connection, '/api/status');
+  const target = new URL(targetUrl);
+  resolveBackendConnection({ baseUrl: target.origin });
   return new Promise((resolve, reject) => {
-    const request = http.get(url, { timeout: timeoutMs }, (response) => {
+    const request = (target.protocol === 'https:' ? https : http).get(targetUrl, { timeout: timeoutMs }, (response) => {
       let body = '';
       response.setEncoding('utf8');
       response.on('data', (chunk) => {
@@ -113,13 +124,14 @@ async function waitForBackendStatus({
   timeoutMs = 60000,
   intervalMs = 1000,
   requestStatus = requestBackendStatus,
+  env = process.env,
 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastError = new Error('Backend status is unavailable');
 
   while (Date.now() < deadline) {
     try {
-      return await requestStatus();
+      return await requestStatus({ env });
     } catch (error) {
       lastError = error;
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -186,6 +198,7 @@ async function ensureBundledBackendReady({
     };
   }
 
+  const connection = resolveBackendConnection({ env });
   const resolvedExecutablePath = executablePath || resolveBundledBackendExecutable({
     env,
     resourcesPath,
@@ -193,7 +206,7 @@ async function ensureBundledBackendReady({
   });
 
   try {
-    const status = await waitForStatusFn({ timeoutMs: 1000 });
+    const status = await waitForStatusFn({ timeoutMs: 1000, env });
     return {
       started: false,
       reason: 'already-running',
@@ -201,6 +214,10 @@ async function ensureBundledBackendReady({
       status,
     };
   } catch (_error) {
+  }
+
+  if (connection.protocol !== 'http:' || connection.pathPrefix) {
+    throw new Error('The configured backend must already be running when using HTTPS or a URL path prefix.');
   }
 
   if (!fileExists(resolvedExecutablePath)) {
@@ -219,7 +236,7 @@ async function ensureBundledBackendReady({
   }
 
   try {
-    const status = await waitForStatusFn({ timeoutMs: 300000 });
+    const status = await waitForStatusFn({ timeoutMs: 300000, env });
     return {
       started: true,
       reason: 'launched',

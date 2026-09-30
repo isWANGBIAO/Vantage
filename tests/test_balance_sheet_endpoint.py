@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from src import server
+from tests.backend_helpers import iter_registered_routes
 
 
 class BalanceSheetEndpointTests(unittest.TestCase):
@@ -99,7 +100,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(payload["rows"], [["Laptop", None, 1000.0], ["Phone", None, 500.0]])
 
     def test_balance_sheet_route_is_registered_and_returns_payload(self):
-        route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
+        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet"), None)
 
         self.assertIsNotNone(route)
 
@@ -130,7 +131,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertIn(list(fake_sheets["Summary"].columns)[1], payload["prompt_payload"]["sheets"][0]["non_null_counts"])
 
     def test_balance_sheet_route_builds_payload_in_background_thread(self):
-        route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
+        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet"), None)
         calls = []
 
         async def fake_to_thread(func, *args, **kwargs):
@@ -144,7 +145,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(calls, [server._build_balance_sheet_payload])
 
     def test_balance_sheet_route_returns_unavailable_payload_when_workbook_is_missing(self):
-        route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
+        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet"), None)
 
         with patch.object(server.DataLoader, "resolve_data_path", return_value=Path("/Users/example/OneDrive/Balance Sheet.xlsx")), patch.object(
             server.DataLoader,
@@ -161,7 +162,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
 
     def test_purchase_recommendations_return_unavailable_payload_when_workbook_is_missing(self):
         route = next(
-            (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
+            (route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet/purchase_recommendations"),
             None,
         )
 
@@ -180,7 +181,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
 
     def test_purchase_recommendations_uses_cache_for_same_balance_sheet_hash(self):
         route = next(
-            (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
+            (route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet/purchase_recommendations"),
             None,
         )
 
@@ -220,7 +221,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         dismiss_route = next(
             (
                 route
-                for route in server.app.routes
+                for route in iter_registered_routes(server.app)
                 if route.path == "/api/balance_sheet/purchase_recommendations/dismiss"
             ),
             None,
@@ -228,7 +229,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         list_route = next(
             (
                 route
-                for route in server.app.routes
+                for route in iter_registered_routes(server.app)
                 if route.path == "/api/balance_sheet/purchase_recommendations/dismissed"
                 and "GET" in getattr(route, "methods", set())
             ),
@@ -269,7 +270,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         dismiss_route = next(
             (
                 route
-                for route in server.app.routes
+                for route in iter_registered_routes(server.app)
                 if route.path == "/api/balance_sheet/purchase_recommendations/dismiss"
             ),
             None,
@@ -277,7 +278,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         list_route = next(
             (
                 route
-                for route in server.app.routes
+                for route in iter_registered_routes(server.app)
                 if route.path == "/api/balance_sheet/purchase_recommendations/dismissed"
                 and "GET" in getattr(route, "methods", set())
             ),
@@ -286,7 +287,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         clear_route = next(
             (
                 route
-                for route in server.app.routes
+                for route in iter_registered_routes(server.app)
                 if route.path == "/api/balance_sheet/purchase_recommendations/dismissed"
                 and "DELETE" in getattr(route, "methods", set())
             ),
@@ -643,16 +644,16 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in filtered[0]["items"]], ["safe idea"])
 
     def test_purchase_recommendation_dismissal_can_be_deleted_by_id(self):
-        dismiss_route = next(route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations/dismiss")
+        dismiss_route = next(route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet/purchase_recommendations/dismiss")
         delete_route = next(
             route
-            for route in server.app.routes
+            for route in iter_registered_routes(server.app)
             if route.path == "/api/balance_sheet/purchase_recommendations/dismissed/{item_id}"
             and "DELETE" in getattr(route, "methods", set())
         )
         list_route = next(
             route
-            for route in server.app.routes
+            for route in iter_registered_routes(server.app)
             if route.path == "/api/balance_sheet/purchase_recommendations/dismissed"
             and "GET" in getattr(route, "methods", set())
         )
@@ -675,7 +676,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
 
     def test_purchase_recommendation_routes_build_off_event_loop(self):
         route = next(
-            (route for route in server.app.routes if route.path == "/api/balance_sheet/purchase_recommendations"),
+            (route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet/purchase_recommendations"),
             None,
         )
 
@@ -696,7 +697,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         route = next(
             (
                 route
-                for route in server.app.routes
+                for route in iter_registered_routes(server.app)
                 if route.path == "/api/balance_sheet/purchase_recommendations/regenerate"
             ),
             None,
@@ -736,7 +737,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(chat.call_count, 4)
 
     def test_balance_sheet_route_returns_full_trend_points_when_sheet_rows_are_truncated(self):
-        route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
+        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet"), None)
 
         self.assertIsNotNone(route)
 
@@ -792,7 +793,7 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(trend_points[0]["date"], "2026-04-30")
 
     def test_balance_sheet_route_splits_actual_trend_from_forecast_points(self):
-        route = next((route for route in server.app.routes if route.path == "/api/balance_sheet"), None)
+        route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/balance_sheet"), None)
 
         self.assertIsNotNone(route)
 

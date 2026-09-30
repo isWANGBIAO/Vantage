@@ -33,12 +33,12 @@ Vantage 是公开仓库。不要将用户的私有提示词、聊天内容、照
 
 重要语义：
 
-- action_plan_auto_generate 控制桌面启动时是否在缺少今日计划等条件下自动生成；action_plan_check_interval_minutes 控制行动计划数据版本轮询间隔。两者不是同一设置，间隔为 0 表示关闭该轮询。
+- action_plan_auto_generate 控制后端启动/跨日时缺少完整今日计划的自动生成；action_plan_check_interval_minutes 独立控制后端数据版本检查。间隔为 0 只关闭版本检查，所有自动生成均等待 onboarding_completed。多个前端不创建多份调度。
 - provider_config 中省略的顶层字段保持原值；若传入 providers 字典，它会替换完整 provider 集合，包括传空字典。因此，未经用户明确要求不得把不完整 providers 字典写回。
 - API key 是 write-only，响应中会脱敏；需要提供密钥时用标准输入 JSON，不能回显、记录或放到命令行参数。
 - 写操作后必须从共享读取入口再次确认；若后端失败或状态不明确，不要声称设置已生效。
 
-CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.complete 的确认仅表示共享 JSON 已保存；登录启动项、托盘标签等 Electron 原生效果由桌面 UI 应用。CLI/MCP 修改行动计划间隔也不会通知已打开的 Action Plan 组件；重载界面后，新间隔才进入当前运行的定时器。间隔有效范围为 0–35,791 分钟。
+CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.complete 的确认仅表示共享 JSON 已保存；登录启动项、托盘标签等 Electron 原生效果由桌面 UI 应用。CLI/MCP 修改行动计划间隔由后端调度器动态读取，无需重载界面。间隔有效范围为 0–35,791 分钟。
 
 调用 onboarding.complete 必须显式提供 skip_chat_setup。设为 true 会保留已有 provider 配置；设为 false 时必须提供 selected_provider，更新只合并该 provider，不会删除其它 provider、模型参数或已保存密钥。
 启用 import_legacy_data=true 时必须显式提供 legacy_root；catalog schema 会表达此条件，服务端仍负责最终路径校验。
@@ -49,7 +49,9 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 
 人工读取当前今日计划使用 action_plan.today.read；生成使用 action_plan.generate。要替换今天已保存的计划，显式设置 replace_today=true。该操作会返回 NDJSON 进度流；只有收到明确的 done=true 且未收到 error/STREAM_ERROR，才可视为生成成功。完成后再次调用 action_plan.today.read，检查最新日期、分析与计划内容是否完整，再对外说明已经更新。失败、超时、缺少完成事件或响应不完整时，不得把旧计划说成新结果，也不得向用户声称替换成功。
 
-桌面端的“每隔 N 分钟自动检查数据变化”还有一条内部流程：src/webapp/src/components/ActionPlan.jsx 读取设置，src/webapp/src/utils/actionPlanAutoRefresh.js 比对数据版本；仅在新版本生成成功后刷新显示。版本接口 /api/action_plan/source_revision 当前没有纳入 automation_catalog，因此 CLI/MCP 可以手动生成、读取和验证计划，但不能执行与 UI 等价的自动版本轮询。用户要求自动监测、持续重试或自动替换 UI 内容时，使用可见桌面 UI，并按上述成功门槛确认；不要伪造一个 MCP 工具。
+“每隔 N 分钟自动检查数据变化”现在由 src/services/action_plan_scheduler.py 在后端生命周期内运行。成功版本与来源指纹保存在运行目录的原子元数据文件中；失败不会推进版本。React 只读轮询任务状态、显示进度和接受用户发起/取消，不触发定时生成。新版原生客户端可使用 /api/v1/capabilities、/api/v1/operations 和 /openapi.json 发现协议，详见 docs/native-ui-architecture.md。
+
+所有 HTTP 行动计划生成入口（包含兼容的 /api/action_plan）进入单一 ActionPlanJobService。action_plan.jobs.create 返回稳定任务 ID；重复请求合并到正在运行的任务，响应 reused=true。断开观察不会取消生成；需显式调用 action_plan.jobs.cancel。任务仅在收到完成信号且验证新保存结果完整后成功。事件只做有界进程内保留；后端重启后任务 ID 可失效，已保存计划不丢失。
 
 ## 用户可见操作映射
 
@@ -57,6 +59,14 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 
 | Vantage 界面能力 | Catalog / MCP 工具 | CLI 命令 |
 | --- | --- | --- |
+| 后端版本与能力 | system.capabilities.read | vantage system capabilities read |
+| 行动计划来源版本 | action_plan.source_revision.read | vantage action-plan source-revision read |
+| 创建/加入行动计划任务 | action_plan.jobs.create | vantage action-plan jobs create |
+| 列出行动计划任务 | action_plan.jobs.list | vantage action-plan jobs list |
+| 读取任务 | action_plan.jobs.read | vantage action-plan jobs read |
+| 观察任务事件 | action_plan.jobs.events | vantage action-plan jobs events |
+| 显式取消任务 | action_plan.jobs.cancel | vantage action-plan jobs cancel |
+| 后端调度状态 | action_plan.scheduler.read | vantage action-plan scheduler read |
 | 服务与相机状态 | system.status.read | vantage system status read |
 | CPU、内存、磁盘及媒体存储统计 | system.statistics.read | vantage system statistics read |
 | 相机检测框显示切换 | system.detection.toggle | vantage system detection toggle |
@@ -107,8 +117,8 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 - 目录、schema、可用性和操作元数据：src/services/automation_catalog.py。
 - 统一 HTTP/配置客户端：src/services/vantage_client.py。
 - CLI 参数、发现、渲染与退出码：src/cli.py；MCP stdio、工具和资源：src/mcp_server.py。
-- API、中间件、配置接口和计划生成：src/server.py；设置 JSON 清洗及持久化：src/core/user_config.py；应用与数据目录：src/core/config.py。
-- 桌面设置与窄 OS 侧效果：src/webapp/main.cjs、src/webapp/preload.cjs；行动计划 UI 和版本轮询：src/webapp/src/components/ActionPlan.jsx、src/webapp/src/utils/actionPlanAutoRefresh.js、src/webapp/src/utils/actionPlanStream.js。
+- HTTP 组装入口：src/server.py；按职责划分的路由与适配：src/backend/；独立任务/调度服务：src/services/action_plan_jobs.py 与 action_plan_scheduler.py；设置 JSON 清洗及持久化：src/core/user_config.py；应用与数据目录：src/core/config.py。
+- 桌面设置与窄 OS 侧效果：src/webapp/main.cjs、src/webapp/preload.cjs；行动计划 UI 和只读任务观察：src/webapp/src/components/ActionPlan.jsx、src/webapp/src/utils/actionPlanJobs.js、src/webapp/src/utils/actionPlanStream.js。
 - 重点测试：tests/test_automation_catalog.py、tests/test_vantage_client.py、tests/test_cli.py、tests/test_mcp_server.py、tests/test_settings_automation_endpoint.py、tests/test_vantage_skill.py；完整操作覆盖由 tests/test_automation_parity.py 负责。
 
 实现功能后根据改动运行 Python 测试、src/webapp 的 lint/test/build 与运行时打包测试。真实安装验收应区分源码测试、构建包、安装后运行；未执行的步骤必须明确写为未验证。

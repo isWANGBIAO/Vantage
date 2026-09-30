@@ -66,6 +66,9 @@ jobs:
       - name: Run frontend tests
         run: npm test
         working-directory: src/webapp
+      - name: Verify the production Electron protocol
+        run: npm run test:electron-protocol
+        working-directory: src/webapp
       - name: Run Never Stop demo tests
         run: npm run never-stop:test
         working-directory: src/webapp

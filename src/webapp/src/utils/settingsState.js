@@ -1,3 +1,5 @@
+import { readSettings, updateSettings } from './configurationClient.js';
+import { getPlatformAdapter } from './platformAdapter.js';
 import automationLimits from './automationLimits.cjs';
 
 const { MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES } = automationLimits;
@@ -48,18 +50,8 @@ const DEFAULT_SETTINGS_STATE = {
   systemLocale: 'en-US',
 };
 
-const BROWSER_SETTINGS_STORAGE_KEY = 'vantage.settingsState';
-
 function cloneSettingsState(value) {
   return JSON.parse(JSON.stringify(value));
-}
-
-function resolveElectronAPI(electronAPI) {
-  return electronAPI ?? globalThis.window?.electronAPI ?? globalThis.electronAPI;
-}
-
-function resolveBrowserStorage() {
-  return globalThis.window?.localStorage ?? globalThis.localStorage ?? null;
 }
 
 function normalizeSettings(payload, mode) {
@@ -183,79 +175,17 @@ function normalizeSettings(payload, mode) {
   };
 }
 
-export async function loadSettingsState(electronAPI) {
-  const resolvedElectronAPI = resolveElectronAPI(electronAPI);
-  if (!resolvedElectronAPI?.getSettingsState) {
-    const storage = resolveBrowserStorage();
-    const stored = storage?.getItem?.(BROWSER_SETTINGS_STORAGE_KEY);
-    if (stored) {
-      try {
-        return normalizeSettings(JSON.parse(stored), 'browser');
-      } catch (error) {
-        console.warn('Failed to parse browser settings state.', error);
-      }
-    }
-    return cloneSettingsState(DEFAULT_SETTINGS_STATE);
-  }
-
-  const payload = await resolvedElectronAPI.getSettingsState();
-  return normalizeSettings(payload, 'electron');
+export async function loadSettingsState(platform = getPlatformAdapter()) {
+  return normalizeSettings(await readSettings(platform), platform.kind);
 }
 
-export async function saveSettingsState(submission, electronAPI) {
-  const resolvedElectronAPI = resolveElectronAPI(electronAPI);
-  if (!resolvedElectronAPI?.saveSettings) {
-    const current = await loadSettingsState(electronAPI);
-    submission = { ...current.settings, ...submission };
-    const normalized = normalizeSettings(
-      {
-        settings: {
-          displayLanguage: submission?.displayLanguage,
-          theme: submission?.theme,
-          themeMode: submission?.themeMode,
-          launchAtLogin: Boolean(submission?.launchAtLogin),
-          voiceProviderMode: submission?.voiceProviderMode,
-          voiceBaseUrl: submission?.voiceBaseUrl,
-          voiceApiKey: submission?.voiceApiKey,
-          voiceHasApiKey: Boolean(submission?.voiceApiKey),
-          voiceModel: submission?.voiceModel,
-          voiceModels: submission?.voiceModels,
-          voiceLastRefreshedAt: submission?.voiceLastRefreshedAt,
-          imageProviderMode: submission?.imageProviderMode,
-          imageBaseUrl: submission?.imageBaseUrl,
-          imageApiKey: submission?.imageApiKey,
-          imageHasApiKey: Boolean(submission?.imageApiKey),
-          imageModel: submission?.imageModel,
-          imageModels: submission?.imageModels,
-          imageLastRefreshedAt: submission?.imageLastRefreshedAt,
-          actionPlanAutoGenerate:
-            typeof submission?.actionPlanAutoGenerate === 'boolean'
-              ? submission.actionPlanAutoGenerate
-              : DEFAULT_SETTINGS_STATE.settings.actionPlanAutoGenerate,
-          actionPlanCheckIntervalMinutes: submission?.actionPlanCheckIntervalMinutes,
-        },
-      },
-      'browser',
-    );
-    const storage = resolveBrowserStorage();
-    storage?.setItem?.(BROWSER_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
-    return normalized;
-  }
-
-  const sanitizedSubmission = { ...(submission || {}) };
-  delete sanitizedSubmission.backgroundMode;
-  const payload = await resolvedElectronAPI.saveSettings(sanitizedSubmission);
-  return normalizeSettings(payload, 'electron');
+export async function saveSettingsState(submission, platform = getPlatformAdapter()) {
+  return normalizeSettings(await updateSettings(submission, platform), platform.kind);
 }
 
-export async function openSettingsPath(pathKey, electronAPI) {
-  const resolvedElectronAPI = resolveElectronAPI(electronAPI);
-  if (!resolvedElectronAPI?.openSettingsPath) {
-    return false;
-  }
-
+export async function openSettingsPath(pathKey, platform = getPlatformAdapter()) {
   try {
-    const result = await resolvedElectronAPI.openSettingsPath(pathKey);
+    const result = await platform.paths.openSettingsPath(pathKey);
     return Boolean(result?.opened);
   } catch (error) {
     console.warn('Failed to open settings path.', error);

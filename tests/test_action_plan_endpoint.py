@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from src import server
+from tests.backend_helpers import iter_registered_routes
 from src.services.model_call_recorder import SessionRecorder
 
 
@@ -127,7 +128,7 @@ class ActionPlanEndpointTests(unittest.TestCase):
         }
 
     def test_server_keeps_debug_suite_endpoints_registered(self):
-        route_paths = {route.path for route in server.app.routes}
+        route_paths = {route.path for route in iter_registered_routes(server.app)}
 
         self.assertIn("/api/action_plan_content", route_paths)
         self.assertIn("/api/system_logs", route_paths)

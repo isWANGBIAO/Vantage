@@ -1,0 +1,421 @@
+{
+  "api_version": "1.0",
+  "schemas": {
+    "ActionPlanJobRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Effort"
+        },
+        "service_tier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service Tier"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "provider_route": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Route"
+        },
+        "replace_today": {
+          "default": false,
+          "title": "Replace Today",
+          "type": "boolean"
+        },
+        "wait_for_provider_ready": {
+          "default": false,
+          "title": "Wait For Provider Ready",
+          "type": "boolean"
+        }
+      },
+      "title": "ActionPlanJobRequest",
+      "type": "object"
+    },
+    "ActionPlanJob": {
+      "$defs": {
+        "ActionPlanJobRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "reasoning_effort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Reasoning Effort"
+            },
+            "service_tier": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Service Tier"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model"
+            },
+            "provider_route": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Provider Route"
+            },
+            "replace_today": {
+              "default": false,
+              "title": "Replace Today",
+              "type": "boolean"
+            },
+            "wait_for_provider_ready": {
+              "default": false,
+              "title": "Wait For Provider Ready",
+              "type": "boolean"
+            }
+          },
+          "title": "ActionPlanJobRequest",
+          "type": "object"
+        },
+        "ActionPlanResult": {
+          "additionalProperties": true,
+          "properties": {
+            "exists": {
+              "title": "Exists",
+              "type": "boolean"
+            },
+            "analysis": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Analysis"
+            },
+            "plan": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Plan"
+            },
+            "meta": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Meta"
+            },
+            "date": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Date"
+            },
+            "filename": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Filename"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Id"
+            }
+          },
+          "required": [
+            "exists"
+          ],
+          "title": "ActionPlanResult",
+          "type": "object"
+        },
+        "JobError": {
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "JobError",
+          "type": "object"
+        },
+        "JobProgress": {
+          "additionalProperties": true,
+          "properties": {
+            "phase": {
+              "title": "Phase",
+              "type": "string"
+            },
+            "events_received": {
+              "default": 0,
+              "title": "Events Received",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "phase"
+          ],
+          "title": "JobProgress",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "queued",
+            "running",
+            "cancelling",
+            "succeeded",
+            "failed",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "trigger": {
+          "title": "Trigger",
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/ActionPlanJobRequest"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "title": "Updated At",
+          "type": "string"
+        },
+        "progress": {
+          "$ref": "#/$defs/JobProgress"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionPlanResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Revision"
+        },
+        "result_identity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result Identity"
+        },
+        "event_cursor": {
+          "title": "Event Cursor",
+          "type": "integer"
+        },
+        "reused": {
+          "default": false,
+          "title": "Reused",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "trigger",
+        "request",
+        "created_at",
+        "updated_at",
+        "progress",
+        "event_cursor"
+      ],
+      "title": "ActionPlanJob",
+      "type": "object"
+    },
+    "BackendCapabilities": {
+      "properties": {
+        "api_version": {
+          "default": "1.0",
+          "title": "Api Version",
+          "type": "string"
+        },
+        "service": {
+          "default": "vantage",
+          "title": "Service",
+          "type": "string"
+        },
+        "transport": {
+          "default": "loopback-http",
+          "title": "Transport",
+          "type": "string"
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "platform_owned": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Platform Owned",
+          "type": "array"
+        },
+        "contracts_url": {
+          "default": "/openapi.json",
+          "title": "Contracts Url",
+          "type": "string"
+        },
+        "operations_url": {
+          "default": "/api/v1/operations",
+          "title": "Operations Url",
+          "type": "string"
+        },
+        "job_retention": {
+          "default": "process-lifetime, bounded; saved results survive restart",
+          "title": "Job Retention",
+          "type": "string"
+        }
+      },
+      "title": "BackendCapabilities",
+      "type": "object"
+    }
+  }
+}

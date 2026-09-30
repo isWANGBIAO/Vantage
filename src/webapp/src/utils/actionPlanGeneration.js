@@ -6,7 +6,6 @@ export function buildActionPlanGenerationPayload(reasoningEffort, {
   model = null,
   providerRoute = null,
   fastModeEnabled = false,
-  startupAutoGenerate = false,
 } = {}) {
   const payload = {
     reasoning_effort: normalizeReasoningEffortForModel(reasoningEffort, model),
@@ -23,25 +22,6 @@ export function buildActionPlanGenerationPayload(reasoningEffort, {
   if (serviceTier) {
     payload.service_tier = serviceTier;
   }
-  if (startupAutoGenerate) {
-    payload.wait_for_provider_ready = true;
-  }
 
   return payload;
-}
-
-export function shouldAutogenerateActionPlan({
-  autoGenerateEnabled = true,
-  hasTriggered,
-  isGenerating,
-  isAborted,
-  hasExistingPlan = false,
-  loadFailed = false,
-}) {
-  return Boolean(autoGenerateEnabled)
-    && !hasTriggered
-    && !isGenerating
-    && !isAborted
-    && !hasExistingPlan
-    && !loadFailed;
 }

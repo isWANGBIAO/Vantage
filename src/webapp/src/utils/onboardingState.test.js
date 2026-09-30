@@ -1,82 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { completeOnboardingSetup, loadOnboardingState, pickLegacyRoot } from './onboardingState.js';
+import { createPlatformAdapter } from './platformAdapter.js';
 
-test('loadOnboardingState falls back to completed browser mode when no electron bridge exists', async () => {
-  const state = await loadOnboardingState(undefined);
+const nativePlatform = requestConfiguration => createPlatformAdapter({ descriptor: { kind: 'electron' }, requestConfiguration });
 
-  assert.deepEqual(state, {
-    completed: true,
-    launchAtLogin: false,
-    displayLanguage: 'system',
-    providerConfigured: false,
-    migrationCompleted: false,
-    legacyRoot: null,
-    mode: 'browser',
-  });
+test('onboarding reflects the backend state instead of assuming browser setup is complete', async () => {
+  const state = await loadOnboardingState(nativePlatform(async () => ({ completed: false, launchAtLogin: true, displayLanguage: 'zh-CN', legacyRoot: '/legacy' })));
+  assert.equal(state.completed, false);
+  assert.equal(state.launchAtLogin, true);
+  assert.equal(state.displayLanguage, 'zh-CN');
+  assert.equal(state.legacyRoot, '/legacy');
 });
 
-test('loadOnboardingState reflects incomplete onboarding from Electron', async () => {
-  const state = await loadOnboardingState({
-    getOnboardingState: async () => ({
-      completed: false,
-      launchAtLogin: true,
-      displayLanguage: 'zh-CN',
-      providerConfigured: true,
-      migrationCompleted: true,
-      legacyRoot: 'C:\\legacy-root',
-    }),
-  });
-
-  assert.deepEqual(state, {
-    completed: false,
-    launchAtLogin: true,
-    displayLanguage: 'zh-CN',
-    providerConfigured: true,
-    migrationCompleted: true,
-    legacyRoot: 'C:\\legacy-root',
-    mode: 'electron',
-  });
+test('onboarding read and write failures reject instead of reporting success', async () => {
+  const platform = nativePlatform(async () => { throw new Error('backend unavailable'); });
+  await assert.rejects(loadOnboardingState(platform), /backend unavailable/);
+  await assert.rejects(completeOnboardingSetup({ skipChatSetup: true }, platform), /backend unavailable/);
 });
 
-test('loadOnboardingState rejects Electron backend read failures instead of assuming setup is complete', async () => {
-  const backendError = new Error('backend unavailable');
-
-  await assert.rejects(
-    loadOnboardingState({ getOnboardingState: async () => { throw backendError; } }),
-    (error) => error === backendError,
-  );
+test('completeOnboardingSetup submits the canonical backend contract', async () => {
+  let received;
+  const platform = nativePlatform(async (method, path, payload) => {
+    received = { method, path, payload };
+    return { completed: true, launchAtLogin: true };
+  });
+  assert.deepEqual(await completeOnboardingSetup({ launchAtLogin: true, skipChatSetup: true }, platform), { completed: true, launchAtLogin: true });
+  assert.deepEqual(received, { method: 'POST', path: '/api/automation/onboarding/complete', payload: { launch_at_login: true, skip_chat_setup: true } });
 });
 
-test('completeOnboardingSetup forwards the submission payload to Electron', async () => {
-  const payload = {
-    launchAtLogin: true,
-    selectedProvider: 'openai',
-    apiKey: 'sk-demo',
-    baseUrl: 'https://example.invalid/v1',
-    model: 'gpt-5',
-    displayLanguage: 'en-US',
-    importLegacyData: true,
-    legacyRoot: 'C:\\legacy-root',
-    skipChatSetup: false,
-  };
-
-  let received = null;
-  const result = await completeOnboardingSetup(payload, {
-    completeOnboarding: async (submission) => {
-      received = submission;
-      return { completed: true, launchAtLogin: true };
-    },
-  });
-
-  assert.deepEqual(received, payload);
-  assert.deepEqual(result, { completed: true, launchAtLogin: true });
-});
-
-test('pickLegacyRoot returns the selected folder path from Electron', async () => {
-  const selectedPath = await pickLegacyRoot({
-    pickLegacyRoot: async () => ({ path: 'D:\\legacy-history' }),
-  });
-
-  assert.equal(selectedPath, 'D:\\legacy-history');
+test('legacy picker uses a narrow optional platform capability', async () => {
+  assert.equal(await pickLegacyRoot(createPlatformAdapter()), null);
+  assert.equal(await pickLegacyRoot(createPlatformAdapter({ pickLegacyRoot: async () => ({ path: '/legacy-history' }) })), '/legacy-history');
 });

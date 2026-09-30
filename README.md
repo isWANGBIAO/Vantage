@@ -186,3 +186,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 Code in this repository is licensed under the [MIT License](LICENSE). Third-party
 models, datasets, and provider APIs may have separate licenses and are not
 included unless explicitly documented.
+
+## 可替换原生界面
+
+后端持有行动计划任务与自动调度，React/Electron、CLI/MCP 和未来原生 UI 共用同一配置与业务 API。接入协议、任务取消/重连语义与平台职责见 [原生 UI 架构](docs/native-ui-architecture.md)；稳定 DTO 见 [API v1 JSON 契约](docs/contracts/application-v1.json)。

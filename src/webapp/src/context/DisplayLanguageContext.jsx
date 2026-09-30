@@ -59,7 +59,9 @@ export function DisplayLanguageProvider({ children }) {
       });
     };
 
-    void initializeLanguageState();
+    void initializeLanguageState().catch((error) => {
+      console.warn('Failed to load backend display language.', error);
+    });
 
     return () => {
       cancelled = true;

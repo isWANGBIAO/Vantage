@@ -8,7 +8,6 @@ this adapter rather than reimplementing those rules.
 from __future__ import annotations
 
 import json
-import ipaddress
 import math
 import mimetypes
 import re
@@ -18,14 +17,14 @@ from email.message import Message
 from email.utils import collapse_rfc2231_value
 from pathlib import Path
 from typing import Any, Iterator, Mapping
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, unquote
 
 import requests
 
 from src.services.automation_catalog import Operation, get_operation
+from src.core.backend_connection import DEFAULT_BACKEND_BASE_URL, normalize_backend_url, resolve_backend_url
 
 
-DEFAULT_BACKEND_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 _PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _UNSAFE_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -334,34 +333,13 @@ class VantageClient:
         session=None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
     ):
-        self.base_url = self._normalize_base_url(base_url or DEFAULT_BACKEND_BASE_URL)
+        self.base_url = resolve_backend_url(base_url)
         self.session = session if session is not None else requests.Session()
         self.timeout = timeout
 
     @staticmethod
     def _normalize_base_url(value: str) -> str:
-        selected_url = value.strip().rstrip("/")
-        try:
-            parsed = urlsplit(selected_url)
-            hostname = parsed.hostname
-            # Accessing .port validates malformed port strings.
-            _ = parsed.port
-        except ValueError:
-            raise ValueError("Vantage backend URL must be a valid loopback URL.") from None
-
-        if parsed.scheme not in {"http", "https"}:
-            raise ValueError("Vantage backend URL must use HTTP or HTTPS.")
-        if not hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise ValueError("Vantage backend URL must be a valid loopback URL.")
-        is_loopback = hostname.lower() == "localhost"
-        if not is_loopback:
-            try:
-                is_loopback = ipaddress.ip_address(hostname).is_loopback
-            except ValueError:
-                is_loopback = False
-        if not is_loopback:
-            raise ValueError("Vantage backend URL must use a loopback host.")
-        return selected_url
+        return normalize_backend_url(value)
 
     def invoke(
         self,

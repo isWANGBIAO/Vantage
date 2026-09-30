@@ -611,7 +611,15 @@ def main():
             print(f"TRANSCRIPTION_RESULT:{text}")
             return
 
-        context_mgr = ContextManager(context_file=args.context_file)
+        # Backend-managed plan jobs isolate only their output/context files.
+        # Config/history_dir (and therefore usage databases) remain unchanged.
+        staging_value = os.environ.get("VANTAGE_ACTION_PLAN_STAGING_DIR")
+        plan_staging_dir = Path(staging_value) if staging_value and not args.chat_message else None
+        context_file = (
+            plan_staging_dir / "latest_context.json"
+            if plan_staging_dir is not None else args.context_file
+        )
+        context_mgr = ContextManager(context_file=context_file)
         client = LLMClient()
         
         # === CHAT MODE ===
@@ -1040,7 +1048,9 @@ def main():
                         },
                     )
 
-                    if args.output_file:
+                    if plan_staging_dir is not None:
+                        output_path = plan_staging_dir / "action_plan.json"
+                    elif args.output_file:
                         output_path = Path(args.output_file)
                     else:
                         history_dir = Config.get_history_dir()

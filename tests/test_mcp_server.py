@@ -240,7 +240,7 @@ def test_unavailable_catalog_operation_is_listed_and_returns_its_reason():
     tools, result = _run(scenario())
     assert "settings.open_path" in {item.name for item in tools.tools}
     assert result.is_error is True
-    assert "requires the running Electron desktop UI" in result.content[0].text
+    assert "requires a native platform adapter" in result.content[0].text
     assert session.calls == []
 
 

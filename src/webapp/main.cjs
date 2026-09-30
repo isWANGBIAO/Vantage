@@ -10,10 +10,20 @@ const {
     shell,
     systemPreferences,
     session,
+    Notification,
+    protocol,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const https = require('https');
+const { resolveBackendConnection, buildConnectionUrl } = require('./src/utils/backendConnection.cjs');
+const { createBackendJsonRequester } = require('./src/utils/backendTransport.cjs');
+const { APP_SCHEME, APP_ORIGIN, APP_ENTRY_URL, APP_SCHEME_PRIVILEGES, installAppProtocol, isTrustedAppUrl } = require('./src/utils/appProtocol.cjs');
+
+// Must precede app readiness; no CSP bypass or insecure web preferences.
+protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: APP_SCHEME_PRIVILEGES }]);
+const { mapPayloadFields, toBackendSettingsPayload, fromBackendSettings, ONBOARDING_PAYLOAD_FIELDS } = require('./src/utils/configurationProtocol.cjs');
 const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimePaths.cjs');
 const { applyLaunchAtLoginSetting } = require('./src/utils/autoLaunch.cjs');
 const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
@@ -47,45 +57,12 @@ let log = {
 };
 const isDev = runtimePaths.appMode !== 'packaged' && !app.isPackaged && process.env.NODE_ENV !== 'production';
 const shouldManageLoginItem = runtimePaths.appMode === 'packaged' || app.isPackaged;
-const BACKEND_HOST = '127.0.0.1';
-const BACKEND_PORT = 8000;
+const backendConnection = resolveBackendConnection({ env: process.env });
 const DEFAULT_SETTINGS = {
     display_language: 'system',
     theme: 'dark',
     theme_mode: 'dark',
     launch_at_login: false,
-};
-const SETTINGS_PAYLOAD_FIELDS = {
-    displayLanguage: 'display_language',
-    theme: 'theme',
-    themeMode: 'theme_mode',
-    launchAtLogin: 'launch_at_login',
-    actionPlanAutoGenerate: 'action_plan_auto_generate',
-    actionPlanCheckIntervalMinutes: 'action_plan_check_interval_minutes',
-    voiceProviderMode: 'voice_provider_mode',
-    voiceBaseUrl: 'voice_base_url',
-    voiceApiKey: 'voice_api_key',
-    voiceModel: 'voice_model',
-    voiceModels: 'voice_models',
-    voiceLastRefreshedAt: 'voice_last_refreshed_at',
-    imageProviderMode: 'image_provider_mode',
-    imageBaseUrl: 'image_base_url',
-    imageApiKey: 'image_api_key',
-    imageModel: 'image_model',
-    imageModels: 'image_models',
-    imageLastRefreshedAt: 'image_last_refreshed_at',
-    providerConfig: 'provider_config',
-};
-const ONBOARDING_PAYLOAD_FIELDS = {
-    displayLanguage: 'display_language',
-    launchAtLogin: 'launch_at_login',
-    selectedProvider: 'selected_provider',
-    baseUrl: 'base_url',
-    apiKey: 'api_key',
-    model: 'model',
-    skipChatSetup: 'skip_chat_setup',
-    importLegacyData: 'import_legacy_data',
-    legacyRoot: 'legacy_root',
 };
 let canonicalSettings = { ...DEFAULT_SETTINGS };
 buildInfo = resolveAppBuildInfo({
@@ -129,172 +106,26 @@ function getTitleBarOverlayOptions(theme = 'dark') {
     };
 }
 
-async function requestBackendJson(method, apiPath, payload) {
-    if (!apiPath.startsWith('/api/automation/')) {
-        return Promise.reject(new Error('Unsupported local backend operation.'));
-    }
-    await backendReadyPromise;
-    const body = payload === undefined ? null : Buffer.from(JSON.stringify(payload), 'utf8');
-    return new Promise((resolve, reject) => {
-        const request = http.request({
-            hostname: BACKEND_HOST,
-            port: BACKEND_PORT,
-            path: apiPath,
-            method,
-            headers: body ? {
-                'content-type': 'application/json',
-                'content-length': body.length,
-            } : {},
-        }, (response) => {
-            const chunks = [];
-            let size = 0;
-            response.on('data', (chunk) => {
-                size += chunk.length;
-                if (size > 2 * 1024 * 1024) {
-                    request.destroy(new Error('Vantage backend response was too large.'));
-                    return;
-                }
-                chunks.push(chunk);
-            });
-            response.on('end', () => {
-                if (response.statusCode < 200 || response.statusCode >= 300) {
-                    reject(new Error(`Vantage backend request failed with status ${response.statusCode}.`));
-                    return;
-                }
-                try {
-                    resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-                } catch {
-                    reject(new Error('Vantage backend returned an invalid JSON response.'));
-                }
-            });
-        });
-        request.setTimeout(10000, () => request.destroy(new Error('Vantage backend request timed out.')));
-        request.on('error', (error) => reject(new Error(`Vantage backend request failed: ${error.message}`)));
-        if (body) request.write(body);
-        request.end();
-    });
-}
+const requestBackendJson = createBackendJsonRequester({
+    connection: backendConnection,
+    waitUntilReady: () => backendReadyPromise,
+});
 
-function mapPayloadFields(payload, fieldMap) {
-    const result = {};
-    const source = payload && typeof payload === 'object' ? payload : {};
-    for (const [sourceKey, targetKey] of Object.entries(fieldMap)) {
-        if (Object.prototype.hasOwnProperty.call(source, sourceKey)) {
-            result[targetKey] = source[sourceKey];
-        }
-    }
-    return result;
-}
-
-function isJsonCompatibleValue(value, seen = new WeakSet()) {
-    if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
-    if (typeof value === 'number') return Number.isFinite(value);
-    if (typeof value !== 'object' || seen.has(value)) return false;
-
-    const isArray = Array.isArray(value);
-    if (!isArray) {
-        const prototype = Object.getPrototypeOf(value);
-        if (prototype !== Object.prototype && prototype !== null) return false;
-    }
-
-    seen.add(value);
-    const compatible = isArray
-        ? value.every((entry) => isJsonCompatibleValue(entry, seen))
-        : Reflect.ownKeys(value).every((key) => (
-            typeof key === 'string' && isJsonCompatibleValue(value[key], seen)
-        ));
-    seen.delete(value);
-    return compatible;
-}
-
-function isPlainJsonRecord(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    const prototype = Object.getPrototypeOf(value);
-    return (prototype === Object.prototype || prototype === null) && isJsonCompatibleValue(value);
-}
-
-function toBackendSettingsPayload(payload) {
-    const mapped = mapPayloadFields(payload, SETTINGS_PAYLOAD_FIELDS);
-    const providerConfig = mapped.provider_config;
-    if (providerConfig && typeof providerConfig === 'object') {
-        const providerFields = [
-            'route', 'name', 'type', 'enabled', 'api_key', 'base_url', 'model', 'models', 'last_refreshed_at',
-            'context_window_tokens',
-            'max_output_tokens',
-        ];
-        const normalizedProviderConfig = { ...providerConfig };
-        if (Object.prototype.hasOwnProperty.call(providerConfig, 'providers')) {
-            const providers = providerConfig.providers;
-            if (providers && typeof providers === 'object' && !Array.isArray(providers)) {
-                if (!isPlainJsonRecord(providers)) {
-                    throw new TypeError('Provider map must be a plain JSON object.');
-                }
-                normalizedProviderConfig.providers = Object.fromEntries(
-                    Object.entries(providers).map(([route, entry]) => {
-                        if (!isPlainJsonRecord(entry)) {
-                            throw new TypeError(`Provider entry "${route}" must be a plain JSON object.`);
-                        }
-                        return [route, Object.fromEntries(providerFields
-                            .filter((key) => Object.prototype.hasOwnProperty.call(entry, key))
-                            .map((key) => [key, entry[key]]))];
-                    }),
-                );
-            }
-        }
-        mapped.provider_config = normalizedProviderConfig;
-    }
-    return mapped;
-}
-
-function buildElectronSettingsState(payload) {
-    const settings = payload.settings || {};
-    canonicalSettings = { ...DEFAULT_SETTINGS, ...settings };
-    const provider = payload.provider || {};
+function getPlatformDescriptor() {
     return {
-        mode: 'electron',
-        settings: {
-            displayLanguage: settings.display_language,
-            theme: settings.theme,
-            themeMode: settings.theme_mode,
-            launchAtLogin: settings.launch_at_login,
-            actionPlanAutoGenerate: settings.action_plan_auto_generate,
-            actionPlanCheckIntervalMinutes: settings.action_plan_check_interval_minutes,
-            voiceProviderMode: settings.voice_provider_mode,
-            voiceBaseUrl: settings.voice_base_url,
-            voiceApiKey: settings.voice_api_key,
-            voiceHasApiKey: Boolean(settings.voice_has_api_key),
-            voiceModel: settings.voice_model,
-            voiceModels: settings.voice_models,
-            voiceLastRefreshedAt: settings.voice_last_refreshed_at,
-            imageProviderMode: settings.image_provider_mode,
-            imageBaseUrl: settings.image_base_url,
-            imageApiKey: settings.image_api_key,
-            imageHasApiKey: Boolean(settings.image_has_api_key),
-            imageModel: settings.image_model,
-            imageModels: settings.image_models,
-            imageLastRefreshedAt: settings.image_last_refreshed_at,
+        kind: 'electron',
+        os: process.platform,
+        capabilities: {
+            customTitleBar: process.platform === 'win32',
+            openSettingsPath: true,
+            pickLegacyRoot: true,
+            launchAtLogin: shouldManageLoginItem,
+            cameraAccess: true,
+            notifications: Notification.isSupported(),
+            minimizeToTray: true,
         },
-        provider: {
-            ...provider,
-            providers: Object.fromEntries(Object.entries(provider.providers || {}).map(([route, entry]) => [
-                route,
-                { ...entry, has_api_key: entry.api_key === '********' },
-            ])),
-        },
-        runtimePaths: {
-            config: payload.runtime_paths?.config_dir,
-            history: payload.runtime_paths?.history_dir,
-            logs: payload.runtime_paths?.log_dir,
-            plots: payload.runtime_paths?.plot_dir,
-            cache: payload.runtime_paths?.cache_dir,
-            runtime: payload.runtime_paths?.runtime_dir,
-            data: payload.runtime_paths?.data_dir,
-        },
-        migration: {
-            completed: payload.migration?.completed === true,
-            sourcePath: payload.migration?.source_path || null,
-            importedAt: payload.migration?.imported_at || null,
-        },
+        backend: { ...backendConnection, rendererOrigin: isDev ? 'http://localhost:5173' : APP_ORIGIN },
+        systemLocale: app.getLocale(),
         app: {
             version: packageJson.version,
             buildDate: buildInfo.build_date || null,
@@ -303,8 +134,16 @@ function buildElectronSettingsState(payload) {
             backendRuntimePath: runtimePaths.runtimeDir,
             dataDir: runtimePaths.dataDir,
         },
-        systemLocale: app.getLocale(),
     };
+}
+
+function buildElectronSettingsState(payload) {
+    canonicalSettings = { ...DEFAULT_SETTINGS, ...(payload.settings || {}) };
+    return fromBackendSettings(payload, {
+        mode: 'electron',
+        app: getPlatformDescriptor().app,
+        systemLocale: app.getLocale(),
+    });
 }
 
 function sanitizeDisplayLanguage(value) {
@@ -551,11 +390,9 @@ function postRendererCameraFrame(frameBytes) {
         }
     };
 
-    const request = http.request(
+    const request = (backendConnection.protocol === 'https:' ? https : http).request(
+        buildConnectionUrl(backendConnection, '/api/renderer_camera/frame'),
         {
-            hostname: '127.0.0.1',
-            port: 8000,
-            path: '/api/renderer_camera/frame',
             method: 'POST',
             timeout: 3000,
             headers: {
@@ -604,7 +441,7 @@ const settingsPathAllowlist = {
 };
 
 function resolveAllowedSettingsPath(pathKey) {
-    const resolver = settingsPathAllowlist[pathKey];
+    const resolver = Object.hasOwn(settingsPathAllowlist, pathKey) ? settingsPathAllowlist[pathKey] : null;
     if (!resolver) {
         return null;
     }
@@ -674,6 +511,56 @@ process.on('uncaughtException', (error) => {
 
 process.on('unhandledRejection', (reason, promise) => {
     log.error(`Unhandled Rejection at: ${promise}, reason: ${reason}`);
+});
+
+// Narrow native transport: this IPC cannot request arbitrary URLs or backend paths.
+ipcMain.on('platform:get-descriptor', (event) => {
+    event.returnValue = event.sender === mainWindow?.webContents ? getPlatformDescriptor() : null;
+});
+
+ipcMain.handle('backend:wait-until-ready', async () => {
+    await backendReadyPromise;
+    return { ready: true };
+});
+
+ipcMain.handle('backend:configuration-request', async (event, method, apiPath, payload) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('Unsupported renderer.');
+    return requestBackendJson(method, apiPath, payload);
+});
+
+let nativePreferencesInFlight = null;
+function applySavedNativePreferences() {
+    if (!nativePreferencesInFlight) {
+        nativePreferencesInFlight = (async () => {
+            const state = await getSettingsStatePayload();
+            if (shouldManageLoginItem) {
+                applyLaunchAtLoginSetting({ app, enabled: state.settings.launchAtLogin });
+            }
+            syncTrayMenu();
+            if (mainWindow && process.platform === 'win32' && typeof mainWindow.setTitleBarOverlay === 'function') {
+                mainWindow.setTitleBarOverlay(getTitleBarOverlayOptions(resolveEffectiveThemeForMain()));
+            }
+            return { applied: true };
+        })().finally(() => { nativePreferencesInFlight = null; });
+    }
+    return nativePreferencesInFlight;
+}
+
+ipcMain.handle('platform:apply-saved-preferences', async (event) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('Unsupported renderer.');
+    // A focus-triggered read may have begun before this write committed.
+    if (nativePreferencesInFlight) await nativePreferencesInFlight.catch(() => {});
+    return applySavedNativePreferences();
+});
+
+ipcMain.on('show-notification', (event, { title, body } = {}) => {
+    if (event.sender === mainWindow?.webContents && Notification.isSupported()) {
+        new Notification({ title: String(title || 'Vantage'), body: String(body || '') }).show();
+    }
+});
+
+ipcMain.on('minimize-to-tray', (event) => {
+    if (event.sender === mainWindow?.webContents) mainWindow.hide();
 });
 
 ipcMain.handle('onboarding:get-state', async () => requestBackendJson('GET', '/api/automation/onboarding'));
@@ -819,6 +706,14 @@ ipcMain.handle('onboarding:complete', async (event, submission) => {
     return result;
 });
 
+function isTrustedRendererDocument(value) {
+    if (!isDev) return isTrustedAppUrl(value, { documentOnly: true });
+    try {
+        const url = new URL(value);
+        return url.origin === 'http://localhost:5173' && !url.username && !url.password;
+    } catch { return false; }
+}
+
 function createWindow() {
     log.info('Creating main window...');
 
@@ -844,10 +739,17 @@ function createWindow() {
         void mainWindow.loadURL('http://localhost:5173');
         mainWindow.webContents.openDevTools();
     } else {
-        const indexPath = path.join(__dirname, 'dist', 'index.html');
-        log.info(`Loading production build: ${indexPath}`);
-        void mainWindow.loadFile(indexPath);
+        log.info(`Loading production app: ${APP_ENTRY_URL}`);
+        void mainWindow.loadURL(APP_ENTRY_URL);
     }
+
+    mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    const preventUntrustedNavigation = (event, target) => {
+        if (!isTrustedRendererDocument(target)) event.preventDefault();
+    };
+    mainWindow.webContents.on('will-navigate', preventUntrustedNavigation);
+    mainWindow.webContents.on('will-redirect', preventUntrustedNavigation);
+    mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
 
     mainWindow.once('ready-to-show', () => {
         log.info('Window ready, showing...');
@@ -865,6 +767,13 @@ function createWindow() {
 
     mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDesc, validatedURL) => {
         log.error(`Failed to load URL: ${validatedURL}, Error: ${errorCode} - ${errorDesc}`);
+    });
+
+    // Other frontends may have changed shared preferences while the window slept.
+    mainWindow.on('focus', () => {
+        void applySavedNativePreferences().catch((error) => {
+            log.warn(`Could not synchronize saved native preferences: ${error.message}`);
+        });
     });
 
     mainWindow.on('close', (event) => {
@@ -935,6 +844,13 @@ if (!gotTheLock) {
         log.info('App ready, initializing...');
         Menu.setApplicationMenu(null);
         configureMediaPermissionHandler();
+        installAppProtocol({
+            session: session.defaultSession,
+            getWebContents: () => mainWindow?.webContents,
+            assetRoot: path.join(__dirname, 'dist'),
+            connection: backendConnection,
+            waitUntilReady: () => backendReadyPromise,
+        });
 
         const shouldLaunchBundledBackend = runtimePaths.appMode === 'packaged' || app.isPackaged;
         let backendReady;

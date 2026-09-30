@@ -169,7 +169,7 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
         )
 
     def test_sources_have_no_yolox_or_body_presence_runtime(self):
-        for path in (Path("src/services/person_detection.py"), Path("src/server.py")):
+        for path in (Path("src/services/person_detection.py"), Path("src/server.py"), *Path("src/backend").glob("*.py")):
             source = path.read_text(encoding="utf-8").lower()
             with self.subTest(path=path):
                 self.assertNotIn("yolox", source)
@@ -177,7 +177,10 @@ class PersonDetectionModelConfigTests(unittest.TestCase):
                 self.assertNotIn("get_person_presence_detector", source)
 
     def test_server_and_detector_sources_do_not_import_heavy_inference_runtimes(self):
-        server_source = Path("src/server.py").read_text(encoding="utf-8")
+        server_source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (Path("src/server.py"), *Path("src/backend").glob("*.py"))
+        )
         detector_source = Path("src/services/person_detection.py").read_text(encoding="utf-8")
 
         combined_source = f"{server_source}\n{detector_source}".lower()

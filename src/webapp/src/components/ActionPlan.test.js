@@ -132,18 +132,39 @@ test('ActionPlan shows live elapsed time while generation is active', () => {
   assert.equal(actionPlanSource.includes('Time {(stats.total_duration || 0).toFixed(1)}s'), false);
 });
 
-test('ActionPlan uses the startup autogenerate setting but does not replace an existing plan on startup', () => {
+test('ActionPlan only submits manual jobs and leaves scheduling to the backend', () => {
   assert.ok(actionPlanSource.includes('loadSettingsState'));
-  assert.ok(actionPlanSource.includes('actionPlanAutoGenerate'));
-  assert.ok(actionPlanSource.includes('autoGenerateEnabled'));
-  assert.ok(actionPlanSource.includes('const loadResult = await loadTodaysPlan(controller.signal);'));
-  assert.ok(actionPlanSource.includes('hasExistingPlan: loadResult?.exists === true'));
-  assert.ok(actionPlanSource.includes('loadFailed: Boolean(loadResult?.error)'));
-  assert.ok(actionPlanSource.includes('waitForProviderReady: true'));
+  assert.ok(actionPlanSource.includes('createActionPlanJobMonitor'));
+  assert.ok(actionPlanSource.includes('jobMonitorRef.current.submit('));
+  assert.equal(actionPlanSource.includes('actionPlanAutoGenerate'), false);
+  assert.equal(actionPlanSource.includes('shouldAutogenerateActionPlan'), false);
+  assert.equal(actionPlanSource.includes('source_revision'), false);
+  assert.equal(actionPlanSource.includes('createActionPlanRevisionChecker'), false);
+  assert.equal(actionPlanSource.includes("fetchBackend('/api/action_plan'"), false);
+});
+
+test('ActionPlan explicitly cancels only from Stop and unmount only stops observation', () => {
+  assert.ok(actionPlanSource.includes('await jobMonitorRef.current.cancelActive()'));
+  assert.ok(actionPlanSource.includes('monitor.stop()'));
+  assert.equal(actionPlanSource.match(/cancelActive\(\)/g)?.length, 1);
+});
+
+test('ActionPlan requires complete successful job results before enabling replies', () => {
+  assert.ok(actionPlanSource.includes('getCompletedActionPlanJobResult(job)'));
+  assert.equal(actionPlanSource.includes('setAnalysisReplyReady(Boolean(analysisContentRef.current.trim()))'), false);
+  assert.equal(actionPlanSource.includes('setPlanReplyReady(Boolean(planContentRef.current.trim()))'), false);
+  assert.ok(actionPlanSource.includes('if (newJob && active && !background)'));
+  assert.ok(actionPlanSource.includes('if (isBackgroundActionPlanJob(job)) return;'));
 });
 
 test('ActionPlan supports stacked reading mode without card-level scrolling', () => {
   assert.ok(actionPlanSource.includes("layoutMode = 'split'"));
   assert.ok(actionPlanSource.includes("'action-plan-stack'"));
   assert.ok(actionPlanSource.includes("overflowY: layoutMode === 'stacked' ? 'visible' : 'auto'"));
+});
+
+test('ActionPlan recovers the committed today view after process-local job history disappears', () => {
+  assert.ok(actionPlanSource.includes('onMissingJob: async (job) =>'));
+  assert.ok(actionPlanSource.includes('applyLoadedActionPlan(saved)'));
+  assert.ok(actionPlanSource.includes('displayedJobIdRef.current !== job.id || isGeneratingRef.current'));
 });

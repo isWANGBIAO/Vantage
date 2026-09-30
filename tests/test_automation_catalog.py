@@ -14,6 +14,14 @@ from src.services.automation_catalog import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 EXPECTED_OPERATION_NAMES = {
+    "system.capabilities.read",
+    "action_plan.source_revision.read",
+    "action_plan.jobs.create",
+    "action_plan.jobs.list",
+    "action_plan.jobs.read",
+    "action_plan.jobs.events",
+    "action_plan.jobs.cancel",
+    "action_plan.scheduler.read",
     "action_plan.content.read",
     "action_plan.generate",
     "action_plan.today.read",
@@ -61,7 +69,6 @@ EXPECTED_OPERATION_NAMES = {
 }
 
 FRONTEND_PLUMBING_ROUTES = {
-    "/api/action_plan/source_revision",
     "/api/stream",
 }
 
@@ -161,11 +168,14 @@ def test_every_operation_has_a_valid_schema_and_one_resolvable_source():
 
 
 def test_catalog_api_routes_exist_and_cover_every_frontend_api_call():
-    server_source = (REPOSITORY_ROOT / "src" / "server.py").read_text(encoding="utf-8")
-    route_pattern = re.compile(r'@app\.(get|post|put|patch|delete)\("(/api/[^\"]+)"', re.IGNORECASE)
+    from src import server
+
+    # OpenAPI traverses included routers and validates the actual composition.
     server_routes = {
         (method.upper(), _normalized_route(path))
-        for method, path in route_pattern.findall(server_source)
+        for path, operations in server.app.openapi()["paths"].items()
+        for method in operations
+        if method in {"get", "post", "put", "patch", "delete"}
     }
     catalog_routes = {
         (operation.method, _normalized_route(operation.path))
@@ -182,7 +192,7 @@ def test_catalog_api_routes_exist_and_cover_every_frontend_api_call():
     assert "/api/renderer_camera/frame" not in {operation.path for operation in OPERATIONS}
     assert "/api/stream" not in {operation.path for operation in OPERATIONS}
     assert "/api/image_proxy" not in {operation.path for operation in OPERATIONS}
-    assert "/api/action_plan/source_revision" not in {operation.path for operation in OPERATIONS}
+    assert "/api/action_plan/source_revision" in {operation.path for operation in OPERATIONS}
 
 
 def test_catalog_http_methods_match_frontend_calls_on_shared_routes():
@@ -247,7 +257,8 @@ def test_catalog_covers_electron_invoke_operations_without_renderer_transport():
         if operation.source_ipc_channel
     }
 
-    assert invoked_channels == catalog_channels
+    transport_channels = {"backend:wait-until-ready", "backend:configuration-request", "platform:apply-saved-preferences"}
+    assert invoked_channels == catalog_channels | transport_channels
     assert not any("camera:" in channel for channel in catalog_channels)
 
 

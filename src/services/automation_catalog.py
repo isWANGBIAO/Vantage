@@ -19,7 +19,7 @@ OutputKind = Literal["json", "text", "stream", "file"]
 Availability = Literal["available", "backend_bridge_required", "desktop_only"]
 
 _DESKTOP_ONLY_REASON = (
-    "This action requires the running Electron desktop UI and cannot be invoked "
+    "This action requires a native platform adapter and cannot be invoked "
     "through the backend API."
 )
 
@@ -289,6 +289,52 @@ _EMPTY = _object_schema()
 
 OPERATIONS: tuple[Operation, ...] = (
     Operation(
+        name="system.capabilities.read", description="Discover the versioned backend API and platform-owned capabilities.",
+        method="GET", path="/api/v1/capabilities", input_schema=_EMPTY, output_kind="json",
+    ),
+    Operation(
+        name="action_plan.source_revision.read", description="Read the action-plan source fingerprint without generating content.",
+        method="GET", path="/api/action_plan/source_revision", input_schema=_EMPTY, output_kind="json",
+    ),
+    Operation(
+        name="action_plan.jobs.create", description="Start or join the single backend-owned action-plan job. Disconnecting does not cancel it.",
+        method="POST", path="/api/v1/action-plan/jobs",
+        input_schema=_object_schema({
+            "reasoning_effort": _string("Optional reasoning effort."),
+            "service_tier": _string("Optional service tier."),
+            "model": _string("Optional configured model."),
+            "provider_route": _string("Optional configured provider route."),
+            "replace_today": _boolean("Replace existing plans only after a new complete result is saved."),
+            "wait_for_provider_ready": _boolean("Wait for the configured local provider to become ready."),
+        }), output_kind="json", mutation=True, sensitive=True, side_effect=True,
+    ),
+    Operation(
+        name="action_plan.jobs.list", description="Read retained action-plan jobs and the shared active job.",
+        method="GET", path="/api/v1/action-plan/jobs", input_schema=_EMPTY, output_kind="json", sensitive=True,
+    ),
+    Operation(
+        name="action_plan.jobs.read", description="Read one backend-owned action-plan job, including its terminal result or error.",
+        method="GET", path="/api/v1/action-plan/jobs/{job_id}",
+        input_schema=_object_schema({"job_id": _string("Job identifier returned by create/list.")}, required=("job_id",)),
+        output_kind="json", sensitive=True,
+    ),
+    Operation(
+        name="action_plan.jobs.events", description="Observe job NDJSON events after a sequence cursor. A truncated event requires a status/result reload.",
+        method="GET", path="/api/v1/action-plan/jobs/{job_id}/events",
+        input_schema=_object_schema({"job_id": _string("Job identifier."), "after": _integer("Last received event sequence.", minimum=0)}, required=("job_id",)),
+        output_kind="stream", stream=True, sensitive=True,
+    ),
+    Operation(
+        name="action_plan.jobs.cancel", description="Explicitly cancel a backend job and wait for its generation process cleanup.",
+        method="POST", path="/api/v1/action-plan/jobs/{job_id}/cancel",
+        input_schema=_object_schema({"job_id": _string("Job identifier to cancel.")}, required=("job_id",)),
+        output_kind="json", mutation=True, sensitive=True,
+    ),
+    Operation(
+        name="action_plan.scheduler.read", description="Read backend-owned automatic generation and source-check status.",
+        method="GET", path="/api/v1/action-plan/scheduler", input_schema=_EMPTY, output_kind="json",
+    ),
+    Operation(
         name="system.status.read",
         description="Read Vantage service and camera status, including detection visibility.",
         method="GET",
@@ -392,7 +438,7 @@ OPERATIONS: tuple[Operation, ...] = (
     ),
     Operation(
         name="action_plan.content.read",
-        description="Read the latest saved action-plan content, regardless of its date.",
+        description="Read the latest saved action-plan content for the current backend-local date.",
         method="GET",
         path="/api/action_plan_content",
         input_schema=_EMPTY,

@@ -281,6 +281,22 @@ ipcRenderer.on(CAMERA_FRAME_BRIDGE_START_CHANNEL, async (event, options = {}) =>
     ipcRenderer.send(CAMERA_FRAME_BRIDGE_RESULT_CHANNEL, result);
 });
 
+// Replaceable platform contract. No arbitrary IPC or Node access is exposed.
+contextBridge.exposeInMainWorld('vantagePlatform', {
+    descriptor: ipcRenderer.sendSync('platform:get-descriptor'),
+    waitUntilBackendReady: () => ipcRenderer.invoke('backend:wait-until-ready'),
+    requestConfiguration: (method, path, payload) => ipcRenderer.invoke('backend:configuration-request', method, path, payload),
+    applySavedPreferences: () => ipcRenderer.invoke('platform:apply-saved-preferences'),
+    openSettingsPath: (key) => ipcRenderer.invoke('settings:open-path', key),
+    pickLegacyRoot: () => ipcRenderer.invoke('onboarding:pick-legacy-root'),
+    getSystemLocale: () => ipcRenderer.invoke('settings:get-system-locale'),
+    setTitleBarTheme: (theme) => ipcRenderer.invoke('window:set-title-bar-theme', theme),
+    requestCameraAccess: () => primeRendererCameraAccess(),
+    showNotification: (title, body) => ipcRenderer.send('show-notification', { title, body }),
+    minimizeToTray: () => ipcRenderer.send('minimize-to-tray'),
+});
+
+// Compatibility for older renderers. New UI code uses platformAdapter.js.
 contextBridge.exposeInMainWorld('electronAPI', {
     platform: process.platform,
     showNotification: (title, body) => {

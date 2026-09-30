@@ -1,3 +1,4 @@
+import { getPlatformAdapter } from '../utils/platformAdapter';
 import { useMemo, useState } from 'react';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
@@ -56,7 +57,7 @@ export default function OnboardingShell({
 
   const currentStep = STEP_ORDER[stepIndex];
   const appLayoutClassName =
-    typeof window !== 'undefined' && window.electronAPI
+    getPlatformAdapter().capabilities.customTitleBar
       ? 'app-layout app-layout--electron'
       : 'app-layout';
 

@@ -1,5 +1,8 @@
+import { readOnboarding, finishOnboarding } from './configurationClient.js';
+import { getPlatformAdapter } from './platformAdapter.js';
+
 const DEFAULT_ONBOARDING_STATE = {
-  completed: true,
+  completed: false,
   launchAtLogin: false,
   displayLanguage: 'system',
   providerConfigured: false,
@@ -44,39 +47,18 @@ function sanitizeOnboardingState(payload, mode) {
   };
 }
 
-function resolveElectronAPI(electronAPI) {
-  return electronAPI ?? globalThis.window?.electronAPI ?? globalThis.electronAPI;
+export async function loadOnboardingState(platform = getPlatformAdapter()) {
+  const payload = await readOnboarding(platform);
+  return sanitizeOnboardingState(payload, platform.kind);
 }
 
-export async function loadOnboardingState(electronAPI) {
-  const resolvedElectronAPI = resolveElectronAPI(electronAPI);
-  if (!resolvedElectronAPI?.getOnboardingState) {
-    return { ...DEFAULT_ONBOARDING_STATE };
-  }
-
-  const payload = await resolvedElectronAPI.getOnboardingState();
-  return sanitizeOnboardingState(payload, 'electron');
+export function completeOnboardingSetup(submission, platform = getPlatformAdapter()) {
+  return finishOnboarding(submission, platform);
 }
 
-export async function completeOnboardingSetup(submission, electronAPI) {
-  const resolvedElectronAPI = resolveElectronAPI(electronAPI);
-  if (!resolvedElectronAPI?.completeOnboarding) {
-    return {
-      completed: true,
-      launchAtLogin: Boolean(submission?.launchAtLogin),
-    };
-  }
-  return resolvedElectronAPI.completeOnboarding(submission);
-}
-
-export async function pickLegacyRoot(electronAPI) {
-  const resolvedElectronAPI = resolveElectronAPI(electronAPI);
-  if (!resolvedElectronAPI?.pickLegacyRoot) {
-    return null;
-  }
-
+export async function pickLegacyRoot(platform = getPlatformAdapter()) {
   try {
-    const payload = await resolvedElectronAPI.pickLegacyRoot();
+    const payload = await platform.paths.pickLegacyRoot();
     return normalizeOptionalString(payload?.path);
   } catch (error) {
     console.warn('Failed to open legacy history picker.', error);

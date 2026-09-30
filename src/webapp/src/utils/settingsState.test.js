@@ -1,212 +1,46 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-
 import { loadSettingsState, openSettingsPath, saveSettingsState } from './settingsState.js';
+import { createPlatformAdapter } from './platformAdapter.js';
 
-function createMemoryStorage() {
-  const store = new Map();
-  return {
-    getItem(key) {
-      return store.has(key) ? store.get(key) : null;
-    },
-    setItem(key, value) {
-      store.set(key, String(value));
-    },
-    removeItem(key) {
-      store.delete(key);
-    },
-  };
+function nativePlatform(requestConfiguration) {
+  return createPlatformAdapter({ descriptor: { kind: 'electron' }, requestConfiguration });
 }
 
-test('interval-only browser saves preserve existing settings and zero survives reload', async () => {
-  const originalStorage = globalThis.localStorage;
-  globalThis.localStorage = createMemoryStorage();
-  try {
-    await saveSettingsState({ theme: 'light', actionPlanAutoGenerate: false, actionPlanCheckIntervalMinutes: 15 });
-    await saveSettingsState({ actionPlanCheckIntervalMinutes: 0 });
-    const state = await loadSettingsState();
-    assert.equal(state.settings.actionPlanCheckIntervalMinutes, 0);
-    assert.equal(state.settings.theme, 'light');
-    assert.equal(state.settings.actionPlanAutoGenerate, false);
-  } finally {
-    globalThis.localStorage = originalStorage;
-  }
-});
-
-test('browser settings enforce the shared action-plan interval limit', async () => {
-  const originalStorage = globalThis.localStorage;
-  globalThis.localStorage = createMemoryStorage();
-  try {
-    await saveSettingsState({ actionPlanCheckIntervalMinutes: 35_791 });
-    assert.equal((await loadSettingsState()).settings.actionPlanCheckIntervalMinutes, 35_791);
-
-    await saveSettingsState({ actionPlanCheckIntervalMinutes: 35_792 });
-    assert.equal((await loadSettingsState()).settings.actionPlanCheckIntervalMinutes, 60);
-  } finally {
-    globalThis.localStorage = originalStorage;
-  }
-});
-
-test('loadSettingsState falls back to browser defaults without Electron', async () => {
-  const state = await loadSettingsState(undefined);
-
-  assert.equal(state.settings.displayLanguage, 'system');
-  assert.equal(state.settings.theme, 'dark');
-  assert.equal(state.settings.themeMode, 'dark');
-  assert.equal(Object.hasOwn(state.settings, 'backgroundMode'), false);
-  assert.equal(state.settings.voiceProviderMode, 'inherit_ai');
-  assert.equal(state.settings.voiceBaseUrl, '');
-  assert.equal(state.settings.voiceApiKey, '');
-  assert.equal(state.settings.voiceModel, 'FunAudioLLM/SenseVoiceSmall');
-  assert.deepEqual(state.settings.voiceModels, ['FunAudioLLM/SenseVoiceSmall']);
-  assert.equal(state.settings.voiceLastRefreshedAt, null);
-  assert.equal(state.settings.imageProviderMode, 'inherit_ai');
-  assert.equal(state.settings.imageBaseUrl, '');
-  assert.equal(state.settings.imageApiKey, '');
-  assert.equal(state.settings.imageModel, '');
-  assert.deepEqual(state.settings.imageModels, []);
-  assert.equal(state.settings.imageLastRefreshedAt, null);
-  assert.equal(state.settings.actionPlanAutoGenerate, true);
-  assert.equal(state.mode, 'browser');
-});
-
-test('loadSettingsState rejects Electron backend read failures instead of returning writable defaults', async () => {
-  const backendError = new Error('backend unavailable');
-
-  await assert.rejects(
-    loadSettingsState({ getSettingsState: async () => { throw backendError; } }),
-    (error) => error === backendError,
-  );
-});
-
-test('saveSettingsState forwards payload to Electron settings bridge', async () => {
-  const payload = {
-    displayLanguage: 'en-US',
-    theme: 'light',
-    themeMode: 'auto',
-    launchAtLogin: true,
-    backgroundMode: 'prewarm',
-    voiceProviderMode: 'custom',
-    voiceBaseUrl: 'https://voice.example.invalid/v1',
-    voiceApiKey: 'sk-voice',
-    voiceModel: 'sensevoice',
-    voiceModels: ['sensevoice', 'sensevoice-large'],
-    voiceLastRefreshedAt: '2026-05-03T12:00:00+08:00',
-    imageProviderMode: 'custom',
-    imageBaseUrl: 'https://images.example.invalid/v1',
-    imageApiKey: 'sk-image',
-    imageModel: 'image-model',
-    imageModels: ['image-model', 'image-large'],
-    imageLastRefreshedAt: '2026-05-03T12:01:00+08:00',
-    actionPlanAutoGenerate: false,
-    provider: {
-      route: 'cliproxyapi',
-      baseUrl: 'https://example.invalid/v1',
-      apiKey: 'sk-demo',
-      model: 'gpt-5.4',
-    },
-  };
-  let received = null;
-
-  const result = await saveSettingsState(payload, {
-    saveSettings: async (submission) => {
-      received = submission;
-      return {
-        settings: {
-          displayLanguage: 'en-US',
-          theme: 'light',
-          themeMode: 'auto',
-          launchAtLogin: true,
-          backgroundMode: 'prewarm',
-          voiceProviderMode: 'custom',
-          voiceBaseUrl: 'https://voice.example.invalid/v1',
-          voiceApiKey: '********',
-          voiceModel: 'sensevoice',
-          voiceModels: ['sensevoice', 'sensevoice-large'],
-          voiceLastRefreshedAt: '2026-05-03T12:00:00+08:00',
-          imageProviderMode: 'custom',
-          imageBaseUrl: 'https://images.example.invalid/v1',
-          imageApiKey: '********',
-          imageModel: 'image-model',
-          imageModels: ['image-model', 'image-large'],
-          imageLastRefreshedAt: '2026-05-03T12:01:00+08:00',
-          actionPlanAutoGenerate: false,
-        },
-      };
-    },
+test('settings adapter translates canonical payloads for every UI without owning persistence', async () => {
+  let saved;
+  const platform = nativePlatform(async (method, path, payload) => {
+    assert.equal(path, '/api/automation/settings');
+    if (method === 'PUT') saved = payload;
+    return { settings: { theme: 'light', action_plan_check_interval_minutes: 0, voice_api_key: '********', voice_has_api_key: true } };
   });
-
-  const { backgroundMode: _legacyBackgroundMode, ...expectedSubmission } = payload;
-  assert.equal(Object.hasOwn(received, 'backgroundMode'), false);
-  assert.deepEqual(received, expectedSubmission);
+  const result = await saveSettingsState({ theme: 'light', actionPlanCheckIntervalMinutes: 0, backgroundMode: 'prewarm' }, platform);
+  assert.deepEqual(saved, { theme: 'light', action_plan_check_interval_minutes: 0 });
+  assert.equal(result.mode, 'electron');
+  assert.equal(result.settings.actionPlanCheckIntervalMinutes, 0);
+  assert.equal(result.settings.voiceHasApiKey, true);
   assert.equal(Object.hasOwn(result.settings, 'backgroundMode'), false);
-  assert.equal(result.settings.theme, 'light');
-  assert.equal(result.settings.themeMode, 'auto');
-  assert.equal(result.settings.voiceApiKey, '********');
-  assert.equal(result.settings.voiceProviderMode, 'custom');
-  assert.equal(result.settings.voiceModel, 'sensevoice');
-  assert.deepEqual(result.settings.voiceModels, ['sensevoice', 'sensevoice-large']);
-  assert.equal(result.settings.imageApiKey, '********');
-  assert.equal(result.settings.imageProviderMode, 'custom');
-  assert.equal(result.settings.imageModel, 'image-model');
-  assert.deepEqual(result.settings.imageModels, ['image-model', 'image-large']);
-  assert.equal(result.settings.actionPlanAutoGenerate, false);
 });
 
-test('openSettingsPath returns false when no Electron bridge exists', async () => {
-  assert.equal(await openSettingsPath('logs', undefined), false);
+test('settings read failures reject without returning writable defaults', async () => {
+  const backendError = new Error('backend unavailable');
+  await assert.rejects(loadSettingsState(nativePlatform(async () => { throw backendError; })), (error) => error === backendError);
 });
 
-test('browser settings fallback persists to localStorage and returns deep copies', async () => {
-  const originalWindow = globalThis.window;
-  const originalLocalStorage = globalThis.localStorage;
-  const storage = createMemoryStorage();
+test('settings mutation failures do not apply native effects or claim success', async () => {
+  let applied = false;
+  const platform = createPlatformAdapter({
+    requestConfiguration: async () => { throw new Error('not saved'); },
+    applySavedPreferences: async () => { applied = true; },
+  });
+  await assert.rejects(saveSettingsState({ theme: 'light' }, platform), /not saved/);
+  assert.equal(applied, false);
+});
 
-  globalThis.window = { localStorage: storage };
-  globalThis.localStorage = storage;
-
-  try {
-    const saved = await saveSettingsState({
-      displayLanguage: 'zh-CN',
-      theme: 'light',
-      themeMode: 'auto',
-      launchAtLogin: true,
-      backgroundMode: 'power_saver',
-      voiceProviderMode: 'custom',
-      voiceBaseUrl: 'https://voice.example.invalid/v1',
-      voiceApiKey: 'sk-voice',
-      voiceModel: 'sensevoice',
-      voiceModels: ['sensevoice'],
-      voiceLastRefreshedAt: '2026-05-03T12:00:00+08:00',
-      imageProviderMode: 'custom',
-      imageBaseUrl: 'https://images.example.invalid/v1',
-      imageApiKey: 'sk-image',
-      imageModel: 'image-model',
-      imageModels: ['image-model'],
-      imageLastRefreshedAt: '2026-05-03T12:01:00+08:00',
-      actionPlanAutoGenerate: false,
-    }, undefined);
-
-    assert.equal(Object.hasOwn(saved.settings, 'backgroundMode'), false);
-
-    const loaded = await loadSettingsState(undefined);
-    assert.equal(loaded.settings.displayLanguage, 'zh-CN');
-    assert.equal(loaded.settings.themeMode, 'auto');
-    assert.equal(Object.hasOwn(loaded.settings, 'backgroundMode'), false);
-    assert.equal(loaded.settings.voiceProviderMode, 'custom');
-    assert.equal(loaded.settings.voiceModel, 'sensevoice');
-    assert.deepEqual(loaded.settings.voiceModels, ['sensevoice']);
-    assert.equal(loaded.settings.imageProviderMode, 'custom');
-    assert.equal(loaded.settings.imageModel, 'image-model');
-    assert.deepEqual(loaded.settings.imageModels, ['image-model']);
-    assert.equal(loaded.settings.actionPlanAutoGenerate, false);
-
-    loaded.settings.theme = 'dark';
-    const loadedAgain = await loadSettingsState(undefined);
-    assert.equal(Object.hasOwn(loadedAgain.settings, 'backgroundMode'), false);
-    assert.equal(loadedAgain.settings.theme, 'light');
-  } finally {
-    globalThis.window = originalWindow;
-    globalThis.localStorage = originalLocalStorage;
-  }
+test('opening settings paths is capability-based and unavailable in a browser', async () => {
+  assert.equal(await openSettingsPath('logs', createPlatformAdapter()), false);
+  const calls = [];
+  const platform = createPlatformAdapter({ openSettingsPath: async key => { calls.push(key); return { opened: true }; } });
+  assert.equal(await openSettingsPath('logs', platform), true);
+  assert.deepEqual(calls, ['logs']);
 });

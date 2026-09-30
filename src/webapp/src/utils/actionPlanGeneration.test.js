@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 
 import {
   buildActionPlanGenerationPayload,
-  shouldAutogenerateActionPlan,
 } from './actionPlanGeneration.js';
 
 test('buildActionPlanGenerationPayload normalizes reasoning and can replace today', () => {
@@ -102,99 +101,5 @@ test('buildActionPlanGenerationPayload recognizes versioned DeepSeek V4 Flash', 
       model: 'DeepSeek-V4-Flash-0731',
       provider_route: 'custom',
     },
-  );
-});
-
-test('buildActionPlanGenerationPayload can request provider readiness wait for startup auto generation', () => {
-  assert.deepEqual(
-    buildActionPlanGenerationPayload('xhigh', {
-      replaceToday: true,
-      model: 'gpt-5.5',
-      providerRoute: 'custom',
-      startupAutoGenerate: true,
-      fastModeEnabled: true,
-    }),
-    {
-      reasoning_effort: 'xhigh',
-      replace_today: true,
-      model: 'gpt-5.5',
-      provider_route: 'custom',
-      service_tier: 'priority',
-      wait_for_provider_ready: true,
-    },
-  );
-});
-
-test('shouldAutogenerateActionPlan only allows startup runs when the setting is enabled', () => {
-  assert.equal(
-    shouldAutogenerateActionPlan({
-      autoGenerateEnabled: true,
-      hasTriggered: false,
-      isGenerating: false,
-      isAborted: false,
-    }),
-    true,
-  );
-
-  assert.equal(
-    shouldAutogenerateActionPlan({
-      autoGenerateEnabled: false,
-      hasTriggered: false,
-      isGenerating: false,
-      isAborted: false,
-    }),
-    false,
-  );
-
-  assert.equal(
-    shouldAutogenerateActionPlan({
-      autoGenerateEnabled: true,
-      hasTriggered: true,
-      isGenerating: false,
-      isAborted: false,
-    }),
-    false,
-  );
-
-  assert.equal(
-    shouldAutogenerateActionPlan({
-      autoGenerateEnabled: true,
-      hasTriggered: false,
-      isGenerating: true,
-      isAborted: false,
-    }),
-    false,
-  );
-
-  assert.equal(
-    shouldAutogenerateActionPlan({
-      autoGenerateEnabled: true,
-      hasTriggered: false,
-      isGenerating: false,
-      isAborted: true,
-    }),
-    false,
-  );
-
-  assert.equal(
-    shouldAutogenerateActionPlan({
-      autoGenerateEnabled: true,
-      hasTriggered: false,
-      isGenerating: false,
-      isAborted: false,
-      hasExistingPlan: true,
-    }),
-    false,
-  );
-
-  assert.equal(
-    shouldAutogenerateActionPlan({
-      autoGenerateEnabled: true,
-      hasTriggered: false,
-      isGenerating: false,
-      isAborted: false,
-      loadFailed: true,
-    }),
-    false,
   );
 });

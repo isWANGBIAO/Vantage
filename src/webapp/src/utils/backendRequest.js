@@ -1,30 +1,32 @@
 import { retryAsync } from './retryAsync.js';
 
-const DEFAULT_BACKEND_PROTOCOL = 'http:';
-const DEFAULT_BACKEND_HOST = '127.0.0.1';
-const DEFAULT_BACKEND_PORT = '8000';
+import connectionContract from './backendConnection.cjs';
+import { getPlatformAdapter } from './platformAdapter.js';
 
-function normalizeBackendHost(hostname) {
-  if (!hostname || hostname === 'localhost' || hostname === '::1' || hostname === '[::1]') {
-    return DEFAULT_BACKEND_HOST;
-  }
+const { resolveBackendConnection, normalizeBackendBaseUrl, isLoopbackHost, buildConnectionUrl } = connectionContract;
 
-  return hostname;
-}
-
-export function resolveBackendBaseUrl(locationLike = globalThis?.location) {
-  const configuredBaseUrl = import.meta.env?.VITE_BACKEND_BASE_URL?.trim();
-  if (configuredBaseUrl) {
-    return configuredBaseUrl.replace(/\/+$/, '');
-  }
-
-  if (locationLike?.protocol && /^https?:$/i.test(locationLike.protocol)) {
+export function resolveBackendBaseUrl(locationLike = globalThis?.location, {
+  platform = getPlatformAdapter(),
+  env = import.meta.env || {},
+  runtimeConfig = globalThis.window?.vantageConfig ?? globalThis.vantageConfig ?? {},
+} = {}) {
+  const rendererOrigin = platform.backend.connection?.rendererOrigin;
+  if (rendererOrigin && locationLike && `${locationLike.protocol}//${locationLike.host}` === rendererOrigin) {
     return '';
   }
-
-  const hostname = normalizeBackendHost(locationLike?.hostname);
-
-  return `${DEFAULT_BACKEND_PROTOCOL}//${hostname}:${DEFAULT_BACKEND_PORT}`;
+  // The native host's live connection wins over stale build-time values.
+  const baseUrl = platform.backend.connection?.baseUrl || runtimeConfig.backendBaseUrl
+    || env.VANTAGE_BACKEND_URL || env.VITE_BACKEND_BASE_URL;
+  if (baseUrl || env.VANTAGE_BACKEND_HOST || env.VANTAGE_BACKEND_PORT) {
+    return resolveBackendConnection({ baseUrl, env }).baseUrl;
+  }
+  if (/^https?:$/i.test(locationLike?.protocol || '')) {
+    if (!isLoopbackHost(locationLike.hostname)) {
+      throw new TypeError('Vantage UI must use a loopback origin or configure a loopback backend URL.');
+    }
+    return '';
+  }
+  return resolveBackendConnection().baseUrl;
 }
 
 export const BACKEND_BASE_URL = resolveBackendBaseUrl();
@@ -53,20 +55,35 @@ export class BackendRequestError extends Error {
 
 export function buildBackendUrl(input) {
   const backendBaseUrl = resolveBackendBaseUrl();
-
-  if (!input) {
-    return backendBaseUrl || '/';
-  }
-
-  if (/^(?:https?:|blob:|data:)/i.test(input)) {
+  if (!input) return backendBaseUrl || '/';
+  if (typeof input !== 'string') throw new TypeError('Backend URL must be a string.');
+  if (/^[a-z][a-z\d+.-]*:/i.test(input) || input.startsWith('//')) {
+    const parsed = new URL(input);
+    const nativeConnection = getPlatformAdapter().backend.connection;
+    const rendererOrigin = nativeConnection?.rendererOrigin;
+    if (rendererOrigin && !backendBaseUrl) {
+      if (`${parsed.protocol}//${parsed.host}` === rendererOrigin && !parsed.username && !parsed.password && !parsed.hash) {
+        return buildConnectionUrl({ baseUrl: '' }, `${parsed.pathname}${parsed.search}`);
+      }
+      const backend = new URL(nativeConnection.baseUrl);
+      if (parsed.origin === backend.origin && !parsed.username && !parsed.password && !parsed.hash) {
+        const prefix = backend.pathname.replace(/\/+$/, '');
+        if (!prefix || parsed.pathname.startsWith(`${prefix}/`)) {
+          return buildConnectionUrl({ baseUrl: '' }, `${parsed.pathname.slice(prefix.length)}${parsed.search}`);
+        }
+      }
+      throw new TypeError('Backend requests cannot leave the trusted renderer origin.');
+    }
+    normalizeBackendBaseUrl(parsed.origin);
+    const expected = backendBaseUrl || globalThis.location?.origin;
+    if (!expected || parsed.origin !== new URL(expected).origin) {
+      throw new TypeError('Backend requests cannot leave the configured loopback origin.');
+    }
+    if (parsed.username || parsed.password || parsed.hash) throw new TypeError('Invalid backend request URL.');
     return input;
   }
-
-  if (input.startsWith('/')) {
-    return backendBaseUrl ? `${backendBaseUrl}${input}` : input;
-  }
-
-  return backendBaseUrl ? `${backendBaseUrl}/${input}` : `/${input}`;
+  const localPath = input.startsWith('/') ? input : `/${input}`;
+  return buildConnectionUrl({ baseUrl: backendBaseUrl }, localPath);
 }
 
 function isAbortError(error) {
@@ -101,6 +118,24 @@ function getRetryDelays(retryPolicy, method, retryDelaysMs) {
   return RETRY_DELAYS_BY_POLICY[retryPolicy] || [];
 }
 
+function waitForBackendReadiness(signal) {
+  if (signal?.aborted) return Promise.reject(signal.reason || new DOMException('Aborted', 'AbortError'));
+  const readiness = Promise.resolve().then(() => getPlatformAdapter().backend.waitUntilReady());
+  if (!signal) return readiness;
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason || new DOMException('Aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    readiness.then(
+      (value) => { cleanup(); resolve(value); },
+      (error) => { cleanup(); reject(error); },
+    );
+  });
+}
+
 export async function fetchBackend(input, {
   retryPolicy = 'load',
   retryDelaysMs,
@@ -110,6 +145,7 @@ export async function fetchBackend(input, {
   signal,
   ...fetchOptions
 } = {}) {
+  await waitForBackendReadiness(signal);
   const method = (fetchOptions.method || 'GET').toUpperCase();
   const url = buildBackendUrl(input);
   const delaysMs = getRetryDelays(retryPolicy, method, retryDelaysMs);
@@ -119,6 +155,7 @@ export async function fetchBackend(input, {
       ...fetchOptions,
       method,
       signal,
+      redirect: 'error',
     });
 
     if (!allowHttpError && !response.ok) {
