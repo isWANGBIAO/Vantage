@@ -11,6 +11,7 @@ final class AppModel: ObservableObject {
     @Published var onboarding: OnboardingState?
     @Published var page: AppPage? = .dashboard
     @Published var pageReloadID = UUID()
+    @Published var selectedPlotID = ""
     @Published var models: [ModelOption] = []
     @Published var selectedModel = ""
     @Published var reasoning = "high"

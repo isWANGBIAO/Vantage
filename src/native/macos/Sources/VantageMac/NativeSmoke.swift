@@ -13,11 +13,12 @@ enum NativeSmoke {
         var errors: [String] = []
         var pages: [[String: Any]] = []
         var flows: [[String: Any]] = []
+        var chartCaptures: [[String: Any]] = []
         let snapshots = target.deletingPathExtension().appendingPathExtension("screenshots")
         let started = Date()
         let partial = target.deletingPathExtension().appendingPathExtension("partial.json")
         func checkpoint(_ phase: String) {
-            let payload: [String: Any] = ["success": false, "phase": phase, "elapsed_seconds": Date().timeIntervalSince(started), "page_loads": model.pageLoads, "pages": pages, "flows": flows, "errors": errors]
+            let payload: [String: Any] = ["success": false, "phase": phase, "elapsed_seconds": Date().timeIntervalSince(started), "page_loads": model.pageLoads, "pages": pages, "flows": flows, "chart_captures": chartCaptures, "errors": errors]
             if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) { try? data.write(to: partial, options: .atomic) }
             FileHandle.standardOutput.write(Data("[native-smoke] \(phase) elapsed=\(Date().timeIntervalSince(started)) loads=\(model.pageLoads)\n".utf8))
         }
@@ -50,6 +51,33 @@ enum NativeSmoke {
                 try data.write(to: destination)
                 pages.append(["id": id, "loaded": true, "screenshot": destination.path, "capture": "ScreenCaptureKit current-process real window"])
                 checkpoint("capture/" + id + "/end")
+                if page == .plots {
+                    let catalog: JSONValue = try await model.api.request(path: "/api/v1/plots/data")
+                    for chart in catalog["charts"].array {
+                        let chartID = chart["id"].string
+                        guard !chartID.isEmpty else { continue }
+                        // This is the actual visible Picker's binding, not an
+                        // independently rendered or offscreen replacement view.
+                        model.selectedPlotID = chartID
+                        checkpoint("plot-picker/" + chartID)
+                        try await Task.sleep(for: .milliseconds(300))
+                        let safeID = String(chartID.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? $0 : "_" })
+                        _ = scrollDetail(window, toBottom: false)
+                        try await Task.sleep(for: .milliseconds(100))
+                        let top = snapshots.appendingPathComponent("plot-" + safeID + "-top.png")
+                        try await captureOwnWindow(window).write(to: top)
+                        let kinds = Array(Set(chart["option"]["series"].array.map { $0["type"].string })).sorted()
+                        chartCaptures.append(["chart_id": chartID, "series_kinds": kinds, "axes": max(1, chart["option"]["yAxis"].array.count), "viewport": "top", "visible_rect": detailViewport(window), "screenshot": top.path, "interaction": "programmatic binding action on the real visible chart Picker"])
+                        if scrollDetail(window, toBottom: true) {
+                            try await Task.sleep(for: .milliseconds(150))
+                            let bottom = snapshots.appendingPathComponent("plot-" + safeID + "-bottom.png")
+                            try await captureOwnWindow(window).write(to: bottom)
+                            chartCaptures.append(["chart_id": chartID, "series_kinds": kinds, "viewport": "bottom", "visible_rect": detailViewport(window), "screenshot": bottom.path, "interaction": "scroll of the real NSScrollView document"])
+                        }
+                        checkpoint("plot-capture/" + chartID + "/end")
+                    }
+                    model.selectedPlotID = ""
+                }
             }
             // The private fixture route must be present before exercising writes.
             // A normal Vantage backend does not expose it and fails closed here.
@@ -93,11 +121,31 @@ enum NativeSmoke {
             if let error = model.error { errors.append(error) }
         } catch { errors.append(SensitiveText.redact(error.localizedDescription)); checkpoint("failed") }
         checkpoint(errors.isEmpty ? "completed" : "failed")
-        let result: [String: Any] = ["success": errors.isEmpty, "pages": pages, "flows": flows, "errors": errors, "renderer": "SwiftUI/AppKit", "synthetic_data": true]
+        let result: [String: Any] = ["success": errors.isEmpty, "pages": pages, "flows": flows, "chart_captures": chartCaptures, "errors": errors, "renderer": "SwiftUI/AppKit", "synthetic_data": true]
         do { try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: target) }
         catch { fputs("Could not write native smoke report\n", stderr) }
         model.shutdown()
         exit(errors.isEmpty ? 0 : 1)
+    }
+    private static func detailScroll(_ window: NSWindow) -> NSScrollView? {
+        func descendants(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(descendants)
+        }
+        guard let content = window.contentView else { return nil }
+        return descendants(content).filter { $0.frame.width > content.frame.width * 0.4 && $0.documentView != nil }.max { $0.frame.width < $1.frame.width }
+    }
+    private static func scrollDetail(_ window: NSWindow, toBottom: Bool) -> Bool {
+        guard let scroll = detailScroll(window), let document = scroll.documentView else { return false }
+        let overflow = max(0, document.bounds.height - scroll.contentSize.height)
+        guard overflow > 2 else { return false }
+        let y = (toBottom == document.isFlipped) ? overflow : 0
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: y)); scroll.reflectScrolledClipView(scroll.contentView)
+        return true
+    }
+    private static func detailViewport(_ window: NSWindow) -> [String: Double] {
+        guard let scroll = detailScroll(window) else { return [:] }
+        let visible = scroll.documentVisibleRect
+        return ["x": Double(visible.minX), "y": Double(visible.minY), "width": Double(visible.width), "height": Double(visible.height), "document_height": Double(scroll.documentView?.bounds.height ?? 0)]
     }
     private static func captureOwnWindow(_ window: NSWindow) async throws -> Data {
         guard #available(macOS 14.4, *) else { throw APIError.http(503, "Permission-free own-window smoke capture requires macOS 14.4 or later.") }

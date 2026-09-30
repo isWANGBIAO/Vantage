@@ -39,11 +39,15 @@ public sealed partial class MainWindow : Window
     readonly List<object> smokePages = [];
     public MainWindow()
     {
+        SmokeDiagnostics.Record("MainWindow.InitializeComponent.before");
         InitializeComponent();
+        SmokeDiagnostics.Record("MainWindow.InitializeComponent.after");
         api = new ApiClient(BackendAddress.Resolve()); host = new BackendHost(api);
         var args = Environment.GetCommandLineArgs();
         var i = Array.IndexOf(args, "--smoke-test"); smokeOutput = i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+        SmokeDiagnostics.Record("MainWindow.Resize.before");
         AppWindow.Resize(new global::Windows.Graphics.SizeInt32(1240, 900));
+        SmokeDiagnostics.Record("MainWindow.Resize.after");
         var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "Vantage.ico");
         if (File.Exists(iconPath)) AppWindow.SetIcon(iconPath);
         AppWindow.Closing += (sender, e) =>
@@ -58,7 +62,7 @@ public sealed partial class MainWindow : Window
         };
         Closed += (_, _) => { if (!shutdownComplete) { lifetime.Cancel(); host.Dispose(); } };
         Root.ActualThemeChanged += (_, _) => ApplyAppearance();
-        Root.Loaded += async (_, _) => { await InitializeAsync(); if (smokeOutput is not null) await RunSmokeAsync(smokeOutput); };
+        Root.Loaded += async (_, _) => { SmokeDiagnostics.Record("Root.Loaded"); await InitializeAsync(); if (smokeOutput is not null) await RunSmokeAsync(smokeOutput); };
     }
     async Task InitializeAsync()
     {

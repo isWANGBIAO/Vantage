@@ -248,7 +248,6 @@ struct ExpensesView: View {
 struct PlotsView: View {
     @EnvironmentObject var model: AppModel
     @StateObject private var source = DomainData()
-    @State private var selected = ""
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -256,11 +255,11 @@ struct PlotsView: View {
                 ForEach(Array(source.data["warnings"].array.enumerated()), id: \.offset) { _, warning in
                     DisclosureGroup { RecordDetails(value: warning) } label: { Label(warning["message"].string.isEmpty ? warning["title"].string : warning["message"].string, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
                 }
-                Picker(model.text("图表", "Chart"), selection: $selected) {
+                Picker(model.text("图表", "Chart"), selection: $model.selectedPlotID) {
                     Text(model.text("所有图表", "All charts")).tag("")
                     ForEach(Array(source.data["charts"].array.enumerated()), id: \.offset) { _, chart in Text(chart["title"].string).tag(chart["id"].string) }
                 }
-                ForEach(Array(source.data["charts"].array.filter { selected.isEmpty || $0["id"].string == selected }.enumerated()), id: \.offset) { _, chart in BackendChart(chart: chart) }
+                ForEach(Array(source.data["charts"].array.filter { model.selectedPlotID.isEmpty || $0["id"].string == model.selectedPlotID }.enumerated()), id: \.offset) { _, chart in BackendChart(chart: chart) }
                 if source.data["charts"].array.isEmpty && !source.loading { ContentUnavailableView(model.text("暂无图表数据", "No chart data"), systemImage: "chart.xyaxis.line") }
                 Text(source.data["generated_at"].string).font(.caption).foregroundStyle(.secondary)
             }.padding(24)
