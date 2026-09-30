@@ -48,3 +48,18 @@ public struct PlotLayout: Sendable {
         return lower...(lower + visible)
     }
 }
+
+public struct PlotCategoryTick: Sendable, Equatable {
+    public let x: Double
+    public let label: String
+}
+extension PlotLayout {
+    public static func categoryTicks(points: [NativeChartPoint], maximumCount: Int = 8) -> [PlotCategoryTick] {
+        var byX: [Double: String] = [:]
+        for point in points where byX[point.x] == nil { byX[point.x] = point.label }
+        let ordered = byX.keys.sorted()
+        let limit = max(2, maximumCount)
+        let indices = ordered.count <= limit ? Array(ordered.indices) : (0..<limit).map { Int((Double($0) * Double(ordered.count - 1) / Double(limit - 1)).rounded()) }
+        return indices.map { PlotCategoryTick(x: ordered[$0], label: byX[ordered[$0]] ?? "") }
+    }
+}

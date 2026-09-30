@@ -70,6 +70,25 @@ jobs:
         run: dotnet test src/native/windows/Vantage.Core.Tests/Vantage.Core.Tests.csproj -c Release --logger trx
       - name: Compile WinUI before backend packaging
         run: dotnet publish src/native/windows/Vantage.Windows/Vantage.Windows.csproj -c Release -r win-x64 -p:Platform=x64 -p:WindowsPackageType=None --self-contained true -o build/native-preflight/windows
+      - name: Record generated WinUI resource evidence
+        if: always()
+        shell: pwsh
+        run: |
+          $evidence = 'build/native-smoke/windows-build'
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          foreach ($source in @('build/native-preflight/windows', 'src/native/windows/Vantage.Windows/obj')) {
+            if (Test-Path $source) {
+              $root = (Resolve-Path $source).Path
+              $items = Get-ChildItem $root -File -Recurse | ForEach-Object { @{ path = [IO.Path]::GetRelativePath($root, $_.FullName); bytes = $_.Length } }
+              $label = if ($source -like 'build/*') { 'published-files' } else { 'intermediate-files' }
+              ConvertTo-Json -InputObject @($items) -Depth 3 | Set-Content "$evidence/$label.json"
+            }
+          }
+          if (Test-Path 'src/native/windows/Vantage.Windows/obj') {
+            Get-ChildItem 'src/native/windows/Vantage.Windows/obj' -Recurse -File | Where-Object { $_.Name -match '^(App|MainWindow)\.g(\.i)?\.cs$' } | ForEach-Object {
+              Copy-Item $_.FullName "$evidence/$($_.Name)" -Force
+            }
+          }
       - name: Exercise the compiled native window before packaging
         run: python scripts/smoke_native_client.py --client build/native-preflight/windows/Vantage.Windows.exe --output build/native-smoke/windows-source
       - name: Build and smoke-test shared packaged backend
@@ -93,6 +112,7 @@ jobs:
             src/native/windows/**/TestResults/*.trx
             build/native-smoke/windows/
             build/native-smoke/windows-source/
+            build/native-smoke/windows-build/
           if-no-files-found: warn
           retention-days: 14
 

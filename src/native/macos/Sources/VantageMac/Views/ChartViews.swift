@@ -18,7 +18,7 @@ struct BackendChart: View {
                     }
                     ForEach(Array(Set(series.map(\.axis))).sorted(), id: \.self) { axis in
                         let matching = series.filter { $0.axis == axis && (selectedSeries.isEmpty || selectedSeries == $0.id) }
-                        if !matching.isEmpty { NativeSeriesChart(series: matching, axisTitle: axisName(axis), axisConfiguration: axisValue(axis), formatter: chart["formatter"].string, timeAxis: xAxis["type"].string == "time") }
+                        if !matching.isEmpty { NativeSeriesChart(series: matching, axisTitle: axisName(axis), axisConfiguration: axisValue(axis), formatter: chart["formatter"].string, timeAxis: xAxis["type"].string == "time", categoryAxis: xAxis["type"].string != "time" && xAxis["type"].string != "value") }
                     }
                 }
                 HStack {
@@ -48,6 +48,7 @@ struct NativeSeriesChart: View {
     var axisConfiguration: JSONValue = .null
     var formatter = ""
     var timeAxis = false
+    var categoryAxis = true
     @State private var selectedX: Double?
     @State private var zoom = 100.0
     @State private var pan = 1.0
@@ -56,7 +57,7 @@ struct NativeSeriesChart: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !axisTitle.isEmpty { Text(axisTitle).font(.caption).foregroundStyle(.secondary) }
-            CPUChart(series: series, configuration: axisConfiguration, formatter: formatter, axisTitle: axisTitle, timeAxis: timeAxis, zoom: zoom, pan: pan, selectedX: $selectedX)
+            CPUChart(series: series, configuration: axisConfiguration, formatter: formatter, axisTitle: axisTitle, timeAxis: timeAxis, categoryAxis: categoryAxis, zoom: zoom, pan: pan, selectedX: $selectedX)
                 .frame(height: 280).clipShape(RoundedRectangle(cornerRadius: 6))
             if !series.allSatisfy({ $0.type == "pie" }) {
                 HStack {
@@ -97,7 +98,7 @@ struct ValuesChart: View {
             let x = rows.map { $0[xKey].string }
             let timed = !x.isEmpty && rows.allSatisfy { ChartData.timestamp($0[xKey]) != nil }
             let series = numericKeys.map { key in JSONValue.object(["name": .string(key), "type": .string("line"), "data": .array(rows.map { row in timed ? .array([row[xKey], row[key]]) : row[key] })]) }
-            NativeSeriesChart(series: ChartData.series(.object(["xAxis": .object(["type": .string(timed ? "time" : "category"), "data": .array(x.map(JSONValue.string))]), "series": .array(series)])), timeAxis: timed)
+            NativeSeriesChart(series: ChartData.series(.object(["xAxis": .object(["type": .string(timed ? "time" : "category"), "data": .array(x.map(JSONValue.string))]), "series": .array(series)])), timeAxis: timed, categoryAxis: !timed)
         }
     }
 }

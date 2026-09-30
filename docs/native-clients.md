@@ -48,6 +48,8 @@ python scripts/build_native_backend.py
 
 它复用 `.venv-backend-runtime-gpu`、依赖闭包/指纹、PyInstaller 与现有运行时验证器。原生验证使用全新临时数据与未占用 loopback 端口，去掉继承的用户数据路径和模型密钥，不终止其他 Vantage 进程。验证包含服务启动、CLI/MCP 与打包后的面部分析入口帮助命令。
 
+Intel macOS 的 cryptography 49+ 已无官方预编译 wheel，因此专用环境使用上游当前版本的静态 OpenSSL 源码构建，需要现有 Xcode、Rust 和 OpenSSL 开发库。安装阶段禁用该包的二进制/构建缓存，验收 `_rust` 不再动态依赖 `libssl`/`libcrypto` 后才记录环境指纹并签名，避免 PyInstaller 同名 dylib 的 ABI 冲突。缺少工具链会明确失败，不自动降级 cryptography。Apple Silicon 继续使用官方 wheel。参见 [cryptography 安装文档](https://cryptography.io/en/stable/installation/#building-cryptography-on-macos)。
+
 随后在目标系统运行：
 
 ```powershell

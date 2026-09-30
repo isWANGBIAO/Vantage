@@ -96,6 +96,8 @@ print(json.dumps({
 
 _REQUIRED_IMPORTS_PROBE = r"""
 import importlib
+import re
+import subprocess
 import sys
 
 required = ["PyInstaller", "chinese_calendar", "cv2", "numpy", "zhdate"]
@@ -103,6 +105,19 @@ if sys.platform == "win32":
     required.append("lap")
 for module_name in required:
     importlib.import_module(module_name)
+if sys.platform == "darwin":
+    # Python's _ssl and Homebrew cryptography can depend on different OpenSSL
+    # builds with identical dylib basenames. PyInstaller flattens those names.
+    # Require a self-contained crypto binding before accepting/reusing a venv.
+    binding = importlib.import_module("cryptography.hazmat.bindings._rust")
+    linked = subprocess.run(
+        ["/usr/bin/otool", "-L", binding.__file__],
+        check=True, capture_output=True, text=True, timeout=15,
+    ).stdout
+    if re.search(r"(?:^|[\s/])lib(?:ssl|crypto)[.\w-]*\.dylib\b", linked, re.MULTILINE):
+        raise RuntimeError("macOS cryptography must statically link OpenSSL before packaging")
+    importlib.import_module("ssl")
+    importlib.import_module("mcp")
 """
 
 _OPENCV_PROBE = r"""
@@ -405,12 +420,14 @@ def _run_checked(
     run_command,
     *,
     path_prefixes: Mapping[str, object],
+    env: Mapping[str, str] | None = None,
 ) -> None:
     try:
         result = run_bounded_subprocess(
             command,
             run_command=run_command,
             path_prefixes=path_prefixes,
+            **({"env": dict(env)} if env is not None else {}),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("backend environment command timed out") from exc
@@ -424,6 +441,25 @@ def _run_checked(
     raise RuntimeError(
         f"backend environment command failed with exit code {result.returncode}{suffix}"
     )
+
+
+def backend_install_policy(
+    platform_identity: Mapping[str, object],
+    environment: Mapping[str, str],
+) -> tuple[list[str], dict[str, str] | None]:
+    """Keep Intel macOS crypto current without a colliding dynamic OpenSSL.
+
+    Cryptography 49+ no longer supplies Intel Mac wheels. Its documented static
+    source build uses the existing Xcode/Rust/OpenSSL toolchain. Do not silently
+    downgrade or reuse a cached wheel previously built with dynamic linkage.
+    """
+    if platform_identity.get("sys_platform") != "darwin":
+        return [], None
+    env = dict(environment)
+    env["OPENSSL_STATIC"] = "1"
+    machine = str(platform_identity.get("machine", "")).lower()
+    flags = ["--no-binary=cryptography", "--no-cache-dir"] if machine in {"x86_64", "amd64", "i386"} else []
+    return flags, env
 
 
 def _parse_last_json_line(output: str) -> dict[str, object]:
@@ -734,17 +770,20 @@ def _synchronize_backend_runtime_environment_locked(
             run_command,
             path_prefixes=subprocess_path_prefixes,
         )
+        install_flags, install_env = backend_install_policy(expected_platform_identity, os.environ)
         _run_checked(
             [
                 str(target_python),
                 "-m",
                 "pip",
                 "install",
+                *install_flags,
                 "-r",
                 str(resolved_requirements),
             ],
             run_command,
             path_prefixes=subprocess_path_prefixes,
+            env=install_env,
         )
         _run_checked(
             [

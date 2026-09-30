@@ -273,6 +273,15 @@ final class PlotLayoutTests: XCTestCase {
         XCTAssertEqual(visible.upperBound, layout.xBounds.upperBound, accuracy: 0.0001)
         XCTAssertEqual(visible.upperBound - visible.lowerBound, (layout.xBounds.upperBound - layout.xBounds.lowerBound) / 2, accuracy: 0.0001)
     }
+    func testCategoryTicksUseActualCentersWithoutDuplicatingNearestLabels() throws {
+        let values = try series(#"{"xAxis":{"type":"category","data":["Mon","Tue","Wed","Thu"]},"series":[{"type":"bar","data":[20,45,null,60]},{"type":"bar","data":[15,20,40,30]}]}"#)
+        let ticks = PlotLayout.categoryTicks(points: values.flatMap(\.points))
+        XCTAssertEqual(ticks.map(\.x), [0, 1, 2, 3])
+        XCTAssertEqual(ticks.map(\.label), ["Mon", "Tue", "Wed", "Thu"])
+        let sampled = PlotLayout.categoryTicks(points: values.flatMap(\.points), maximumCount: 3)
+        XCTAssertEqual(Set(sampled.map(\.x)).count, 3)
+        XCTAssertEqual(sampled.first?.x, 0); XCTAssertEqual(sampled.last?.x, 3)
+    }
     func testNullGapKeepsBothIsolatedSamplesVisible() throws {
         let values = try series(#"{"series":[{"type":"line","data":[65,null,64]}]}"#)
         XCTAssertEqual(values[0].isolatedPoints.map(\.y), [65, 64])
@@ -317,5 +326,23 @@ final class AudioOperationStateTests: XCTestCase {
         state.cancel(); let next = state.begin(transcribing: true)
         XCTAssertFalse(state.isCurrent(permission)); XCTAssertFalse(state.finish(permission))
         XCTAssertTrue(state.isCurrent(next)); XCTAssertTrue(state.transcribing)
+    }
+}
+
+final class ChatDraftRecoveryTests: XCTestCase {
+    func testConfirmedUnchangedContextRestoresOnlySubmittedDraft() {
+        let result = ChatDraftRecovery.recover(submitted: "  original message\n", currentDraft: "", beforeVersion: "v1", afterVersion: "v1")
+        XCTAssertEqual(result.draft, "  original message\n"); XCTAssertNil(result.retainedCopy)
+    }
+    func testNewDraftIsNeverOverwritten() {
+        let result = ChatDraftRecovery.recover(submitted: "old", currentDraft: "new draft", beforeVersion: "v1", afterVersion: "v1")
+        XCTAssertEqual(result.draft, "new draft"); XCTAssertEqual(result.retainedCopy, "old")
+    }
+    func testUnknownOrChangedContextDoesNotQueueDuplicateSend() {
+        for version in [nil, "v2"] as [String?] {
+            let result = ChatDraftRecovery.recover(submitted: "old", currentDraft: "", beforeVersion: "v1", afterVersion: version)
+            XCTAssertEqual(result.draft, ""); XCTAssertEqual(result.retainedCopy, "old")
+        }
+        XCTAssertEqual(ChatDraftRecovery.recover(submitted: "old", currentDraft: "", beforeVersion: nil, afterVersion: nil).draft, "")
     }
 }

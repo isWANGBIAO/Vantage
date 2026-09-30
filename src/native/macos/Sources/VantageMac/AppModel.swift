@@ -28,6 +28,7 @@ final class AppModel: ObservableObject {
     @Published var sendingChat = false
     @Published var chatReady = false
     @Published var draft = ""
+    @Published var failedChatDraft: String?
     @Published var pageLoads: [String: String] = [:]
     let host = BackendHost()
     private var startupError: Error?
@@ -231,11 +232,13 @@ final class AppModel: ObservableObject {
         let epoch = connectionID; let client = api
         let result: ChatContext = try await client.request(path: "/api/v1/chat/context", method: "DELETE")
         guard connectionID == epoch else { throw CancellationError() }
-        chat = result; chatStream = ChatStreamState()
+        chat = result; chatStream = ChatStreamState(); failedChatDraft = nil
     }
     func sendChat() {
         let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty, !sendingChat, chatReady else { return }
+        let submittedDraft = draft
+        let beforeVersion = chat?.context_version
         let request = ChatRequest(message: message, option: selectedOption, reasoning: reasoning.isEmpty ? nil : reasoning, tier: tier.isEmpty ? nil : tier)
         sendingChat = true; chatStream = ChatStreamState(); draft = ""
         let epoch = connectionID; let client = api
@@ -245,11 +248,20 @@ final class AppModel: ObservableObject {
                 try await client.stream(path: "/api/v1/chat", method: "POST", body: try .encode(request)) { [weak self] event in
                     if let receiver = self { await receiver.receiveChatEvent(event, epoch: epoch) }
                 }
-                guard self.connectionID == epoch, !Task.isCancelled else { return }
+                guard self.connectionID == epoch else { return }
+                try Task.checkCancellation()
                 if let failure = self.chatStream.failure { throw APIError.http(502, failure) }
                 guard self.chatStream.done else { throw APIError.incompleteStream }
                 try await self.refreshChat(); self.chatStream = ChatStreamState()
-            } catch { if self.connectionID == epoch { self.report(error); try? await self.refreshChat() } }
+            } catch {
+                guard self.connectionID == epoch else { return }
+                self.report(error)
+                var verifiedVersion: String?
+                do { try await self.refreshChat(); verifiedVersion = self.chat?.context_version } catch { }
+                guard self.connectionID == epoch else { return }
+                let recovery = ChatDraftRecovery.recover(submitted: submittedDraft, currentDraft: self.draft, beforeVersion: beforeVersion, afterVersion: verifiedVersion)
+                self.draft = recovery.draft; self.failedChatDraft = recovery.retainedCopy
+            }
         }
     }
     func stopChat() { chatTask?.cancel() }

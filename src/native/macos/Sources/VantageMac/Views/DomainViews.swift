@@ -371,7 +371,7 @@ struct UsageView: View {
                 LoadBanner(source: source) { Task { await refresh() } }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 180))]) {
                     ForEach(["session_count", "completed_call_count", "failed_call_count", "total_tokens", "prompt_tokens", "completion_tokens", "prompt_cache_hit_rate", "output_tokens_per_second"], id: \.self) { key in
-                        MetricCard(title: key.replacingOccurrences(of: "_", with: " "), value: source.data["summary"][key].string)
+                        MetricCard(title: key.replacingOccurrences(of: "_", with: " "), value: metricValue(key))
                     }
                 }
                 GroupBox(model.text("每日用量", "Daily usage")) { ValuesChart(rows: source.data["by_day"].array, keys: ["prompt_tokens", "completion_tokens", "total_tokens"]).padding(8) }
@@ -385,6 +385,13 @@ struct UsageView: View {
                 DisclosureGroup(model.text("完整汇总", "Full summary")) { RecordDetails(value: source.data["summary"]) }
             }.padding(24)
         }.task { await refresh() }.toolbar { Button { Task { await refresh() } } label: { Image(systemName: "arrow.clockwise") } }
+    }
+    private func metricValue(_ key: String) -> String {
+        let value = source.data["summary"][key]
+        guard let numeric = value.double else { return value == .null ? "—" : value.string }
+        if key.hasSuffix("_rate") { return numeric.formatted(.number.precision(.fractionLength(1))) + "%" }
+        if key.hasSuffix("_per_second") { return numeric.formatted(.number.precision(.fractionLength(0...2))) + " tok/s" }
+        return numeric.formatted(.number.precision(.fractionLength(0)))
     }
     private func refresh() async { await source.load("/api/v1/usage", model: model, page: .usage) }
 }
@@ -404,11 +411,13 @@ struct LogsView: View {
                 Button(model.text("复制可见日志", "Copy visible logs")) { NativePlatform.copy(lines.joined(separator: "\n")) }
             }
             LoadBanner(source: source) { Task { await refresh() } }
-            ScrollView([.vertical, .horizontal]) {
-                LazyVStack(alignment: .leading, spacing: 5) {
-                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in Text(line).font(.system(.caption, design: .monospaced)).foregroundStyle(line.localizedCaseInsensitiveContains("error") ? Color.red : line.localizedCaseInsensitiveContains("warn") ? .orange : .primary).textSelection(.enabled) }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }.background(.background, in: RoundedRectangle(cornerRadius: 10))
+            GeometryReader { geometry in
+                ScrollView([.vertical, .horizontal]) {
+                    LazyVStack(alignment: .leading, spacing: 5) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in Text(line).font(.system(.caption, design: .monospaced)).foregroundStyle(line.localizedCaseInsensitiveContains("error") ? Color.red : line.localizedCaseInsensitiveContains("warn") ? .orange : .primary).textSelection(.enabled) }
+                    }.frame(minWidth: geometry.size.width, minHeight: geometry.size.height, alignment: .topLeading)
+                }.background(.background, in: RoundedRectangle(cornerRadius: 10))
+            }
         }.padding(24).task {
             await refresh()
             while !Task.isCancelled { try? await Task.sleep(for: .seconds(3)); if Task.isCancelled { return }; if live { await refresh() } }

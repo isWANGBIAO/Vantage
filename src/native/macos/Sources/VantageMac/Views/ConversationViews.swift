@@ -125,6 +125,16 @@ struct ChatView: View {
                 }.onChange(of: model.chatStream.content) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
                     .onChange(of: messages.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             }
+            if let retained = model.failedChatDraft {
+                DisclosureGroup(model.text("发送遇到问题，消息副本已保留", "Send encountered a problem; a copy is retained")) {
+                    Text(retained).font(.body).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    HStack {
+                        Button(model.text("复制消息", "Copy message")) { NativePlatform.copy(retained) }
+                        Button(model.text("重新读取会话", "Reload conversation")) { Task { do { try await model.refreshChat() } catch { model.report(error) } } }
+                        Button(model.text("关闭副本", "Dismiss copy")) { model.failedChatDraft = nil }
+                    }
+                }.padding(.horizontal, 20).foregroundStyle(.secondary)
+            }
             if let stats = model.chatStream.stats ?? model.chat?.stats { DisclosureGroup(model.text("会话用量", "Session usage")) { RecordDetails(value: stats).frame(maxHeight: 180) }.font(.caption).padding(.horizontal, 20) }
             Divider()
             HStack {

@@ -29,6 +29,7 @@ try {
     Copy-Item $runtime (Join-Path $stage 'backend-runtime/VantageBackend') -Recurse
     Copy-Item (Join-Path $repo 'LICENSE') $stage
     if (-not (Test-Path (Join-Path $stage 'Vantage.Windows.exe'))) { throw 'Native executable missing from publish output.' }
+    if (-not ((Test-Path (Join-Path $stage 'Vantage.Windows.pri')) -or (Test-Path (Join-Path $stage 'resources.pri')))) { throw 'Native application PRI missing from publish output.' }
     if (-not (Test-Path (Join-Path $stage 'Assets/Vantage.ico'))) { throw 'Native icon asset missing from publish output.' }
     if (Test-Path $target) { Remove-Item $target -Recurse -Force }
     Move-Item $stage $target

@@ -41,7 +41,8 @@ enum NativeSmoke {
                 let loaded = model.pageLoads[page.rawValue] == "loaded"
                 checkpoint("load/" + id + "/end")
                 guard loaded else { throw APIError.http(503, id + ": actual API-backed page did not finish loading") }
-                try await Task.sleep(for: .milliseconds(250))
+                // Let the native project progress indicator finish its visual interpolation.
+                try await Task.sleep(for: .milliseconds(page == .projects ? 1250 : 250))
                 guard let window = NSApp.windows.filter({ $0.isVisible && !($0 is NSPanel) }).max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
                     throw APIError.http(503, "The native application window is not visible.")
                 }

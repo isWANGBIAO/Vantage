@@ -12,13 +12,14 @@ struct CPUChart: NSViewRepresentable {
     let formatter: String
     let axisTitle: String
     let timeAxis: Bool
+    let categoryAxis: Bool
     let zoom: Double
     let pan: Double
     @Binding var selectedX: Double?
     func makeNSView(context: Context) -> CPUPlotView { CPUPlotView() }
     func updateNSView(_ view: CPUPlotView, context: Context) {
         view.series = series; view.configuration = configuration; view.formatter = formatter
-        view.axisTitle = axisTitle; view.timeAxis = timeAxis; view.zoom = zoom; view.pan = pan
+        view.axisTitle = axisTitle; view.timeAxis = timeAxis; view.categoryAxis = categoryAxis; view.zoom = zoom; view.pan = pan
         view.selectedX = selectedX; view.onSelection = { selectedX = $0 }; view.needsDisplay = true
         view.setAccessibilityLabel("Chart: " + series.map(\.name).joined(separator: ", ") + ". " + axisTitle)
     }
@@ -29,6 +30,7 @@ final class CPUPlotView: NSView {
     var formatter = ""
     var axisTitle = ""
     var timeAxis = false
+    var categoryAxis = true
     var zoom = 100.0
     var pan = 1.0
     var selectedX: Double?
@@ -84,9 +86,18 @@ final class CPUPlotView: NSView {
             let row = y(ordinate)
             stroke(context, from: CGPoint(x: plot.minX, y: row), to: CGPoint(x: plot.maxX, y: row), color: .separatorColor, width: 0.5)
             drawText(ChartFormatting.value(axis.value(ordinate), kind: formatter, name: axisTitle), in: CGRect(x: 0, y: row - 8, width: 67, height: 18), alignment: .right)
-            let abscissa = xDomain.lowerBound + fraction * (xDomain.upperBound - xDomain.lowerBound)
-            let label = timeAxis ? ChartFormatting.dateTick(abscissa, includeTime: points.contains(where: { $0.label.contains(":") }) && xDomain.upperBound - xDomain.lowerBound < 172800) : points.min(by: { abs($0.x - abscissa) < abs($1.x - abscissa) })?.label ?? ""
-            drawText(label, in: CGRect(x: x(abscissa) - 43, y: plot.maxY + 10, width: 86, height: 30), alignment: .center)
+        }
+        if categoryAxis {
+            let visible = points.filter { xDomain.contains($0.x) }
+            for tick in PlotLayout.categoryTicks(points: visible, maximumCount: max(2, Int(plot.width / 85))) {
+                drawText(tick.label, in: CGRect(x: x(tick.x) - 43, y: plot.maxY + 10, width: 86, height: 30), alignment: .center)
+            }
+        } else {
+            for index in 0...4 {
+                let abscissa = xDomain.lowerBound + Double(index) / 4 * (xDomain.upperBound - xDomain.lowerBound)
+                let label = timeAxis ? ChartFormatting.dateTick(abscissa, includeTime: points.contains(where: { $0.label.contains(":") }) && xDomain.upperBound - xDomain.lowerBound < 172800) : ChartFormatting.value(abscissa)
+                drawText(label, in: CGRect(x: x(abscissa) - 43, y: plot.maxY + 10, width: 86, height: 30), alignment: .center)
+            }
         }
         stroke(context, from: CGPoint(x: plot.minX, y: plot.minY), to: CGPoint(x: plot.minX, y: plot.maxY), color: .secondaryLabelColor)
         stroke(context, from: CGPoint(x: plot.minX, y: plot.maxY), to: CGPoint(x: plot.maxX, y: plot.maxY), color: .secondaryLabelColor)

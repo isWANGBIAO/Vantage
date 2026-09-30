@@ -83,9 +83,11 @@ public sealed partial class MainWindow
         var model = new ModelPicker(await api.GetAsync<JsonElement>("/api/v1/models", ct)); PageContent.Children.Add(model);
         var metadata = Text(""); var history = Stack(); var message = Input(T("消息 · Ctrl+Enter 发送", "Message · Ctrl+Enter to send"), multi: true); message.MinHeight = 100;
         var stats = new Expander { Header = T("会话统计", "Session statistics"), HorizontalAlignment = HorizontalAlignment.Stretch };
-        Task? sending = null;
+        Task? sending = null; ChatContext? authoritativeContext = null; long draftRevision = 0; bool clearingForSend = false;
+        message.TextChanging += (sender, args) => { if (!clearingForSend) draftRevision++; };
         void Display(ChatContext context)
         {
+            authoritativeContext = context;
             history.Children.Clear();
             metadata.Text = $"{T("会话版本", "Session revision")}: {context.ContextVersion} · {T("行动计划上下文", "Action-plan context")}: {context.HasActionPlanContext}";
             foreach (var item in context.Messages ?? []) history.Children.Add(Card(Stack(Text(item.Role == "user" ? T("你", "You") : "Vantage", 12), MarkdownView.Create(item.Content), ActionButton(T("复制", "Copy"), () => { NativeDesktop.Copy(item.Content); return Task.CompletedTask; }))));
@@ -95,12 +97,14 @@ public sealed partial class MainWindow
         async Task Send()
         {
             if (sending is { IsCompleted: false } || string.IsNullOrWhiteSpace(message.Text)) return;
-            var text = message.Text; message.Text = "";
+            if (authoritativeContext is null) { Status(T("会话正在加载，请稍后发送", "The session is loading; try sending once it is ready")); return; }
+            var text = message.Text; var sentContextVersion = authoritativeContext.ContextVersion; var sentDraftRevision = draftRevision;
+            clearingForSend = true; try { message.Text = ""; } finally { clearingForSend = false; }
             chatLifetime?.Dispose(); chatLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct); var streamCt = chatLifetime.Token;
             history.Children.Add(Card(Stack(Text(T("你", "You")), MarkdownView.Create(text))));
             var response = Text(""); var thinking = Text("");
             history.Children.Add(Card(Stack(Text("Vantage"), response, new Expander { Header = T("推理", "Reasoning"), Content = thinking })));
-            var state = new ChatStreamState();
+            var state = new ChatStreamState(); var failed = false;
             async Task Stream()
             {
                 try
@@ -109,9 +113,21 @@ public sealed partial class MainWindow
                     { state.Apply(e); response.Text = state.Content; thinking.Text = state.Thinking; }
                     state.RequireSuccess();
                 }
-                catch (OperationCanceledException) when (streamCt.IsCancellationRequested) { Status(T("已停止对话请求", "Chat request stopped")); }
-                catch (Exception e) { ShowError(e); }
-                finally { if (!ct.IsCancellationRequested) { try { await Refresh(); } catch (Exception e) { ShowError(e); } } }
+                catch (OperationCanceledException) when (streamCt.IsCancellationRequested) { failed = true; Status(T("已停止对话请求", "Chat request stopped")); }
+                catch (Exception e) { failed = true; ShowError(e); }
+                finally
+                {
+                    if (!ct.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            var latest = await api.ChatContextAsync(ct);
+                            if (DraftRecovery.ShouldRestore(failed, sentContextVersion, latest.ContextVersion, message.Text, sentDraftRevision, draftRevision)) message.Text = text;
+                            Display(latest);
+                        }
+                        catch (Exception e) { ShowError(e); }
+                    }
+                }
             }
             sending = Stream(); await sending;
         }

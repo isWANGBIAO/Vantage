@@ -15,6 +15,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 from .client import ClientError, JobObserver, complete_result, payload_text, provider_patch
 from .charts import Chart
 from .markdown import markdown_blocks
+from .chat_draft import ChatDraftAttempt
 from .platform import Recorder, Tray, apply_autostart, choose_file, open_folder, system_locale
 
 CSS = b'''
@@ -184,6 +185,9 @@ class Window(Gtk.ApplicationWindow):
         self.job_id = None
         self.job_render = {"analysis": "", "plan": ""}
         self.chat_stop = None
+        self.chat_context_version = None
+        self.chat_clear_epoch = 0
+        self.failed_chat_attempt = None
         self.camera_stop = None
         self.recorder = Recorder()
         self.models = []
@@ -550,8 +554,17 @@ class Window(Gtk.ApplicationWindow):
             return
         def render(data):
             draft = buffer_text(self.chat_input) if hasattr(self, "chat_input") else ""
+            if self.failed_chat_attempt:
+                failed, owner = self.failed_chat_attempt
+                restored = failed.recover(data["context"], draft, clear_epoch=self.chat_clear_epoch, same_attempt=self.chat_stop is owner)
+                if restored is not None:
+                    draft = restored
+                    self.failed_chat_attempt = None
+                elif data["context"].get("context_version") != failed.context_version:
+                    self.failed_chat_attempt = None
             content = self.heading("chat", self.tr("聊天上下文从后端读取；语音转录后可编辑再发送", "Conversation comes from the backend; review voice transcription before sending"))
             self.chat_options = self.model_controls(content)
+            self.chat_context_version = data["context"].get("context_version")
             self.chat_messages = data["context"].get("messages", [])
             self.chat_text = "\n\n".join(f"{'你 / You' if m['role'] == 'user' else 'Vantage'}\n{m['content']}" for m in self.chat_messages)
             scroll, self.chat_view = text_view(self.chat_text, height=320, markdown=True)
@@ -592,11 +605,14 @@ class Window(Gtk.ApplicationWindow):
         if "chat-stream" in self.pending:
             self.notice_ok(self.tr("上一条请求正在结束，请稍候", "The previous request is finishing; please wait"))
             return
-        message = buffer_text(self.chat_input).strip()
+        original_draft = buffer_text(self.chat_input)
+        message = original_draft.strip()
         if not message:
             return
         stop = threading.Event()
         self.chat_stop = stop
+        self.failed_chat_attempt = None
+        attempt = ChatDraftAttempt(original_draft, self.chat_context_version, self.chat_clear_epoch)
         request = {"message": message, **self.chat_options()}
         self.chat_input.get_buffer().set_text("")
         base = self.chat_text + f"\n\n你 / You\n{message}\n\nVantage\n"
@@ -623,18 +639,47 @@ class Window(Gtk.ApplicationWindow):
             if not stop.is_set() and not partial["done"]:
                 raise ClientError("Chat stream ended before completion; reload context to verify saved messages")
             return self.client.request("/api/v1/chat/context")
+        def restore_if_uncommitted(context):
+            restored = attempt.recover(
+                context, buffer_text(self.chat_input),
+                clear_epoch=self.chat_clear_epoch, same_attempt=self.chat_stop is stop,
+            )
+            if restored is not None:
+                self.chat_input.get_buffer().set_text(restored)
+                self.failed_chat_attempt = None
+            elif self.chat_stop is stop and context.get("context_version") != attempt.context_version:
+                self.failed_chat_attempt = None
+            return restored is not None
         def done(context):
+            cancelled = stop.is_set()
             stop.set()
-            self.chat_text = "\n\n".join(f"{m['role']}\n{m['content']}" for m in context.get("messages", []))
-            if self.page == "chat":
-                self.load_chat()
+            if cancelled and not partial["done"]:
+                restore_if_uncommitted(context)
+            if self.chat_stop is stop and self.chat_clear_epoch == attempt.clear_epoch:
+                self.chat_context_version = context.get("context_version")
+                self.chat_text = "\n\n".join(f"{m['role']}\n{m['content']}" for m in context.get("messages", []))
+                if self.page == "chat":
+                    self.load_chat()
         def error(exc):
             cancelled = stop.is_set()
             stop.set()
+            if self.chat_stop is stop and self.chat_clear_epoch == attempt.clear_epoch:
+                self.failed_chat_attempt = (attempt, stop)
             if not cancelled:
                 self.show_error(exc)
-            elif self.page == "chat":
-                self.load_chat()
+            def recovered(context):
+                restore_if_uncommitted(context)
+                if self.chat_stop is stop and self.chat_clear_epoch == attempt.clear_epoch:
+                    self.chat_context_version = context.get("context_version")
+                    if self.page == "chat":
+                        self.load_chat()
+            # A failed POST might have committed before the connection failed.
+            # GET is the only recovery action; there is never an automatic resend.
+            self.run_async(
+                f"chat-recovery-{id(stop)}",
+                lambda: self.client.request("/api/v1/chat/context"), recovered,
+                lambda _: None,  # No authoritative version means no automatic restore.
+            )
         self.run_async("chat-stream", worker, done, error)
 
     def stop_chat(self):
@@ -644,8 +689,11 @@ class Window(Gtk.ApplicationWindow):
         self.client.cancel_stream("/api/v1/chat")
 
     def clear_chat(self):
+        self.chat_clear_epoch += 1
+        self.failed_chat_attempt = None
         self.stop_chat()
         def done(context):
+            self.chat_context_version = context.get("context_version")
             self.chat_messages = context.get("messages", [])
             set_view_text(self.chat_view, "\n\n".join(m["content"] for m in self.chat_messages))
             self.chat_text = buffer_text(self.chat_view)
