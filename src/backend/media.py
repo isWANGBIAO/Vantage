@@ -1,5 +1,6 @@
 """Media storage scanning, saved-photo publication, and media access routes."""
 
+import asyncio
 import os
 import re
 import time
@@ -21,6 +22,7 @@ from src.services.person_detection import (
     PRESENCE_DETECTION_CONFIDENCE,
     detect_presence_count,
 )
+from src.utils.native_folders import open_directory
 
 from . import camera as _camera
 from . import observability as _observability
@@ -467,8 +469,7 @@ async def open_folder(request: Request):
 
             print(f"[OpenFolder] Opening target path: {target_path}")
 
-            # Use os.startfile for native Windows behavior
-            os.startfile(target_path)
+            await asyncio.to_thread(open_directory, target_path)
             return {"status": "success", "opened": target_path}
         except Exception as e:
             print(f"[OpenFolder] Error: {e}")

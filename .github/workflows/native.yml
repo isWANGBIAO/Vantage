@@ -1,0 +1,159 @@
+name: Native desktop
+
+on:
+  push:
+    branches: [main, native-ui-verification]
+    paths:
+      - 'src/native/**'
+      - 'src/backend/**'
+      - 'src/core/**'
+      - 'src/services/**'
+      - 'src/utils/**'
+      - 'src/manager/**'
+      - 'src/server.py'
+      - 'src/scripts/**'
+      - 'scripts/*native*'
+      - 'tests/test_native*'
+      - 'requirements*.txt'
+      - '.github/workflows/native.yml'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: WinUI 3 build, test and package (x64)
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: |
+            requirements-core.txt
+            requirements-backend-runtime-gpu.txt
+      - name: Test native protocol and state machines
+        run: dotnet test src/native/windows/Vantage.Core.Tests/Vantage.Core.Tests.csproj -c Release --logger trx
+      - name: Build and smoke-test shared packaged backend
+        run: python scripts/build_native_backend.py
+      - name: Build self-contained WinUI package
+        shell: pwsh
+        run: ./src/native/windows/build.ps1 -BackendRuntime build/backend-runtime/stage/VantageBackend -OutputDirectory build/native/windows
+      - name: Exercise native window against synthetic data
+        run: python scripts/smoke_native_client.py --client build/native/windows/Vantage/Vantage.Windows.exe --output build/native-smoke/windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vantage-Windows-x64-${{ github.sha }}
+          path: build/native/windows/*.zip
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Native-Windows-evidence-${{ github.sha }}
+          path: |
+            src/native/windows/**/TestResults/*.trx
+            build/native-smoke/windows/
+          if-no-files-found: warn
+          retention-days: 14
+
+  macos:
+    name: SwiftUI build, test and package (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: |
+            requirements-core.txt
+            requirements-backend-runtime-gpu.txt
+      - name: Test native protocol and state machines
+        run: swift test --package-path src/native/macos
+      - name: Build and smoke-test shared packaged backend
+        run: python scripts/build_native_backend.py
+      - name: Build native application bundle
+        run: bash src/native/macos/scripts/package.sh --backend-runtime build/backend-runtime/stage/VantageBackend --output build/native/macos
+      - name: Exercise native window against synthetic data
+        run: python scripts/smoke_native_client.py --client build/native/macos/Vantage.app/Contents/MacOS/Vantage --output build/native-smoke/macos
+      - name: Archive application bundle
+        run: ditto -c -k --keepParent build/native/macos/Vantage.app build/native/macos/Vantage-macOS-${{ matrix.arch }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vantage-macOS-${{ matrix.arch }}-${{ github.sha }}
+          path: build/native/macos/*.zip
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Native-macOS-${{ matrix.arch }}-evidence-${{ github.sha }}
+          path: build/native-smoke/macos/
+          if-no-files-found: warn
+          retention-days: 14
+
+  linux:
+    name: GTK4 build, test and package (x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: |
+            requirements-core.txt
+            requirements-backend-runtime-gpu.txt
+      - name: Install GTK4 desktop test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi python3-cairo python3-gi-cairo gir1.2-gtk-4.0 xvfb dbus-x11 libgl1 libglib2.0-0t64
+      - name: Test native protocol and state machines
+        run: /usr/bin/python3 -m unittest discover -s src/native/linux/tests -p 'test_*.py'
+      - name: Exercise native windows against synthetic data
+        run: dbus-run-session -- xvfb-run -a /usr/bin/python3 src/native/linux/smoke_test.py --output-dir build/native-smoke/linux
+      - name: Build and smoke-test shared packaged backend
+        run: python scripts/build_native_backend.py
+      - name: Package GTK4 application and backend
+        run: /usr/bin/python3 src/native/linux/package.py --backend-runtime build/backend-runtime/stage/VantageBackend --output-dir dist/native/linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vantage-Linux-x64-${{ github.sha }}
+          path: dist/native/linux/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Native-Linux-evidence-${{ github.sha }}
+          path: build/native-smoke/linux/
+          if-no-files-found: warn
+          retention-days: 14

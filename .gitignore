@@ -47,6 +47,7 @@ MANIFEST
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
+!src/native/windows/Vantage.Windows/app.manifest
 *.spec
 
 # Installer logs
@@ -161,3 +162,10 @@ migration/
 runtime/
 config/
 src/webapp/electron-dist/
+
+# Native desktop build intermediates
+src/native/**/bin/
+src/native/**/obj/
+src/native/**/TestResults/
+src/native/**/.build/
+src/native/**/.swiftpm/

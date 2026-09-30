@@ -9,6 +9,7 @@ from src.core.config import Config
 from . import source_paths as _source_paths
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
+RUN_FACE_ANALYSIS_BRIDGE_ARG = "--run-face-analysis"
 
 def _get_runtime_workdir():
     return Path(Config.get_project_root())
@@ -30,6 +31,15 @@ def _build_run_prompt_subprocess(run_prompt_args=None):
 
     script_path = _resolve_run_prompt_script_path()
     return [sys.executable, script_path, *resolved_args], os.path.dirname(script_path)
+
+
+def _build_face_analysis_subprocess(arguments=None):
+    """A frozen executable must dispatch a mode, never receive a Python file."""
+    arguments = list(arguments or [])
+    if _is_frozen_runtime():
+        return [sys.executable, RUN_FACE_ANALYSIS_BRIDGE_ARG, *arguments], str(_get_runtime_workdir())
+    script = Path(_source_paths.SERVER_FILE).resolve().parent / "scripts" / "analyze_face.py"
+    return [sys.executable, str(script), *arguments], str(_get_runtime_workdir())
 
 
 def terminate_subprocess(process):

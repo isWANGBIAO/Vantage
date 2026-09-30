@@ -32,6 +32,7 @@ BACKEND_RUNTIME_FINGERPRINT_VERSION = 5
 BACKEND_RUNTIME_SOURCE_INPUTS = (
     "requirements-core.txt",
     "requirements-backend-runtime-gpu.txt",
+    "src/backend",
     "src/core",
     "src/manager",
     "src/scripts",
@@ -127,6 +128,7 @@ PYINSTALLER_HIDDEN_IMPORTS = (
     "zhdate",
     "src.cli",
     "src.mcp_server",
+    "src.scripts.analyze_face",
     "mcp",
     "mcp.server",
     "mcp.server.stdio",

@@ -243,7 +243,12 @@ class FaceReportEndpointTests(unittest.TestCase):
                 with _backend_face._face_analysis_job_lock:
                     _backend_face._face_analysis_job_running = True
 
-                with patch.object(_backend_face, "FACE_ANALYSIS_DB_FILE", db_path), patch.object(_backend_face.time, "time", return_value=200):
+                with (
+                    patch.object(_backend_face, "FACE_ANALYSIS_DB_FILE", db_path),
+                    patch.object(_backend_face.time, "time", return_value=200),
+                    patch.object(_backend_face, "_face_analysis_job_started_at", 50),
+                    patch.object(_backend_face, "_face_analysis_job_error", None),
+                ):
                     payload = asyncio.run(_backend_face.get_face_progress())
             finally:
                 with _backend_face._face_analysis_job_lock:

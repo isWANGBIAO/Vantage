@@ -29,12 +29,14 @@ from src.utils.sensitive_data import RedactingPipeLog, build_log_path_prefixes
 
 RUN_PROMPT_BRIDGE_ARG = "--run-prompt"
 RUN_CLI_BRIDGE_ARG = "--run-cli"
+RUN_FACE_ANALYSIS_BRIDGE_ARG = "--run-face-analysis"
 PACKAGED_RUNTIME_REQUIRED_IMPORTS = (
     "chinese_calendar",
     "zhdate",
     "mcp",
     "src.cli",
     "src.mcp_server",
+    "src.scripts.analyze_face",
 )
 
 
@@ -182,6 +184,20 @@ def _run_cli_entrypoint(
     return resolved_cli_main(args)
 
 
+def _run_face_analysis_entrypoint(args, *, analysis_main=None):
+    if getattr(sys, "frozen", False):
+        _configure_frozen_runtime_search_paths(Config.get_project_root())
+        _validate_packaged_runtime_imports()
+    if analysis_main is None:
+        from src.scripts.analyze_face import main as analysis_main
+    previous_argv = sys.argv[:]
+    try:
+        sys.argv = ["analyze_face.py", *args]
+        return analysis_main()
+    finally:
+        sys.argv = previous_argv
+
+
 def _main_without_backend_runtime_lock():
     if len(sys.argv) > 1 and sys.argv[1] == RUN_PROMPT_BRIDGE_ARG:
         _run_prompt_entrypoint(sys.argv[2:])
@@ -210,6 +226,8 @@ def _main_without_backend_runtime_lock():
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == RUN_CLI_BRIDGE_ARG:
         return _run_cli_entrypoint(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == RUN_FACE_ANALYSIS_BRIDGE_ARG:
+        return _run_face_analysis_entrypoint(sys.argv[2:])
 
     if getattr(sys, "frozen", False):
         return _main_without_backend_runtime_lock()

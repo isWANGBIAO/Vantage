@@ -134,7 +134,9 @@ def export_excel(db_file):
     if not records:
         return None
 
-    output_path = os.path.abspath("Face_Analysis_History.xlsx")
+    export_dir = Path(Config.get_runtime_dir()) / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    output_path = str(export_dir / "Face_Analysis_History.xlsx")
     exported = export_valid_results_to_excel(records, output_path)
     return exported
 
@@ -151,15 +153,13 @@ def main():
     db_file = get_default_db_file()
     output_dir = get_default_plot_output_dir()
 
-    search_paths = args.dir if args.dir else discover_photo_search_paths()
-    if not search_paths:
-        print("No photo directories found.")
-        update_progress(1, 1, status="idle")
-        return
-
     if args.export:
         exported = export_excel(db_file)
         if exported is None:
+            search_paths = args.dir if args.dir else discover_photo_search_paths()
+            if not search_paths:
+                print("Export skipped: no cached data or photo directories found.")
+                return
             _, report = run_analysis(
                 search_paths=search_paths,
                 model_path=args.model,
@@ -178,6 +178,12 @@ def main():
             print(f"EXPORT_PATH:{exported}")
         else:
             print("Export skipped: no valid analyzed rows.")
+        return
+
+    search_paths = args.dir if args.dir else discover_photo_search_paths()
+    if not search_paths:
+        print("No photo directories found.")
+        update_progress(1, 1, status="idle")
         return
 
     run_analysis(

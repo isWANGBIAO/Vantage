@@ -3,7 +3,6 @@
 import asyncio
 import os
 import subprocess
-import sys
 import threading
 import time
 from datetime import datetime
@@ -23,6 +22,7 @@ from src.utils.face_analysis_db import (
     initialize_face_analysis_storage,
     load_face_analysis_records,
     load_face_progress_cache,
+    save_face_progress_cache,
     upsert_face_analysis_record,
 )
 from src.utils.face_report_cache import (
@@ -37,7 +37,6 @@ from . import observability as _observability
 from . import plots as _plots
 from . import processes as _processes
 from . import runtime as _runtime
-from . import source_paths as _source_paths
 
 router = APIRouter()
 
@@ -73,6 +72,8 @@ _face_report_refresh_lock = threading.Lock()
 _face_analysis_job_lock = threading.Lock()
 
 _face_analysis_job_running = False
+_face_analysis_job_started_at = 0.0
+_face_analysis_job_error = None
 
 def _get_face_analysis_db_file():
     if FACE_ANALYSIS_DB_FILE:
@@ -162,7 +163,7 @@ def process_captured_face_photo(photo_path):
 @router.post("/api/v1/face/analyze")
 async def analyze_face_history(background_tasks: BackgroundTasks):
     """Trigger background analysis of face history"""
-    global _face_analysis_job_running
+    global _face_analysis_job_running, _face_analysis_job_started_at, _face_analysis_job_error
 
     with _face_analysis_job_lock:
         if _face_analysis_job_running:
@@ -174,11 +175,10 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
                 },
             )
         _face_analysis_job_running = True
+        _face_analysis_job_started_at = time.time()
+        _face_analysis_job_error = None
 
-    current_dir = os.path.dirname(os.path.abspath(_source_paths.SERVER_FILE))
-    script_path = os.path.join(current_dir, "scripts", "analyze_face.py")
-    if not os.path.exists(script_path):
-         script_path = os.path.abspath("src/scripts/analyze_face.py")
+    command, workdir = _processes._build_face_analysis_subprocess()
 
     def run_analysis():
         print("Starting face analysis...")
@@ -195,15 +195,25 @@ async def analyze_face_history(background_tasks: BackgroundTasks):
                     stream_name="face-analysis"
                 ) as child_output:
                     subprocess.run(
-                        [sys.executable, script_path],
+                        command,
                         check=True,
-                        cwd=str(_processes._get_runtime_workdir()),
+                        cwd=workdir,
                         stdout=child_output,
                         stderr=subprocess.STDOUT,
                     )
             print("Face analysis complete.")
         except Exception as e:
             print(f"Face analysis failed: {e}")
+            global _face_analysis_job_error
+            _face_analysis_job_error = "Face analysis failed. See System Logs for details."
+            try:
+                save_face_progress_cache({
+                    "status": "error", "error": _face_analysis_job_error,
+                    "percent": 0, "timestamp": time.time(),
+                }, _get_face_analysis_db_file())
+            except Exception:
+                # Keep the in-memory error even if the disk itself failed.
+                pass
         finally:
             global _face_analysis_job_running
             with _face_analysis_job_lock:
@@ -258,16 +268,13 @@ async def get_face_report():
 async def export_face_excel():
     """Export face analysis data to Excel"""
     try:
-        current_dir = os.path.dirname(os.path.abspath(_source_paths.SERVER_FILE))
-        script_path = os.path.join(current_dir, "scripts", "analyze_face.py")
-        if not os.path.exists(script_path):
-             script_path = os.path.abspath("src/scripts/analyze_face.py")
+        command, workdir = _processes._build_face_analysis_subprocess(["--export"])
 
         def run_export_script():
             return subprocess.run(
-                [sys.executable, script_path, "--export"],
+                command,
                 capture_output=True,
-                cwd=str(_processes._get_runtime_workdir()),
+                cwd=workdir,
                 timeout=FACE_EXPORT_TIMEOUT_SECONDS,
             )
 
@@ -315,6 +322,17 @@ async def get_face_progress():
         db_file = _get_face_analysis_db_file()
         initialize_face_analysis_storage(db_file)
         data = load_face_progress_cache(db_file)
+
+        with _face_analysis_job_lock:
+            job_running = _face_analysis_job_running
+            started_at = _face_analysis_job_started_at
+            job_error = _face_analysis_job_error
+        if job_error:
+            return {"status": "error", "error": job_error, "percent": 0}
+        if job_running and (not data or data.get("timestamp", 0) < started_at):
+            return {"status": "queued", "percent": 0, "timestamp": started_at}
+        if data and data.get("status") == "error":
+            return data
 
         if not data:
             return {"status": "idle", "percent": 0}

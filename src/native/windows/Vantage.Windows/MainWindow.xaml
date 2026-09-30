@@ -1,0 +1,9 @@
+<Window x:Class="Vantage.Windows.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Vantage">
+  <Grid x:Name="Root" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <NavigationView x:Name="Navigation" IsBackButtonVisible="Collapsed" PaneDisplayMode="Auto" IsSettingsVisible="True" Header="Vantage" SelectionChanged="Navigation_SelectionChanged">
+      <ScrollViewer x:Name="PageScroll" HorizontalScrollBarVisibility="Disabled"><StackPanel x:Name="PageContent" Padding="28" Spacing="18" MaxWidth="1500" HorizontalAlignment="Stretch"/></ScrollViewer>
+    </NavigationView>
+    <InfoBar x:Name="StatusBar" Grid.Row="1" IsOpen="True" IsClosable="False" Severity="Informational" Title="Vantage" Message="Connecting to the local backend…"/>
+  </Grid>
+</Window>

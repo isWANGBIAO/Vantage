@@ -5,8 +5,10 @@ import asyncio
 import contextlib
 import json
 import os
+import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -75,6 +77,10 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Only validate the built files and manifest without starting the executable.",
     )
+    parser.add_argument(
+        "--isolated", action="store_true",
+        help="Use fresh data and an unused loopback port; never stop other Vantage instances.",
+    )
     return parser
 
 
@@ -92,10 +98,29 @@ def _seed_smoke_media_paths(smoke_data_dir: Path) -> Path:
     return config_dir
 
 
-def _build_smoke_environment(layout: dict[str, Path]) -> dict[str, str]:
-    smoke_data_dir = layout["build_root"] / "smoke-data"
+def _build_smoke_environment(
+    layout: dict[str, Path], *, smoke_data_dir: Path | None = None,
+    isolated_port: int | None = None,
+) -> dict[str, str]:
+    smoke_data_dir = smoke_data_dir or layout["build_root"] / "smoke-data"
     config_dir = _seed_smoke_media_paths(smoke_data_dir)
     env = os.environ.copy()
+    if isolated_port is not None:
+        # The smoke app must never read a developer's configured data or send
+        # requests using inherited model credentials.
+        env = {
+            key: value for key, value in env.items()
+            if not key.upper().startswith(("VANTAGE_", "CLIPROXYAPI_", "OPENAI_", "ANTHROPIC_", "AZURE_OPENAI_"))
+            and not any(marker in key.upper() for marker in ("API_KEY", "TOKEN", "SECRET", "PASSWORD"))
+        }
+        env["VANTAGE_BACKEND_URL"] = f"http://127.0.0.1:{isolated_port}"
+        env["VANTAGE_BACKEND_HOST"] = "127.0.0.1"
+        env["VANTAGE_BACKEND_PORT"] = str(isolated_port)
+        for key, suffix in {
+            "HISTORY": "history", "LOG": "logs", "PLOT": "plot_outputs",
+            "CACHE": "cache", "RUNTIME": "runtime", "MIGRATION": "migration",
+        }.items():
+            env[f"VANTAGE_{key}_DIR"] = str(smoke_data_dir / suffix)
     runtime_path_entries = [str(path) for path in collect_runtime_library_dirs(layout["runtime_dir"])]
     existing_path_entries = [entry for entry in env.get("PATH", "").split(os.pathsep) if entry]
     env["PATH"] = os.pathsep.join(runtime_path_entries + existing_path_entries)
@@ -124,12 +149,20 @@ def _terminate_process_tree(pid: int):
         process.kill()
 
 
-def _wait_for_status(timeout_seconds: int) -> dict[str, object]:
+def _unused_loopback_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return listener.getsockname()[1]
+
+
+def _wait_for_status(
+    timeout_seconds: int, base_url: str = "http://127.0.0.1:8000",
+) -> dict[str, object]:
     deadline = time.time() + timeout_seconds
     last_error = None
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen("http://127.0.0.1:8000/api/v1/system/status", timeout=5) as response:
+            with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/v1/system/status", timeout=5) as response:
                 payload = json.loads(response.read().decode("utf-8"))
                 return payload
         except Exception as exc:  # noqa: BLE001
@@ -192,6 +225,16 @@ def _run_packaged_cli_smoke(
     if not isinstance(response, dict):
         raise RuntimeError("Packaged CLI returned an unexpected status response.")
     return response
+
+
+def _run_packaged_face_entrypoint_smoke(executable_path, *, cwd, env, timeout_seconds=30):
+    completed = subprocess.run(
+        [str(executable_path), "--run-face-analysis", "--help"],
+        cwd=str(cwd), env=env, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=timeout_seconds, check=False,
+    )
+    if completed.returncode != 0 or "--export" not in completed.stdout:
+        raise RuntimeError("Packaged face-analysis entry point is unavailable.")
 
 
 def _run_packaged_mcp_smoke(
@@ -344,14 +387,17 @@ def _main_without_backend_runtime_lock() -> int:
         print(json.dumps({"manifest": manifest, "validated": True}, indent=2, ensure_ascii=True))
         return 0
 
-    existing_server_processes = list(iter_vantage_server_processes(PROJECT_ROOT))
-    terminate_processes(existing_server_processes)
-    terminate_processes(list(_iter_packaged_backend_processes()))
+    if not args.isolated:
+        existing_server_processes = list(iter_vantage_server_processes(PROJECT_ROOT))
+        terminate_processes(existing_server_processes)
+        terminate_processes(list(_iter_packaged_backend_processes()))
 
     verify_dir = layout["build_root"] / "verification"
     verify_dir.mkdir(parents=True, exist_ok=True)
+    if args.isolated:
+        verify_dir = Path(tempfile.mkdtemp(prefix="native-smoke-", dir=verify_dir))
     smoke_log_path = verify_dir / "backend-runtime-smoke.log"
-    smoke_data_dir = layout["build_root"] / "smoke-data"
+    smoke_data_dir = verify_dir / "data" if args.isolated else layout["build_root"] / "smoke-data"
 
     try:
         _clear_runtime_server_log_pointer(smoke_data_dir)
@@ -359,7 +405,10 @@ def _main_without_backend_runtime_lock() -> int:
         print(f"Could not clear previous packaged backend runtime log pointer: {exc}")
         return 1
 
-    env = _build_smoke_environment(layout)
+    env = _build_smoke_environment(
+        layout, smoke_data_dir=smoke_data_dir,
+        isolated_port=_unused_loopback_port() if args.isolated else None,
+    )
     executable_path = layout["executable_path"]
 
     with open(smoke_log_path, "w", encoding="utf-8") as smoke_log:
@@ -372,95 +421,107 @@ def _main_without_backend_runtime_lock() -> int:
         )
 
     try:
-        status_payload = _wait_for_status(args.timeout_seconds)
-    except Exception as exc:  # noqa: BLE001
+        try:
+            from src.core.backend_connection import resolve_backend_url
+            status_payload = _wait_for_status(args.timeout_seconds, resolve_backend_url(env=env))
+        except Exception as exc:  # noqa: BLE001
+            _terminate_process_tree(process.pid)
+            log_tail = _tail_text_file(smoke_log_path)
+            print(str(exc))
+            if log_tail:
+                print("--- smoke log tail ---")
+                print(log_tail)
+            return 1
+
+        try:
+            _run_packaged_cli_smoke(
+                executable_path,
+                cwd=layout["runtime_dir"],
+                env=env,
+                timeout_seconds=min(args.timeout_seconds, 30),
+            )
+            _run_packaged_face_entrypoint_smoke(
+                executable_path, cwd=layout["runtime_dir"], env=env,
+                timeout_seconds=min(args.timeout_seconds, 30),
+            )
+            mcp_status = _run_packaged_mcp_smoke(
+                executable_path,
+                cwd=layout["runtime_dir"],
+                env=env,
+                timeout_seconds=min(args.timeout_seconds, 30),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _terminate_process_tree(process.pid)
+            log_tail = _tail_text_file(smoke_log_path)
+            print(str(exc))
+            if log_tail:
+                print("--- smoke log tail ---")
+                print(log_tail)
+            return 1
+
+        (
+            runtime_log_path,
+            runtime_log_text,
+            runtime_log_validation_errors,
+        ) = _read_verified_runtime_server_log(
+            smoke_data_dir
+        )
+        runtime_blockers = _find_runtime_blockers(runtime_log_text)
+        status_matches_runtime = _status_matches_runtime_layout(status_payload, layout)
+
         _terminate_process_tree(process.pid)
-        log_tail = _tail_text_file(smoke_log_path)
-        print(str(exc))
-        if log_tail:
-            print("--- smoke log tail ---")
-            print(log_tail)
-        return 1
+        if not status_matches_runtime:
+            print(
+                "Packaged backend status returned an unexpected runtime marker: "
+                f"{status_payload.get('runtime')} (expected cwd_name={layout['resource_dir'].name})"
+            )
+            if runtime_log_path:
+                print("--- runtime log tail ---")
+                print(_tail_text_file(runtime_log_path))
+            return 1
 
-    try:
-        _run_packaged_cli_smoke(
-            executable_path,
-            cwd=layout["runtime_dir"],
-            env=env,
-            timeout_seconds=min(args.timeout_seconds, 30),
-        )
-        mcp_status = _run_packaged_mcp_smoke(
-            executable_path,
-            cwd=layout["runtime_dir"],
-            env=env,
-            timeout_seconds=min(args.timeout_seconds, 30),
-        )
-    except Exception as exc:  # noqa: BLE001
-        _terminate_process_tree(process.pid)
-        log_tail = _tail_text_file(smoke_log_path)
-        print(str(exc))
-        if log_tail:
-            print("--- smoke log tail ---")
-            print(log_tail)
-        return 1
+        if runtime_blockers:
+            print("Packaged backend runtime log contains blocking errors: " + ", ".join(runtime_blockers))
+            if runtime_log_path:
+                print("--- runtime log tail ---")
+                print(_tail_text_file(runtime_log_path))
+            return 1
 
-    (
-        runtime_log_path,
-        runtime_log_text,
-        runtime_log_validation_errors,
-    ) = _read_verified_runtime_server_log(
-        smoke_data_dir
-    )
-    runtime_blockers = _find_runtime_blockers(runtime_log_text)
-    status_matches_runtime = _status_matches_runtime_layout(status_payload, layout)
+        if runtime_log_validation_errors:
+            print(
+                "Packaged backend runtime log validation failed: "
+                + "; ".join(runtime_log_validation_errors)
+            )
+            if runtime_log_path:
+                print("--- runtime log tail ---")
+                print(_tail_text_file(runtime_log_path))
+            return 1
 
-    _terminate_process_tree(process.pid)
-    if not status_matches_runtime:
         print(
-            "Packaged backend status returned an unexpected runtime marker: "
-            f"{status_payload.get('runtime')} (expected cwd_name={layout['resource_dir'].name})"
-        )
-        if runtime_log_path:
-            print("--- runtime log tail ---")
-            print(_tail_text_file(runtime_log_path))
-        return 1
-
-    if runtime_blockers:
-        print("Packaged backend runtime log contains blocking errors: " + ", ".join(runtime_blockers))
-        if runtime_log_path:
-            print("--- runtime log tail ---")
-            print(_tail_text_file(runtime_log_path))
-        return 1
-
-    if runtime_log_validation_errors:
-        print(
-            "Packaged backend runtime log validation failed: "
-            + "; ".join(runtime_log_validation_errors)
-        )
-        if runtime_log_path:
-            print("--- runtime log tail ---")
-            print(_tail_text_file(runtime_log_path))
-        return 1
-
-    print(
-        json.dumps(
-            {
-                "validated": True,
-                "executable": str(executable_path),
-                "smoke_log": str(smoke_log_path),
-                "runtime_log": str(runtime_log_path) if runtime_log_path else None,
-                "status": status_payload,
-                "cli_smoke": {"validated": True},
-                "mcp_smoke": {
+            json.dumps(
+                {
                     "validated": True,
-                    "tool_count": mcp_status["tool_count"],
+                    "executable": str(executable_path),
+                    "smoke_log": str(smoke_log_path),
+                    "runtime_log": str(runtime_log_path) if runtime_log_path else None,
+                    "status": status_payload,
+                    "cli_smoke": {"validated": True},
+                    "face_entrypoint_smoke": {"validated": True},
+                    "mcp_smoke": {
+                        "validated": True,
+                        "tool_count": mcp_status["tool_count"],
+                    },
                 },
-            },
-            indent=2,
-            ensure_ascii=True,
+                indent=2,
+                ensure_ascii=True,
+            )
         )
-    )
-    return 0
+        return 0
+    finally:
+        if process.poll() is None:
+            _terminate_process_tree(process.pid)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=10)
 
 
 def main() -> int:

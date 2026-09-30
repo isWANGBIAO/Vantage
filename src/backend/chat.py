@@ -298,6 +298,7 @@ async def chat_endpoint(request: ChatRequest):
         proc = None
         stderr_task = None
         stderr_lines = []
+        stream_failed = False
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -318,6 +319,8 @@ async def chat_endpoint(request: ChatRequest):
 
                 msg = decoded.strip()
                 if msg:
+                    if msg.startswith(("STREAM_ERROR:", "STREAM_ANALYSIS_ERROR:", "STREAM_PLAN_ERROR:")):
+                        stream_failed = True
                     yield json.dumps({"log": msg}) + "\n"
 
             await proc.wait()
@@ -328,6 +331,11 @@ async def chat_endpoint(request: ChatRequest):
                 err_msg = "\n".join(stderr_lines).strip() or f"run_prompt.py exited with code {proc.returncode}"
                 logging.error("Chat subprocess failed: %s", err_msg)
                 yield json.dumps({"error": err_msg}) + "\n"
+            elif not stream_failed:
+                # EOF can also mean a dropped transport. Every native client
+                # receives the same explicit completion record after the child
+                # has exited cleanly; it then reloads the authoritative context.
+                yield json.dumps({"done": True}) + "\n"
         except asyncio.CancelledError:
             logging.warning("Chat stream cancelled by client")
             _processes.terminate_subprocess(proc)
