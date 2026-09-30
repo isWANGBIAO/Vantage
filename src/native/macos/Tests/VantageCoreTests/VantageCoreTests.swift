@@ -251,3 +251,38 @@ final class StreamCancellationTests: XCTestCase {
         do { try await task.value; XCTFail("Cancelled observation must not complete successfully") } catch { }
     }
 }
+
+final class PlotLayoutTests: XCTestCase {
+    private func series(_ json: String) throws -> [NativeChartSeries] {
+        ChartData.series(try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8)))
+    }
+    func testStackedBarsUseCumulativeDomainAndSeparateGroups() throws {
+        let values = try series(#"{"series":[{"name":"A","type":"bar","stack":"total","data":[8]},{"name":"B","type":"bar","stack":"total","data":[16]},{"name":"C","type":"bar","data":[3]}]}"#)
+        let layout = PlotLayout(points: values.flatMap(\.points), configuration: .null)
+        XCTAssertEqual(layout.bars["0-0"], PlotBar(start: 0, end: 8, group: "total"))
+        XCTAssertEqual(layout.bars["1-0"], PlotBar(start: 8, end: 24, group: "total"))
+        XCTAssertEqual(layout.bars["2-0"], PlotBar(start: 0, end: 3, group: "C"))
+        XCTAssertGreaterThan(layout.yBounds.upperBound, 24)
+        XCTAssertEqual(layout.barGroups, ["total", "C"])
+    }
+    func testInverseExplicitBoundsAndZoomStayOrdered() throws {
+        let values = try series(#"{"series":[{"type":"line","data":[2,6,14]}]}"#)
+        let layout = PlotLayout(points: values.flatMap(\.points), configuration: .object(["min": .number(0), "max": .number(20), "inverse": .bool(true)]))
+        XCTAssertEqual(layout.yBounds, -20.0...0.0)
+        let visible = layout.visibleX(zoom: 0.5, pan: 1)
+        XCTAssertEqual(visible.upperBound, layout.xBounds.upperBound, accuracy: 0.0001)
+        XCTAssertEqual(visible.upperBound - visible.lowerBound, (layout.xBounds.upperBound - layout.xBounds.lowerBound) / 2, accuracy: 0.0001)
+    }
+    func testNullGapKeepsBothIsolatedSamplesVisible() throws {
+        let values = try series(#"{"series":[{"type":"line","data":[65,null,64]}]}"#)
+        XCTAssertEqual(values[0].isolatedPoints.map(\.y), [65, 64])
+        XCTAssertEqual(values[0].isolatedPoints.map(\.segment), [0, 1])
+    }
+    func testPositiveAndNegativeStacksDoNotCancelEachOther() throws {
+        let values = try series(#"{"series":[{"name":"A","type":"bar","stack":"s","data":[5]},{"name":"B","type":"bar","stack":"s","data":[-3]},{"name":"C","type":"bar","stack":"s","data":[2]}]}"#)
+        let layout = PlotLayout(points: values.flatMap(\.points), configuration: .null)
+        XCTAssertEqual(layout.bars["1-0"]?.start, 0)
+        XCTAssertEqual(layout.bars["1-0"]?.end, -3)
+        XCTAssertEqual(layout.bars["2-0"]?.end, 7)
+    }
+}

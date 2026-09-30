@@ -1,5 +1,4 @@
 import SwiftUI
-import Charts
 import VantageCore
 
 struct BackendChart: View {
@@ -51,54 +50,20 @@ struct NativeSeriesChart: View {
     var timeAxis = false
     @State private var selectedX: Double?
     @State private var zoom = 100.0
+    @State private var pan = 1.0
     private var points: [NativeChartPoint] { series.flatMap(\.points) }
-    private var axis: ChartAxis { ChartAxis(axisConfiguration) }
+    private let colors: [Color] = [.teal, .blue, .orange, .purple, .pink, .green, .red, .indigo]
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             if !axisTitle.isEmpty { Text(axisTitle).font(.caption).foregroundStyle(.secondary) }
-            if series.allSatisfy({ $0.type == "pie" }) {
-                Chart(points) { point in
-                    SectorMark(angle: .value("Value", point.y), innerRadius: .ratio(0.48), angularInset: 2)
-                        .foregroundStyle(by: .value("Category", point.label))
-                        .annotation(position: .overlay) { Text(point.y.formatted(.number.precision(.fractionLength(0...1)))).font(.caption).foregroundStyle(.white) }
-                }.frame(height: 260)
-            } else {
-                Chart(points) { point in
-                    if point.kind == "bar" {
-                        BarMark(x: .value("Date", point.x), y: .value("Value", axis.coordinate(point.y)), stacking: point.stack.isEmpty ? .unstacked : .standard)
-                            .foregroundStyle(by: .value("Series", point.series))
-                            .position(by: .value("Group", point.stack.isEmpty ? point.series : point.stack))
-                    } else if point.kind == "scatter" {
-                        PointMark(x: .value("Date", point.x), y: .value("Value", axis.coordinate(point.y))).foregroundStyle(by: .value("Series", point.series))
-                    } else {
-                        LineMark(x: .value("Date", point.x), y: .value("Value", axis.coordinate(point.y)), series: .value("Segment", "\(point.series)-\(point.segment)"))
-                            .foregroundStyle(by: .value("Series", point.series))
-                    }
-                    if let selectedX, abs(point.x - selectedX) < 0.0001 { RuleMark(x: .value("Selected", selectedX)).foregroundStyle(.secondary).annotation(position: .top) { Text("\(point.label): \(point.y.formatted())").font(.caption) } }
+            CPUChart(series: series, configuration: axisConfiguration, formatter: formatter, axisTitle: axisTitle, timeAxis: timeAxis, zoom: zoom, pan: pan, selectedX: $selectedX)
+                .frame(height: 280).clipShape(RoundedRectangle(cornerRadius: 6))
+            if !series.allSatisfy({ $0.type == "pie" }) {
+                HStack {
+                    ForEach(Array(series.enumerated()), id: \.element.id) { index, item in Label(item.name, systemImage: "circle.fill").font(.caption).foregroundStyle(colors[index % colors.count]) }
                 }
-                .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 5)) { axis in
-                        AxisGridLine(); AxisTick()
-                        AxisValueLabel {
-                            if let value = axis.as(Double.self) {
-                                if timeAxis { Text(ChartFormatting.dateTick(value)) }
-                                else { Text(points.min(by: { abs($0.x - value) < abs($1.x - value) })?.label ?? "") }
-                            }
-                        }
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks { axis in
-                        AxisGridLine(); AxisTick()
-                        AxisValueLabel { if let number = axis.as(Double.self) { Text(ChartFormatting.value(self.axis.value(number), kind: formatter, name: axisTitle)) } }
-                    }
-                }
-                .modifier(NativeChartScale(configuration: axisConfiguration))
-                .chartXSelection(value: $selectedX)
-                .chartScrollableAxes(.horizontal)
-                .chartXVisibleDomain(length: max(1, ((points.map(\.x).max() ?? 1) - (points.map(\.x).min() ?? 0)) * zoom / 100))
-                .frame(height: 260)
                 HStack { Text("Zoom").font(.caption); Slider(value: $zoom, in: 5...100); Text("\(Int(zoom))%").font(.caption.monospacedDigit()) }
+                if zoom < 100 { HStack { Text("Position").font(.caption); Slider(value: $pan, in: 0...1) } }
                 if let selectedX, let nearest = points.min(by: { abs($0.x - selectedX) < abs($1.x - selectedX) }) {
                     Text(nearest.label).font(.caption.bold())
                     ForEach(points.filter { abs($0.x - nearest.x) < 0.0001 }) { point in
@@ -111,42 +76,12 @@ struct NativeSeriesChart: View {
 }
 struct RadarChart: View {
     let option: JSONValue
-    private let colors: [Color] = [.teal, .blue, .orange, .purple, .pink]
+    private let colors: [Color] = [.teal, .blue, .orange, .purple, .pink, .green, .red, .indigo]
     var body: some View {
         let indicators = option["radar"]["indicator"].array
         let entries = option["series"].array.flatMap { $0["data"].array }
         VStack {
-            Canvas { context, size in
-                guard indicators.count >= 3 else { return }
-                let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                let radius = min(size.width, size.height) * 0.36
-                func point(_ index: Int, _ fraction: Double) -> CGPoint {
-                    let angle = Double(index) * 2 * .pi / Double(indicators.count) - .pi / 2
-                    return CGPoint(x: center.x + cos(angle) * radius * fraction, y: center.y + sin(angle) * radius * fraction)
-                }
-                for ring in 1...4 {
-                    var path = Path()
-                    for index in indicators.indices { let p = point(index, Double(ring) / 4); if index == 0 { path.move(to: p) } else { path.addLine(to: p) } }
-                    path.closeSubpath(); context.stroke(path, with: .color(.secondary.opacity(0.3)), lineWidth: 1)
-                }
-                for index in indicators.indices {
-                    var path = Path(); path.move(to: center); path.addLine(to: point(index, 1)); context.stroke(path, with: .color(.secondary.opacity(0.3)))
-                    context.draw(Text(indicators[index]["name"].string).font(.caption), at: point(index, 1.2))
-                }
-                for (entryIndex, entry) in entries.enumerated() {
-                    let values = entry["value"].array
-                    guard values.count == indicators.count else { continue }
-                    var path = Path()
-                    for index in indicators.indices {
-                        let maximum = indicators[index]["max"].double ?? 1
-                        let value = values[index].double ?? 0
-                        let p = point(index, maximum > 0 ? min(max(value / maximum, 0), 1) : 0)
-                        if index == 0 { path.move(to: p) } else { path.addLine(to: p) }
-                    }
-                    path.closeSubpath(); let color = colors[entryIndex % colors.count]
-                    context.fill(path, with: .color(color.opacity(0.15))); context.stroke(path, with: .color(color), lineWidth: 2)
-                }
-            }.frame(height: 320)
+            CPURadarChart(option: option).frame(height: 340).clipShape(RoundedRectangle(cornerRadius: 6))
             HStack { ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in Label(entry["name"].string, systemImage: "circle.fill").foregroundStyle(colors[index % colors.count]).font(.caption) } }
             DynamicGrid(columns: ["Series"] + indicators.map { $0["name"].string }, rows: entries.map { [.string($0["name"].string)] + $0["value"].array })
         }
@@ -160,8 +95,9 @@ struct ValuesChart: View {
         let numericKeys = keys.isEmpty ? Array(Set(rows.flatMap { row in row.object.filter { $0.value.double != nil && $0.key != xKey }.map(\.key) })).sorted() : keys
         if !rows.isEmpty, !numericKeys.isEmpty {
             let x = rows.map { $0[xKey].string }
-            let series = numericKeys.map { key in JSONValue.object(["name": .string(key), "type": .string("line"), "data": .array(rows.map { $0[key] })]) }
-            NativeSeriesChart(series: ChartData.series(.object(["xAxis": .object(["type": .string("category"), "data": .array(x.map(JSONValue.string))]), "series": .array(series)])))
+            let timed = !x.isEmpty && rows.allSatisfy { ChartData.timestamp($0[xKey]) != nil }
+            let series = numericKeys.map { key in JSONValue.object(["name": .string(key), "type": .string("line"), "data": .array(rows.map { row in timed ? .array([row[xKey], row[key]]) : row[key] })]) }
+            NativeSeriesChart(series: ChartData.series(.object(["xAxis": .object(["type": .string(timed ? "time" : "category"), "data": .array(x.map(JSONValue.string))]), "series": .array(series)])), timeAxis: timed)
         }
     }
 }
@@ -184,14 +120,5 @@ struct DynamicGrid: View {
             }
             if filtered.count > limit { Button("Show more") { limit += 100 } }
         }
-    }
-}
-
-private struct NativeChartScale: ViewModifier {
-    let configuration: JSONValue
-    @ViewBuilder func body(content: Content) -> some View {
-        let axis = ChartAxis(configuration)
-        if let bounds = axis.bounds { content.chartYScale(domain: bounds) }
-        else { content.chartYScale(domain: .automatic(includesZero: axis.includesZero)) }
     }
 }

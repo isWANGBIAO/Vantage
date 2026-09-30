@@ -1,6 +1,6 @@
 # Vantage 原生 macOS 客户端
 
-macOS 14+，SwiftUI + AppKit + Swift Charts；没有 WebView、Electron 或 React 运行时。复用同一个 `/api/v1` Python 后端。
+macOS 14+，SwiftUI + AppKit + CPU/CoreGraphics 图表；没有 WebView、Electron 或 React 运行时。复用同一个 `/api/v1` Python 后端。
 
 ## 构建和启动
 
@@ -30,7 +30,7 @@ open build/native/macos/Vantage.app
 
 - 本机引导、provider/语音/图像设置、模型发现、采样参数和模型 profile；凭据 SecureField/write-only，不写 UserDefaults
 - 仪表盘、隐私默认隐藏的媒体预览、AQI/专注状态、项目进度/提交、财务工作表/趋势/预测/采购建议隐藏与恢复
-- Native Charts 展示后端 ECharts 数据契约，包括 time/category、缺失段、stack、pie/radar 和分轴；原始工作表/图表数据可筛选
+- CPU/CoreGraphics 原生绘图展示后端 ECharts 数据契约，包括 time/category、缺失段、stack、pie/radar 和分轴；鼠标/键盘选点、缩放和平移；原始工作表/图表数据可筛选。绘图使用真实 NSView 的 CPU draw，不要求 Metal 设备
 - 共享后台行动计划任务发现、提交、重连、取消、去重与截断处理；不会以 EOF 或部分正文判断成功
 - 权威聊天上下文、明确完成流、清空会话、模型选择、语音录制/转录；录音临时文件自动清理
 - 面部历史、分析进度、导出、显式相机预览、AVFoundation→JPEG 后端桥；未授权不自动启动设备

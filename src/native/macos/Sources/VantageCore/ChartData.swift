@@ -18,6 +18,10 @@ public struct NativeChartSeries: Identifiable, Sendable {
     public let axis: Int
     public let stack: String
     public let points: [NativeChartPoint]
+    public var isolatedPoints: [NativeChartPoint] {
+        let counts = Dictionary(grouping: points, by: \.segment).mapValues(\.count)
+        return points.filter { counts[$0.segment] == 1 }
+    }
 }
 /// ECharts is a backend data contract, not a rendering dependency. Normalize
 /// numbers, [x,y], {value:...}, null gaps, time/category axes without flattening units.
@@ -62,9 +66,9 @@ public enum ChartData {
 }
 
 public enum ChartFormatting {
-    public static func dateTick(_ timestamp: Double) -> String {
+    public static func dateTick(_ timestamp: Double, includeTime: Bool = false) -> String {
         let formatter = DateFormatter(); formatter.locale = .current; formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.setLocalizedDateFormatFromTemplate("MMMd")
+        formatter.setLocalizedDateFormatFromTemplate(includeTime ? "HHmm" : "MMMd")
         return formatter.string(from: Date(timeIntervalSince1970: timestamp))
     }
     public static func value(_ value: Double, kind: String = "", name: String = "") -> String {
