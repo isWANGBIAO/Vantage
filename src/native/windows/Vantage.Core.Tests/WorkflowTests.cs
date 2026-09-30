@@ -46,6 +46,16 @@ public class WorkflowTests
         Assert.Throws<InvalidDataException>(() => JobObserver.ValidateTerminal(Job("succeeded", Complete() with { Error = "failed" })));
         Assert.Throws<InvalidDataException>(() => JobObserver.ValidateTerminal(Job("succeeded", Complete(), new("failed", "failed"))));
     }
+    [Fact] public void SuccessRequiresMatchingSavedIdentityAndContent()
+    {
+        var expected = Complete();
+        Assert.True(JobObserver.MatchesSavedResult(expected, Complete()));
+        Assert.False(JobObserver.MatchesSavedResult(expected, Complete() with { Filename = "older.json" }));
+        Assert.False(JobObserver.MatchesSavedResult(expected, Complete() with { Date = "2026-01-02" }));
+        Assert.False(JobObserver.MatchesSavedResult(expected, Complete() with { Plan = new("") }));
+        Assert.False(JobObserver.MatchesSavedResult(expected, Complete() with { Analysis = new("different") }));
+        Assert.False(JobObserver.MatchesSavedResult(expected with { Id = JsonData.Element("new") }, Complete() with { Id = JsonData.Element("old") }));
+    }
     [Fact] public async Task ObservationCancellationDoesNotCancelServerJob()
     {
         var requests = new List<HttpMethod>();
@@ -96,6 +106,20 @@ public class WorkflowTests
     {
         using var api = new ApiClient(new("http://localhost"), new Handler(_ => Task.FromResult(Json(new { api_version = "2.0", service = "vantage" }))));
         await Assert.ThrowsAsync<InvalidDataException>(() => api.VerifyAsync());
+    }
+    [Fact] public async Task SmokeRefusesARealBackendBeforeAnyApplicationRead()
+    {
+        var paths = new List<string>();
+        using var api = new ApiClient(new("http://localhost"), new Handler(r => { paths.Add(r.RequestUri!.AbsolutePath); return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)); }));
+        await Assert.ThrowsAsync<ApiException>(() => api.VerifySyntheticFixtureAsync());
+        Assert.Equal(new[] { "/__test__/requests" }, paths);
+    }
+    [Fact] public async Task SmokeRequiresTheExactSyntheticMarker()
+    {
+        using var api = new ApiClient(new("http://localhost"), new Handler(_ => Task.FromResult(Json(new[] { new { method = "GET", path = "/__test__/requests" } }))));
+        await api.VerifySyntheticFixtureAsync();
+        using var wrong = new ApiClient(new("http://localhost"), new Handler(_ => Task.FromResult(Json(new { ok = true }))));
+        await Assert.ThrowsAsync<InvalidDataException>(() => wrong.VerifySyntheticFixtureAsync());
     }
     [Fact] public async Task ErrorMessagesNeverReflectResponseSecrets()
     {

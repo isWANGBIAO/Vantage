@@ -31,7 +31,7 @@ public sealed partial class MainWindow
             cameraCts?.Cancel(); cameraCts?.Dispose(); camera.Source = null;
             if (!cameraToggle.IsOn) return;
             cameraCts = CancellationTokenSource.CreateLinkedTokenSource(ct); var streamCt = cameraCts.Token;
-            try { await api.StreamCameraAsync(bytes => ImageBytesAsync(camera, bytes), streamCt); }
+            try { await api.StreamCameraAsync(bytes => ImageBytesAsync(camera, bytes, streamCt), streamCt); }
             catch (OperationCanceledException) when (streamCt.IsCancellationRequested) { }
             catch (Exception e) { if (!ct.IsCancellationRequested) ShowError(e); }
         };
@@ -148,7 +148,7 @@ public sealed partial class MainWindow
         xName ??= keys.FirstOrDefault(k => k is "datetime" or "date" or "timestamp" or "month" or "created_at") ?? keys.FirstOrDefault();
         var numeric = yName is not null ? new[] { yName } : keys.Where(k => k != xName && data.Any(row => row.Field(k).Number().HasValue)).ToArray();
         var series = numeric.Select(k => new { name = k, type = "line", data = data.Select((row, i) => new object?[] { xName is null ? i : row.Field(xName), row.Field(k).Number() }) });
-        return Stack(new NativeChart(JsonData.Element(new { xAxis = new { type = "time" }, yAxis = new { type = "value" }, series }), English), new Expander { Header = T("原始记录", "Source records"), Content = DataView(rows), HorizontalAlignment = HorizontalAlignment.Stretch });
+        return Stack(new NativeChart(JsonData.ChartElement(new { xAxis = new { type = "time" }, yAxis = new { type = "value" }, series }), English), new Expander { Header = T("原始记录", "Source records"), Content = DataView(rows), HorizontalAlignment = HorizontalAlignment.Stretch });
     }
     async Task FaceAsync(CancellationToken ct)
     {
@@ -162,7 +162,7 @@ public sealed partial class MainWindow
             foreach (var key in new[] { "lightest", "heaviest" })
             {
                 var entry = current.Field(key); var image = new Image { Height = 260, Stretch = Stretch.Uniform }; var reveal = new ToggleSwitch { Header = T("显示照片", "Reveal photo") }; privacyToggles.Add(reveal);
-                reveal.Toggled += async (_, _) => { image.Source = null; var path = entry.Field("url").Text(); if (reveal.IsOn && path.Length > 0) { try { var bytes = await api.DownloadAsync(path, ct); if (reveal.IsOn && !ct.IsCancellationRequested) await ImageBytesAsync(image, bytes); } catch (Exception e) { if (!ct.IsCancellationRequested) ShowError(e); } } };
+                reveal.Toggled += async (_, _) => { image.Source = null; var path = entry.Field("url").Text(); if (reveal.IsOn && path.Length > 0) { try { var bytes = await api.DownloadAsync(path, ct); if (reveal.IsOn && !ct.IsCancellationRequested) { await ImageBytesAsync(image, bytes, ct); if (!reveal.IsOn) image.Source = null; } } catch (Exception e) { if (!ct.IsCancellationRequested) ShowError(e); } } };
                 report.Children.Add(Card(Stack(Text($"{key} · {entry.Field("date").Text()} · {entry.Field("score").Text()}", 18), reveal, image)));
             }
         }

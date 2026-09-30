@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import ServiceManagement
+import UniformTypeIdentifiers
 import VantageCore
 
 @MainActor
@@ -12,6 +13,14 @@ final class BackendHost {
         probeConfiguration.timeoutIntervalForRequest = 1
         probeConfiguration.timeoutIntervalForResource = 2
         let probe = APIClient(address: api.address, configuration: probeConfiguration)
+        if ProcessInfo.processInfo.arguments.contains("--smoke-test") {
+            // Fail before reading any settings/media if someone accidentally
+            // points smoke mode at a real backend. Never spawn in smoke mode.
+            let marker: JSONValue = try await probe.request(path: "/__test__/requests")
+            guard case .array = marker else { throw APIError.http(400, "Smoke mode requires the isolated fixture server.") }
+            let capabilities: Capabilities = try await probe.request(path: "/api/v1/capabilities")
+            try capabilities.validate(); return
+        }
         do {
             let capabilities: Capabilities = try await probe.request(path: "/api/v1/capabilities")
             try capabilities.validate(); return
@@ -71,6 +80,12 @@ enum NativePlatform {
     static func chooseFolder() -> String? {
         let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false
         return panel.runModal() == .OK ? panel.url?.path : nil
+    }
+    static func chooseAudio() -> URL? {
+        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false; panel.allowedContentTypes = [.audio]
+        panel.message = "Choose an audio file to transcribe with your configured voice provider."
+        return panel.runModal() == .OK ? panel.url : nil
     }
     static func copy(_ text: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
     static func setLogin(_ enabled: Bool) throws {

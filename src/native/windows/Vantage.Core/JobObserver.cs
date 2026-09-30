@@ -46,6 +46,18 @@ public sealed class JobObserver(ApiClient api)
             await Task.Delay(delay, ct);
         }
     }
+    public static bool MatchesSavedResult(PlanResult? expected, PlanResult actual)
+    {
+        if (expected?.IsComplete != true || !actual.IsComplete) return false;
+        if (string.IsNullOrEmpty(expected.Date) || expected.Date != actual.Date) return false;
+        if (!string.IsNullOrEmpty(expected.Filename) && expected.Filename != actual.Filename) return false;
+        if (expected.Id is { } expectedId && expectedId.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+        {
+            if (actual.Id is not { } actualId || expectedId.Text() != actualId.Text()) return false;
+        }
+        else if (string.IsNullOrEmpty(expected.Filename)) return false;
+        return expected.Analysis!.Body == actual.Analysis!.Body && expected.Plan!.Body == actual.Plan!.Body;
+    }
     public static PlanJob ValidateTerminal(PlanJob job)
     {
         if (job.Status == "succeeded" && (job.Error is not null || job.Result?.IsComplete != true))

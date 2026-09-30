@@ -63,6 +63,11 @@ public sealed partial class MainWindow : Window
         try
         {
             Status(T("正在连接本机后端…", "Connecting to the local backend…"));
+            if (smokeOutput is not null)
+            {
+                using var fixtureCheck = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); fixtureCheck.CancelAfter(TimeSpan.FromSeconds(10));
+                await api.VerifySyntheticFixtureAsync(fixtureCheck.Token);
+            }
             await host.StartOrConnectAsync(smokeOutput is not null, lifetime.Token);
             settings = await api.SettingsAsync(lifetime.Token); ApplyAppearance(); BuildNavigation();
             if (smokeOutput is null)
@@ -144,6 +149,8 @@ public sealed partial class MainWindow : Window
     async Task ShutdownAsync()
     {
         if (shutdownStarted) return; shutdownStarted = true; quitting = true;
+        // Closing can synchronously invoke this method; let its cancelled event unwind before Close().
+        await Task.Yield();
         lifetime.Cancel(); pageLifetime.Cancel(); chatLifetime?.Cancel();
         try { await StopAudioAsync(); }
         finally { tray?.Dispose(); host.Dispose(); api.Dispose(); shutdownComplete = true; Close(); }
@@ -184,10 +191,10 @@ public sealed partial class MainWindow : Window
         AppWindow.TitleBar.ButtonForegroundColor = dark ? Colors.White : Colors.Black;
     }
     void UpdateTray() { if (tray is not null) { tray.ShowLabel = T("打开 Vantage", "Open Vantage"); tray.ExitLabel = T("退出", "Quit"); } }
-    async Task ImageBytesAsync(Image image, byte[] bytes)
+    async Task ImageBytesAsync(Image image, byte[] bytes, CancellationToken ct = default)
     {
         using var random = new InMemoryRandomAccessStream(); using (var writer = new DataWriter(random.GetOutputStreamAt(0))) { writer.WriteBytes(bytes); await writer.StoreAsync(); }
-        random.Seek(0); var bitmap = new BitmapImage(); await bitmap.SetSourceAsync(random); image.Source = bitmap;
+        random.Seek(0); var bitmap = new BitmapImage(); await bitmap.SetSourceAsync(random); ct.ThrowIfCancellationRequested(); image.Source = bitmap;
     }
     async Task PollAsync(Func<Task> load, TimeSpan interval, CancellationToken ct)
     {
@@ -227,7 +234,7 @@ public sealed partial class MainWindow : Window
             }
             var job = await api.CreateJobAsync(new());
             var terminal = await new JobObserver(api).ObserveAsync(job.Id, null, null, lifetime.Token);
-            if (terminal.Status != "succeeded" || !(await api.PlanAsync()).IsComplete) failures.Add("Action plan did not complete.");
+            if (terminal.Status != "succeeded" || !JobObserver.MatchesSavedResult(terminal.Result, await api.PlanAsync())) failures.Add("Action plan did not complete.");
             var state = new ChatStreamState();
             await foreach (var e in api.ChatAsync(new("Native smoke fixture"), lifetime.Token)) state.Apply(e);
             state.RequireSuccess(); if (!(await api.ChatContextAsync()).Messages.Any()) failures.Add("Chat context was not persisted.");

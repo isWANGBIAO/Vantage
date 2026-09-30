@@ -9,7 +9,7 @@ public sealed record Capabilities(string ApiVersion, string Service)
     [JsonPropertyName("capabilities")] public string[] Features { get; init; } = [];
 }
 public sealed record PlanSection(string Body);
-public sealed record PlanResult(bool Exists, PlanSection? Analysis, PlanSection? Plan, string? Date, string? Filename, JsonElement? Meta, string? Error = null)
+public sealed record PlanResult(bool Exists, PlanSection? Analysis, PlanSection? Plan, string? Date, string? Filename, JsonElement? Meta, string? Error = null, JsonElement? Id = null)
 {
     public bool IsComplete => Exists && string.IsNullOrEmpty(Error) && !string.IsNullOrWhiteSpace(Analysis?.Body) && !string.IsNullOrWhiteSpace(Plan?.Body);
 }
@@ -67,5 +67,7 @@ public static class JsonData
     public static IEnumerable<JsonElement> Items(this JsonElement value) => value.ValueKind == JsonValueKind.Array ? value.EnumerateArray() : [];
     public static string String(this JsonObject value, string key, string fallback = "") => value[key]?.GetValue<string>() ?? fallback;
     public static bool Bool(this JsonObject value, string key) => value[key]?.GetValue<bool>() ?? false;
+    // Chart option member names (xAxis, yAxisIndex) belong to the ECharts data contract, not API DTO snake_case.
+    public static JsonElement ChartElement(object value) => JsonSerializer.SerializeToElement(value, new JsonSerializerOptions(Options) { PropertyNamingPolicy = null });
     public static JsonElement Element(object value) => JsonSerializer.SerializeToElement(value, Options);
 }

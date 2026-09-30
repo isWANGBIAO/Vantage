@@ -5,7 +5,8 @@ public class ChartTests
 {
     [Fact] public void KeepsNullGapsAndIrregularTimeSpacing()
     {
-        var option = JsonData.Element(new { xAxis = new { type = "time" }, series = new { data = new object?[][] { ["2026-01-01", 10], ["2026-01-03", null], ["2026-01-10", 30] } } });
+        var option = JsonData.ChartElement(new { xAxis = new { type = "time" }, series = new { data = new object?[][] { ["2026-01-01", 10], ["2026-01-03", null], ["2026-01-10", 30] } } });
+        Assert.Equal("time", option.Field("xAxis").Field("type").Text());
         var points = ChartMath.ExtractPoints(option.Field("series"), option.Field("xAxis"));
         Assert.Null(points[1].Y); Assert.Equal(4.5, (points[2].X - points[0].X) / (points[1].X - points[0].X));
     }

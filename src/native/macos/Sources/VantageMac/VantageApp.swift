@@ -43,9 +43,15 @@ struct VantageApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: AppModel?
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if let id = Bundle.main.bundleIdentifier,
-           let existing = NSRunningApplication.runningApplications(withBundleIdentifier: id).first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
-            existing.activate(options: [.activateAllWindows]); NSApp.terminate(nil); return
+        if let id = Bundle.main.bundleIdentifier {
+            let candidates = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+            let first = candidates.min {
+                let left = $0.launchDate ?? .distantPast; let right = $1.launchDate ?? .distantPast
+                return left == right ? $0.processIdentifier < $1.processIdentifier : left < right
+            }
+            if let existing = first, existing.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                existing.activate(options: [.activateAllWindows]); NSApp.terminate(nil); return
+            }
         }
         NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps: true)
     }

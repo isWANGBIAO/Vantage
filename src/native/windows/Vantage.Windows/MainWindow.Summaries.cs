@@ -60,6 +60,6 @@ public sealed partial class MainWindow
             foreach (var (metric, label) in new[] { ("output_tokens_per_second", T("输出", "Output")), ("average_tokens_per_second", T("总计", "Total")) })
                 series.Add(new { name = group.Key + " · " + label, type = "line", data = group.OrderBy(x => x.Field("created_at").Text()).Select(row => new object?[] { row.Field("created_at").Text(), row.Field(metric).Number() }).ToArray() });
         }
-        return Stack(Text(T("逐调用速度趋势", "Per-call speed trend"), 22), new NativeChart(JsonData.Element(new { xAxis = new { type = "time" }, yAxis = new { type = "value", name = "tok/s" }, series }), English));
+        return Stack(Text(T("逐调用速度趋势", "Per-call speed trend"), 22), new NativeChart(JsonData.ChartElement(new { xAxis = new { type = "time" }, yAxis = new { type = "value", name = "tok/s" }, series }), English));
     }
 }

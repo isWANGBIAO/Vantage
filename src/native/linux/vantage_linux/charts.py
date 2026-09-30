@@ -2,12 +2,25 @@
 import math
 import gi
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Gtk, Pango, PangoCairo
 
 COLORS = [(0.27, 0.79, 0.69), (0.51, 0.65, 1), (0.98, 0.70, 0.35), (0.85, 0.48, 0.70), (0.60, 0.80, 0.39)]
 
 
 from .chart_data import numeric, series_points, prepare_chart, normalized_y
+
+
+def draw_text(cr, text):
+    """Pango provides fontconfig CJK fallback; Cairo's toy API does not."""
+    x, baseline = cr.get_current_point()
+    layout = PangoCairo.create_layout(cr)
+    layout.set_font_description(Pango.FontDescription.from_string("Sans 9"))
+    layout.set_text(str(text), -1)
+    cr.save()
+    cr.move_to(x, baseline - 11)
+    PangoCairo.show_layout(cr, layout)
+    cr.restore()
 
 
 class Chart(Gtk.Box):
@@ -88,14 +101,14 @@ class Chart(Gtk.Box):
                     cr.stroke()
                 cr.set_source_rgb(*COLORS[index % len(COLORS)])
                 cr.move_to(5 if index == 0 else right + 8 + (index - 1) * 45, pos + 4)
-                cr.show_text(f"{val:.1f}")
+                draw_text(cr, f"{val:.1f}")
             cr.move_to(5 if index == 0 else right + 5 + (index - 1) * 45, 12)
-            cr.show_text(str(axis["name"])[:12])
+            draw_text(cr, str(axis["name"])[:12])
         if prepared["keys"]:
             cr.set_source_rgb(0.65, 0.70, 0.75)
             for key, pos in [(prepared["keys"][0], left), (prepared["keys"][-1], right - 65)]:
                 cr.move_to(pos, height - 12)
-                cr.show_text(str(key)[:16])
+                draw_text(cr, str(key)[:16])
         groups = prepared["bar_groups"]
         cr.save()
         cr.rectangle(left - 15, top, right - left + 30, bottom - top)
@@ -151,7 +164,7 @@ class Chart(Gtk.Box):
             cr.line_to(center[0] + radius * math.cos(angle), center[1] + radius * math.sin(angle))
             cr.stroke()
             cr.move_to(center[0] + radius * 1.05 * math.cos(angle), center[1] + radius * 1.05 * math.sin(angle))
-            cr.show_text(str(indicators[i].get("name", ""))[:18])
+            draw_text(cr, str(indicators[i].get("name", ""))[:18])
         color_index = 0
         for index, series in enumerate(series_list):
             for point in series.get("data", []):
@@ -160,7 +173,7 @@ class Chart(Gtk.Box):
                     continue
                 cr.set_source_rgb(*COLORS[color_index % len(COLORS)])
                 cr.move_to(8, 15 + color_index * 16)
-                cr.show_text(str(point.get("name", series.get("name", "")))[:25])
+                draw_text(cr, str(point.get("name", series.get("name", "")))[:25])
                 color_index += 1
                 for i, value in enumerate(vals[:n]):
                     angle = math.tau * i / n - math.pi / 2

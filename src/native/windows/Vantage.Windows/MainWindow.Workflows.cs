@@ -18,19 +18,23 @@ public sealed partial class MainWindow
         var wait = Check(T("等待本地服务就绪", "Wait for local provider readiness"), false);
         var progress = Text(T("尚无活动任务", "No active job")); var actualRequest = Text("");
         var eventLog = Input(T("实时进度", "Live progress"), multi: true); eventLog.IsReadOnly = true;
-        var resultPanel = Stack(); string? currentJob = null;
-        async Task LoadSaved()
+        var resultPanel = Stack(); string? currentJob = null; PlanResult? displayedPlan = null;
+        async Task<PlanResult> LoadSaved()
         {
-            var saved = await api.PlanAsync(ct); ct.ThrowIfCancellationRequested(); resultPanel.Children.Clear();
-            if (!saved.IsComplete) { resultPanel.Children.Add(Text(T("今天还没有完整保存的计划", "No complete plan saved for today"))); return; }
+            var saved = await api.PlanAsync(ct); ct.ThrowIfCancellationRequested();
+            if (!saved.IsComplete) { if (resultPanel.Children.Count == 0) resultPanel.Children.Add(Text(T("今天还没有完整保存的计划", "No complete plan saved for today"))); return saved; }
+            if (JobObserver.MatchesSavedResult(displayedPlan, saved)) return saved;
+            resultPanel.Children.Clear(); displayedPlan = saved;
             resultPanel.Children.Add(Text($"{saved.Date} · {saved.Filename}"));
             resultPanel.Children.Add(ActionButton(T("复制完整计划", "Copy complete plan"), () => { NativeDesktop.Copy(saved.Analysis!.Body + "\n\n" + saved.Plan!.Body); return Task.CompletedTask; }));
             resultPanel.Children.Add(Card(Stack(Heading(T("分析", "Analysis")), MarkdownView.Create(saved.Analysis!.Body))));
             resultPanel.Children.Add(Card(Stack(Heading(T("行动", "Plan")), MarkdownView.Create(saved.Plan!.Body))));
             if (saved.Meta is { } meta) resultPanel.Children.Add(new Expander { Header = T("模型、输入与统计", "Model, inputs and statistics"), Content = DataView(meta), HorizontalAlignment = HorizontalAlignment.Stretch });
+            return saved;
         }
         async Task Observe(PlanJob job)
         {
+            if (currentJob is not null) return;
             currentJob = job.Id;
             actualRequest.Text = $"{job.Id} · {(job.Reused ? T("已加入现有任务", "Joined existing job") : job.Trigger)}\n{JsonSerializer.Serialize(job.Request, JsonData.Options)}";
             try
@@ -38,13 +42,18 @@ public sealed partial class MainWindow
                 var terminal = await new JobObserver(api).ObserveAsync(job.Id,
                     state => progress.Text = $"{state.Status} · {state.Progress?.Phase}",
                     e => { if (e.Truncated || e.EventTruncated) { eventLog.Text = T("部分事件已过期，正在重新读取完整任务结果", "Some events expired; reloading the complete job result"); } else if (e.Log is not null) AppendBounded(eventLog, e.Log); }, ct);
-                if (terminal.Status == "succeeded") { await LoadSaved(); Status(T("新计划已完整保存", "The new plan is fully saved"), InfoBarSeverity.Success); }
+                if (terminal.Status == "succeeded")
+                {
+                    var saved = await LoadSaved();
+                    if (JobObserver.MatchesSavedResult(terminal.Result, saved)) Status(T("新计划已完整保存并核对", "The new plan is saved and verified"), InfoBarSeverity.Success);
+                    else Status(saved.IsComplete ? T("任务已结束；保存结果随后发生变化，当前显示最新结果", "The job finished, but the saved result changed afterward; the latest result is shown") : T("任务已结束，但尚未读到对应的完整保存结果", "The job finished, but its complete saved result could not be verified"), InfoBarSeverity.Warning);
+                }
                 else if (terminal.Status == "failed") Status(terminal.Error?.Message ?? T("生成失败，保留旧计划", "Generation failed; the previous plan is retained"), InfoBarSeverity.Error);
             }
-            catch (JobLostException) { await LoadSaved(); var jobs = await api.JobsAsync(ct); progress.Text = T("后端已重启，已重新加载保存结果", "Backend restarted; saved results reloaded"); if (jobs.Active is { } active && active.Id != currentJob) await Observe(active); }
+            catch (JobLostException) { currentJob = null; await LoadSaved(); var jobs = await api.JobsAsync(ct); progress.Text = T("后端已重启，已重新加载保存结果", "Backend restarted; saved results reloaded"); if (jobs.Active is { } active && active.Id != job.Id) await Observe(active); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
             catch (Exception e) { if (!ct.IsCancellationRequested) ShowError(e); }
-            finally { currentJob = null; }
+            finally { if (currentJob == job.Id) currentJob = null; }
         }
         var generate = ActionButton(T("生成 / 加入任务", "Generate / join job"), async () =>
         {
@@ -60,6 +69,13 @@ public sealed partial class MainWindow
         var list = await api.JobsAsync(ct);
         PageContent.Children.Add(new Expander { Header = T("最近任务", "Recent jobs"), Content = DataView(JsonData.Element(list.Jobs)), HorizontalAlignment = HorizontalAlignment.Stretch });
         if (list.Active is { } running) _ = Observe(running);
+        if (smokeOutput is null) _ = PollAsync(async () =>
+        {
+            if (currentJob is not null) return;
+            var recent = await api.JobsAsync(ct);
+            if (recent.Active is { } active) await Observe(active);
+            else await LoadSaved();
+        }, TimeSpan.FromSeconds(5), ct);
     }
     async Task ChatAsync(CancellationToken ct)
     {

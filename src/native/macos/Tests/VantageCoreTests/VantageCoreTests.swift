@@ -161,6 +161,31 @@ final class HTTPTests: XCTestCase {
         do { let _: JSONValue = try await client().request(path: "/api/v1/settings"); XCTFail("Expected refusal") }
         catch { XCTAssertEqual(error as? APIError, .insecureRedirect) }
     }
+    func testAudioFileTranscriptionPreservesFormatAndReadsCanonicalField() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("private-name-\(UUID().uuidString).wav")
+        try Data([0x52, 0x49, 0x46, 0x46]).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        StubProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/prefix/api/v1/media/transcribe")
+            XCTAssertEqual(request.httpMethod, "POST")
+            var data = request.httpBody ?? Data()
+            if let input = request.httpBodyStream {
+                input.open(); defer { input.close() }
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while input.hasBytesAvailable {
+                    let count = input.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }; data.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            let multipart = String(decoding: data, as: UTF8.self)
+            XCTAssertTrue(multipart.contains("filename=\"audio.wav\""))
+            XCTAssertTrue(multipart.contains("Content-Type: audio/wav"))
+            XCTAssertFalse(multipart.contains("private-name"))
+            return (200, Data(#"{"transcription":"synthetic transcript"}"#.utf8))
+        }
+        let transcript = try await client().transcribe(file: file)
+        XCTAssertEqual(transcript, "synthetic transcript")
+    }
     func testOpenFolderUsesExplicitIntent() async throws {
         StubProtocol.handler = { request in XCTAssertEqual(request.value(forHTTPHeaderField: "X-Vantage-Intent"), "open-folder"); return (200, Data("{}".utf8)) }
         try await client().openMediaFolder("photo")
@@ -195,6 +220,7 @@ final class MarkdownTests: XCTestCase {
 }
 
 private final class HangingProtocol: URLProtocol {
+    static var started: (() -> Void)?
     static var stopped: (() -> Void)?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -202,21 +228,24 @@ private final class HangingProtocol: URLProtocol {
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/x-ndjson"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data("{\"log\":\"waiting\"}\n".utf8))
+        Self.started?()
         // Deliberately keep transport open until the caller cancels.
     }
     override func stopLoading() { Self.stopped?() }
 }
 final class StreamCancellationTests: XCTestCase {
     func testCancellingObservationClosesUnderlyingTransport() async throws {
+        let started = expectation(description: "URL loading started")
         let stopped = expectation(description: "URL loading stopped")
         stopped.assertForOverFulfill = false
+        HangingProtocol.started = { started.fulfill() }
         HangingProtocol.stopped = { stopped.fulfill() }
-        defer { HangingProtocol.stopped = nil }
+        defer { HangingProtocol.stopped = nil; HangingProtocol.started = nil }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [HangingProtocol.self]
         let client = APIClient(address: try BackendAddress("http://127.0.0.1"), configuration: configuration)
         let task = Task { try await client.stream(path: "/api/v1/action-plan/jobs/test/events") { _ in } }
-        try await Task.sleep(for: .milliseconds(150))
+        await fulfillment(of: [started], timeout: 3)
         task.cancel()
         await fulfillment(of: [stopped], timeout: 3)
         do { try await task.value; XCTFail("Cancelled observation must not complete successfully") } catch { }

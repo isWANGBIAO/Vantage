@@ -126,7 +126,11 @@ public final class APIClient: @unchecked Sendable {
         var request = try request(path: "/api/v1/media/transcribe", method: "POST", query: [:], body: nil)
         request.timeoutInterval = 300
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"recording.m4a\"\r\nContent-Type: audio/mp4\r\n\r\n".utf8)
+        let extensionValue = file.pathExtension.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        let suffix = extensionValue.isEmpty ? "m4a" : String(extensionValue.prefix(12))
+        let mime = ["m4a": "audio/mp4", "mp4": "audio/mp4", "mp3": "audio/mpeg", "mpeg": "audio/mpeg", "mpga": "audio/mpeg", "wav": "audio/wav", "webm": "audio/webm", "ogg": "audio/ogg", "flac": "audio/flac", "aac": "audio/aac", "aiff": "audio/aiff"][suffix] ?? "application/octet-stream"
+        // Preserve the format without sending a personal filename in multipart headers.
+        var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.\(suffix)\"\r\nContent-Type: \(mime)\r\n\r\n".utf8)
         body.append(try Data(contentsOf: file)); body.append(Data("\r\n--\(boundary)--\r\n".utf8)); request.httpBody = body
         let (data, response) = try await session.data(for: request); try validate(response, data: data)
         return try JSONDecoder().decode(JSONValue.self, from: data)["transcription"].string

@@ -138,7 +138,16 @@ struct ChatView: View {
             HStack(alignment: .bottom, spacing: 12) {
                 TextEditor(text: $model.draft).font(.body).frame(minHeight: 60, maxHeight: 130).padding(7).background(.background, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor)))
                 Button { recordingTask = Task { await toggleRecording() } } label: { Image(systemName: voice.recording ? "stop.circle.fill" : "mic.fill").foregroundStyle(voice.recording ? .red : .primary) }.disabled(transcribing || model.sendingChat || (!model.chatReady && !voice.recording)).help(model.text("录音转文字", "Record and transcribe"))
-                if transcribing { ProgressView().controlSize(.small) }
+                Button {
+                    guard let file = NativePlatform.chooseAudio() else { return }
+                    recordingTask = Task { await transcribeFile(file) }
+                } label: { Image(systemName: "waveform.badge.plus") }
+                    .disabled(voice.recording || transcribing || model.sendingChat || !model.chatReady)
+                    .help(model.text("选择音频文件转录", "Transcribe an audio file"))
+                if transcribing {
+                    ProgressView().controlSize(.small)
+                    Button(model.text("取消转录", "Cancel transcription")) { voiceEpoch = UUID(); recordingTask?.cancel(); transcribing = false }
+                }
                 if model.sendingChat { Button(model.text("停止", "Stop")) { model.stopChat() } }
                 else { Button(model.text("发送", "Send")) { model.sendChat() }.buttonStyle(.borderedProminent).disabled(!model.chatReady || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || voice.recording || transcribing).keyboardShortcut(.return, modifiers: .command) }
             }.padding(18)
@@ -148,6 +157,17 @@ struct ChatView: View {
         .confirmationDialog(model.text("清空对话？行动计划上下文将保留", "Clear conversation? The action-plan context will be retained."), isPresented: $confirmClear) {
             Button(model.text("清空", "Clear"), role: .destructive) { Task { do { try await model.clearChat() } catch { model.report(error) } } }
         }
+    }
+    private func transcribeFile(_ file: URL) async {
+        let epoch = voiceEpoch; let client = model.api
+        transcribing = true
+        let scoped = file.startAccessingSecurityScopedResource()
+        defer { if scoped { file.stopAccessingSecurityScopedResource() }; if epoch == voiceEpoch { transcribing = false } }
+        do {
+            let text = try await client.transcribe(file: file)
+            guard epoch == voiceEpoch, client === model.api, !Task.isCancelled else { return }
+            model.draft += (model.draft.isEmpty ? "" : "\n") + text
+        } catch { if epoch == voiceEpoch { model.report(error) } }
     }
     private func toggleRecording() async {
         let epoch = voiceEpoch; let client = model.api

@@ -64,9 +64,9 @@ def face_payload():
 
 def chart_payload():
     options = [
-        {"xAxis": {"type": "category", "data": ["Mon", "Tue", "Wed", "Thu"]}, "yAxis": {"type": "value"}, "series": [{"name": "Read", "type": "bar", "stack": "time", "data": [20, 45, None, 60]}, {"name": "Move", "type": "bar", "stack": "time", "data": [15, 20, 40, 30]}]},
-        {"xAxis": {"type": "time"}, "yAxis": [{"type": "value", "name": "Weight", "min": 40, "max": 100}, {"type": "value", "name": "Pace", "inverse": True, "min": 0, "max": 20}], "series": [{"name": "Weight", "type": "line", "data": [["2026-01-01", 60], ["2026-01-03", None], ["2026-01-10", 65]]}, {"name": "Pace", "type": "line", "yAxisIndex": 1, "data": [["2026-01-01", 7], ["2026-01-03", 6], ["2026-01-10", 5]]}]},
-        {"radar": {"indicator": [{"name": "Read", "max": 100}, {"name": "Move", "max": 100}, {"name": "Sleep", "max": 100}]}, "series": [{"name": "Activity", "type": "radar", "data": [{"name": "Today", "value": [70, 40, 80]}, {"name": "Goal", "value": [80, 60, 90]}]}]},
+        {"xAxis": {"type": "category", "data": ["Mon", "Tue", "Wed", "Thu"]}, "yAxis": {"type": "value"}, "series": [{"name": "阅读", "type": "bar", "stack": "time", "data": [20, 45, None, 60]}, {"name": "运动", "type": "bar", "stack": "time", "data": [15, 20, 40, 30]}]},
+        {"xAxis": {"type": "time"}, "yAxis": [{"type": "value", "name": "体重", "min": 40, "max": 100}, {"type": "value", "name": "配速", "inverse": True, "min": 0, "max": 20}], "series": [{"name": "体重", "type": "line", "data": [["2026-01-01", 60], ["2026-01-03", None], ["2026-01-10", 65]]}, {"name": "配速", "type": "line", "yAxisIndex": 1, "data": [["2026-01-01", 7], ["2026-01-03", 6], ["2026-01-10", 5]]}]},
+        {"radar": {"indicator": [{"name": "阅读", "max": 100}, {"name": "运动", "max": 100}, {"name": "睡眠", "max": 100}]}, "series": [{"name": "Activity", "type": "radar", "data": [{"name": "今日", "value": [70, 40, 80]}, {"name": "目标", "value": [80, 60, 90]}]}]},
     ]
     return {"count": len(options), "charts": [{"id": f"fixture-{i}", "title": f"Synthetic chart {i + 1}", "description": "Native chart semantic smoke fixture", "empty": False, "error": None, "summary": [], "option": option} for i, option in enumerate(options)]}
 

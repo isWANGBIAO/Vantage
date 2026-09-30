@@ -44,6 +44,12 @@ public sealed class ApiClient : IDisposable
         if (caps.Service != "vantage" || caps.ApiVersion?.Split('.')[0] != "1") throw new InvalidDataException("This client requires the Vantage v1 API.");
         await GetAsync<JsonElement>("/api/v1/operations", ct);
     }
+    public async Task VerifySyntheticFixtureAsync(CancellationToken ct = default)
+    {
+        var marker = await GetAsync<JsonElement>("/__test__/requests", ct);
+        if (marker.ValueKind != JsonValueKind.Array || !marker.Items().Any(entry => entry.Field("method").Text() == "GET" && entry.Field("path").Text() == "/__test__/requests"))
+            throw new InvalidDataException("Smoke mode requires the isolated synthetic fixture server; no application data was read or changed.");
+    }
     public Task<SettingsState> SettingsAsync(CancellationToken ct = default) => GetAsync<SettingsState>("/api/v1/settings", ct);
     public Task<SettingsState> UpdateSettingsAsync(JsonObject patch, CancellationToken ct = default) => SendAsync<SettingsState>(HttpMethod.Put, "/api/v1/settings", patch, ct);
     public Task<OnboardingState> OnboardingAsync(CancellationToken ct = default) => GetAsync<OnboardingState>("/api/v1/onboarding", ct);
