@@ -392,7 +392,9 @@ def test_cancelling_blocked_stream_closes_response_and_session_immediately(monke
     stream_started = threading.Event()
     release_stream = threading.Event()
     worker_finished = threading.Event()
+    worker_settled = asyncio.Event()
     invoke_and_convert = mcp_server_module._invoke_and_convert
+    consume_worker_result = mcp_server_module._consume_worker_result
 
     def track_worker_completion(*args, **kwargs):
         try:
@@ -401,6 +403,12 @@ def test_cancelling_blocked_stream_closes_response_and_session_immediately(monke
             worker_finished.set()
 
     monkeypatch.setattr(mcp_server_module, "_invoke_and_convert", track_worker_completion)
+
+    def track_worker_settled(worker):
+        consume_worker_result(worker)
+        worker_settled.set()
+
+    monkeypatch.setattr(mcp_server_module, "_consume_worker_result", track_worker_settled)
 
     class _BlockingResponse(_Response):
         def iter_lines(self, decode_unicode=True):
@@ -440,7 +448,12 @@ def test_cancelling_blocked_stream_closes_response_and_session_immediately(monke
             assert response.closed is True
             assert session.closed is True
             assert await asyncio.wait_for(asyncio.to_thread(worker_finished.wait, 1), timeout=2)
-            await asyncio.sleep(0)
+            # A thread's finally runs before to_thread's Future and its done
+            # callbacks settle on the loop. One sleep(0) is not a synchronization
+            # barrier on Windows/Python 3.13. Wait for the real cleanup callback
+            # without gathering the worker ourselves (which would mask a missing
+            # exception-consumption callback).
+            await asyncio.wait_for(worker_settled.wait(), timeout=2)
             assert not [
                 pending
                 for pending in asyncio.all_tasks()
