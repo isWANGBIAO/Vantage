@@ -70,6 +70,7 @@ jobs:
         run: npm run test:electron-protocol
         working-directory: src/webapp
       - name: Run Never Stop demo tests
+        timeout-minutes: 3
         run: npm run never-stop:test
         working-directory: src/webapp
       - name: Build frontend
