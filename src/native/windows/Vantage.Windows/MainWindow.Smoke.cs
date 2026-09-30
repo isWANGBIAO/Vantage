@@ -17,7 +17,7 @@ public sealed partial class MainWindow
 
     async Task RunSmokeAsync(string output)
     {
-        var failures = new List<string>(); var evidence = new List<object>(); var actions = new List<string>();
+        var failures = new List<string>(); var evidence = new List<object>(); var actions = new List<string>(); var failureDetails = new List<object>(); var phase = "initialization";
         var directory = Path.GetDirectoryName(Path.GetFullPath(output))!; Directory.CreateDirectory(directory);
         async Task Capture(string name)
         {
@@ -33,6 +33,7 @@ public sealed partial class MainWindow
             if (!ready) throw new InvalidOperationException("Backend initialization failed.");
             if (!onboarded)
             {
+                phase = "onboarding.finish";
                 await NavigateAsync("chat");
                 if (selectedPage != "onboarding") throw new InvalidOperationException("Unfinished onboarding allowed navigation.");
                 var before = CountVisuals(PageContent);
@@ -45,6 +46,7 @@ public sealed partial class MainWindow
             }
             foreach (var page in new[] { "dashboard", "plan", "chat", "projects", "finance", "plots", "face", "usage", "logs", "settings" })
             {
+                phase = "page." + page;
                 await NavigateAsync(page); Root.UpdateLayout(); await Task.Delay(250);
                 var count = CountVisuals(PageContent); var loaded = count >= 5 && StatusBar.Severity != InfoBarSeverity.Error;
                 if (!loaded) failures.Add($"{page}: failed or empty native view");
@@ -90,12 +92,14 @@ public sealed partial class MainWindow
                     await Reveal(toggle, "face-photo-hidden"); actions.Add("UIA face photo reveal/decode/hide");
                 }
             }
+            phase = "plan.generate";
             await NavigateAsync("plan");
             await InvokeSmokeButtonAsync(Named<Button>("PlanGenerate"));
             var completed = (await api.JobsAsync()).Jobs.FirstOrDefault() ?? throw new InvalidDataException("No job was created by the native Generate button.");
             if (StatusBar.Severity != InfoBarSeverity.Success || completed.Status != "succeeded" || !JobObserver.MatchesSavedResult(completed.Result, await api.PlanAsync())) throw new InvalidDataException("The native plan workflow did not verify its saved result.");
             await Capture("plan-generated"); await Reveal(Named<StackPanel>("PlanSavedResult"), "plan-saved-content"); actions.Add("UIA Generate button; production observer and saved-result identity verification");
 
+            phase = "plan.cancel";
             // This route configures the already-verified isolated fixture, never a production backend.
             await api.PostAsync("/__test__/reset", new { onboarded = true, job_mode = "hold" });
             await NavigateAsync("plan"); var generateButton = Named<Button>("PlanGenerate");
@@ -107,22 +111,40 @@ public sealed partial class MainWindow
             if ((await api.JobAsync(heldJob!)).Status != "cancelled") throw new InvalidDataException("The native Cancel button did not cancel the shared job.");
             actions.Add("UIA Generate/Cancel; repeated Generate disabled; canonical cancelled snapshot verified");
 
+            phase = "chat.input";
             await NavigateAsync("chat"); var input = Named<TextBox>("ChatInput");
-            ((IValueProvider)new TextBoxAutomationPeer(input).GetPattern(PatternInterface.Value)).SetValue("Native smoke fixture");
+            await Reveal(input, "chat-before-input");
+            await WaitSmokeAsync(() => Task.FromResult(input.IsLoaded && input.ActualWidth > 0 && input.ActualHeight > 0), "Native chat input layout");
+            if (!input.IsEnabled || input.IsReadOnly) throw new InvalidDataException("Native chat input is not editable.");
+            // TextBox's Text/Value UIA patterns are native implementations, not managed
+            // IValueProvider objects. Fill the real control, including TextChanging handlers;
+            // the production Send and Clear paths are still driven by UIA button invocation.
+            input.Text = "Native smoke fixture";
+            if (input.Text != "Native smoke fixture") throw new InvalidDataException("Native chat draft was not filled.");
+            phase = "chat.send";
             await InvokeSmokeButtonAsync(Named<Button>("ChatSend"));
+            phase = "chat.verify";
             var context = await api.ChatContextAsync();
             if (!context.Messages.Any(m => m.Role == "user" && m.Content == "Native smoke fixture") || !VisibleText(PageContent).Contains("Native smoke fixture", StringComparison.Ordinal)) throw new InvalidDataException("The sent message is not both persisted and displayed by the native chat view.");
-            await Capture("chat-sent"); await Reveal(Named<StackPanel>("ChatHistory"), "chat-messages"); await Reveal(input, "chat-input"); actions.Add("UIA text Value and Send; production stream/context display and persistence verified");
+            await Capture("chat-sent"); await Reveal(Named<StackPanel>("ChatHistory"), "chat-messages"); await Reveal(input, "chat-input"); actions.Add("Native TextBox.Text input (production TextChanging); UIA Send; production stream/context display and persistence verified");
+            phase = "chat.clear-dialog";
             var clearing = InvokeSmokeButtonAsync(Named<Button>("ChatClear"));
             await WaitSmokeAsync(() => Task.FromResult(activeDialog is not null && Visuals<Button>(activeDialog).Any(b => b.Content?.ToString() == activeDialog.PrimaryButtonText)), "Native clear confirmation dialog");
             var primary = Visuals<Button>(activeDialog!).First(b => b.Content?.ToString() == activeDialog!.PrimaryButtonText);
+            phase = "chat.clear-confirm";
             ((IInvokeProvider)new ButtonAutomationPeer(primary).GetPattern(PatternInterface.Invoke)).Invoke(); await clearing;
+            phase = "chat.clear-verify";
             var cleared = await api.ChatContextAsync();
             if (cleared.Messages.Any(m => m.Role == "user" && m.Content == "Native smoke fixture") || VisibleText(PageContent).Contains("Native smoke fixture", StringComparison.Ordinal)) throw new InvalidDataException("Native clear did not adopt the authoritative base context.");
             await Capture("chat-cleared"); actions.Add("UIA Clear and native ContentDialog primary button; production reset and visible state verified");
         }
-        catch (Exception e) { failures.Add(e.Message); }
-        await File.WriteAllTextAsync(output, JsonSerializer.Serialize(new { success = failures.Count == 0, pages = smokePages, errors = failures, screenshots = evidence, actions, action_driver = "WinUI UI Automation Invoke/Value/Toggle and production event handlers; read-only API snapshots verify results" }, new JsonSerializerOptions { WriteIndented = true }));
+        catch (Exception e)
+        {
+            static string Bounded(string? value, int limit) => value is null ? "" : value[..Math.Min(value.Length, limit)];
+            failures.Add(phase + ": " + Bounded(e.Message, 2048));
+            failureDetails.Add(new { phase, type = e.GetType().FullName, message = Bounded(e.Message, 2048), stack = Bounded(e.StackTrace, 8192) });
+        }
+        await File.WriteAllTextAsync(output, JsonSerializer.Serialize(new { success = failures.Count == 0, pages = smokePages, errors = failures, failure_details = failureDetails, screenshots = evidence, actions, action_driver = "Native TextBox.Text draft input; WinUI UI Automation Invoke/Toggle and production event handlers; read-only API snapshots verify results" }, new JsonSerializerOptions { WriteIndented = true }));
         quitting = true; Environment.ExitCode = failures.Count == 0 ? 0 : 1; await ShutdownAsync(); Application.Current.Exit();
     }
     static bool Decoded(Image image) => image.Source is BitmapSource bitmap && bitmap.PixelWidth > 0 && bitmap.PixelHeight > 0;

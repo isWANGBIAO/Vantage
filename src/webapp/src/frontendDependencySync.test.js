@@ -1479,7 +1479,9 @@ test('an orphaned lock file is reclaimed instead of blocking synchronization', (
       webappRoot,
       runtime: TEST_RUNTIME,
       env: {},
-      lockTimeoutMilliseconds: 500,
+      // Reclamation starts a real Node helper; use the same bounded budget as
+      // the other successful cross-process tests, rather than asserting latency.
+      lockTimeoutMilliseconds: 5000,
       runCommand() {},
     });
 
@@ -1518,7 +1520,7 @@ test('orphaned choosing and ticket leases are removed by their unique paths', ()
       webappRoot,
       runtime: TEST_RUNTIME,
       env: {},
-      lockTimeoutMilliseconds: 500,
+      lockTimeoutMilliseconds: 5000,
       runCommand() {},
     });
 
