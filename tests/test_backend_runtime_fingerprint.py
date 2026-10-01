@@ -1,11 +1,11 @@
 from src.core.backend_runtime_packaging import (
-    PYINSTALLER_EXCLUDES, build_backend_runtime_fingerprint, collect_backend_runtime_resources,
+    build_backend_runtime_fingerprint, collect_backend_runtime_resources,
     resolve_backend_runtime_layout, write_backend_runtime_fingerprint,
 )
 from tests.test_backend_runtime_packaging import _create_required_runtime_resources
 
 
-def test_modular_backend_changes_invalidate_all_native_runtime_packages(tmp_path):
+def test_modular_backend_changes_invalidate_packaged_runtime(tmp_path):
     _create_required_runtime_resources(tmp_path)
     domain = tmp_path / "src/backend/chat.py"
     domain.parent.mkdir(parents=True)
@@ -16,10 +16,6 @@ def test_modular_backend_changes_invalidate_all_native_runtime_packages(tmp_path
     after = build_backend_runtime_fingerprint(tmp_path, resources=resources, distribution_closure=[])
     assert before["digest"] != after["digest"]
     assert "src/backend/chat.py" in {entry["path"] for entry in after["inputs"]}
-
-
-def test_shared_backend_does_not_collect_native_ui_or_smoke_fixtures():
-    assert "src.native" in PYINSTALLER_EXCLUDES
 
 
 def test_runtime_carries_its_build_platform_metadata_when_relocated(tmp_path):

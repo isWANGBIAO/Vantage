@@ -22,7 +22,7 @@ from src.services.person_detection import (
     PRESENCE_DETECTION_CONFIDENCE,
     detect_presence_count,
 )
-from src.utils.native_folders import open_directory
+from src.utils.desktop_folders import open_directory
 
 from . import camera as _camera
 from . import observability as _observability

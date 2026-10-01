@@ -21,7 +21,8 @@
     "never-stop:start": "electron never-stop/main.cjs",
     "never-stop:test": "node --test never-stop/core/*.test.cjs never-stop/test/*.test.cjs never-stop/ui/*.test.*",
     "never-stop:package": "npm run never-stop:build && electron-builder --config never-stop/electron-builder.cjs --win portable",
-    "test:electron-protocol": "electron --headless --ozone-platform=headless --disable-gpu --disable-dev-shm-usage scripts/smoke-app-protocol.cjs"
+    "test:electron-protocol": "electron --headless --ozone-platform=headless --disable-gpu --disable-dev-shm-usage scripts/smoke-app-protocol.cjs",
+    "test:electron-ui": "electron --headless --ozone-platform=headless --disable-gpu --disable-dev-shm-usage scripts/smoke-unified-ui.cjs"
   },
   "dependencies": {
     "echarts": "^6.1.0",

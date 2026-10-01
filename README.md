@@ -26,8 +26,7 @@
 </p>
 
 Vantage is a local-first desktop workspace for personal analytics. It combines a
-Python/FastAPI backend with native WinUI 3, SwiftUI and GTK4 clients, plus the
-React/Electron frontend, for time logs, planning,
+Python/FastAPI backend with a unified React/Electron desktop UI for time logs, planning,
 LLM-assisted summaries, optional media capture, and health-style visualizations.
 
 This public repository intentionally contains only source code, tests, and
@@ -50,7 +49,6 @@ the platform user-data directory, not in this repository.
 ## Features
 
 - Windows and macOS desktop packaging through Electron.
-- Native Windows (WinUI 3), macOS (SwiftUI) and Linux (GTK4) clients sharing the same backend; see [native builds and validation](docs/native-clients.md).
 - FastAPI backend for data loading, plotting, chat, action plans, usage logs,
   face-analysis reports, and local media endpoints.
 - React UI for dashboard, action plan, chat, plots, usage, settings, expenses,
@@ -189,6 +187,6 @@ Code in this repository is licensed under the [MIT License](LICENSE). Third-part
 models, datasets, and provider APIs may have separate licenses and are not
 included unless explicitly documented.
 
-## 可替换原生界面
+## 统一桌面界面与共享后端
 
-后端持有行动计划任务与自动调度，Windows WinUI 3、macOS SwiftUI、Linux GTK4、React/Electron 和 CLI/MCP 共用同一配置与业务 API。原生构建与验收见 [原生客户端](docs/native-clients.md)；接入协议、任务取消/重连语义与平台职责见 [原生 UI 架构](docs/native-ui-architecture.md)；稳定 DTO 见 [API v1 JSON 契约](docs/contracts/application-v1.json)。
+React/Electron 是唯一维护的桌面界面，Windows 和 macOS 使用同一套 UI。后端持有行动计划任务与自动调度，桌面端与 CLI/MCP 共用同一配置与 canonical `/api/v1` 业务 API；不会恢复旧兼容入口。分层职责、任务取消/重连语义与安全边界见 [应用架构](docs/application-architecture.md)；稳定 DTO 见 [API v1 JSON 契约](docs/contracts/application-v1.json)。

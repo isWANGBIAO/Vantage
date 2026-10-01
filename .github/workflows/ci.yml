@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, native-ui-verification]
+    branches: [main]
   pull_request:
 
 permissions:
@@ -75,6 +75,10 @@ jobs:
         working-directory: src/webapp
       - name: Build frontend
         run: npm run build
+        working-directory: src/webapp
+      - name: Smoke test the production unified UI
+        timeout-minutes: 3
+        run: npm run test:electron-ui
         working-directory: src/webapp
 
   macos-runtime-smoke:

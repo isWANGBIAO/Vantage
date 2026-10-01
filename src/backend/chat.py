@@ -332,7 +332,7 @@ async def chat_endpoint(request: ChatRequest):
                 logging.error("Chat subprocess failed: %s", err_msg)
                 yield json.dumps({"error": err_msg}) + "\n"
             elif not stream_failed:
-                # EOF can also mean a dropped transport. Every native client
+                # EOF can also mean a dropped transport. Every client
                 # receives the same explicit completion record after the child
                 # has exited cleanly; it then reloads the authoritative context.
                 yield json.dumps({"done": True}) + "\n"

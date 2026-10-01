@@ -100,7 +100,6 @@ PYINSTALLER_EXCLUDES = (
     "polars",
     "src.AI_Prediction",
     "src.battery_monitor",
-    "src.native",
     "src.core.backend_runtime_lock",
     "src.scripts.convert_icon",
     "src.scripts.install_requirements",
@@ -636,7 +635,7 @@ def write_backend_runtime_fingerprint(
     payload = json.dumps(fingerprint, indent=2, ensure_ascii=True) + "\n"
     fingerprint_path.write_text(payload, encoding="utf-8")
     # Keep the cache record at the build root, and carry the same platform /
-    # architecture provenance with a runtime moved into a native package.
+    # architecture provenance with a runtime moved into a desktop package.
     bundled_fingerprint = layout["runtime_dir"] / BACKEND_RUNTIME_FINGERPRINT_NAME
     bundled_fingerprint.parent.mkdir(parents=True, exist_ok=True)
     bundled_fingerprint.write_text(payload, encoding="utf-8")

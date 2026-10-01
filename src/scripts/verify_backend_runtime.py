@@ -407,7 +407,7 @@ def _main_without_backend_runtime_lock() -> int:
     verify_dir = layout["build_root"] / "verification"
     verify_dir.mkdir(parents=True, exist_ok=True)
     if args.isolated:
-        verify_dir = Path(tempfile.mkdtemp(prefix="native-smoke-", dir=verify_dir))
+        verify_dir = Path(tempfile.mkdtemp(prefix="backend-smoke-", dir=verify_dir))
     smoke_log_path = verify_dir / "backend-runtime-smoke.log"
     smoke_data_dir = verify_dir / "data" if args.isolated else layout["build_root"] / "smoke-data"
 

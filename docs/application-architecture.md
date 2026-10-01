@@ -1,6 +1,6 @@
-# 可替换原生 UI 的应用边界
+# 统一桌面 UI 与共享后端的应用边界
 
-Vantage 的业务后端与界面独立运行。React + Electron、Windows WinUI 3、macOS SwiftUI 和 Linux GTK4 客户端复用同一 HTTP 服务、持久设置与后台行动计划调度，无需移植 React 的业务定时器。原生应用入口、构建和验证边界见 [原生客户端](native-clients.md)。
+Vantage 的业务后端与界面独立运行。React + Electron 是唯一维护的桌面 UI，Windows 和 macOS 共用同一界面与平台适配层。CLI/MCP 复用同一 HTTP 服务、持久设置与后台行动计划调度。独立原生客户端及其构建、打包和验收流程已移除，后端模块化与安全修复继续保留。
 
 ## 分层与职责
 
@@ -24,7 +24,7 @@ Vantage 的业务后端与界面独立运行。React + Electron、Windows WinUI 
 
 全局 ASGI 边界对所有 HTTP 与 WebSocket（包括媒体资源）校验客户端和 Host 为 loopback；有 Origin 的浏览器请求须来自开发白名单，显式 null 或不可信 Origin 在派发前拒绝，防止无预检的跨站 POST。开发 CORS 只允许受信任的本机 Vite 来源。Electron 配置调用通过精确路径/方法 allowlist 的窄 IPC 转发至同一 HTTP 配置 API；生产 renderer 使用可信 `vantage://app` 同源协议访问打包资源与后端流，开发 browser 通过同源代理访问。无需允许不可信的 `Origin: null` 或禁用 webSecurity。API 密钥始终 write-only/脱敏，不再将浏览器 localStorage 当作业务配置存储。
 
-## 原生客户端接入步骤
+## 桌面端与自动化接入步骤
 
 1. 由应用宿主启动或连接唯一后端，等待 `/api/v1/system/status` 成功；不要每个页面启动服务
 2. GET `/api/v1/capabilities`，确认 `api_version` 主版本与所需能力
