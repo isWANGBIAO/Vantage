@@ -474,6 +474,18 @@ OPERATIONS: tuple[Operation, ...] = (
         sensitive=True,
     ),
     Operation(
+        name="models.preference.update",
+        description="Persist the default configured provider and model without changing credentials or other settings.",
+        method="PUT",
+        path="/api/v1/models/preference",
+        input_schema=_object_schema({
+            "provider_route": _string("Enabled configured provider route."),
+            "model": _string("Known model identifier for the provider."),
+        }, required=("provider_route", "model")),
+        output_kind="json",
+        mutation=True,
+    ),
+    Operation(
         name="providers.special_models.discover",
         description="Discover voice or image models using the selected or supplied special-provider configuration.",
         method="POST",

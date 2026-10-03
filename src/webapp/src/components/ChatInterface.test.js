@@ -85,9 +85,9 @@ test('ChatInterface cleans up recording stream and timer when unmounted', () => 
 });
 
 test('ChatInterface uses provider-aware model options before falling back to legacy models', () => {
-  assert.ok(chatSource.includes('const defaultModel = data?.default_model'));
+  assert.ok(chatSource.includes('resolvePreferredModelOption(modelList)'));
   assert.ok(chatSource.includes('buildModelOptionsFromCatalog(data)'));
-  assert.ok(chatSource.includes('preferred_llm_model_ref'));
+  assert.ok(!chatSource.includes('preferred_llm_model_ref'));
   assert.ok(chatSource.includes('payload.provider_route'));
   assert.ok(chatSource.includes("vantage:llm-models-updated"));
 });
@@ -99,11 +99,12 @@ test('ChatInterface sends fast priority service tier only through supported prox
   assert.ok(chatSource.includes("t('common.fast_mode')"));
 });
 
-test('ChatInterface defaults to the latest Action Plan provider-aware model route', () => {
+test('ChatInterface tracks the latest Action Plan cache route without overriding canonical selection', () => {
   assert.ok(chatSource.includes('contextPreferredModelRef'));
   assert.ok(chatSource.includes('data?.preferred_model_option_id'));
   assert.ok(chatSource.includes('buildModelOptionId(data?.preferred_provider_route, data?.preferred_model)'));
-  assert.ok(chatSource.includes('findModelOption(modelList, contextPreferredModelRef.current)'));
+  assert.ok(!chatSource.includes('findModelOption(modelList, contextPreferredModelRef.current)'));
+  assert.ok(!chatSource.includes('setSelectedModel(inheritedOption.id)'));
 });
 
 test('ChatInterface warns when the user switches away from the inherited cache route', () => {

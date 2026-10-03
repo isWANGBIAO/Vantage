@@ -4,7 +4,37 @@ import assert from 'node:assert/strict';
 import {
   buildModelOptionsFromCatalog,
   findModelOption,
+  resolvePreferredModelOption,
+  persistPreferredModelOption,
 } from './llmModelCatalog.js';
+
+test('canonical default wins over stale browser model preference', () => {
+  const options = buildModelOptionsFromCatalog({ default_model: 'deepseek', default_provider_route: 'ds',
+    providers: [{ route: 'glm', models: ['glm'] }, { route: 'ds', models: ['deepseek'] }] });
+  assert.equal(resolvePreferredModelOption(options, { getItem: () => 'glm::glm' }).id, 'ds::deepseek');
+});
+
+test('model preference saves only route/model before publishing success', async () => {
+  const option = { id: 'ds::deepseek', provider_route: 'ds', model: 'deepseek' };
+  let request;
+  const result = await persistPreferredModelOption(option, async (url, init) => {
+    request = { url, init }; return { provider_route: 'ds', model: 'deepseek' };
+  });
+  assert.equal(request.url, '/api/v1/models/preference');
+  assert.equal(request.init.method, 'PUT');
+  assert.deepEqual(JSON.parse(request.init.body), { provider_route: 'ds', model: 'deepseek' });
+  assert.equal(result, option);
+});
+
+test('failed preference save rejects without changing the previous selection', async () => {
+  let current = 'glm::glm';
+  await assert.rejects(async () => {
+    const saved = await persistPreferredModelOption({ id: 'ds::deepseek', provider_route: 'ds', model: 'deepseek' },
+      async () => { throw new Error('save failed'); });
+    current = saved.id;
+  }, /save failed/);
+  assert.equal(current, 'glm::glm');
+});
 
 test('buildModelOptionsFromCatalog preserves provider-aware duplicate model names', () => {
   const options = buildModelOptionsFromCatalog({

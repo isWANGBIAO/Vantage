@@ -5,7 +5,7 @@ import time
 from typing import Optional
 
 import requests
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -16,6 +16,8 @@ from src.core.user_config import (
     get_provider_chain_config,
     load_provider_config,
     load_settings,
+    save_provider_config,
+    USER_CONFIG_LOCK,
 )
 from src.services.llm_client import LLMClient
 from src.utils.sensitive_data import redact_sensitive_text
@@ -142,6 +144,29 @@ class ProviderModelDiscoverRequest(BaseModel):
 @router.get("/api/v1/models")
 async def list_llm_models():
     return await asyncio.to_thread(_build_llm_models_payload)
+
+
+@router.put("/api/v1/models/preference")
+def update_model_preference(payload: dict):
+    """Change only the canonical selection, under the shared configuration lock."""
+    if set(payload) != {"provider_route", "model"}:
+        raise HTTPException(status_code=422, detail="Only provider_route and model are accepted.")
+    route, model = payload.get("provider_route"), payload.get("model")
+    if not isinstance(route, str) or not isinstance(model, str) or not route.strip() or not model.strip():
+        raise HTTPException(status_code=422, detail="A provider route and model are required.")
+    route, model = route.strip(), model.strip()
+    with USER_CONFIG_LOCK:
+        config = load_provider_config()
+        entry = config.get("providers", {}).get(route)
+        if (not isinstance(entry, dict) or entry.get("enabled") is False
+                or not any(provider.get("route") == route for provider in get_provider_chain_config())):
+            raise HTTPException(status_code=422, detail="The selected provider is not enabled or configured.")
+        if model not in entry.get("models", []) and model != entry.get("model"):
+            raise HTTPException(status_code=422, detail="The model is not configured for this provider.")
+        config["selected_provider"] = route
+        entry["model"] = model
+        save_provider_config(config)
+    return {"provider_route": route, "model": model}
 
 
 def _build_llm_models_payload():

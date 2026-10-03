@@ -45,6 +45,11 @@ test('startup transport waits for backend readiness before sending onboarding an
   }
 });
 
+test('window-local close shortcut uses the existing hide-to-tray close handler', () => {
+  assert.match(mainSource, /webContents\.on\('before-input-event',\s*\(event, input\) => \{\s*handleWindowCloseShortcut\(event, input, mainWindow\);\s*\}\)/);
+  assert.match(mainSource, /mainWindow\.on\('close',\s*\(event\) => \{\s*if \(!app\.isQuitting\) \{\s*event\.preventDefault\(\);\s*mainWindow\.hide\(\);/);
+});
+
 test('Electron main process loads the bounded logger factory but starts with a no-op logger', () => {
   assert.match(
     mainSource,

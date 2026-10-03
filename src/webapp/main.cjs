@@ -29,6 +29,7 @@ const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('.
 const { resolveAppBuildInfo } = require('./src/utils/buildInfo.cjs');
 const { createBoundedLogger } = require('./src/utils/boundedLogger.cjs');
 const { loadAppIcon } = require('./src/utils/appIcon.cjs');
+const { handleWindowCloseShortcut } = require('./src/utils/windowCloseShortcut.cjs');
 const packageJson = require('./package.json');
 let buildInfo = {};
 try {
@@ -646,6 +647,10 @@ function createWindow() {
         backgroundColor: '#050508',
         show: false,
         ...getWindowChromeOptions(),
+    });
+
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+        handleWindowCloseShortcut(event, input, mainWindow);
     });
 
     if (isDev) {
