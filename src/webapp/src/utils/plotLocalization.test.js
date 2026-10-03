@@ -4,6 +4,25 @@ import assert from 'node:assert/strict';
 import { buildChartOption, formatSummaryValue } from './plotFormatters.js';
 import { localizePlotChart, localizePlotWarnings } from './plotLocalization.js';
 
+test('balance chart localizes actual and daily consumption metadata', () => {
+  const chart = localizePlotChart({
+    id: 'balance',
+    title: '资产与消费',
+    description: '把总资产、分账户资产和实际消费、日均消费放进同一张可筛选图，而不是只看一张静态资金曲线。',
+    summary: [{ label: '最新实际消费', value: 100 }, { label: '最新日均消费', value: 10 }],
+    option: {
+      yAxis: [{ name: '资产 / 消费 (元)' }, { name: '日均消费 (元/天)' }],
+      series: [{ name: '实际消费' }, { name: '日均消费' }],
+    },
+  }, 'en-US');
+  assert.equal(chart.title, 'Assets and Consumption');
+  assert.equal(chart.description, 'Combine total assets, account-level assets, actual consumption, and daily consumption into one filterable chart instead of one static balance curve.');
+  assert.deepEqual(chart.summary.map((item) => item.label), ['Latest Actual Consumption', 'Latest Daily Consumption']);
+  assert.equal(chart.option.yAxis[0].name, 'Assets / Consumption (RMB)');
+  assert.equal(chart.option.yAxis[1].name, 'Daily Consumption (RMB/day)');
+  assert.deepEqual(chart.option.series.map((item) => item.name), ['Actual Consumption', 'Daily Consumption']);
+});
+
 test('localizePlotChart translates backend chart metadata and option labels for English', () => {
   const chart = {
     id: 'time-allocation',

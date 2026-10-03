@@ -3,6 +3,27 @@ import test from 'node:test';
 
 import { buildExpenseSheetViewModel } from './expenseSheetModel.js';
 
+test('consumption history prefers new columns without falling back from blank or zero values', () => {
+  const payload = {
+    source: { updated_at: '2026-04-30 23:27:13' },
+    sheets: [{
+      name: '开销',
+      columns: ['日期', '现金及现金等价物+股票', '期间支出', '日均支出', '实际消费', '日均消费'],
+      rows: [
+        ['2026-04-01', 6000, 900, 90, 300, 30],
+        ['2026-04-02', 6000, 900, 90, 0, 0],
+        ['2026-04-03', 6000, 900, 90, '', ''],
+      ],
+    }],
+  };
+  const viewModel = buildExpenseSheetViewModel(payload);
+  assert.deepEqual(viewModel.trendChart.points.map(({ periodSpend, dailyAverage }) =>
+    [periodSpend, dailyAverage]), [[300, 30], [0, 0], [null, null]]);
+  assert.deepEqual(viewModel.recentSpending.map(({ periodSpend, dailyAverage }) =>
+    [periodSpend, dailyAverage]), [[0, 0], [300, 30]]);
+  assert.equal(viewModel.kpis.find((item) => item.id === 'dailyBurn').label, '最近日均消费');
+});
+
 test('buildExpenseSheetViewModel tolerates a null payload before data loads', () => {
   const viewModel = buildExpenseSheetViewModel(null);
 

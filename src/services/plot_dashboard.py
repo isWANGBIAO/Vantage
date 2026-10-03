@@ -1164,6 +1164,10 @@ def _build_balance_dashboard_chart():
         raise ValueError('资产数据为空')
 
     dates = balance_df['日期'].tolist()
+    daily_col = plot_module._find_balance_column(balance_df, ['日均消费', '日均支出', '日均开销', '日均成本'])
+    spend_col = plot_module._find_balance_column(balance_df, ['实际消费', '期间支出', '预测/实际支出'])
+    if daily_col is None:
+        raise ValueError('未找到日均消费字段')
     balance_col = plot_module._find_balance_column(
         balance_df,
         ['现金及现金等价物+股票', '实际/预测期末现金+股票', '现金及现金等价物'],
@@ -1190,8 +1194,11 @@ def _build_balance_dashboard_chart():
         {'name': '银行卡资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['银行卡资产'].to_numpy(dtype=float), 0)},
         {'name': '微信资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['微信资产'].to_numpy(dtype=float), 0)},
         {'name': '股票资产', 'type': 'line', 'showSymbol': False, 'data': _series_points(dates, balance_df['股票资产'].to_numpy(dtype=float), 0)},
-        {'name': '日均支出', 'type': 'line', 'showSymbol': False, 'smooth': True, 'yAxisIndex': 1, 'data': _series_points(dates, balance_df['日均支出'].to_numpy(dtype=float), 0)},
+        {'name': '日均消费', 'type': 'line', 'showSymbol': False, 'smooth': True, 'yAxisIndex': 1, 'data': _series_points(dates, pd.to_numeric(balance_df[daily_col], errors='coerce').to_numpy(dtype=float), 0)},
     ]
+    if spend_col is not None:
+        series.append({'name': '实际消费', 'type': 'line', 'showSymbol': False, 'smooth': True,
+                       'data': _series_points(dates, pd.to_numeric(balance_df[spend_col], errors='coerce').to_numpy(dtype=float), 0)})
 
     if not forecast_series_df.empty and len(forecast_series_df) > 1:
         series.append(
@@ -1233,23 +1240,26 @@ def _build_balance_dashboard_chart():
         'grid': {'top': 72, 'left': 56, 'right': 56, 'bottom': 72, 'containLabel': True},
         'xAxis': {'type': 'time'},
         'yAxis': [
-            {'type': 'value', 'name': '资产 (元)'},
-            {'type': 'value', 'name': '日均支出 (元/天)', 'position': 'right'},
+            {'type': 'value', 'name': '资产 / 消费 (元)'},
+            {'type': 'value', 'name': '日均消费 (元/天)', 'position': 'right'},
         ],
         'series': series,
     }
 
     latest_row = balance_df.iloc[-1]
+    latest_daily = plot_module._row_number(latest_row, daily_col)
+    latest_spend = plot_module._row_number(latest_row, spend_col)
     return _build_chart(
         'balance',
-        '资产与支出',
-        '把总资产、分账户资产和日均支出放进同一张可筛选图，而不是只看一张静态资金曲线。',
+        '资产与消费',
+        '把总资产、分账户资产和实际消费、日均消费放进同一张可筛选图，而不是只看一张静态资金曲线。',
         option,
         formatter='currency',
         height=430,
         summary=[
             {'label': '最新总资产', 'value': f"¥{int(round(float(latest_row[balance_col]))):,}"},
-            {'label': '最新日均支出', 'value': f"¥{int(round(float(latest_row['日均支出']))):,}/天"},
+            {'label': '最新日均消费', 'value': f"¥{int(round(latest_daily)):,}/天" if latest_daily is not None else '—'},
+            {'label': '最新实际消费', 'value': f"¥{int(round(latest_spend)):,}" if latest_spend is not None else '—'},
         ],
     )
 
@@ -1626,8 +1636,8 @@ def build_plot_dashboard_data():
         ),
         _safe_chart(
             'balance',
-            '资产与支出',
-            '把总资产、分账户资产和日均支出放进同一张可筛选图，而不是只看一张静态资金曲线。',
+            '资产与消费',
+            '把总资产、分账户资产和实际消费、日均消费放进同一张可筛选图，而不是只看一张静态资金曲线。',
             _build_balance_dashboard_chart,
             formatter='currency',
             height=430,

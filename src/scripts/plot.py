@@ -1244,7 +1244,10 @@ def plot_balance_sheet(data_frame_balance, output_dir=None):
         raise ValueError("资产实际记录为空，无法绘图")
 
     date = actual_df["日期"]
-    day_average_expenditure = actual_df["日均支出"]
+    daily_col = _find_balance_column(actual_df, ["日均消费", "日均支出", "日均开销", "日均成本"])
+    if daily_col is None:
+        raise ValueError("未找到日均消费字段")
+    day_average_expenditure = pd.to_numeric(actual_df[daily_col], errors="coerce")
 
     fig, ax1 = plt.subplots(figsize=get_figsize("balance"))
     balance_col = _find_balance_column(actual_df, ["现金及现金等价物+股票", "实际/预测期末现金+股票", "现金及现金等价物"])
@@ -1260,10 +1263,14 @@ def plot_balance_sheet(data_frame_balance, output_dir=None):
         markersize=8,
     )
     ax1.set_xlabel("日期")
-    ax1.set_ylabel("现金及现金等价物+股票", color=COLORS["blue"])
+    ax1.set_ylabel("资产 / 消费 (元)", color=COLORS["blue"])
     ax1.tick_params(axis="y", labelcolor=COLORS["blue"])
     apply_axis_style(ax1)
-    ax1.set_title("资产与支出趋势", color=COLORS["gray"], pad=16)
+    ax1.set_title("资产与消费趋势", color=COLORS["gray"], pad=16)
+    spend_col = _find_balance_column(actual_df, ["实际消费", "期间支出", "预测/实际支出"])
+    if spend_col is not None:
+        ax1.plot(date, pd.to_numeric(actual_df[spend_col], errors="coerce"),
+                 label="实际消费", color=COLORS["green"], linewidth=2.0)
 
     ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
     ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
@@ -1286,12 +1293,12 @@ def plot_balance_sheet(data_frame_balance, output_dir=None):
         date,
         day_average_expenditure,
         "-",
-        label="日均支出",
+        label="日均消费",
         color=COLORS["orange"],
         linewidth=2.0,
         markersize=6,
     )
-    ax2.set_ylabel("日均支出", color=COLORS["orange"])
+    ax2.set_ylabel("日均消费", color=COLORS["orange"])
     ax2.tick_params(axis="y", labelcolor=COLORS["orange"])
 
     lines_1, labels_1 = ax1.get_legend_handles_labels()

@@ -159,6 +159,17 @@ def _find_metric(sheets, keywords):
             return result
     return None
 
+def _find_consumption_metric(sheets, preferred_field, legacy_keywords):
+    # A present new column is authoritative even when its values are missing.
+    for sheet_name, df in sheets.items():
+        if preferred_field in df.columns:
+            result = _find_metric_from_columns(df[[preferred_field]], [preferred_field])
+            if result is not None:
+                result["sheet"] = sheet_name
+            return result
+    return _find_metric(sheets, legacy_keywords)
+
+
 def _find_budget_sheet(sheets):
     if not sheets:
         return None, None
@@ -289,8 +300,8 @@ def _find_expense_sheet(sheets):
     for sheet_name, df in sheets.items():
         date_col = _find_date_column(df)
         balance_col = _find_first_column(df, ["现金及现金等价物+股票", "现金及现金等价物", "现金", "股票"])
-        daily_average_col = _find_first_column(df, ["日均支出", "日均开销", "日均成本"])
-        period_spend_col = _find_first_column(df, ["期间支出", "支出"])
+        daily_average_col = _find_first_column(df, ["日均消费", "日均支出", "日均开销", "日均成本"])
+        period_spend_col = _find_first_column(df, ["实际消费", "期间支出", "支出"])
 
         if date_col is not None and any(col is not None for col in [balance_col, daily_average_col, period_spend_col]):
             return sheet_name, df
@@ -400,8 +411,8 @@ def _build_expense_trend_points(sheets):
         return []
 
     balance_col = _find_first_column(df, ["现金及现金等价物+股票", "实际/预测期末现金+股票", "现金及现金等价物", "现金", "股票"])
-    daily_average_col = _find_first_column(df, ["日均支出", "日均开销", "日均成本"])
-    period_spend_col = _find_first_column(df, ["预测/实际支出", "期间支出", "支出"])
+    daily_average_col = _find_first_column(df, ["日均消费", "日均支出", "日均开销", "日均成本"])
+    period_spend_col = _find_first_column(df, ["实际消费", "预测/实际支出", "期间支出", "支出"])
 
     if balance_col is None and daily_average_col is None and period_spend_col is None:
         return []
@@ -568,9 +579,11 @@ def _build_balance_summary(sheets):
         if actual_expense_df is not None and not actual_expense_df.empty:
             metric_sheets[expense_sheet_name] = actual_expense_df
 
-    daily_avg = _find_metric(metric_sheets, ["日均支出", "日均开销", "日均成本"])
-    monthly_total = _find_metric(metric_sheets, ["月支出", "月度支出", "当月支出", "月总支出"])
+    daily_avg = _find_consumption_metric(metric_sheets, "日均消费", ["日均支出", "日均开销", "日均成本"])
+    monthly_total = _find_consumption_metric(metric_sheets, "实际消费", ["月支出", "月度支出", "当月支出", "月总支出"])
     monthly_avg = _find_metric(metric_sheets, ["月均支出", "月均开销", "月均成本"])
+    has_actual_consumption = any("实际消费" in df.columns for df in metric_sheets.values())
+    has_daily_consumption = any("日均消费" in df.columns for df in metric_sheets.values())
 
     latest_date = None
     if daily_avg and "sheet" in daily_avg:
@@ -593,16 +606,16 @@ def _build_balance_summary(sheets):
     monthly_total_value = None
     if monthly_total:
         monthly_total_value = monthly_total["value"]
-    elif monthly_avg:
+    elif monthly_avg and not has_actual_consumption:
         monthly_total_value = monthly_avg["value"]
 
-    if daily_avg_value is None and monthly_total_value is not None:
+    if daily_avg_value is None and monthly_total_value is not None and not has_daily_consumption:
         daily_avg_value = monthly_total_value / days_in_month if days_in_month else None
 
     per_minute = None
     if daily_avg_value is not None:
         per_minute = daily_avg_value / (24 * 60)
-    elif monthly_total_value is not None:
+    elif monthly_total_value is not None and not has_daily_consumption:
         per_minute = (monthly_total_value / days_in_month) / (24 * 60) if days_in_month else None
 
     per_day_month = None
