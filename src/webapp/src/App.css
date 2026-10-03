@@ -95,23 +95,14 @@
   align-items: center;
   gap: 0.75rem;
   overflow-x: auto;
+  overflow-y: hidden;
   padding-bottom: 0.25rem;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-hover) transparent;
+  scrollbar-width: none;
   min-width: min(100%, 420px);
 }
 
 .app-nav::-webkit-scrollbar {
-  height: 6px;
-}
-
-.app-nav::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.app-nav::-webkit-scrollbar-thumb {
-  background: var(--border-hover);
-  border-radius: 999px;
+  display: none;
 }
 
 .app-nav-link {

@@ -22,8 +22,8 @@ const faceHistorySource = read('./components/FaceHistory.jsx');
 const displayCopySource = read('./utils/displayCopy.js');
 
 test('global shell keeps navigation discoverable and reduces accidental motion', () => {
-  assert.match(appCss, /\.app-nav\s*\{[\s\S]*scrollbar-width:\s*thin/s);
-  assert.match(appCss, /\.app-nav::-webkit-scrollbar\s*\{[\s\S]*height:\s*6px/s);
+  assert.match(appCss, /\.app-nav\s*\{[\s\S]*scrollbar-width:\s*none/s);
+  assert.match(appCss, /\.app-nav::-webkit-scrollbar\s*\{[\s\S]*display:\s*none/s);
   assert.ok(appCss.includes('aria-current'));
   assert.ok(appSource.includes('href={`#${item.key.replaceAll'));
   assert.ok(indexCss.includes('@media (prefers-reduced-motion: reduce)'));

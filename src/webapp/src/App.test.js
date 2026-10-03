@@ -4,6 +4,15 @@ import { readFileSync } from 'node:fs';
 
 const appSource = readFileSync(new URL('./App.jsx', import.meta.url), 'utf8');
 
+test('header navigation hides native scrollbar controls but remains horizontally scrollable', () => {
+  const css = readFileSync(new URL('./App.css', import.meta.url), 'utf8');
+  const nav = css.match(/\.app-nav\s*\{([^}]+)\}/)[1];
+  assert.match(nav, /overflow-x:\s*auto/);
+  assert.match(nav, /overflow-y:\s*hidden/);
+  assert.match(nav, /scrollbar-width:\s*none/);
+  assert.match(css, /\.app-nav::-webkit-scrollbar\s*\{[^}]*display:\s*none/);
+});
+
 test('App passes the current theme into chart-heavy screens', () => {
   assert.ok(appSource.includes('<ExpenseSheet theme={theme} />'));
   assert.ok(appSource.includes('<Plots theme={theme} />'));
