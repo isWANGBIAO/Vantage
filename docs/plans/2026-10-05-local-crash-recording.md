@@ -22,8 +22,8 @@ Files: `src/webapp/src/utils/crashDiagnostics.cjs`, matching `.test.js`,
 
 ### Task 2: Python collection
 
-Files: `src/core/crash_diagnostics.py`, `src/scripts/backend_runtime_entry.py`
-(locate actual packaging entry first), `tests/test_crash_diagnostics.py`.
+Files: `src/core/crash_diagnostics.py`, `src/scripts/run_server_background.py`
+(verified packaging entry), `tests/test_crash_diagnostics.py`.
 
 1. Write failing tests for configured data-root storage, no-value tracebacks,
    fatal faulthandler output, process isolation and active-file-safe retention.

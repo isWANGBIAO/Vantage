@@ -252,3 +252,50 @@ def test_retention_preserves_aged_crashpad_new_dump_until_finalized(tmp_path):
     writing.rename(pending)
     module.prune_diagnostics(tmp_path, max_records=0, max_bytes=0)
     assert not pending.exists()
+
+
+@pytest.mark.parametrize("use_explicit_directory", [False, True])
+def test_standalone_frozen_entry_uses_user_directory_not_install_resources(tmp_path, use_explicit_directory):
+    env = dict(os.environ)
+    for name in ("VANTAGE_APP_MODE", "VANTAGE_DATA_DIR", "VANTAGE_PROJECT_ROOT"):
+        env.pop(name, None)
+    env["LOCALAPPDATA"] = str(tmp_path / "user")
+    if use_explicit_directory:
+        env["VANTAGE_DATA_DIR"] = str(tmp_path / "custom-data")
+    resource_root = tmp_path / "installation"
+    body = (
+        "import sys; from pathlib import Path; "
+        "from src.scripts import run_server_background as launcher; "
+        f"sys.frozen = True; sys._MEIPASS = {str(resource_root)!r}; "
+        "launcher._initialize_packaged_app_mode(); "
+        "record = launcher.install_crash_diagnostics(role='cli', periodic_seconds=0); "
+        "print(record.path); record.close()"
+    )
+    result = subprocess.run([sys.executable, "-c", body], env=env,
+                            cwd=Path(__file__).resolve().parents[1],
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    expected_root = tmp_path / "custom-data" if use_explicit_directory else tmp_path / "user" / "Vantage"
+    assert str(expected_root / "diagnostics" / "python") in result.stdout
+    assert not resource_root.exists()
+
+
+def test_packaged_entry_mode_initialization_respects_explicit_overrides():
+    from src.scripts import run_server_background as launcher
+    assert hasattr(launcher, "_initialize_packaged_app_mode"), "missing packaged entry mode initialization"
+    explicit = {"VANTAGE_APP_MODE": "development", "VANTAGE_DATA_DIR": "custom-location"}
+    launcher._initialize_packaged_app_mode(env=explicit, is_frozen=True)
+    assert explicit == {"VANTAGE_APP_MODE": "development", "VANTAGE_DATA_DIR": "custom-location"}
+    development = {}
+    launcher._initialize_packaged_app_mode(env=development, is_frozen=False)
+    assert development == {}
+    packaged = {"VANTAGE_DATA_DIR": "custom-location"}
+    launcher._initialize_packaged_app_mode(env=packaged, is_frozen=True)
+    assert packaged == {"VANTAGE_APP_MODE": "packaged", "VANTAGE_DATA_DIR": "custom-location"}
+
+
+def test_packaged_mode_is_initialized_before_diagnostics():
+    root = Path(__file__).resolve().parents[1]
+    launcher = (root / "src/scripts/run_server_background.py").read_text(encoding="utf-8")
+    assert "    _initialize_packaged_app_mode()" in launcher
+    assert launcher.index("    _initialize_packaged_app_mode()") < launcher.index("install_crash_diagnostics(role=_role)")
