@@ -2,6 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPlatformAdapter, getPlatformAdapter } from './platformAdapter.js';
 
+test('diagnostics is unavailable in a browser and cannot open arbitrary paths', async () => {
+  const browser = createPlatformAdapter();
+  assert.equal(browser.capabilities.diagnostics, false);
+  assert.equal(await browser.diagnostics.getStatus(), null);
+  assert.deepEqual(await browser.diagnostics.openDirectory(), { opened: false });
+  const calls = [];
+  const native = createPlatformAdapter({
+    getDiagnosticsStatus: async (...args) => { calls.push(args); return { localOnly: true }; },
+    openDiagnosticsDirectory: async (...args) => { calls.push(args); return { opened: true }; },
+  });
+  assert.equal(native.capabilities.diagnostics, true);
+  assert.deepEqual(await native.diagnostics.getStatus(), { localOnly: true });
+  assert.deepEqual(await native.diagnostics.openDirectory('/untrusted'), { opened: true });
+  assert.deepEqual(calls, [[], []]);
+});
+
 test('browser exposes explicit unavailable native capabilities without performing side effects', async () => {
   const platform = createPlatformAdapter();
   assert.equal(platform.kind, 'browser');

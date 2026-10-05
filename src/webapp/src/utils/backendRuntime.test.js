@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { EventEmitter } from 'node:events';
 
 const require = createRequire(import.meta.url);
 const {
@@ -21,6 +22,20 @@ const runtimePaths = {
   runtimeDir: 'C:\\Users\\Example\\AppData\\Local\\Vantage\\runtime',
   migrationDir: 'C:\\Users\\Example\\AppData\\Local\\Vantage\\migration',
 };
+
+test('bundled backend observer attaches immediately before readiness wait', async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 9876, exitCode: null, unref() {} });
+  let calls = 0;
+  let observed = false;
+  const result = await ensureBundledBackendReady({
+    isDev: false, runtimePaths, env: {}, executablePath: 'C:\\runtime\\VantageBackend.exe', fileExists: () => true,
+    loadProviderConfigFn: () => ({ providers: {} }),
+    spawnProcess: () => child,
+    onSpawned: candidate => { assert.equal(candidate, child); observed = true; },
+    waitForStatusFn: async () => { calls += 1; if (calls === 1) throw new Error('not running'); assert.equal(observed, true); return { ready: true }; },
+  });
+  assert.equal(result.started, true);
+});
 
 test('resolveBundledBackendExecutable prefers an explicit override', () => {
   const executablePath = resolveBundledBackendExecutable({

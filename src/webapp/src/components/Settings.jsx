@@ -20,6 +20,7 @@ import {
 } from '../utils/providerModels';
 import { loadSettingsState, openSettingsPath, saveSettingsState } from '../utils/settingsState';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
+import { getPlatformAdapter } from '../utils/platformAdapter';
 
 const SECTION_ORDER = [
   { key: 'general', labelKey: 'settings.section.general' },
@@ -200,6 +201,24 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [refreshingSpecialModels, setRefreshingSpecialModels] = useState(null);
   const [saveStatus, setSaveStatus] = useState('');
+  const [diagnosticsStatus, setDiagnosticsStatus] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPlatformAdapter().diagnostics.getStatus().then((status) => {
+      if (!cancelled) setDiagnosticsStatus(status);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const openCrashRecords = async () => {
+    try {
+      const result = await getPlatformAdapter().diagnostics.openDirectory();
+      setSaveStatus(result?.opened ? '' : t('diagnostics.open_failed'));
+    } catch {
+      setSaveStatus(t('diagnostics.open_failed'));
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -1002,6 +1021,16 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           <Copy size={15} />
           {t('settings.about.copy_diagnostics')}
         </button>
+      </div>
+      <div className="settings-diagnostics">
+        <h3>{t('diagnostics.title')}</h3>
+        <p>{t('diagnostics.privacy')}</p>
+        {diagnosticsStatus?.available === false || !diagnosticsStatus?.directory ? <p>{t('diagnostics.unavailable')}</p> : <code>{diagnosticsStatus.directory}</code>}
+        <div className="settings-inline-actions">
+          <button type="button" className="secondary-button" onClick={openCrashRecords} disabled={!getPlatformAdapter().capabilities.diagnostics || diagnosticsStatus?.available === false}>
+            <FolderOpen size={15} />{t('diagnostics.open')}
+          </button>
+        </div>
       </div>
     </section>
   );

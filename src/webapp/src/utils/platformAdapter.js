@@ -12,6 +12,8 @@ export function createPlatformAdapter(bridge = null) {
     cameraAccess: available('cameraAccess', bridge?.requestCameraAccess),
     notifications: available('notifications', bridge?.showNotification),
     minimizeToTray: available('minimizeToTray', bridge?.minimizeToTray),
+    diagnostics: available('diagnostics', bridge?.getDiagnosticsStatus)
+      && available('diagnostics', bridge?.openDiagnosticsDirectory),
     systemLocale: true,
   });
   return Object.freeze({
@@ -35,6 +37,12 @@ export function createPlatformAdapter(bridge = null) {
         ? bridge.openSettingsPath(key) : Promise.resolve({ opened: false }),
       pickLegacyRoot: () => capabilities.pickLegacyRoot
         ? bridge.pickLegacyRoot() : Promise.resolve({ path: null }),
+    }),
+    diagnostics: Object.freeze({
+      getStatus: () => capabilities.diagnostics
+        ? bridge.getDiagnosticsStatus() : Promise.resolve(null),
+      openDirectory: () => capabilities.diagnostics
+        ? bridge.openDiagnosticsDirectory() : Promise.resolve({ opened: false }),
     }),
     locale: Object.freeze({
       getSystemLocale: async () => await bridge?.getSystemLocale?.() || descriptor.systemLocale || getBrowserLocale(),

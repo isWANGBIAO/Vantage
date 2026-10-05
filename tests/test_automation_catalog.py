@@ -268,7 +268,11 @@ def test_catalog_covers_electron_invoke_operations_without_renderer_transport():
     }
 
     transport_channels = {"backend:wait-until-ready", "backend:configuration-request", "platform:apply-saved-preferences"}
-    assert invoked_channels == catalog_channels | transport_channels
+    # Crash records can contain private memory. These narrow desktop controls
+    # do not expose record contents through the public CLI/MCP business catalog.
+    diagnostics_channels = {"diagnostics:get-status", "diagnostics:open-directory"}
+    assert invoked_channels == catalog_channels | transport_channels | diagnostics_channels
+    assert not catalog_channels & diagnostics_channels
     assert not any("camera:" in channel for channel in catalog_channels)
 
 

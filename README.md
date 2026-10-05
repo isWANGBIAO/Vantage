@@ -124,13 +124,13 @@ GitHub Releases are automated for version tags. Keep
 tag:
 
 ```powershell
-git tag -a v1.0.85 -m "Vantage 1.0.85"
-git push origin v1.0.85
+git tag -a v1.0.86 -m "Vantage 1.0.86"
+git push origin v1.0.86
 ```
 
 The `Release` workflow builds the Windows installer, generates `SHA256SUMS.txt`,
 and publishes the assets to the matching GitHub Release. The tag must match the
-frontend package version, for example `v1.0.85` for package version `1.0.85`.
+frontend package version, for example `v1.0.86` for package version `1.0.86`.
 
 macOS full build, install, and launch:
 
@@ -155,6 +155,13 @@ Packaged macOS builds use:
 - `~/Library/Application Support/Vantage/history`
 - `~/Library/Application Support/Vantage/logs`
 - `~/Library/Application Support/Vantage/plot_outputs`
+
+## Local Crash Records
+
+Vantage records crash evidence locally without automatic uploads. Open it from
+Settings → About → Local crash records. Dumps may contain private memory data;
+inspect before sharing. See [local crash diagnostics](docs/local-crash-diagnostics.md)
+for coverage, retention limits, and isolated verification.
 
 ## Configuration
 

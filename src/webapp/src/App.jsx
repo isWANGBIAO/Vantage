@@ -5,6 +5,7 @@ import './App.css';
 import appIcon from '../assets/icon.png';
 import ActionPlanContainer from './components/ActionPlanContainer';
 import OnboardingShell from './components/OnboardingShell';
+import CrashDiagnosticsNotice from './components/CrashDiagnosticsNotice';
 import { completeOnboardingSetup, loadOnboardingState, pickLegacyRoot } from './utils/onboardingState';
 import { loadSettingsState, saveSettingsState } from './utils/settingsState';
 import {
@@ -477,6 +478,7 @@ function AppShell() {
       </header>
 
       <main className="app-container app-main">
+        <CrashDiagnosticsNotice />
         <Suspense fallback={null}>
           {(activeTab === 'dashboard' || shouldRenderBackgroundTabs) ? (
             <div style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}>
