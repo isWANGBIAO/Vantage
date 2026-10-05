@@ -35,3 +35,22 @@ npm --prefix src/webapp run test:crash-diagnostics
 ```
 
 最后一个命令故意令独立 Electron 测试进程崩溃；测试父进程验证本地转储、禁止上传、下一次会话恢复与正常退出标记。
+
+Windows 打包 CLI 的独立目录验证（临时用户目录和模拟后端，不调用业务工具）：
+
+```powershell
+node src/webapp/scripts/smoke-packaged-crash-diagnostics.cjs "path/to/VantageBackend.exe"
+```
+
+## 1.0.86 验收记录（2026-10-05）
+
+- Python 全套：1657 passed、16 skipped、70 subtests passed；保留既有 Starlette/AnyIO 弃用警告。
+- 前端：lint、525 项测试、生产构建通过。
+- Electron 隔离主进程与渲染进程真实崩溃：均生成有效 MDMP，核实禁止上传；主进程异常标记与正常退出区分通过。
+- Python 隔离原生故障、异常隐私、线程异常、保留策略和并发写入保护通过。
+- 生产 UI 隔离测试：七个页面、双语隐私说明、提示关闭、目录失败、不可用状态及正常启动通过，无渲染错误。
+- Windows 安装链自然完成；安装版前后端与打包产物哈希一致，构建提交 `7f6ff46`，后端状态正常，活动记录和本地 Crashpad 进程已核实。
+- 安装版独立 CLI 在模拟后端与临时用户目录下通过验证；正常退出删除空活动记录。
+- 模型提供方配置文件安装前后哈希不变。未上传记录、未修改系统转储注册表、未推送分支。
+
+本次实机打包安装验证在 Windows 执行；未声称完成 macOS 实机验收。
