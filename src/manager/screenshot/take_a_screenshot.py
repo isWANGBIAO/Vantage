@@ -1,5 +1,10 @@
 import os
 from datetime import datetime
+
+from src.core.cpu_runtime_policy import configure_cpu_runtime
+
+configure_cpu_runtime()
+
 import mss
 import sys
 import subprocess

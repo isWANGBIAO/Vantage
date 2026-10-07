@@ -14,6 +14,11 @@ const {
     protocol,
     crashReporter,
 } = require('electron');
+
+// Vantage's UI does not require hardware acceleration. Apply the app-wide
+// software-rendering policy synchronously, before readiness or any windows.
+app.disableHardwareAcceleration();
+
 const path = require('path');
 const fs = require('fs');
 const http = require('http');

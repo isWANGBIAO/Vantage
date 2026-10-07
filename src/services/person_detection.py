@@ -15,6 +15,10 @@ import threading
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.core.cpu_runtime_policy import configure_cpu_runtime
+
+configure_cpu_runtime()
+
 
 PERSON_DETECTION_CONFIDENCE = 0.75
 PRESENCE_DETECTION_CONFIDENCE = 0.50

@@ -46,6 +46,10 @@ def _ensure_project_root_on_sys_path(
 
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
+from src.core.cpu_runtime_policy import configure_cpu_runtime
+
+configure_cpu_runtime()
+
 from src.core.config import Config
 from src.core.crash_diagnostics import install_crash_diagnostics
 

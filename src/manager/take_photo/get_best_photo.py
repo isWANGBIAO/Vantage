@@ -1,4 +1,15 @@
 import time
+import sys
+from pathlib import Path
+
+if __package__ in (None, ""):
+    project_root = str(Path(__file__).resolve().parents[3])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+from src.core.cpu_runtime_policy import configure_cpu_runtime
+
+configure_cpu_runtime()
 
 import cv2
 

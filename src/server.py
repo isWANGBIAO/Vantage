@@ -14,6 +14,10 @@ if current_dir not in sys.path:
 if project_root not in sys.path:
     sys.path.append(project_root)
 
+from src.core.cpu_runtime_policy import configure_cpu_runtime
+
+configure_cpu_runtime()
+
 # This must run before any optional camera runtime is imported.
 if sys.platform == "darwin":
     skip_camera_auth = os.environ.get("VANTAGE_MACOS_SKIP_CAMERA_AUTH")
