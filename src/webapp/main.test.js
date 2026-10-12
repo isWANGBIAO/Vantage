@@ -318,7 +318,7 @@ test('Electron keeps native directory, picker, login, tray, and title-bar effect
     /ipcMain\.handle\('platform:open-settings-path',[\s\S]*?\n\}\);\n\nipcMain\.handle\('platform:pick-legacy-root'/,
   )?.[0];
   const picker = mainSource.match(
-    /ipcMain\.handle\('platform:pick-legacy-root',[\s\S]*?\n\}\);\n\nipcMain\.handle\('platform:get-system-locale'/,
+    /ipcMain\.handle\('platform:pick-legacy-root',[\s\S]*?\n\}\);\n\nipcMain\.handle\('platform:pick-body-analysis-directory'/,
   )?.[0];
   const titleBarTheme = mainSource.match(
     /ipcMain\.handle\('platform:set-title-bar-theme',[\s\S]*?\n\}\);/,
@@ -334,6 +334,14 @@ test('Electron keeps native directory, picker, login, tray, and title-bar effect
   assert.match(picker, /dialog\.showOpenDialog/);
   assert.match(picker, /properties: \['openDirectory'\]/);
   assert.match(titleBarTheme, /setTitleBarOverlay/);
+});
+
+test('body-analysis directory picker accepts only leg, scalp, and model folders from the main renderer', () => {
+  const picker = mainSource.match(/ipcMain\.handle\('platform:pick-body-analysis-directory',[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(picker);
+  assert.match(picker, /event\.sender !== mainWindow\?\.webContents/);
+  assert.match(picker, /\['leg', 'scalp', 'model'\]/);
+  assert.match(picker, /properties: \['openDirectory'\]/);
 });
 
 test('Electron main process requests macOS camera access before bundled backend startup', () => {

@@ -93,8 +93,17 @@ test('App passes visibility into SystemLogs so hidden panels do not poll logs', 
   assert.ok(appSource.includes("<SystemLogs isVisible={activeTab === 'system logs'} />"));
 });
 
-test('App keeps face-history prewarm mounted but passes visibility into FaceHistory', () => {
-  assert.ok(appSource.includes("<FaceHistory isVisible={activeTab === 'face history'} />"));
+test('Body Analysis replaces Face History navigation and legacy hash remains valid', () => {
+  assert.match(appSource, /key: 'body-analysis', labelKey: 'app\.nav\.body_analysis'/);
+  assert.match(appSource, /\['face-history', 'body-analysis'\]/);
+  assert.match(appSource, /<BodyAnalysis/);
+  assert.equal(appSource.includes("key: 'face history', labelKey: 'app.nav.face_history'"), false);
+});
+
+test('FaceHistory is not prewarmed invisibly after moving inside Body Analysis', () => {
+  const preloadedTabs = appSource.match(/const BACKGROUND_TAB_COMPONENTS = \[([\s\S]*?)\];/)[1];
+  assert.equal(preloadedTabs.includes('FaceHistory'), false);
+  assert.equal(appSource.includes("<FaceHistory isVisible={activeTab === 'face history'} />"), false);
 });
 
 test('App gates the workspace behind onboarding when setup is incomplete', () => {

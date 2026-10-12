@@ -30,9 +30,11 @@ test('preload exposes a narrow platform contract without a parallel legacy bridg
   await exposed.vantagePlatform.requestConfiguration('PUT', '/api/v1/settings', { theme: 'light' });
   await exposed.vantagePlatform.applySavedPreferences();
   await exposed.vantagePlatform.waitUntilBackendReady();
+  await exposed.vantagePlatform.pickBodyAnalysisDirectory('leg');
   assert.deepEqual(invocations, [
     ['backend:configuration-request', 'PUT', '/api/v1/settings', { theme: 'light' }],
     ['platform:apply-saved-preferences'],
     ['backend:wait-until-ready'],
+    ['platform:pick-body-analysis-directory', 'leg'],
   ]);
 });

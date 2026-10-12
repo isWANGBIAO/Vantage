@@ -670,6 +670,16 @@ ipcMain.handle('platform:pick-legacy-root', async (event) => {
     };
 });
 
+ipcMain.handle('platform:pick-body-analysis-directory', async (event, kind) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error('Unsupported renderer.');
+    if (!['leg', 'scalp', 'model'].includes(kind)) throw new Error('Unsupported directory selection.');
+    const result = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openDirectory'],
+        title: { leg: '选择腿毛照片目录', scalp: '选择头皮照片目录', model: '选择本地 SAM3 模型目录' }[kind],
+    });
+    return { path: result.canceled ? null : (result.filePaths[0] || null) };
+});
+
 ipcMain.handle('platform:get-system-locale', async (event) => {
     if (event.sender !== mainWindow?.webContents) throw new Error('Unsupported renderer.');
     return app.getLocale();

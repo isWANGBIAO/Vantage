@@ -44,3 +44,31 @@ test('opening settings paths is capability-based and unavailable in a browser', 
   assert.equal(await openSettingsPath('logs', platform), true);
   assert.deepEqual(calls, ['logs']);
 });
+
+test('body-analysis settings round-trip through the shared JSON settings API', async () => {
+  let saved;
+  const platform = nativePlatform(async (method, path, payload) => {
+    assert.equal(path, '/api/v1/settings');
+    if (method === 'PUT') saved = payload;
+    return { settings: {
+      body_analysis_enabled: true,
+      body_analysis_leg_dir: 'leg-directory',
+      body_analysis_scalp_dir: 'scalp-directory',
+      body_analysis_model_dir: 'model-directory',
+    } };
+  });
+  const result = await saveSettingsState({
+    bodyAnalysisEnabled: true,
+    bodyAnalysisLegDir: 'leg-directory',
+    bodyAnalysisScalpDir: 'scalp-directory',
+    bodyAnalysisModelDir: 'model-directory',
+  }, platform);
+  assert.deepEqual(saved, {
+    body_analysis_enabled: true,
+    body_analysis_leg_dir: 'leg-directory',
+    body_analysis_scalp_dir: 'scalp-directory',
+    body_analysis_model_dir: 'model-directory',
+  });
+  assert.equal(result.settings.bodyAnalysisEnabled, true);
+  assert.equal(result.settings.bodyAnalysisLegDir, 'leg-directory');
+});

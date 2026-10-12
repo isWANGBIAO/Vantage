@@ -11,6 +11,17 @@ test('Never Stop navigation has localized labels', () => {
   assert.equal(translate('en-US', 'app.nav.never_stop'), 'Never Stop');
 });
 
+test('Body Analysis subpages and optional setup have aligned translations', () => {
+  const keys = [
+    'app.nav.body_analysis', 'body_analysis.title', 'body_analysis.tab.dark_circles',
+    'body_analysis.tab.leg', 'body_analysis.tab.scalp', 'body_analysis.install',
+    'body_analysis.environment_missing', 'body_analysis.no_verified_trend',
+  ];
+  for (const language of ['en-US', 'zh-CN']) {
+    for (const key of keys) assert.ok(DISPLAY_COPY[language][key], `${language} missing ${key}`);
+  }
+});
+
 test('expense copy names actual and daily consumption without changing forecast spend', () => {
   assert.equal(translate('zh-CN', 'expense.period_spend', { value: '10' }), '实际消费 10');
   assert.equal(translate('zh-CN', 'expense.daily_average', { value: '10' }), '日均消费 10');

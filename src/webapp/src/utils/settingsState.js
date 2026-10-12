@@ -27,6 +27,10 @@ const DEFAULT_SETTINGS_STATE = {
     imageLastRefreshedAt: null,
     actionPlanAutoGenerate: true,
     actionPlanCheckIntervalMinutes: 60,
+    bodyAnalysisEnabled: false,
+    bodyAnalysisLegDir: '',
+    bodyAnalysisScalpDir: '',
+    bodyAnalysisModelDir: '',
   },
   provider: {
     version: 2,
@@ -140,6 +144,10 @@ function normalizeSettings(payload, mode) {
         && safeSettings.actionPlanCheckIntervalMinutes >= 0
         && safeSettings.actionPlanCheckIntervalMinutes <= MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
         ? safeSettings.actionPlanCheckIntervalMinutes : 60,
+      bodyAnalysisEnabled: safeSettings.bodyAnalysisEnabled === true,
+      bodyAnalysisLegDir: typeof safeSettings.bodyAnalysisLegDir === 'string' ? safeSettings.bodyAnalysisLegDir : '',
+      bodyAnalysisScalpDir: typeof safeSettings.bodyAnalysisScalpDir === 'string' ? safeSettings.bodyAnalysisScalpDir : '',
+      bodyAnalysisModelDir: typeof safeSettings.bodyAnalysisModelDir === 'string' ? safeSettings.bodyAnalysisModelDir : '',
     },
     provider:
       safePayload.provider && typeof safePayload.provider === 'object'

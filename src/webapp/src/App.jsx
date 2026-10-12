@@ -24,7 +24,7 @@ const ProjectProgress = lazyWithPreload(() => import('./components/ProjectProgre
 const ExpenseSheet = lazyWithPreload(() => import('./components/ExpenseSheet'));
 const Plots = lazyWithPreload(() => import('./components/Plots'));
 const SystemLogs = lazyWithPreload(() => import('./components/SystemLogs'));
-const FaceHistory = lazyWithPreload(() => import('./components/FaceHistory'));
+const BodyAnalysis = lazyWithPreload(() => import('./components/BodyAnalysis'));
 const NeverStopPage = lazyWithPreload(() => import('./components/NeverStopPage'));
 const Settings = lazyWithPreload(() => import('./components/Settings'));
 
@@ -34,7 +34,6 @@ const BACKGROUND_TAB_COMPONENTS = [
   ExpenseSheet,
   Plots,
   SystemLogs,
-  FaceHistory,
 ];
 
 const NAV_ITEMS = [
@@ -44,12 +43,13 @@ const NAV_ITEMS = [
   { key: 'expense sheet', labelKey: 'app.nav.expense_sheet' },
   { key: 'plots', labelKey: 'app.nav.plots' },
   { key: 'system logs', labelKey: 'app.nav.system_logs' },
-  { key: 'face history', labelKey: 'app.nav.face_history' },
+  { key: 'body-analysis', labelKey: 'app.nav.body_analysis' },
   { key: 'never-stop', labelKey: 'app.nav.never_stop' },
 ];
 
 const TAB_HASH_TO_KEY = Object.fromEntries([
   ...NAV_ITEMS.map((item) => [item.key.replaceAll(' ', '-'), item.key]),
+  ['face-history', 'body-analysis'],
   ['settings', 'settings'],
 ]);
 
@@ -539,10 +539,8 @@ function AppShell() {
           ) : null}
         </Suspense>
         <Suspense fallback={null}>
-          {(activeTab === 'face history' || shouldRenderBackgroundTabs) ? (
-            <div style={{ display: activeTab === 'face history' ? 'block' : 'none' }}>
-              <FaceHistory isVisible={activeTab === 'face history'} />
-            </div>
+          {activeTab === 'body-analysis' ? (
+            <BodyAnalysis />
           ) : null}
         </Suspense>
         <Suspense fallback={null}>
@@ -561,7 +559,7 @@ function AppShell() {
 
       {activeTab !== 'plots' &&
         activeTab !== 'action plan' &&
-        activeTab !== 'face history' &&
+        activeTab !== 'body-analysis' &&
         activeTab !== 'expense sheet' &&
         activeTab !== 'system logs' &&
         activeTab !== 'settings' &&

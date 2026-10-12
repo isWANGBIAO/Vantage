@@ -291,6 +291,7 @@ contextBridge.exposeInMainWorld('vantagePlatform', {
     applySavedPreferences: () => ipcRenderer.invoke('platform:apply-saved-preferences'),
     openSettingsPath: (key) => ipcRenderer.invoke('platform:open-settings-path', key),
     pickLegacyRoot: () => ipcRenderer.invoke('platform:pick-legacy-root'),
+    pickBodyAnalysisDirectory: (kind) => ipcRenderer.invoke('platform:pick-body-analysis-directory', kind),
     getSystemLocale: () => ipcRenderer.invoke('platform:get-system-locale'),
     setTitleBarTheme: (theme) => ipcRenderer.invoke('platform:set-title-bar-theme', theme),
     requestCameraAccess: () => primeRendererCameraAccess(),

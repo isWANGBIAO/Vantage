@@ -24,10 +24,22 @@ test('browser exposes explicit unavailable native capabilities without performin
   assert.equal(platform.capabilities.customTitleBar, false);
   assert.equal(platform.capabilities.launchAtLogin, false);
   assert.equal(platform.capabilities.openSettingsPath, false);
+  assert.equal(platform.capabilities.pickBodyAnalysisDirectory, false);
+  assert.deepEqual(await platform.paths.pickBodyAnalysisDirectory('leg'), { path: null });
   assert.deepEqual(await platform.camera.requestAccess(), { granted: false, supported: false });
   assert.deepEqual(await platform.window.setTitleBarTheme('light'), { applied: false });
   assert.deepEqual(await platform.preferences.applySaved(), { applied: false });
   assert.ok(await platform.locale.getSystemLocale());
+});
+
+test('body-analysis picker uses one narrow native capability', async () => {
+  const calls = [];
+  const platform = createPlatformAdapter({
+    pickBodyAnalysisDirectory: async (kind) => { calls.push(kind); return { path: 'selected-directory' }; },
+  });
+  assert.equal(platform.capabilities.pickBodyAnalysisDirectory, true);
+  assert.deepEqual(await platform.paths.pickBodyAnalysisDirectory('scalp'), { path: 'selected-directory' });
+  assert.deepEqual(calls, ['scalp']);
 });
 
 test('a non-Electron native host can implement individual platform capabilities', async () => {

@@ -8,6 +8,7 @@ export function createPlatformAdapter(bridge = null) {
     customTitleBar: descriptor.capabilities?.customTitleBar === true,
     openSettingsPath: available('openSettingsPath', bridge?.openSettingsPath),
     pickLegacyRoot: available('pickLegacyRoot', bridge?.pickLegacyRoot),
+    pickBodyAnalysisDirectory: available('pickBodyAnalysisDirectory', bridge?.pickBodyAnalysisDirectory),
     launchAtLogin: descriptor.capabilities?.launchAtLogin === true,
     cameraAccess: available('cameraAccess', bridge?.requestCameraAccess),
     notifications: available('notifications', bridge?.showNotification),
@@ -37,6 +38,8 @@ export function createPlatformAdapter(bridge = null) {
         ? bridge.openSettingsPath(key) : Promise.resolve({ opened: false }),
       pickLegacyRoot: () => capabilities.pickLegacyRoot
         ? bridge.pickLegacyRoot() : Promise.resolve({ path: null }),
+      pickBodyAnalysisDirectory: (kind) => capabilities.pickBodyAnalysisDirectory
+        ? bridge.pickBodyAnalysisDirectory(kind) : Promise.resolve({ path: null }),
     }),
     diagnostics: Object.freeze({
       getStatus: () => capabilities.diagnostics
