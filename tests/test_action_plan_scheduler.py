@@ -10,6 +10,9 @@ from unittest.mock import patch
 from src.services.action_plan_jobs import ActionPlanJobService
 from src.services.action_plan_scheduler import ActionPlanScheduler, _revision_digest
 
+REVISION_1 = "a" * 64
+REVISION_2 = "b" * 64
+
 
 class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -20,7 +23,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.settings = {"onboarding_completed": True, "action_plan_auto_generate": True,
                          "action_plan_check_interval_minutes": 60, "api_key": "secret"}
         self.saved = {"exists": False, "date": self.date}
-        self.revision = "r1"
+        self.revision = REVISION_1
         self.revision_calls = 0
         self.calls = []
         self.fail = False
@@ -52,7 +55,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
             raise FileNotFoundError("private source")
         return self.revision
 
-    async def generate(self, request):
+    async def generate(self, request, *, source_revision=None):
         self.calls.append(request)
         if self.block is not None:
             await self.block.wait()
@@ -61,19 +64,22 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
             return
         self.saved = {"exists": True, "id": str(len(self.calls)), "date": self.date,
                       "analysis": {"body": "Private analysis"}, "plan": {"body": "Private plan"},
-                      "meta": {"api_key": "do-not-persist"}}
+                      "meta": {"api_key": "do-not-persist", "source_revision": source_revision}}
         if self.use_real_payload:
-            self.saved = self.real_saved_plan(sequence=len(self.calls))
+            self.saved = self.real_saved_plan(sequence=len(self.calls), source_revision=source_revision)
         yield {"done": True}
 
-    def real_saved_plan(self, *, date=None, sequence=0):
+    def real_saved_plan(self, *, date=None, sequence=0, source_revision=None):
         from src.scripts.run_prompt import build_action_plan_payload
 
         generated_at = datetime.strptime(date or self.date, "%Y%m%d").replace(hour=12, second=sequence)
-        return {"exists": True, **build_action_plan_payload(
+        payload = {"exists": True, **build_action_plan_payload(
             generated_at=generated_at, analysis_body="Real analysis", plan_body="Real plan",
             stats={}, metadata={},
         )}
+        if source_revision is not None:
+            payload["meta"]["source_revision"] = source_revision
+        return payload
 
     async def run_tick(self, **kwargs):
         outcome = await self.scheduler.tick(**kwargs)
@@ -83,7 +89,8 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
 
     def existing_plan(self):
         self.saved = {"exists": True, "id": "old", "date": self.date,
-                      "analysis": {"body": "old"}, "plan": {"body": "old"}}
+                      "analysis": {"body": "old"}, "plan": {"body": "old"},
+                      "meta": {"source_revision": self.revision}}
 
     async def test_startup_is_independent_of_zero_revision_interval(self):
         self.settings["action_plan_check_interval_minutes"] = 0
@@ -93,7 +100,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.calls[0]["replace_today"])
         self.assertTrue(self.calls[0]["wait_for_provider_ready"])
         calls = self.revision_calls
-        self.revision = "r2"
+        self.revision = REVISION_2
         self.clock += 86400
         self.assertEqual((await self.run_tick(force_check=True))["outcome"], "idle")
         self.assertEqual(self.revision_calls, calls)
@@ -111,16 +118,16 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         first = await self.run_tick()
         self.assertEqual(first["outcome"], "baseline_recorded")
         self.assertEqual(self.calls, [])
-        self.revision = "r2"
+        self.revision = REVISION_2
         result = await self.run_tick(force_check=True)
         self.assertEqual(result["trigger"], "source_changed")
         self.assertEqual(result["job"]["status"], "succeeded")
         self.assertTrue(self.calls[0]["replace_today"])
         self.assertFalse(self.calls[0]["wait_for_provider_ready"])
 
-    async def test_existing_plan_establishes_baseline_without_starting_model(self):
+    async def test_existing_plan_uses_saved_revision_without_starting_model(self):
         self.existing_plan()
-        self.assertEqual((await self.run_tick())["outcome"], "baseline_recorded")
+        self.assertEqual((await self.run_tick())["outcome"], "unchanged")
         self.assertEqual((await self.run_tick(force_check=True))["outcome"], "unchanged")
         self.assertEqual(self.calls, [])
 
@@ -128,7 +135,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.existing_plan()
         await self.run_tick()
         old_metadata = self.path.read_text()
-        self.revision = "r2"
+        self.revision = REVISION_2
         self.fail = True
         outcome = await self.run_tick(force_check=True)
         self.assertEqual(outcome["job"]["status"], "failed")
@@ -136,7 +143,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.fail = False
         retry = await self.run_tick(force_check=True)
         self.assertEqual(retry["job"]["status"], "succeeded")
-        self.assertEqual(self.scheduler.status()["baseline_revision"], _revision_digest("r2"))
+        self.assertEqual(self.scheduler.status()["baseline_revision"], _revision_digest(REVISION_2))
 
     async def test_failed_startup_retries_on_interval_without_false_baseline(self):
         self.fail = True
@@ -152,19 +159,40 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.run_tick()
         await self.scheduler.close()
         self.scheduler = self.make_scheduler()
-        self.assertEqual((await self.run_tick())["outcome"], "unchanged")
+        initial = await self.run_tick()
+        self.assertEqual(initial["outcome"], "unchanged")
         self.assertEqual(len(self.calls), 1)
         await self.scheduler.close()
-        self.revision = "r2"
+        self.revision = REVISION_2
         self.scheduler = self.make_scheduler()
         outcome = await self.run_tick()
         self.assertEqual(outcome["trigger"], "source_changed")
         self.assertEqual(len(self.calls), 2)
 
+    async def test_restart_compares_saved_plan_revision_even_without_metadata(self):
+        self.revision = "a" * 64
+        self.saved = {**self.real_saved_plan(), "meta": {"source_revision": "a" * 64}}
+        initial = await self.run_tick()
+        assert initial["outcome"] == "unchanged"
+        assert self.calls == []
+        await self.scheduler.close()
+        self.revision = "b" * 64
+        self.scheduler = self.make_scheduler()
+        changed = await self.run_tick()
+        assert changed["trigger"] == "source_changed"
+        assert changed["job"]["status"] == "succeeded"
+
+    async def test_restart_treats_legacy_plan_without_revision_as_stale(self):
+        self.revision = "a" * 64
+        self.saved = self.real_saved_plan()
+        outcome = await self.run_tick()
+        assert outcome["trigger"] == "source_changed"
+        assert outcome["job"]["status"] == "succeeded"
+
     async def test_manual_completion_updates_same_baseline_and_prevents_duplicate(self):
         self.existing_plan()
         await self.run_tick()
-        self.revision = "r2"
+        self.revision = REVISION_2
         manual = await self.jobs.start({"model": "chosen"})
         await self.jobs.wait(manual["id"])
         self.assertEqual((await self.run_tick(force_check=True))["outcome"], "unchanged")
@@ -187,13 +215,23 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         outcome = await self.scheduler.tick()
         while not self.calls:
             await asyncio.sleep(0)
-        self.revision = "r2"
+        self.revision = REVISION_2
         self.block.set()
         await self.jobs.wait(outcome["job_id"])
-        self.assertEqual(self.scheduler.status()["baseline_revision"], _revision_digest("r1"))
+        self.assertEqual(self.scheduler.status()["baseline_revision"], _revision_digest(REVISION_1))
         again = await self.run_tick(force_check=True)
         self.assertEqual(again["trigger"], "source_changed")
         self.assertEqual(len(self.calls), 2)
+
+    async def test_completed_job_cannot_certify_a_different_saved_revision(self):
+        self.existing_plan()
+        await self.run_tick()
+        self.revision = REVISION_2
+        await self.scheduler._on_completed({
+            "status": "succeeded", "source_revision": REVISION_2,
+            "result": self.real_saved_plan(sequence=2, source_revision=REVISION_1),
+        })
+        assert self.scheduler.status()["baseline_revision"] == _revision_digest(REVISION_1)
 
     async def test_date_rollover_resets_baseline_and_generates_missing_day(self):
         await self.run_tick()
@@ -207,7 +245,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def test_dynamic_settings_disable_and_reenable_checks(self):
         self.existing_plan()
         await self.run_tick()
-        self.revision = "r2"
+        self.revision = REVISION_2
         self.settings["action_plan_check_interval_minutes"] = 0
         self.clock += 3600
         self.assertEqual((await self.run_tick(force_check=True))["outcome"], "idle")
@@ -221,7 +259,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.run_tick())["outcome"], "source_unavailable")
         self.assertEqual(self.calls, [])
         self.assertFalse(self.path.exists())
-        self.revision = "r1"
+        self.revision = REVISION_1
         self.clock += 5
         self.assertEqual((await self.run_tick())["job"]["status"], "succeeded")
 
@@ -250,7 +288,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
             self.path.write_text(content)
             await self.scheduler.close()
             self.scheduler = self.make_scheduler()
-            self.assertEqual((await self.run_tick())["outcome"], "baseline_recorded")
+            self.assertEqual((await self.run_tick())["outcome"], "unchanged")
         self.assertEqual(self.calls, [])
 
     async def test_atomic_metadata_failure_preserves_old_file(self):
@@ -258,7 +296,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         await self.run_tick()
         previous = self.path.read_text()
         with patch("src.services.action_plan_scheduler.os.replace", side_effect=OSError("private path")):
-            self.revision = "r2"
+            self.revision = REVISION_2
             result = await self.run_tick(force_check=True)
             self.assertEqual(result["job"]["status"], "succeeded")
         self.assertEqual(self.path.read_text(), previous)
@@ -280,7 +318,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def test_metadata_write_retry_does_not_regenerate_already_saved_result(self):
         self.existing_plan()
         await self.run_tick()
-        self.revision = "r2"
+        self.revision = REVISION_2
         with patch("src.services.action_plan_scheduler.os.replace", side_effect=OSError("disk")):
             result = await self.run_tick(force_check=True)
             self.assertEqual(result["job"]["status"], "succeeded")
@@ -289,7 +327,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         recovered = await self.run_tick(force_check=True)
         self.assertEqual(recovered["outcome"], "unchanged")
         self.assertEqual(len(self.calls), 1)
-        self.assertEqual(json.loads(self.path.read_text())["generated_revision"], _revision_digest("r2"))
+        self.assertEqual(json.loads(self.path.read_text())["generated_revision"], _revision_digest(REVISION_2))
 
     async def test_scheduler_close_does_not_wait_for_running_generation(self):
         self.block = asyncio.Event()
@@ -319,15 +357,15 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.revision_calls, 0)
 
     async def test_real_iso_dated_manual_success_advances_baseline(self):
-        self.saved = self.real_saved_plan()
+        self.saved = self.real_saved_plan(source_revision=self.revision)
         await self.run_tick()
         self.use_real_payload = True
-        self.revision = "r2"
+        self.revision = REVISION_2
         manual = await self.jobs.start()
         result = await self.jobs.wait(manual["id"])
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["result"]["date"], "2026-09-30")
-        self.assertEqual(self.scheduler.status()["generated_revision"], _revision_digest("r2"))
+        self.assertEqual(self.scheduler.status()["generated_revision"], _revision_digest(REVISION_2))
         self.assertEqual((await self.run_tick(force_check=True))["outcome"], "unchanged")
         self.assertEqual(len(self.calls), 1)
 
@@ -335,7 +373,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.use_real_payload = True
         first = await self.run_tick()
         self.assertEqual(first["job"]["status"], "succeeded")
-        self.assertEqual(json.loads(self.path.read_text())["generated_revision"], _revision_digest("r1"))
+        self.assertEqual(json.loads(self.path.read_text())["generated_revision"], _revision_digest(REVISION_1))
         self.date = "20261001"
         # Even if an adapter returns yesterday's actual payload, it cannot count
         # as an existing plan for the new day.
@@ -347,7 +385,7 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
     async def test_yesterdays_iso_result_cannot_certify_new_day_revision(self):
         self.date = "20261001"
         await self.scheduler._on_completed({
-            "status": "succeeded", "source_revision": "r1",
+            "status": "succeeded", "source_revision": REVISION_1,
             "result": self.real_saved_plan(date="20260930"),
         })
         self.assertIsNone(self.scheduler.status()["generated_revision"])

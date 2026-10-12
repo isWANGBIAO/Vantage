@@ -32,12 +32,12 @@ REQUEST_FIELDS = frozenset({
 _ERROR_PREFIXES = ("STREAM_ANALYSIS_ERROR:", "STREAM_PLAN_ERROR:", "STREAM_ERROR:")
 
 
-async def call_callback(callback: Callable, *args):
+async def call_callback(callback: Callable, *args, **kwargs):
     """Accept sync or async dependency adapters without blocking the event loop."""
     if inspect.iscoroutinefunction(callback) or inspect.isasyncgenfunction(callback):
-        value = callback(*args)
+        value = callback(*args, **kwargs)
     else:
-        value = await asyncio.to_thread(callback, *args)
+        value = await asyncio.to_thread(callback, *args, **kwargs)
     return await value if inspect.isawaitable(value) else value
 
 
@@ -134,6 +134,14 @@ class ActionPlanJobService:
         if min(event_limit, event_buffer_bytes, retained_jobs, max_stream_line_bytes) < 1:
             raise ValueError("Job retention and stream limits must be positive")
         self._generate = generate
+        try:
+            parameters = inspect.signature(generate).parameters
+            self._generate_accepts_revision = (
+                "source_revision" in parameters
+                or any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
+            )
+        except (TypeError, ValueError):
+            self._generate_accepts_revision = False
         self._read_today = read_today
         self._read_revision = read_revision
         self._event_limit = event_limit
@@ -371,7 +379,8 @@ class ActionPlanJobService:
                     job.source_revision = revision
                 except Exception as exc:
                     raise _JobFailure("source_unavailable", "行动计划数据源暂不可用。") from exc
-            iterator = await call_callback(self._generate, copy.deepcopy(job.request))
+            generation_kwargs = {"source_revision": job.source_revision} if self._generate_accepts_revision else {}
+            iterator = await call_callback(self._generate, copy.deepcopy(job.request), **generation_kwargs)
             saw_done = False
             saw_error = False
             async for event in self._decoded_events(iterator):

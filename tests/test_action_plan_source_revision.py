@@ -22,7 +22,7 @@ def test_revision_tracks_content_even_if_size_and_timestamp_are_unchanged(tmp_pa
         source.write_bytes(b"other")
         os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
         assert first.body != _revision().body
-        assert set(json.loads(first.body)) == {"revision"}
+        assert set(json.loads(first.body)) == {"revision", "generated_revision", "has_generated_plan"}
 
 
 def test_missing_source_returns_retryable_error_without_private_path(tmp_path):
@@ -86,7 +86,7 @@ def test_locked_workbook_uses_snapshot_and_removes_it(tmp_path):
 
 def test_revision_covers_every_source_the_action_plan_reads(tmp_path):
     """只覆盖 Time.xlsx 会漏掉资产负债表和各个 Prompt 的修改。"""
-    for name in ("Time.xlsx", "Balance Sheet.xlsx", "Prompt_Goals.md", "Prompt_Inventory.md"):
+    for name in ("Time.xlsx", "Balance Sheet.xlsx", "Prompt_System.md", "Prompt_Goals.md", "Prompt_Inventory.md"):
         (tmp_path / name).write_bytes(b"original")
 
     def resolve(name, *args, **kwargs):
@@ -100,7 +100,7 @@ def test_revision_covers_every_source_the_action_plan_reads(tmp_path):
     ):
         baseline = _revision().body
 
-        for name in ("Balance Sheet.xlsx", "Prompt_Goals.md", "Prompt_Inventory.md"):
+        for name in ("Balance Sheet.xlsx", "Prompt_System.md", "Prompt_Goals.md", "Prompt_Inventory.md"):
             original = (tmp_path / name).read_bytes()
             (tmp_path / name).write_bytes(b"edited")
             assert _revision().body != baseline, f"{name} 的修改没有改变指纹"
@@ -139,3 +139,34 @@ def _snapshot(path, tmp_path):
 def test_copy_failure_returns_retryable_error():
     with patch.object(_backend_action_plans, "_compute_action_plan_source_revision", side_effect=_backend_action_plans.subprocess.CalledProcessError(1, "copy")):
         assert _revision().status_code == 503
+
+
+def test_revision_reports_saved_complete_plan_and_ignores_incomplete_newer_output(tmp_path):
+    from datetime import datetime
+
+    today = datetime.now().strftime("%Y%m%d")
+    complete = tmp_path / f"action_plan_{today}_complete.json"
+    complete.write_text(json.dumps({
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "analysis": {"body": "analysis"}, "plan": {"body": "plan"},
+        "meta": {"source_revision": "b" * 64},
+    }), encoding="utf-8")
+    incomplete = tmp_path / f"action_plan_{today}_incomplete.json"
+    incomplete.write_text(json.dumps({
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "analysis": {"body": "analysis"}, "plan": {"body": ""},
+        "meta": {"source_revision": "c" * 64},
+    }), encoding="utf-8")
+    os.utime(complete, (1, 1))
+    os.utime(incomplete, (2, 2))
+
+    with patch.object(_backend_action_plans._chat, "_get_history_dir", return_value=str(tmp_path)), patch.object(
+        _backend_action_plans, "_compute_action_plan_source_revision", return_value="a" * 64
+    ):
+        payload = json.loads(_revision().body)
+
+    assert payload == {
+        "revision": "a" * 64,
+        "generated_revision": "b" * 64,
+        "has_generated_plan": True,
+    }

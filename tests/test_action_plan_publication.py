@@ -220,12 +220,83 @@ def test_raw_factory_passes_internal_staging_without_changing_history(monkeypatc
     monkeypatch.setattr(action_plans.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(action_plans, "_get_missing_action_plan_data_sources", lambda: [])
     monkeypatch.setenv("VANTAGE_HISTORY_DIR", str(tmp_path / "history"))
+    monkeypatch.setenv("VANTAGE_ACTION_PLAN_SOURCE_REVISION", "stale-private-value")
     async def exercise():
-        response = await action_plans.create_action_plan_stream(staging_directory=tmp_path / "stage")
+        response = await action_plans.create_action_plan_stream(
+            staging_directory=tmp_path / "stage", source_revision="a" * 64,
+        )
         return [event async for event in response.body_iterator]
     asyncio.run(exercise())
     assert captured["env"][STAGING_ENV] == str(tmp_path / "stage")
+    assert captured["env"]["VANTAGE_ACTION_PLAN_SOURCE_REVISION"] == "a" * 64
     assert captured["env"]["VANTAGE_HISTORY_DIR"] == str(tmp_path / "history")
+
+
+def test_generation_adapter_passes_captured_revision_to_raw_stream(monkeypatch, tmp_path):
+    monkeypatch.setattr(Config, "get_history_dir", staticmethod(lambda: tmp_path))
+    observed = []
+
+    async def raw(_request, *, staging_directory, source_revision):
+        observed.append(source_revision)
+
+        async def stream():
+            output = _payload()
+            output["meta"]["source_revision"] = source_revision
+            (staging_directory / "action_plan.json").write_text(json.dumps(output))
+            yield '{"done":true}\n'
+
+        return SimpleNamespace(body_iterator=stream())
+
+    monkeypatch.setattr(action_plans, "create_action_plan_stream", raw)
+
+    async def exercise():
+        return [event async for event in application._generate({}, source_revision="a" * 64)]
+
+    assert asyncio.run(exercise())[-1] == {"done": True}
+    assert observed == ["a" * 64]
+
+
+@pytest.mark.parametrize("staged_revision", [None, "b" * 64])
+def test_generation_does_not_publish_complete_plan_with_wrong_source_revision(
+    monkeypatch, tmp_path, staged_revision,
+):
+    monkeypatch.setattr(Config, "get_history_dir", staticmethod(lambda: tmp_path))
+    previous = _save(tmp_path, _payload("old"))
+
+    async def raw(_request, *, staging_directory, source_revision):
+        assert source_revision == "a" * 64
+
+        async def stream():
+            output = _payload("new")
+            if staged_revision is not None:
+                output["meta"]["source_revision"] = staged_revision
+            (staging_directory / "action_plan.json").write_text(json.dumps(output))
+            yield '{"done":true}\n'
+
+        return SimpleNamespace(body_iterator=stream())
+
+    monkeypatch.setattr(action_plans, "create_action_plan_stream", raw)
+
+    async def exercise():
+        return [event async for event in application._generate(
+            {"replace_today": True}, source_revision="a" * 64,
+        )]
+
+    with pytest.raises(RuntimeError, match="source revision"):
+        asyncio.run(exercise())
+    assert previous.exists()
+    assert (asyncio.run(action_plans.get_today_action_plan()))["id"] == "old"
+    assert not list((tmp_path / STAGING_DIRECTORY).iterdir())
+
+
+def test_store_rejects_invalid_expected_source_revision_before_publication(tmp_path):
+    store = ActionPlanStore(tmp_path)
+    pending = store.begin()
+    pending.output_file.write_text(json.dumps(_payload("new")))
+    with pytest.raises(ValueError, match="source revision"):
+        store.publish(pending, expected_source_revision="private source text")
+    assert not list(tmp_path.glob("action_plan_*.json"))
+    store.discard(pending)
 
 
 def test_real_prompt_entrypoint_stages_plan_and_all_context_but_preserves_usage(monkeypatch, tmp_path, capsys):
@@ -254,6 +325,7 @@ def test_real_prompt_entrypoint_stages_plan_and_all_context_but_preserves_usage(
         monkeypatch.setattr(run_prompt.DataLoader, method, lambda *args, **kwargs: "synthetic rows")
     monkeypatch.setattr(run_prompt, "_load_session_usage_summary", lambda root, session: usage_roots.append(root))
     monkeypatch.setenv(STAGING_ENV, str(pending.directory))
+    monkeypatch.setenv("VANTAGE_ACTION_PLAN_SOURCE_REVISION", "b" * 64)
     monkeypatch.setattr(sys, "argv", ["run_prompt.py"])
     run_prompt.main()
     capsys.readouterr()
@@ -267,6 +339,7 @@ def test_real_prompt_entrypoint_stages_plan_and_all_context_but_preserves_usage(
     assert (history / "state.db").read_bytes() == b"usage-stays-here"
     saved = store.publish(pending)
     assert json.loads(saved.path.read_text())["plan"]["body"] == "plan reply"
+    assert json.loads(saved.path.read_text())["meta"]["source_revision"] == "b" * 64
     assert "plan reply" in (history / "latest_action_plan_context.json").read_text()
     store.discard(pending)
 

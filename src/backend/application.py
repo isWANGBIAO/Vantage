@@ -6,6 +6,7 @@ domain functions to services once per backend process/lifespan.
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,7 +41,7 @@ async def _read_revision():
     return await asyncio.to_thread(action_plans._compute_action_plan_source_revision)
 
 
-async def _generate(request):
+async def _generate(request, *, source_revision=None):
     from src.backend import action_plans
 
     store = ActionPlanStore(Config.get_history_dir())
@@ -48,8 +49,14 @@ async def _generate(request):
     iterator = None
     try:
         parameters = {**request, "replace_today": False}
+        private_kwargs = (
+            {"source_revision": source_revision}
+            if isinstance(source_revision, str) and re.fullmatch(r"[0-9a-f]{64}", source_revision)
+            else {}
+        )
         response = await action_plans.create_action_plan_stream(
             action_plans.ActionPlanRequest(**parameters), staging_directory=pending.directory,
+            **private_kwargs,
         )
         iterator = response.body_iterator
         completed = False
@@ -68,7 +75,10 @@ async def _generate(request):
             # Cancellation is checked before publication. There is deliberately
             # no await inside this small local-file commit, so cancellation can
             # never abandon a worker that later publishes a cancelled job.
-            published = store.publish(pending, replace_today=bool(request.get("replace_today")))
+            published = store.publish(
+                pending, replace_today=bool(request.get("replace_today")),
+                expected_source_revision=private_kwargs.get("source_revision"),
+            )
             if not published.context_updated:
                 yield {"log": "Plan saved; chat context could not be fully refreshed."}
             yield {"done": True}

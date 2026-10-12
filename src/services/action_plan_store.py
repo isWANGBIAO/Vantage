@@ -86,7 +86,10 @@ class ActionPlanStore:
                 raise ValueError("Staged action-plan artifact exceeds the size limit")
         return json.loads(content)
 
-    def publish(self, pending: PendingActionPlan, *, replace_today: bool = False) -> PublishedActionPlan:
+    def publish(
+        self, pending: PendingActionPlan, *, replace_today: bool = False,
+        expected_source_revision: str | None = None,
+    ) -> PublishedActionPlan:
         """Commit once after the raw stream exits successfully with done=true.
 
         All validation occurs before the atomic rename. Failures after commit
@@ -100,6 +103,13 @@ class ActionPlanStore:
             raise RuntimeError("Generation did not save a new complete plan") from exc
         if not complete_plan(payload):
             raise RuntimeError("Generation did not save a new complete plan")
+        if expected_source_revision is not None:
+            if not isinstance(expected_source_revision, str) or re.fullmatch(r"[0-9a-f]{64}", expected_source_revision) is None:
+                raise ValueError("Invalid expected action-plan source revision")
+            metadata = payload.get("meta")
+            saved_revision = metadata.get("source_revision") if isinstance(metadata, dict) else None
+            if saved_revision != expected_source_revision:
+                raise RuntimeError("Generated action-plan source revision does not match the captured revision")
         plan_date = normalize_plan_date(payload.get("date"))
         if plan_date is None or plan_date != normalize_plan_date(self._today()):
             raise RuntimeError("Generated action plan belongs to a different day; retry for today")

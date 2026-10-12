@@ -35,6 +35,12 @@ def _revision_digest(revision: str) -> str:
     return hashlib.sha256(revision.encode("utf-8")).hexdigest()
 
 
+def _saved_source_revision(plan: Mapping) -> str | None:
+    metadata = plan.get("meta")
+    revision = metadata.get("source_revision") if isinstance(metadata, Mapping) else None
+    return revision if isinstance(revision, str) and _DIGEST.fullmatch(revision) else None
+
+
 def _empty_state(date: str) -> dict:
     return {"version": 1, "date": date, "baseline_revision": None,
             "generated_revision": None, "generated_plan_identity": None}
@@ -199,7 +205,14 @@ class ActionPlanScheduler:
             self._wake.set()
             return
         revision = job.get("source_revision")
-        if not isinstance(revision, str) or not revision.strip():
+        if (
+            not isinstance(revision, str)
+            or _DIGEST.fullmatch(revision) is None
+            or _saved_source_revision(job["result"]) != revision
+        ):
+            # A complete plan may still be a legacy/incorrectly tagged output.
+            # Keep it retryable rather than certifying an unrelated snapshot.
+            self._wake.set()
             return
         async with self._lock:
             await self._load()
@@ -298,12 +311,27 @@ class ActionPlanScheduler:
         digest = _revision_digest(revision)
         if startup_due and not has_plan:
             return await self._start_job("startup", now, interval)
+        if has_plan:
+            saved_revision = _saved_source_revision(today_plan)
+            saved_digest = _revision_digest(saved_revision) if saved_revision is not None else None
+            saved_identity = plan_identity(today_plan)
+            if (
+                self._state["generated_plan_identity"] != saved_identity
+                or self._state["generated_revision"] != saved_digest
+            ):
+                reconciled = {**self._state, "baseline_revision": saved_digest,
+                              "generated_revision": saved_digest,
+                              "generated_plan_identity": saved_identity}
+                if not await self._persist(reconciled):
+                    return {"outcome": "metadata_unavailable"}
         baseline = self._state["baseline_revision"]
         if baseline is None:
             if startup_enabled and self._startup_handled and not has_plan:
                 # Retry a failed startup on the configured interval. Never record
                 # its unconsumed revision as a successful baseline.
                 return await self._start_job("startup", now, interval)
+            if has_plan:
+                return await self._start_job("source_changed", now, interval)
             saved = await self._persist({**self._state, "baseline_revision": digest})
             return {"outcome": "baseline_recorded" if saved else "metadata_unavailable"}
         if digest == baseline:

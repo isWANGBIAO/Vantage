@@ -1043,6 +1043,9 @@ def main():
                             "plan_prompt": action_plan_msg,
                         },
                     )
+                    source_revision = os.environ.get("VANTAGE_ACTION_PLAN_SOURCE_REVISION", "")
+                    if len(source_revision) == 64 and all(char in "0123456789abcdef" for char in source_revision):
+                        action_plan_payload["meta"]["source_revision"] = source_revision
 
                     if plan_staging_dir is not None:
                         output_path = plan_staging_dir / "action_plan.json"

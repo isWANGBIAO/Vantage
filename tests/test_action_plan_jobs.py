@@ -50,6 +50,33 @@ class ActionPlanJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(service.active())
         self.assertTrue(service.events(started["id"])["events"][-1]["done"])
 
+    async def test_captured_revision_reaches_private_generation_adapter_not_request(self):
+        captured = []
+        revision_reads = 0
+
+        async def read_revision():
+            nonlocal revision_reads
+            revision_reads += 1
+            return "a" * 64 if revision_reads == 1 else "b" * 64
+
+        async def generate(request, *, source_revision):
+            captured.append((request, source_revision))
+            self.saved = saved_plan()
+            yield {"done": True}
+
+        async def read_today():
+            return copy.deepcopy(self.saved)
+
+        service = ActionPlanJobService(generate, read_today, read_revision)
+        self.services.append(service)
+        started = await service.start({"model": "chosen"})
+        result = await service.wait(started["id"])
+
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["source_revision"], "a" * 64)
+        self.assertEqual(captured, [({"model": "chosen"}, "a" * 64)])
+        self.assertEqual(revision_reads, 1)
+
     async def test_concurrent_manual_and_scheduler_requests_deduplicate(self):
         gate = asyncio.Event()
         calls = []

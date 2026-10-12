@@ -13,11 +13,13 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 from contextlib import suppress
 from fastapi import APIRouter
 
 from .api_contracts import ActionPlanResult
+from src.services.action_plan_jobs import complete_plan, normalize_plan_date
 
 router = APIRouter()
 
@@ -167,6 +169,7 @@ ACTION_PLAN_REQUIRED_DATA_FILES = ("Time.xlsx",)
 # refresh. These are read if present but are never treated as missing inputs.
 ACTION_PLAN_CONTENT_FILES = (
     "Balance Sheet.xlsx",
+    "Prompt_System.md",
     "Prompt_Personal_Info.md",
     "Prompt_Action_Plan.md",
     "Prompt_Project_Management.md",
@@ -230,17 +233,43 @@ def _compute_action_plan_source_revision():
         _hash_action_plan_source(path, filename, digest)
     return digest.hexdigest()
 
+
+def _get_generated_action_plan_source_revision():
+    """Only a complete saved plan can certify an earlier source revision."""
+    today = datetime.now().strftime("%Y%m%d")
+    for filename in sorted(_list_today_action_plan_files(today), key=os.path.getmtime, reverse=True):
+        try:
+            with Path(filename).open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (ValueError, UnicodeError):
+            continue
+        if not complete_plan(payload):
+            continue
+        if "date" in payload and normalize_plan_date(payload["date"]) != today:
+            continue
+        meta = payload.get("meta")
+        revision = meta.get("source_revision") if isinstance(meta, dict) else None
+        if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{64}", revision) is None:
+            revision = None
+        return revision, True
+    return None, False
+
 @router.get("/api/v1/action-plan/source-revision")
 async def get_action_plan_source_revision():
     try:
         revision = await asyncio.to_thread(_compute_action_plan_source_revision)
+        generated_revision, has_generated_plan = await asyncio.to_thread(_get_generated_action_plan_source_revision)
     except (OSError, subprocess.CalledProcessError):
         return JSONResponse(
             status_code=503,
             content={"error": "行动计划数据源暂不可用，请稍后重试。"},
             headers={"Cache-Control": "no-store"},
         )
-    return JSONResponse(content={"revision": revision}, headers={"Cache-Control": "no-store"})
+    return JSONResponse(
+        content={"revision": revision, "generated_revision": generated_revision,
+                 "has_generated_plan": has_generated_plan},
+        headers={"Cache-Control": "no-store"},
+    )
 
 def _get_missing_action_plan_data_sources():
     missing_sources = []
@@ -264,6 +293,7 @@ def _build_action_plan_data_unavailable_message(missing_sources):
 
 async def create_action_plan_stream(
     request: Optional[ActionPlanRequest] = None, *, staging_directory: Optional[Path] = None,
+    source_revision: Optional[str] = None,
 ):
     run_prompt_args = []
 
@@ -272,8 +302,11 @@ async def create_action_plan_stream(
     env["PYTHONUNBUFFERED"] = "1"
     # Internal-only output control; it is absent from every request schema.
     env.pop("VANTAGE_ACTION_PLAN_STAGING_DIR", None)
+    env.pop("VANTAGE_ACTION_PLAN_SOURCE_REVISION", None)
     if staging_directory is not None:
         env["VANTAGE_ACTION_PLAN_STAGING_DIR"] = str(staging_directory)
+    if isinstance(source_revision, str) and re.fullmatch(r"[0-9a-f]{64}", source_revision):
+        env["VANTAGE_ACTION_PLAN_SOURCE_REVISION"] = source_revision
     env["AI_REASONING_EFFORT"] = _chat._normalize_reasoning_effort(
         request.reasoning_effort if request else None,
     )
