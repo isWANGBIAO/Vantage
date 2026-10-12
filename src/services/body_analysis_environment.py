@@ -21,6 +21,7 @@ from src.core.user_config import get_body_analysis_report_root
 # The CUDA 13.0 wheel is appropriate for this machine's existing PyTorch setup.
 # A different CUDA runtime requires an explicit future compatibility decision.
 TORCH_VERSION = "2.9.0"
+TORCHVISION_VERSION = "0.24.0"
 PYTORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu130"
 OPTIONAL_PACKAGE_SPECS = (
     "transformers==5.3.0",
@@ -34,7 +35,7 @@ _PYTHON_IDENTITY_CODE = (
     "'version':list(sys.version_info[:2]),'executable':sys.executable}))"
 )
 _CAPABILITY_CODE = (
-    "import json; import cv2,numpy,PIL,skimage,torch; "
+    "import json; import cv2,numpy,PIL,skimage,torch,torchvision; "
     "from transformers import Sam3Model,Sam3Processor; "
     "print(json.dumps({'ready':True,'cuda':bool(torch.cuda.is_available())}))"
 )
@@ -70,11 +71,49 @@ def _checkpoint_exists(model_dir: str | Path | None) -> bool:
     if not model_dir:
         return False
     model = Path(model_dir).expanduser()
-    if not model.is_dir() or not (model / "config.json").is_file():
+    if not model.is_dir():
         return False
-    return any(
-        (model / name).is_file()
-        for name in ("model.safetensors", "model.safetensors.index.json", "pytorch_model.bin")
+    # Sam3Processor wraps an image processor and a CLIP tokenizer.  Requiring
+    # the official local files avoids marking partial downloads as ready.
+    required_files = (
+        "config.json", "processor_config.json", "tokenizer_config.json",
+        "tokenizer.json", "vocab.json", "merges.txt",
+    )
+    if not all(_nonempty_file(model / name) for name in required_files):
+        return False
+    single_weights = (model / "model.safetensors", model / "pytorch_model.bin")
+    present_single_weights = [path for path in single_weights if path.is_file()]
+    if present_single_weights:
+        return all(_nonempty_file(path) for path in present_single_weights)
+    index = model / "model.safetensors.index.json"
+    if not _nonempty_file(index):
+        return False
+    try:
+        if index.stat().st_size > 5_000_000:
+            return False
+        weight_map = json.loads(index.read_text(encoding="utf-8")).get("weight_map")
+        if not isinstance(weight_map, dict) or not weight_map:
+            return False
+        shard_names = set(weight_map.values())
+        if not all(isinstance(name, str) and _safe_shard_name(name) for name in shard_names):
+            return False
+        return all(_nonempty_file(model / name) for name in shard_names)
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
+        return False
+
+
+def _nonempty_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _safe_shard_name(name: str) -> bool:
+    return (
+        bool(name) and name not in {".", ".."}
+        and "/" not in name and "\\" not in name and ":" not in name
+        and name.endswith(".safetensors")
     )
 
 
@@ -231,7 +270,8 @@ def install_body_analysis_environment(
             return _status("failed", reason="venv_creation_failed")
     steps = (
         [str(python), "-m", "pip", "install", "--only-binary=:all:",
-         "--index-url", PYTORCH_CUDA_INDEX, f"torch=={TORCH_VERSION}"],
+         "--index-url", PYTORCH_CUDA_INDEX, f"torch=={TORCH_VERSION}",
+         f"torchvision=={TORCHVISION_VERSION}"],
         [str(python), "-m", "pip", "install", "--only-binary=:all:", *OPTIONAL_PACKAGE_SPECS],
     )
     for command in steps:
