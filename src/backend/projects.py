@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from src.core.config import Config
+from src.utils.data_loader import DataLoader
 
 from . import source_paths as _source_paths
 
@@ -18,11 +18,7 @@ router = APIRouter()
 
 PROJECT_ACTIVITY_SNAPSHOT_NAME = "project_activity.json"
 
-def _get_project_progress_root():
-    configured_root = Path(Config.get_project_root())
-    if (configured_root / "Prompt_Project_Management.md").exists():
-        return configured_root
-
+def _packaged_resource_root():
     current_dir = Path(os.path.dirname(os.path.abspath(_source_paths.SERVER_FILE)))
     return current_dir.parent
 
@@ -70,7 +66,7 @@ def _load_project_activity_snapshot(project_root):
     return normalized_commits
 
 def _load_recent_git_commits(project_root, days=14):
-    git_root = _find_git_root(project_root) or _find_git_root(Path.cwd())
+    git_root = _find_git_root(project_root)
     if git_root is None:
         return []
 
@@ -78,6 +74,9 @@ def _load_recent_git_commits(project_root, days=14):
     try:
         time_limit = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
         git_cmd = ["git", "log", f'--since="{time_limit}"', "--pretty=format:%h|%ad|%s", "--date=short"]
+        relative_project = Path(project_root).resolve().relative_to(git_root)
+        if relative_project.parts:
+            git_cmd.extend(["--", relative_project.as_posix()])
         proc = subprocess.run(git_cmd, capture_output=True, cwd=git_root)
 
         if proc.returncode != 0 or not proc.stdout:
@@ -101,8 +100,8 @@ def _load_recent_git_commits(project_root, days=14):
 async def get_project_progress():
     """Parse Prompt_Project_Management.md and git logs to return project momentum."""
     try:
-        project_root = _get_project_progress_root()
-        md_file = project_root / "Prompt_Project_Management.md"
+        md_file = Path(DataLoader.resolve_data_path("Prompt_Project_Management.md"))
+        project_root = md_file.parent
 
         completed_tasks = []
         pending_tasks = []
@@ -116,7 +115,7 @@ async def get_project_progress():
                     # Detect Headers as project groups
                     if line.startswith("## ") or line.startswith("### ") or line.startswith("#### "):
                         cleaned_header = re.sub(r'^#+\s*', '', line)
-                        if cleaned_header and "任务" in cleaned_header or "项目" in cleaned_header:
+                        if cleaned_header and ("任务" in cleaned_header or "项目" in cleaned_header):
                              current_project = cleaned_header
 
                     # Detect completed tasks
@@ -135,7 +134,7 @@ async def get_project_progress():
 
         # Git commits (last 14 days). Packaged builds fall back to a bundled snapshot.
         recent_commits = _load_recent_git_commits(project_root)
-        if not recent_commits:
+        if not recent_commits and project_root.resolve() == _packaged_resource_root().resolve():
             recent_commits = _load_project_activity_snapshot(project_root)
 
         return {

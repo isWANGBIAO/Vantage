@@ -1109,8 +1109,7 @@ class DataLoader:
 
     @staticmethod
     def get_system_prompt_content():
-        base_dir = Config.get_project_root()
-        system_prompt_path = base_dir / "Prompt_System.md"
+        system_prompt_path = DataLoader.resolve_data_path("Prompt_System.md")
         system_prompt_content = ""
         
         if system_prompt_path.exists():
