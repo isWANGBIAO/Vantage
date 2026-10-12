@@ -10,11 +10,24 @@ test('generated image references must belong to the report manifest and stay rel
   }
 });
 
+test('automatic leg photo proxies may trend only when date and quality are verified', () => {
+  const report = { leg: { records: [
+    { review_status: 'unreviewed', trend_eligible: true, timestamp_verified: true, captured_at: '2026-01-01T09:00:00' },
+    { review_status: 'unreviewed', trend_eligible: false, timestamp_verified: true, captured_at: '2026-01-02T09:00:00' },
+  ], trend: [
+    { date: '2026-01-01', hair_count: 4, hair_density_per_mpx: 5 },
+    { date: '2026-01-02', hair_count: 8, hair_density_per_mpx: 9 },
+  ] } };
+  assert.deepEqual(visibleTrend(report, 'leg'), [{ date: '2026-01-01', hair_count: 4, hair_density_per_mpx: 5 }]);
+});
+
 test('scalp candidate and unreviewed records never enter a trend', () => {
   const report = { scalp: { records: [{ review_status: 'unreviewed', trend_eligible: false }], trend: [{ date: '2026-01-01', scalp_candidate_fraction_percent: 5 }] } };
   assert.deepEqual(visibleTrend(report, 'scalp'), []);
   const accepted = { leg: { records: [{ review_status: 'accepted', trend_eligible: true, timestamp_verified: true, captured_at: '2026-01-01T09:00:00' }], trend: [{ date: '2026-01-01', hair_count: 4, hair_density_per_mpx: 5 }] } };
   assert.deepEqual(visibleTrend(accepted, 'leg'), [{ date: '2026-01-01', hair_count: 4, hair_density_per_mpx: 5 }]);
+  const scalp = { scalp: { records: [{ review_status: 'unreviewed', trend_eligible: true, timestamp_verified: true, captured_at: '2026-01-01T09:00:00' }], trend: [{ date: '2026-01-01', hair_region_fraction_percent: 10, texture_fraction_percent: 3, scalp_candidate_fraction_percent: 2 }] } };
+  assert.deepEqual(visibleTrend(scalp, 'scalp'), []);
 });
 
 test('missing metrics stay unknown and record names cannot show a source path', () => {

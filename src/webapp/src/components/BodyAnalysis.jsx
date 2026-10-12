@@ -28,7 +28,8 @@ function ReportSection({ kind, report, t }) {
   return (
     <section aria-label={t(kind === 'leg' ? 'body_analysis.tab.leg' : 'body_analysis.tab.scalp')}>
       <p>{t('body_analysis.record_count', { count: records.length })}</p>
-      {trend.length === 0 && <p>{t('body_analysis.no_verified_trend')}</p>}
+      {trend.length === 0 && <p>{t(kind === 'leg' ? 'body_analysis.no_verified_trend' : 'body_analysis.no_verified_scalp_trend')}</p>}
+      {kind === 'leg' && trend.length > 0 && <p>{t('body_analysis.leg_proxy_notice')}</p>}
       {trend.length > 0 && <div style={{ overflowX: 'auto', marginBottom: 16 }}><table>
         <thead><tr><th>{t('body_analysis.captured_at')}</th><th>{t(kind === 'leg' ? 'body_analysis.hair_count' : 'body_analysis.hair_region')}</th><th>{t(kind === 'leg' ? 'body_analysis.density' : 'body_analysis.texture')}</th></tr></thead>
         <tbody>{trend.map((point) => <tr key={point.date}><td>{point.date}</td><td>{formatMetric(kind === 'leg' ? point.hair_count : point.hair_region_fraction_percent)}</td><td>{formatMetric(kind === 'leg' ? point.hair_density_per_mpx : point.texture_fraction_percent)}</td></tr>)}</tbody>

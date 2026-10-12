@@ -16,11 +16,13 @@ export function visibleTrend(report, kind) {
   const section = report?.[kind];
   const keys = TREND_KEYS[kind];
   if (!keys || !Array.isArray(section?.records) || !Array.isArray(section?.trend)) return [];
-  const acceptedDates = new Set(section.records
-    .filter((record) => record?.review_status === 'accepted' && record.trend_eligible === true && record.timestamp_verified === true)
+  const eligibleDates = new Set(section.records
+    .filter((record) => record?.trend_eligible === true
+      && record.timestamp_verified === true
+      && (kind === 'leg' || record.review_status === 'accepted'))
     .map((record) => String(record.captured_at || '').slice(0, 10)));
   return section.trend.filter((item) => {
-    if (!item || !acceptedDates.has(item.date)) return false;
+    if (!item || !eligibleDates.has(item.date)) return false;
     return keys.every((key) => Number.isFinite(item[key]));
   }).map((item) => Object.fromEntries(['date', 'n', ...keys]
     .filter((key) => Object.hasOwn(item, key)).map((key) => [key, item[key]])));

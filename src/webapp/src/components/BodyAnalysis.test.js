@@ -35,4 +35,6 @@ test('report renders inspectable masks and only eligible trend records', () => {
   assert.match(source, /texture_mask_path/);
   assert.match(source, /line_mask_path/);
   assert.match(source, /scalp_candidate_mask_path/);
+  assert.match(source, /body_analysis\.leg_proxy_notice/);
+  assert.match(source, /body_analysis\.no_verified_scalp_trend/);
 });
