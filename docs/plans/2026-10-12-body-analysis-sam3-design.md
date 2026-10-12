@@ -48,11 +48,12 @@ only a pre-existing HTML report would not satisfy automatic analysis.
    segmentation masks/overlays, per-image quality warnings, and time trends.
    A missing detection is `null`, never zero. Unreviewed or rejected scalp
    candidate measurements remain inspectable but cannot enter trend charts.
-5. Only generated report assets beneath the selected report directory are
-   served through a restricted endpoint. HTML, if displayed in an iframe, is
-   sandboxed without same-origin privileges. The existing dark-circle tab is
-   mounted only while visible so its live-camera polling does not run under a
-   hidden subpage. Old `#face-history` links continue to open Dark Circles.
+5. The UI renders structured JSON data and generated images; it does not load
+   report HTML into the application. Only generated assets beneath the selected
+   report directory are served through a restricted endpoint. The existing
+   dark-circle tab is mounted only while visible so its live-camera polling
+   does not run under a hidden subpage. Old `#face-history` links continue to
+   open Dark Circles.
 
 ## Safety and interpretation
 
