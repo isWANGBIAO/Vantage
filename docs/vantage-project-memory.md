@@ -45,6 +45,12 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 
 有副作用的读取与工具：face.live.read 的 active=true 会标记实时查看器处于可见状态；system.media.open_folder 会打开操作系统文件管理器。调用前确认这正是用户要求的动作。
 
+## 身体分析与可选 SAM3
+
+“身体分析”统一承载黑眼圈历史、腿毛和头皮三个子页面。腿毛与头皮由本地 SAM3 脚本分析；主安装包仅带脱敏脚本，不捆绑 PyTorch、Transformers 或模型权重。`settings.json` 的 `body_analysis_enabled`、`body_analysis_leg_dir`、`body_analysis_scalp_dir`、`body_analysis_model_dir` 是唯一配置入口，默认关闭且没有机器专属路径。目录必须存在，不能与源码仓库或报告输出位置重叠。保存设置、后台启动或显式重试均由同一后端服务检查照片版本；未变化时复用上次完整报告，失败时保留旧报告。
+
+可选 GPU 环境缺失时只显示提示；唯有用户明确点击安装，才会在用户数据目录建立独立环境并下载依赖。不会自动下载受限 SAM3 权重，不会上传照片。报告与掩膜/覆盖图留在用户数据目录；接口只读取当前完整报告及其清单列出的生成图片，不提供任意源照片路径。腿毛数量、密度和头皮纹理均是照片代理指标；无检出值为 null，缺少可信拍摄时间不进入时间趋势，未验证的头皮候选不得生成趋势。真实模型效果须单独在本机验证，单元测试或安装成功不能代替。
+
 ## 行动计划工作流与边界
 
 人工读取当前今日计划使用 action_plan.today.read；生成使用 action_plan.jobs.create，观察使用 action_plan.jobs.events，状态使用 action_plan.jobs.read。要替换今天已保存的计划，显式设置 replace_today=true。创建返回任务快照与ID，events操作返回NDJSON进度流；只有收到明确的 done=true 且未收到 error/STREAM_ERROR，才可视为生成成功。完成后再次调用 action_plan.today.read，检查最新日期、分析与计划内容是否完整，再对外说明已经更新。失败、超时、缺少完成事件或响应不完整时，不得把旧计划说成新结果，也不得向用户声称替换成功。
@@ -99,6 +105,12 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 | 读取面部历史报告 | face.report.read | vantage face report read |
 | 导出面部历史 Excel | face.export | vantage face export |
 | 读取面部分析进度 | face.progress.read | vantage face progress read |
+| 读取身体分析状态 | body_analysis.status.read | vantage body-analysis status read |
+| 读取最新身体分析报告 | body_analysis.report.read | vantage body-analysis report read |
+| 查看报告生成的掩膜/覆盖图 | body_analysis.asset.read | vantage body-analysis asset read |
+| 显式安装可选本地分析环境 | body_analysis.environment.install | vantage body-analysis environment install |
+| 手动重试身体分析 | body_analysis.run.retry | vantage body-analysis run retry |
+| 选择照片/模型目录（仅桌面可见 UI） | body_analysis.directory.pick | vantage body-analysis directory pick |
 | 读取项目进度 | project_progress.read | vantage project-progress read |
 | 读取脱敏设置和运行目录 | settings.state.read | vantage settings state read |
 | 更新设置和 provider 配置 | settings.update | vantage settings update |
