@@ -478,7 +478,7 @@ def get_body_analysis_report_root() -> Path:
 def validate_body_analysis_paths(settings: dict, *, fields=None) -> dict[str, str]:
     """Resolve configured input directories; call again immediately before scanning.
 
-    Never let a source directory include the repository or the generated report
+    Never let a source directory overlap the repository or the generated report
     root. The returned paths are normalized, but no directories are created.
     """
     selected = BODY_ANALYSIS_DIRECTORY_FIELDS if fields is None else fields
@@ -496,8 +496,8 @@ def validate_body_analysis_paths(settings: dict, *, fields=None) -> dict[str, st
         path = Path(value).expanduser().resolve()
         if not path.is_dir():
             raise ValueError(f"{key} must be an existing directory")
-        if path == repository or path in repository.parents:
-            raise ValueError(f"{key} cannot contain the repository root")
+        if path == repository or path in repository.parents or repository in path.parents:
+            raise ValueError(f"{key} cannot overlap the repository")
         if path == output or path in output.parents or output in path.parents:
             raise ValueError(f"{key} cannot overlap generated output")
         normalized[key] = str(path)

@@ -209,17 +209,20 @@ def test_body_analysis_update_preserves_other_settings_and_normalizes_paths(tmp_
     assert persisted["display_language"] == "en-US"
 
 
-@pytest.mark.parametrize("invalid_kind", ["file", "missing", "repository", "output", "output_parent"])
+@pytest.mark.parametrize("invalid_kind", ["file", "missing", "repository", "repository_child", "output", "output_parent"])
 def test_body_analysis_update_rejects_unsafe_source_paths_without_writing(tmp_path, monkeypatch, invalid_kind):
     paths = _use_runtime_dirs(monkeypatch, tmp_path)
     project = tmp_path / "project"
     project.mkdir()
+    project_child = project / "photos"
+    project_child.mkdir()
     output = paths["history"] / "body_analysis"
     output.mkdir(parents=True)
     invalid = {
         "file": tmp_path / "photo.jpg",
         "missing": tmp_path / "missing",
         "repository": project,
+        "repository_child": project_child,
         "output": output,
         "output_parent": paths["history"],
     }[invalid_kind]
@@ -244,6 +247,19 @@ def test_body_analysis_path_validation_can_be_reused_after_directory_moves(tmp_p
 
     with pytest.raises(ValueError, match="body_analysis_leg_dir"):
         _backend_settings.validate_body_analysis_paths(user_config.load_settings())
+
+
+@pytest.mark.parametrize("field", [
+    "body_analysis_leg_dir", "body_analysis_scalp_dir", "body_analysis_model_dir",
+])
+def test_body_analysis_scan_time_rejects_repository_subdirectories(tmp_path, monkeypatch, field):
+    _use_runtime_dirs(monkeypatch, tmp_path)
+    source = tmp_path / "project" / "private_photos"
+    source.mkdir(parents=True)
+    persisted = user_config.save_settings({field: str(source)})
+
+    with pytest.raises(ValueError, match=field):
+        user_config.validate_body_analysis_paths(persisted)
 
 
 def test_concurrent_display_language_and_settings_updates_preserve_both_fields(tmp_path, monkeypatch):
