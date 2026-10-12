@@ -29,11 +29,23 @@ def discover_images(source_dir: Path) -> list[Path]:
     source_dir = Path(source_dir)
     if source_dir.is_symlink() or not source_dir.is_dir():
         raise ValueError("source directory unavailable")
+    resolved_source = source_dir.resolve()
     return sorted(
         path for path in source_dir.rglob("*")
         if path.is_file() and not path.is_symlink() and path.suffix.lower() in IMAGE_SUFFIXES
+        and path.resolve().is_relative_to(resolved_source)
         and not any(parent.is_symlink() for parent in path.parents if parent != source_dir)
     )
+
+
+def _reject_repository_staging(staging_root: Path) -> None:
+    """Prevent direct CLI invocations from writing private reports into source control."""
+    script = Path(__file__).resolve()
+    protected_roots = {parent for parent in script.parents if (parent / ".git").exists()}
+    if script.parent.name == "scripts" and script.parent.parent.name == "src":
+        protected_roots.add(script.parents[2])
+    if any(Path(staging_root).resolve().is_relative_to(root) for root in protected_roots):
+        raise ValueError("repository staging is forbidden")
 
 
 def read_capture_time(path: Path) -> tuple[str, str, bool]:
@@ -66,6 +78,7 @@ def create_new_output(staging_root: Path, output_dir: Path) -> Path:
         raise ValueError("staging root is a symlink")
     if not root.is_dir():
         raise ValueError("staging root unavailable")
+    _reject_repository_staging(root)
     if output.parent != root or output.name in ("", ".", ".."):
         raise ValueError("output must be a direct child of staging root")
     if output.exists() or output.is_symlink():
@@ -217,7 +230,9 @@ def analyze_photo(
         "analysis_width": int(rgb.shape[1]), "analysis_height": int(rgb.shape[0]),
         "roi_area_px": area, "roi_area_ratio": float(area / primary.size),
         "sam_scores": [float(score) for score in scores], "sharpness": sharpness,
-        "quality_flags": quality, "review_status": "unreviewed", "trend_eligible": False,
+        "quality_flags": quality, "review_status": "unreviewed",
+        "measurement_type": "photographic_proxy",
+        "trend_eligible": kind == "leg" and verified and area / primary.size >= 0.03,
         "mask_path": mask_path, "overlay_path": overlay_path,
         "texture_mask_path": texture_path, "texture_overlay_path": texture_overlay_path,
         "line_mask_path": line_mask_path, "line_overlay_path": line_overlay_path,
@@ -251,7 +266,7 @@ def analyze_photo(
 
 
 def aggregate_trends(records: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
-    """Only manually accepted, EXIF-dated, complete proxies can enter trends."""
+    """Show dated leg proxies; scalp remains gated on manual acceptance."""
     if kind not in {"leg", "scalp"}:
         raise ValueError("unknown analysis kind")
     metrics = ("hair_count", "hair_density_per_mpx") if kind == "leg" else (
@@ -259,15 +274,23 @@ def aggregate_trends(records: list[dict[str, Any]], kind: str) -> list[dict[str,
     )
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
-        if record.get("kind") != kind or record.get("review_status") != "accepted":
+        review = record.get("review_status")
+        if record.get("kind") != kind or review not in ({"accepted", "unreviewed"} if kind == "leg" else {"accepted"}):
             continue
         if not record.get("trend_eligible") or not record.get("timestamp_verified"):
+            continue
+        if kind == "leg" and (not _finite_number(record.get("roi_area_ratio")) or record["roi_area_ratio"] < 0.03):
             continue
         if any(not isinstance(record.get(metric), (int, float)) or not math.isfinite(record[metric]) for metric in metrics):
             continue
         grouped[str(record["captured_at"])[:10]].append(record)
     return [
-        {"date": day, **{metric: float(median(record[metric] for record in group)) for metric in metrics}, "n": len(group)}
+        {
+            "date": day,
+            **{metric: float(median(record[metric] for record in group)) for metric in metrics},
+            "n": len(group), "measurement_type": "photographic_proxy",
+            "review_status": "unreviewed" if any(record["review_status"] == "unreviewed" for record in group) else "accepted",
+        }
         for day, group in sorted(grouped.items())
     ]
 
@@ -278,11 +301,19 @@ def _record_assets(record: dict[str, Any]) -> list[str]:
 
 def build_report(leg_records: list[dict[str, Any]], scalp_records: list[dict[str, Any]]) -> dict[str, Any]:
     """Construct a complete machine-readable report; no raw image is copied."""
+    leg_trend = aggregate_trends(leg_records, "leg")
+    scalp_trend = aggregate_trends(scalp_records, "scalp")
     return {
         "schema_version": SCHEMA_VERSION, "complete": True, "engine": "sam3",
         "input_counts": {"leg": len(leg_records), "scalp": len(scalp_records)},
-        "leg": {"records": leg_records, "trend": aggregate_trends(leg_records, "leg")},
-        "scalp": {"records": scalp_records, "trend": aggregate_trends(scalp_records, "scalp")},
+        "leg": {
+            "records": leg_records, "trend": leg_trend,
+            "trend_unavailable_reason": None if leg_trend else ("no_images" if not leg_records else "no_verified_valid_measurements"),
+        },
+        "scalp": {
+            "records": scalp_records, "trend": scalp_trend,
+            "trend_unavailable_reason": None if scalp_trend else ("no_images" if not scalp_records else "manual_review_required"),
+        },
         "assets": sorted(set(path for record in leg_records + scalp_records for path in _record_assets(record))),
     }
 
@@ -297,7 +328,7 @@ def _validate_record(record: Any, kind: str, assets: set[str]) -> None:
     required = {
         "kind", "file_name", "captured_at", "timestamp_source", "timestamp_verified",
         "analysis_width", "analysis_height", "roi_area_px", "roi_area_ratio",
-        "sam_scores", "sharpness", "quality_flags", "review_status", "trend_eligible",
+        "sam_scores", "sharpness", "quality_flags", "review_status", "trend_eligible", "measurement_type",
         "mask_path", "overlay_path", "texture_mask_path", "texture_overlay_path",
         "line_mask_path", "line_overlay_path", "texture_fraction_percent",
     }
@@ -307,6 +338,8 @@ def _validate_record(record: Any, kind: str, assets: set[str]) -> None:
     }
     if not required.issubset(record) or record["kind"] != kind:
         raise ValueError("incomplete report record")
+    if record["measurement_type"] != "photographic_proxy":
+        raise ValueError("invalid measurement type")
     name = record["file_name"]
     if not isinstance(name, str) or name in {"", ".", ".."} or any(char in name for char in "/\\:"):
         raise ValueError("invalid photo name")
@@ -338,7 +371,12 @@ def _validate_record(record: Any, kind: str, assets: set[str]) -> None:
         raise ValueError("invalid quality flags")
     if not isinstance(record["review_status"], str) or record["review_status"] not in {"unreviewed", "accepted", "rejected"} or type(record["trend_eligible"]) is not bool:
         raise ValueError("invalid review status")
-    if record["trend_eligible"] and (record["review_status"] != "accepted" or not record["timestamp_verified"]):
+    if record["trend_eligible"] and (
+        not record["timestamp_verified"]
+        or record["review_status"] == "rejected"
+        or (kind == "scalp" and record["review_status"] != "accepted")
+        or (kind == "leg" and ratio < 0.03)
+    ):
         raise ValueError("unreviewed measurement in trend")
     for key in ("texture_fraction_percent", "hair_region_fraction_percent", "scalp_candidate_fraction_percent"):
         if key in record and record[key] is not None and (not _finite_number(record[key]) or not 0 <= record[key] <= 100):
@@ -406,6 +444,13 @@ def validate_report_manifest(report: dict[str, Any], output_root: Path) -> bool:
             _validate_record(record, section, asset_set)
         if report[section]["trend"] != aggregate_trends(report[section]["records"], section):
             raise ValueError("invalid report trend")
+        expected_reason = None if report[section]["trend"] else (
+            "no_images" if not report[section]["records"] else (
+                "manual_review_required" if section == "scalp" else "no_verified_valid_measurements"
+            )
+        )
+        if report[section].get("trend_unavailable_reason") != expected_reason:
+            raise ValueError("invalid trend availability reason")
     return True
 
 
@@ -448,6 +493,7 @@ def run(
         raise ValueError("source_or_checkpoint_unavailable")
     if progress_json != output_dir / "progress.json":
         raise ValueError("progress_destination_invalid")
+    _reject_repository_staging(staging_root)
     root = staging_root.resolve()
     if any(root.is_relative_to(source.resolve()) or source.resolve().is_relative_to(root)
            for source in (leg_dir, scalp_dir, model_dir)):

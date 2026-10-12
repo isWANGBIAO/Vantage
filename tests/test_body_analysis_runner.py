@@ -49,6 +49,21 @@ def test_discover_images_is_sorted_local_and_skips_other_files(tmp_path, runner)
     assert runner.discover_images(folder) == [folder / "b.JPG", folder / "nested" / "a.png"]
 
 
+def test_discover_images_rejects_resolved_escape_even_if_link_flag_is_missed(tmp_path, monkeypatch, runner):
+    folder = tmp_path / "photos"
+    folder.mkdir()
+    outside = tmp_path / "outside.png"
+    _photo(outside)
+    escape = folder / "escape.png"
+    try:
+        escape.symlink_to(outside)
+    except OSError:
+        pytest.skip("links unavailable")
+    original = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda self: False if self == escape else original(self))
+    assert runner.discover_images(folder) == []
+
+
 def test_capture_time_uses_exif_and_marks_mtime_unverified(tmp_path, runner):
     dated = tmp_path / "dated.jpg"
     _photo(dated, exif_time="2026:01:02 03:04:05")
@@ -97,6 +112,29 @@ def test_new_output_rejects_symlink_staging_root(tmp_path, runner):
         pytest.skip("directory symlinks unavailable")
     with pytest.raises(ValueError, match="symlink"):
         runner.create_new_output(link, link / "run")
+
+
+def test_direct_runner_refuses_staging_inside_checkout(tmp_path, runner):
+    checkout = Path(__file__).resolve().parents[1]
+    for name in ("leg", "scalp", "model"):
+        (tmp_path / name).mkdir()
+    output = checkout / "runner-must-not-create"
+    assert not output.exists()
+    with pytest.raises(ValueError, match="repository"):
+        runner.run(
+            leg_dir=tmp_path / "leg", scalp_dir=tmp_path / "scalp", model_dir=tmp_path / "model",
+            staging_root=checkout, output_dir=output, progress_json=output / "progress.json",
+        )
+    assert not output.exists()
+
+
+def test_runner_refuses_its_source_tree_even_without_git_metadata(tmp_path, monkeypatch, runner):
+    scripts = tmp_path / "src" / "scripts"
+    scripts.mkdir(parents=True)
+    monkeypatch.setattr(runner, "__file__", str(scripts / "body_analysis_sam3.py"))
+    with pytest.raises(ValueError, match="repository"):
+        runner.create_new_output(tmp_path, tmp_path / "private-report")
+    assert not (tmp_path / "private-report").exists()
 
 
 def test_no_detection_is_null_and_masks_remain_inspectable(tmp_path, runner):
@@ -170,14 +208,33 @@ def test_trends_require_verified_time_and_accepted_review(runner):
     base = {
         "kind": "leg", "captured_at": "2026-01-02T12:00:00", "timestamp_verified": True,
         "review_status": "accepted", "trend_eligible": True, "hair_count": 12,
-        "hair_density_per_mpx": 20.0,
+        "hair_density_per_mpx": 20.0, "roi_area_ratio": 0.3,
     }
     accepted = dict(base)
     no_exif = dict(base, timestamp_verified=False, hair_count=90)
     rejected = dict(base, review_status="rejected", hair_count=80)
     missing = dict(base, hair_count=None, hair_density_per_mpx=None)
     trend = runner.aggregate_trends([accepted, no_exif, rejected, missing], "leg")
-    assert trend == [{"date": "2026-01-02", "hair_count": 12.0, "hair_density_per_mpx": 20.0, "n": 1}]
+    assert trend == [{
+        "date": "2026-01-02", "hair_count": 12.0, "hair_density_per_mpx": 20.0,
+        "n": 1, "measurement_type": "photographic_proxy", "review_status": "accepted",
+    }]
+
+
+def test_unreviewed_leg_proxy_has_trend_only_with_verified_time_and_valid_roi(runner):
+    base = {
+        "kind": "leg", "captured_at": "2026-01-02T12:00:00", "timestamp_verified": True,
+        "review_status": "unreviewed", "trend_eligible": True, "roi_area_ratio": 0.3,
+        "hair_count": 4, "hair_density_per_mpx": 40.0,
+    }
+    invalid = [
+        dict(base, timestamp_verified=False), dict(base, roi_area_ratio=0.01),
+        dict(base, hair_count=None), dict(base, review_status="rejected"),
+    ]
+    assert runner.aggregate_trends([base, *invalid], "leg") == [{
+        "date": "2026-01-02", "hair_count": 4.0, "hair_density_per_mpx": 40.0,
+        "n": 1, "measurement_type": "photographic_proxy", "review_status": "unreviewed",
+    }]
 
 
 def test_report_manifest_rejects_traversal_and_symlink_assets(tmp_path, runner):
@@ -188,7 +245,8 @@ def test_report_manifest_rejects_traversal_and_symlink_assets(tmp_path, runner):
     valid = {
         "schema_version": 1, "complete": True, "engine": "sam3",
         "input_counts": {"leg": 0, "scalp": 0},
-        "leg": {"records": [], "trend": []}, "scalp": {"records": [], "trend": []},
+        "leg": {"records": [], "trend": [], "trend_unavailable_reason": "no_images"},
+        "scalp": {"records": [], "trend": [], "trend_unavailable_reason": "no_images"},
         "assets": ["masks/1.png"],
     }
     assert runner.validate_report_manifest(valid, report) is True
@@ -211,6 +269,7 @@ def test_manifest_requires_exact_input_counts(tmp_path, runner):
     output.mkdir()
     valid = runner.build_report([], [])
     assert valid["input_counts"] == {"leg": 0, "scalp": 0}
+    assert valid["scalp"]["trend_unavailable_reason"] == "no_images"
     assert runner.validate_report_manifest(valid, output)
     for invalid in (None, {"leg": 1, "scalp": 0}, {"leg": False, "scalp": 0}, {"leg": 0}):
         with pytest.raises(ValueError, match="input counts"):
@@ -301,7 +360,11 @@ def test_synthetic_run_writes_complete_report_without_gpu(tmp_path, monkeypatch,
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert runner.validate_report_manifest(report, output) is True
     assert len(report["leg"]["records"]) == len(report["scalp"]["records"]) == 1
-    assert report["leg"]["trend"] == report["scalp"]["trend"] == []
+    assert len(report["leg"]["trend"]) == 1
+    assert report["leg"]["trend"][0]["review_status"] == "unreviewed"
+    assert report["leg"]["trend"][0]["measurement_type"] == "photographic_proxy"
+    assert report["scalp"]["trend"] == []
+    assert report["scalp"]["trend_unavailable_reason"] == "manual_review_required"
     assert report["scalp"]["records"][0]["scalp_candidate_fraction_percent"] is None
     assert report["complete"] is True
     assert json.loads((output / "progress.json").read_text())["status"] == "succeeded"
