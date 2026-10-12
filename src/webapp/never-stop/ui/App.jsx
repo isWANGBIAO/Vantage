@@ -37,10 +37,10 @@ import {
   publicationStatus,
 } from "./state.mjs";
 const invoke = (method, payload = {}) =>
-  window.neverStop
-    ? window.neverStop.invoke(method, payload)
+  window.vantagePlatform?.neverStop
+    ? window.vantagePlatform.neverStop.invoke(method, payload)
     : Promise.reject(
-        new Error("桌面连接不可用。请使用 Never Stop 独立桌面入口启动。"),
+        new Error("Never Stop 本地连接不可用。请重新启动 Vantage。"),
       );
 const message = (e) => e?.message || String(e);
 const Markdown = ({ text }) => (
@@ -67,7 +67,7 @@ const status = (p) =>
     switching: "正在切换",
     stopping: "正在停止",
   })[p.status] || (p.desiredRunning ? "准备运行" : "已暂停");
-export default function App() {
+export default function App({ isVisible = true, openRequest }) {
   const [state, setState] = useState({
     projects: [],
     resources: [],
@@ -80,14 +80,22 @@ export default function App() {
     [busy, setBusy] = useState(false),
     [progress, setProgress] = useState({}),
     [modal, setModal] = useState(null),
-    [draftDirty, setDraftDirty] = useState({});
+    [draftDirty, setDraftDirty] = useState({}),
+    [principlesDirty, setPrinciplesDirty] = useState(false);
   const project = state.projects.find((p) => p.id === selected);
+  const pendingRequests = useRef(0);
   const progressKey = projectScopeKey(project);
   const reportDraftState = useCallback((id, dirty) => {
     setDraftDirty((previous) =>
       previous[id] === dirty ? previous : { ...previous, [id]: dirty },
     );
   }, []);
+  useEffect(() => {
+    if (openRequest?.projectId) {
+      setSelected(openRequest.projectId);
+      setPanel(null);
+    }
+  }, [openRequest]);
   const refresh = useCallback(async () => {
     try {
       const next = await invoke("state");
@@ -102,20 +110,21 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
-    refresh();
-    const unsub = window.neverStop?.onChange((event) => {
+    if (!isVisible) return undefined;
+    void refresh();
+    const unsub = window.vantagePlatform?.neverStop?.onChange((event) => {
       if (event?.selectedProjectId) {
         setSelected(event.selectedProjectId);
         setPanel(null);
       }
-      refresh();
+      void refresh();
     });
     const timer = setInterval(refresh, 2500);
     return () => {
       unsub?.();
       clearInterval(timer);
     };
-  }, [refresh]);
+  }, [refresh, isVisible]);
   const readProgress = useCallback(async () => {
     if (!selected || !progressKey) return;
     try {
@@ -129,12 +138,14 @@ export default function App() {
     }
   }, [selected, progressKey]);
   useEffect(() => {
-    readProgress();
+    if (!isVisible) return undefined;
+    void readProgress();
     const timer = setInterval(readProgress, 1800);
     return () => clearInterval(timer);
-  }, [readProgress]);
+  }, [readProgress, isVisible]);
   const run = useCallback(
     async (method, payload = {}) => {
+      pendingRequests.current++;
       setBusy(true);
       try {
         const result = await invoke(method, payload);
@@ -144,13 +155,14 @@ export default function App() {
         setError(message(e));
         throw e;
       } finally {
-        setBusy(false);
+        pendingRequests.current--;
+        setBusy(pendingRequests.current > 0);
       }
     },
     [refresh],
   );
   const toggle = useCallback(() => {
-    if (!project || busy) return;
+    if (!project || busy || pendingRequests.current) return;
     if (!project.desiredRunning && !project.publishedGoal?.trim()) {
       setPanel("目标");
       setError("请先编辑并发布目标，再开始运行。");
@@ -162,14 +174,14 @@ export default function App() {
   }, [project, busy, run]);
   useEffect(() => {
     const handler = (e) => {
-      if (canToggleWithSpace(e, !!panel || !!modal)) {
+      if (isVisible && canToggleWithSpace(e, !!panel || !!modal)) {
         e.preventDefault();
         toggle();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [toggle, panel, modal]);
+  }, [toggle, panel, modal, isVisible]);
   const current = progress[progressKey] || {},
     snapshot = current.snapshot,
     axes = snapshot?.radar?.axes || [];
@@ -231,6 +243,10 @@ export default function App() {
           )}
         </nav>
         <div className="sidebar-bottom">
+          <button onClick={() => openPanel("执行原则")}>
+            <Shield size={18} />
+            执行原则{principlesDirty && <span>待保存</span>}
+          </button>
           <button onClick={() => openPanel("我的资源")}>
             <Server size={18} />
             我的资源<span>{state.resources.length}</span>
@@ -252,9 +268,7 @@ export default function App() {
             <ChevronRight size={15} />
             {project?.name || "欢迎"}
           </div>
-          <span className="edition">
-            独立 Demo · {state.appVersion ? `v${state.appVersion}` : "开发版"}
-          </span>
+          <span className="edition">Vantage · Never Stop</span>
         </header>
         {error && (
           <div role="alert" className="banner">
@@ -404,6 +418,7 @@ export default function App() {
                   key={project.id}
                   totalRunMs={project.totalRunMs}
                   runTimerStartedAt={project.runTimerStartedAt}
+                  isVisible={isVisible}
                 />
                 <button
                   className={`primary control ${project.desiredRunning ? "pause" : ""}`}
@@ -425,6 +440,7 @@ export default function App() {
               project={project}
               invoke={invoke}
               status={status(project)}
+              isVisible={isVisible}
             />
             {current.error && (
               <div className="data-warning">
@@ -505,7 +521,7 @@ export default function App() {
             <DrawerHead title="目标" close={() => setPanel(null)} />
             <GoalEditor
               project={editorProject}
-              visible={visible}
+              visible={isVisible && visible}
               onDraftState={reportDraftState}
               run={run}
               onError={setError}
@@ -513,7 +529,21 @@ export default function App() {
           </div>
         );
       })}
-      {panel && panel !== "目标" && (
+      <section
+        className={`drawer ${panel === "执行原则" ? "visible" : ""}`}
+        role={panel === "执行原则" ? "dialog" : undefined}
+        aria-modal={panel === "执行原则" ? true : undefined}
+        aria-label="执行原则"
+        inert={panel === "执行原则" ? undefined : true}
+      >
+        <DrawerHead title="执行原则" close={() => setPanel(null)} />
+        <PrinciplesEditor
+          visible={isVisible && panel === "执行原则"}
+          run={run}
+          onDirty={setPrinciplesDirty}
+        />
+      </section>
+      {panel && panel !== "目标" && panel !== "执行原则" && (
         <section
           className="drawer visible"
           role="dialog"
@@ -532,15 +562,6 @@ export default function App() {
                 </p>
                 <Markdown text={snapshot?.suggestions_markdown} />
               </>
-            )}{" "}
-            {panel === "执行原则" && (
-              <Markdown
-                text={
-                  typeof state.principles === "string"
-                    ? state.principles
-                    : state.principles?.text
-                }
-              />
             )}{" "}
             {panel === "错误" && (
               <>
@@ -678,6 +699,10 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
     conflictRef = useRef(null),
     mounted = useRef(true);
   useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useEffect(() => {
     onDraftState(
       project.id,
       saving || !!conflict || local.current.text !== local.current.base,
@@ -694,7 +719,7 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
   }, []);
   useEffect(() => {
     let active = true;
-    mounted.current = true;
+    if (!visible) return undefined;
     const read = async () => {
       try {
         if (!visible || lock.current) return;
@@ -721,7 +746,6 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
     const timer = setInterval(read, 1400);
     return () => {
       active = false;
-      mounted.current = false;
       clearInterval(timer);
     };
   }, [project.id, visible, apply, onError]);
@@ -752,8 +776,12 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
           conflictRef.current = external;
           setConflict(external);
           setSaveState("发现外部编辑冲突");
-        } else onError(message(e));
+        } else {
+          setSaveState("保存失败，草稿已保留");
+          onError(message(e));
+        }
       } catch {
+        setSaveState("保存失败，草稿已保留");
         onError(message(e));
       }
       return false;
@@ -763,10 +791,10 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
     }
   }, [project.id, onError]);
   useEffect(() => {
-    if (!ready || conflict) return;
+    if (!ready || conflict || saveState === "保存失败，草稿已保留") return;
     const timer = setTimeout(() => save(), 650);
     return () => clearTimeout(timer);
-  }, [text, ready, conflict, save, saving]);
+  }, [text, ready, conflict, save, saving, saveState]);
   const publish = async () => {
     const publishedText = local.current.text;
     if (await save()) {
@@ -871,7 +899,7 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
       <div className="editor-footer">
         <p>
           <span className="pill">{publicationStatus(text, project)}</span>
-          <small>自动保存仅更新草稿。撤销 / 重做使用系统快捷键。</small>
+          <small>自动保存写入 goal.md，Agent 可读取；发布会同步应用的目标快照。撤销 / 重做使用系统快捷键。</small>
         </p>
         <button
           className="primary"
@@ -880,6 +908,163 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
         >
           发布目标
           <ArrowUpRight size={16} />
+        </button>
+      </div>
+    </>
+  );
+}
+function PrinciplesEditor({ visible, run, onDirty }) {
+  const [text, setText] = useState("");
+  const [ready, setReady] = useState(false);
+  const [preview, setPreview] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [failure, setFailure] = useState("");
+  const [notice, setNotice] = useState("");
+  const [conflict, setConflict] = useState(null);
+  const local = useRef({ text: "", base: "", version: null });
+  const defaults = useRef("");
+  const lock = useRef(false);
+  const conflictRef = useRef(null);
+  const apply = useCallback((external) => {
+    local.current = {
+      text: external.text,
+      base: external.text,
+      version: external.version,
+    };
+    defaults.current = external.defaultText;
+    setText(external.text);
+    conflictRef.current = null;
+    setConflict(null);
+    setReady(true);
+  }, []);
+  const dirty = ready && text !== local.current.base;
+  useEffect(() => {
+    onDirty(dirty || !!conflict || saving);
+  }, [dirty, conflict, saving, onDirty]);
+  useEffect(() => {
+    if (!visible) return undefined;
+    let active = true;
+    let reading = false;
+    const read = async () => {
+      if (reading || lock.current) return;
+      reading = true;
+      try {
+        const external = await invoke("principles.read");
+        if (!active || lock.current) return;
+        defaults.current = external.defaultText;
+        if (local.current.version === null) {
+          apply(external);
+          setFailure("");
+        } else {
+          const result = reconcileDraft(local.current, external);
+          if (result?.conflict) {
+            conflictRef.current = external;
+            setConflict(external);
+          } else if (result) apply(external);
+        }
+      } catch (error) {
+        if (active) setFailure(message(error));
+      } finally {
+        reading = false;
+      }
+    };
+    void read();
+    const timer = setInterval(read, 1800);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [visible, apply]);
+  const save = async () => {
+    if (!ready || lock.current || conflictRef.current || !local.current.text.trim()) return;
+    lock.current = true;
+    setSaving(true);
+    setFailure("");
+    setNotice("");
+    const submitted = { ...local.current };
+    try {
+      const external = await run("principles.save", {
+        text: submitted.text,
+        version: submitted.version,
+      });
+      apply(external);
+      setNotice("已保存。所有项目从下一轮调用开始使用新原则。");
+    } catch (error) {
+      setFailure(message(error));
+      try {
+        const external = await invoke("principles.read");
+        if (external.version !== submitted.version) {
+          defaults.current = external.defaultText;
+          conflictRef.current = external;
+          setConflict(external);
+        }
+      } catch {
+        // Keep the local draft if the follow-up read also fails.
+      }
+    } finally {
+      lock.current = false;
+      setSaving(false);
+    }
+  };
+  const edit = (value) => {
+    local.current.text = value;
+    setText(value);
+    setNotice("");
+  };
+  return (
+    <>
+      <div className="principles-hint">
+        <p className="hint">所有项目共用。保存在 Vantage 数据目录，重启与升级后保留；保存后从下一轮调用生效。</p>
+        <p className="hint">关闭面板会保留未保存草稿，完全退出前请保存。恢复默认先更新草稿，点击保存后才生效。</p>
+        {failure && <p className="data-warning" role="alert">{failure}</p>}
+        {notice && <p role="status">{notice}</p>}
+      </div>
+      <div className="editor-tools">
+        <div className="segmented">
+          <button className={!preview ? "selected" : ""} onClick={() => setPreview(false)}>编辑</button>
+          <button className={preview ? "selected" : ""} onClick={() => setPreview(true)}>预览</button>
+        </div>
+        <span role="status">{saving ? "正在保存" : !ready ? "正在读取" : conflict ? "存在版本冲突" : dirty ? "未保存" : "已保存"}</span>
+        <button disabled={!ready || saving} onClick={() => {
+          edit(defaults.current);
+          setPreview(false);
+          setNotice("默认原则已载入草稿，请审阅后保存。");
+        }}><RotateCcw size={15} />恢复默认</button>
+      </div>
+      <div className="editor-content" onKeyDown={(event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+          event.preventDefault();
+          void save();
+        }
+      }}>
+        {preview ? <Markdown text={text} /> : <textarea
+          aria-label="执行原则 Markdown"
+          spellCheck={false}
+          disabled={!ready || saving}
+          value={text}
+          onChange={(event) => edit(event.target.value)}
+        />}
+        {conflict && <div className="conflict" role="alert">
+          <h3>执行原则已在其他位置修改</h3>
+          <p>你的草稿已保留。请对照当前版本，选择采用当前版本，或手动合并后保存。</p>
+          <div className="conflict-columns">
+            <div><strong>本地草稿</strong><pre>{text}</pre></div>
+            <div><strong>当前已保存版本</strong><pre>{conflict.text}</pre></div>
+          </div>
+          <button disabled={saving} onClick={() => apply(conflict)}>采用当前版本</button>
+          <button disabled={saving} onClick={() => {
+            local.current.base = conflict.text;
+            local.current.version = conflict.version;
+            conflictRef.current = null;
+            setConflict(null);
+            setNotice("已保留本地草稿，请审阅并保存。");
+          }}>保留本地 / 已手动合并</button>
+        </div>}
+      </div>
+      <div className="editor-footer">
+        <p><small>保存快捷键：Ctrl+S。原则不能为空。</small></p>
+        <button className="primary" disabled={!ready || !dirty || saving || !!conflict || !text.trim()} onClick={save}>
+          <Save size={16} />保存执行原则
         </button>
       </div>
     </>
@@ -1190,7 +1375,12 @@ function Preferences({ settings, run }) {
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        run("settings.save", { settings: form }).catch(() => {});
+        run("settings.save", {
+          settings: {
+            notificationsEnabled: !!form.notificationsEnabled,
+            notificationTime: form.notificationTime || "18:00",
+          },
+        }).catch(() => {});
       }}
     >
       <h3>每日提醒</h3>
@@ -1242,23 +1432,8 @@ function Preferences({ settings, run }) {
       <hr />
       <h3>后台与启动</h3>
       <p className="hint">
-        打开新版应用后，会同步已启用的自启动入口，下次登录使用新版。
+        Never Stop 随 Vantage 启动。登录后自动启动请到 Vantage 设置中管理。
       </p>
-      {settings.startupError && (
-        <p className="data-warning" role="alert">
-          自启动入口同步失败：{message(settings.startupError)}
-        </p>
-      )}
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={!!form.launchAtLogin}
-          onChange={(e) =>
-            setForm({ ...form, launchAtLogin: e.target.checked })
-          }
-        />
-        登录系统后启动，恢复之前的运行意图
-      </label>
       <p className="hint">
         关闭主窗口后项目继续工作。暂停的项目不会因重新打开窗口而启动。完全退出请使用系统托盘菜单。
       </p>

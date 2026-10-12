@@ -25,6 +25,7 @@ const ExpenseSheet = lazyWithPreload(() => import('./components/ExpenseSheet'));
 const Plots = lazyWithPreload(() => import('./components/Plots'));
 const SystemLogs = lazyWithPreload(() => import('./components/SystemLogs'));
 const FaceHistory = lazyWithPreload(() => import('./components/FaceHistory'));
+const NeverStopPage = lazyWithPreload(() => import('./components/NeverStopPage'));
 const Settings = lazyWithPreload(() => import('./components/Settings'));
 
 const BACKGROUND_TAB_COMPONENTS = [
@@ -44,6 +45,7 @@ const NAV_ITEMS = [
   { key: 'plots', labelKey: 'app.nav.plots' },
   { key: 'system logs', labelKey: 'app.nav.system_logs' },
   { key: 'face history', labelKey: 'app.nav.face_history' },
+  { key: 'never-stop', labelKey: 'app.nav.never_stop' },
 ];
 
 const TAB_HASH_TO_KEY = Object.fromEntries([
@@ -105,6 +107,8 @@ function resolveEffectiveTheme(themeMode, systemTheme = 'dark') {
 function AppShell() {
   const { t, displayLanguage, setDisplayLanguage } = useDisplayLanguage();
   const [activeTab, setActiveTab] = useState(() => getTabKeyFromHash(window.location.hash) || 'action plan');
+  const [neverStopVisited, setNeverStopVisited] = useState(() => getTabKeyFromHash(window.location.hash) === 'never-stop');
+  const [neverStopOpenRequest, setNeverStopOpenRequest] = useState(null);
   const [themeMode, setThemeMode] = useState(() => (
     localStorage.getItem('themeMode') || localStorage.getItem('theme') || 'dark'
   ));
@@ -144,12 +148,28 @@ function AppShell() {
       const nextTab = getTabKeyFromHash(window.location.hash);
       if (nextTab) {
         setActiveTab(nextTab);
+        if (nextTab === 'never-stop') setNeverStopVisited(true);
       }
     };
 
     syncActiveTabFromHash();
     window.addEventListener('hashchange', syncActiveTabFromHash);
     return () => window.removeEventListener('hashchange', syncActiveTabFromHash);
+  }, []);
+
+  useEffect(() => {
+    const neverStopBridge = window.vantagePlatform?.neverStop;
+    if (typeof neverStopBridge?.onOpen !== 'function') return undefined;
+    const unsubscribe = neverStopBridge.onOpen((event) => {
+      const projectId = typeof event === 'string' ? event : event?.projectId || event?.selectedProjectId;
+      setNeverStopOpenRequest({ projectId: projectId || null });
+      setNeverStopVisited(true);
+      setActiveTab('never-stop');
+      if (window.location.hash !== '#never-stop') {
+        window.history.pushState(null, '', '#never-stop');
+      }
+    });
+    return () => unsubscribe?.();
   }, []);
 
   useEffect(() => {
@@ -345,6 +365,7 @@ function AppShell() {
 
   const handleNavTabChange = (tabKey) => {
     setActiveTab(tabKey);
+    if (tabKey === 'never-stop') setNeverStopVisited(true);
     const nextHash = TAB_KEY_TO_HASH[tabKey];
 
     if (nextHash && window.location.hash !== nextHash) {
@@ -525,6 +546,13 @@ function AppShell() {
           ) : null}
         </Suspense>
         <Suspense fallback={null}>
+          {(activeTab === 'never-stop' || neverStopVisited) ? (
+            <div style={{ display: activeTab === 'never-stop' ? 'block' : 'none' }}>
+              <NeverStopPage isVisible={activeTab === 'never-stop'} openRequest={neverStopOpenRequest} />
+            </div>
+          ) : null}
+        </Suspense>
+        <Suspense fallback={null}>
           {activeTab === 'settings' ? (
             <Settings currentTheme={theme} currentThemeMode={themeMode} onSettingsApplied={handleSettingsApplied} />
           ) : null}
@@ -537,6 +565,7 @@ function AppShell() {
         activeTab !== 'expense sheet' &&
         activeTab !== 'system logs' &&
         activeTab !== 'settings' &&
+        activeTab !== 'never-stop' &&
         activeTab !== 'project progress' && (
           <footer
             style={{

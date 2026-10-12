@@ -4,12 +4,14 @@ import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { runInNewContext } from 'node:vm';
+import { Buffer } from 'node:buffer';
 import protocol from './src/utils/configurationProtocol.cjs';
 import transport from './src/utils/backendTransport.cjs';
 import connection from './src/utils/backendConnection.cjs';
 
 const protocolSource = readFileSync(new URL('./src/utils/configurationProtocol.cjs', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('./main.cjs', import.meta.url), 'utf8');
+const preloadSource = readFileSync(new URL('./preload.cjs', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('./src/App.jsx', import.meta.url), 'utf8');
 const settingsSource = readFileSync(new URL('./src/components/Settings.jsx', import.meta.url), 'utf8');
 const packageJson = JSON.parse(
@@ -36,6 +38,48 @@ test('Electron disables hardware acceleration synchronously before loading start
   const policyIndex = mainSource.indexOf('app.disableHardwareAcceleration();');
   assert.ok(policyIndex < mainSource.indexOf('app.whenReady()'));
   assert.ok(policyIndex < mainSource.indexOf('new BrowserWindow('));
+});
+
+test('main preload exposes Never Stop only through the Vantage platform bridge', async () => {
+  const exposed = new Map();
+  const listeners = new Map();
+  const calls = [];
+  const ipcRenderer = {
+    on: (channel, listener) => listeners.set(channel, listener),
+    removeListener: (channel, listener) => {
+      if (listeners.get(channel) === listener) listeners.delete(channel);
+    },
+    invoke: async (...args) => { calls.push(args); return { ok: true, value: { projects: [] } }; },
+    sendSync: () => ({ kind: 'electron' }),
+  };
+  runInNewContext(preloadSource, {
+    require: () => ({
+      contextBridge: { exposeInMainWorld: (name, value) => exposed.set(name, value) },
+      ipcRenderer,
+    }),
+    Buffer,
+    setTimeout,
+  });
+  assert.deepEqual([...exposed.keys()], ['vantagePlatform']);
+  const neverStop = exposed.get('vantagePlatform').neverStop;
+  assert.equal(typeof neverStop.invoke, 'function');
+  assert.equal(typeof neverStop.onChange, 'function');
+  assert.equal(typeof neverStop.onOpen, 'function');
+  const result = await neverStop.invoke('state', {});
+  assert.equal(Array.isArray(result.projects), true);
+  assert.deepEqual(calls, [['never-stop:invoke', 'state', {}]]);
+  const updates = [];
+  const unsubscribe = neverStop.onChange(value => updates.push(value));
+  listeners.get('never-stop:change')({}, { selectedProjectId: 'one' });
+  assert.equal(updates[0].selectedProjectId, 'one');
+  unsubscribe();
+  assert.equal(listeners.has('never-stop:change'), false);
+  const opens = [];
+  const stopOpen = neverStop.onOpen(value => opens.push(value));
+  listeners.get('never-stop:open')({}, { selectedProjectId: 'two' });
+  assert.equal(opens[0].selectedProjectId, 'two');
+  stopOpen();
+  assert.equal(listeners.has('never-stop:open'), false);
 });
 
 test('startup transport waits for backend readiness before sending onboarding and settings requests', async () => {

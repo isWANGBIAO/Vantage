@@ -44,6 +44,17 @@ test('package exposes frontend test and check scripts', () => {
   assert.equal(packageJson.scripts['electron:package'], 'electron-builder');
 });
 
+test('Never Stop ships inside Vantage, without a second desktop entry point', () => {
+  assert.ok(packageJson.build.files.includes('never-stop/core/**/*.cjs'));
+  assert.ok(packageJson.build.files.includes('never-stop/never_stop_execution_principles_v0_1.md'));
+  assert.ok(!packageJson.build.files.includes('!node_modules/**/*'));
+  assert.ok(packageJson.scripts['never-stop:test']);
+  assert.equal(packageJson.scripts['never-stop:build'], undefined);
+  assert.equal(packageJson.scripts['never-stop:start'], undefined);
+  assert.equal(packageJson.scripts['never-stop:package'], undefined);
+  assert.match(packageJson.scripts.test, /src\/\*\*\/\*\.test\.cjs/);
+});
+
 test('build script normalizes junction paths before invoking Vite', () => {
   assert.ok(existsSync(new URL('./scripts/vite-build.mjs', import.meta.url)));
   assert.ok(viteBuildScriptSource.includes('realpathSync'));

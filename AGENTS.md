@@ -37,7 +37,7 @@ python -m pytest -q                                  # Python
 npm --prefix src/webapp run lint                     # frontend lint
 npm --prefix src/webapp test                         # frontend tests
 npm --prefix src/webapp run build                    # frontend build
-npm --prefix src/webapp run never-stop:test          # Never Stop demo
+npm --prefix src/webapp run never-stop:test          # Never Stop page
 ```
 
 `python -m pytest -q` covers `tests/` only. `npm --prefix src/webapp run check`
@@ -50,14 +50,12 @@ application, and `RUN_DEV.bat` is the development entry point.
 ## Subprojects
 
 - `src/webapp/` is the Electron + React desktop app.
-- `src/webapp/never-stop/` is a separate Electron entry point for the Never Stop
-  demo. It has its own npm scripts (`never-stop:build`, `never-stop:start`,
-  `never-stop:test`, `never-stop:package`) and its own version number in
-  `src/webapp/never-stop/electron-builder.cjs`, which is independent of the main
-  app version in `src/webapp/package.json`. A difference between those two
-  versions is expected, not a conflict.
-- `src/webapp/never-stop/VALIDATION.md` records per-version delivery evidence for
-  that subproject. Keep its entries factual and scoped to what was actually run.
+- `src/webapp/never-stop/` contains the core and React UI of the Never Stop
+  page inside Vantage. It has one dedicated test script (`never-stop:test`),
+  but shares the main Electron entry point, package, user-data policy, and
+  version in `src/webapp/package.json`.
+- `src/webapp/never-stop/VALIDATION.md` records historical evidence from the
+  former standalone demo. It is not validation of the integrated page.
 
 ## Source of Truth
 

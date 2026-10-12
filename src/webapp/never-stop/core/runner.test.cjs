@@ -89,6 +89,7 @@ test("publish coalesces latest, reset creates empty session; duplicate cwd rejec
   await runner.start(p.id);
   await until(async () => (await calls()).length === 1);
   const initialPrompt = (await calls())[0].prompt;
+  assert.ok(initialPrompt.includes("以文件中的最新目标为准；文件缺失时使用以下快照"));
   assert.ok(
     initialPrompt.includes(
       "请先读取 goal.md 执行；如果 progress.md 有跑偏，按照 goal.md 来执行",
@@ -138,6 +139,9 @@ test("independent projects, persisted running intent resumes and paused stays pa
   await restored.init();
   t.after(() => restored.shutdown());
   await until(async () => (await calls(root2)).length >= 2);
+  assert.ok((await calls(root2))[1].prompt.includes(
+    "请先读取 goal.md 执行；如果 progress.md 有跑偏，按照 goal.md 来执行",
+  ));
   assert.equal(
     restored.snapshot().find((x) => x.id === p.id).desiredRunning,
     false,
@@ -458,4 +462,56 @@ test("failed process-tree termination prevents another top-level launch", async 
   state.handle = null;
   if (state.loop) await state.loop;
   assert.equal(launches, 0);
+});
+
+test("failed removal preserves the project and allows a successful retry", async (t) => {
+  const { runner, p, dir } = await fixture(t);
+  const originalState = runner.states.get(p.id);
+  const save = runner._save.bind(runner);
+  let saves = 0;
+  runner._save = () => {
+    if (++saves === 2) return Promise.reject(Error("injected removal disk failure"));
+    return save();
+  };
+  await assert.rejects(() => runner.remove(p.id), /removal disk failure/);
+  runner._save = save;
+  assert.equal(runner.snapshot()[0].id, p.id);
+  assert.equal(runner.snapshot()[0].desiredRunning, false);
+  assert.equal(runner.states.get(p.id), originalState);
+  const persisted = JSON.parse(await fs.readFile(path.join(dir, "data", "projects.json")));
+  assert.equal(persisted[0].id, p.id);
+  await runner.remove(p.id);
+  assert.equal(runner.snapshot().length, 0);
+  assert.equal(runner.states.has(p.id), false);
+});
+
+test("failed project creation leaves no phantom directory registration", async (t) => {
+  const { runner, p, dir } = await fixture(t);
+  const root = path.join(dir, "second-project");
+  await fs.mkdir(root);
+  const save = runner._save.bind(runner);
+  runner._save = () => Promise.reject(Error("injected creation disk failure"));
+  await assert.rejects(() => runner.addProject({ root, backend: "codex" }), /creation disk failure/);
+  runner._save = save;
+  assert.deepEqual(runner.snapshot().map(project => project.id), [p.id]);
+  assert.deepEqual([...runner.states.keys()], [p.id]);
+  const added = await runner.addProject({ root, backend: "codex" });
+  assert.equal(added.root, root);
+  const persisted = JSON.parse(await fs.readFile(path.join(dir, "data", "projects.json")));
+  assert.equal(persisted.length, 2);
+});
+
+test("queued duplicate removal does not delete or restore an already removed project", async (t) => {
+  const { runner, p } = await fixture(t);
+  const save = runner._save.bind(runner);
+  let saves = 0;
+  runner._save = () => {
+    if (++saves === 4) return Promise.reject(Error("unexpected duplicate deletion write"));
+    return save();
+  };
+  const results = await Promise.allSettled([runner.remove(p.id), runner.remove(p.id)]);
+  runner._save = save;
+  assert.deepEqual(results.map(result => result.status), ["fulfilled", "fulfilled"]);
+  assert.equal(runner.snapshot().length, 0);
+  assert.equal(runner.states.has(p.id), false);
 });

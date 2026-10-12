@@ -1,6 +1,7 @@
 const { EventEmitter } = require("node:events");
 const path = require("node:path");
 const { atomicWrite, readText } = require("./files.cjs");
+const { PrinciplesStore } = require("./principles.cjs");
 class Application extends EventEmitter {
   constructor({
     runner,
@@ -39,13 +40,25 @@ class Application extends EventEmitter {
     runner.on("change", () => this.emit("change"));
     this.settingsQueue = Promise.resolve();
     this.projectFileQueues = new Map();
+    this.principlesStore = dataDir
+      ? new PrinciplesStore({ dataDir, defaultText: principles || "" })
+      : null;
   }
   async init() {
+    if (this.principlesStore) {
+      await this.principlesStore.init();
+      this.syncPrinciples(this.principlesStore.snapshot());
+    }
     const raw = await readText(path.join(this.dataDir, "settings.json"));
     if (raw) this.settings = { ...this.settings, ...JSON.parse(raw) };
     delete this.settings.startupError;
     try { await this.reconcileStartup?.(this.settings); }
     catch (error) { this.settings.startupError = String(error.message).slice(0, 1000); }
+  }
+  syncPrinciples(value) {
+    this.principles = value.text;
+    this.runner.principles = value.text;
+    return value;
   }
   project(id) {
     const project = this.runner.snapshot().find((p) => p.id === id);
@@ -90,6 +103,15 @@ class Application extends EventEmitter {
         };
       case "project.pick":
         return this.pickDirectory(Boolean(payload.create));
+      case "principles.read":
+        return this.syncPrinciples(await this.principlesStore.read());
+      case "principles.save": {
+        const value = this.syncPrinciples(
+          await this.principlesStore.save(payload.text, payload.version),
+        );
+        this.emit("change");
+        return value;
+      }
       case "project.directory.change": {
         const project = this.project(id);
         if (typeof payload.root !== "string" || !payload.root.trim())

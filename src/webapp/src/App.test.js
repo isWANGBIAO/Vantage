@@ -126,6 +126,26 @@ test('App initializes and syncs the active tab from the URL hash', () => {
   assert.ok(appSource.includes('handleNavTabChange'));
 });
 
+test('Never Stop is a lazy Vantage tab that stays mounted after the first visit', () => {
+  assert.match(appSource, /key: 'never-stop', labelKey: 'app\.nav\.never_stop'/);
+  assert.match(appSource, /lazyWithPreload\(\(\) => import\('\.\/components\/NeverStopPage'\)\)/);
+  assert.match(appSource, /const \[neverStopVisited, setNeverStopVisited\] = useState/);
+  assert.match(appSource, /activeTab === 'never-stop' \|\| neverStopVisited/);
+  assert.match(appSource, /<NeverStopPage isVisible=\{activeTab === 'never-stop'\} openRequest=\{neverStopOpenRequest\} \/>/);
+  const preloadedTabs = appSource.match(/const BACKGROUND_TAB_COMPONENTS = \[([\s\S]*?)\];/)[1];
+  assert.equal(preloadedTabs.includes('NeverStopPage'), false);
+});
+
+test('Never Stop notification opens its Vantage tab and carries project selection through lazy mount', () => {
+  assert.match(appSource, /const neverStopBridge = window\.vantagePlatform\?\.neverStop/);
+  assert.match(appSource, /neverStopBridge\.onOpen\(\(event\) =>/);
+  assert.match(appSource, /setNeverStopVisited\(true\)/);
+  assert.match(appSource, /setActiveTab\('never-stop'\)/);
+  assert.match(appSource, /window\.history\.pushState\(null, '', '#never-stop'\)/);
+  assert.match(appSource, /setNeverStopOpenRequest\(\{ projectId:/);
+  assert.match(appSource, /<NeverStopPage isVisible=\{activeTab === 'never-stop'\} openRequest=\{neverStopOpenRequest\} \/>/);
+});
+
 test('App only reapplies onboarding language when the saved onboarding value changes', () => {
   assert.ok(appSource.includes('lastAppliedOnboardingLanguageRef'));
   assert.ok(appSource.includes('lastAppliedOnboardingLanguageRef.current === onboardingState.displayLanguage'));

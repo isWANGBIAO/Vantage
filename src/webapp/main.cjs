@@ -11,8 +11,10 @@ const {
     systemPreferences,
     session,
     Notification,
+    safeStorage,
     protocol,
     crashReporter,
+    powerMonitor,
 } = require('electron');
 
 // Vantage's UI does not require hardware acceleration. Apply the app-wide
@@ -37,6 +39,11 @@ const { createBoundedLogger } = require('./src/utils/boundedLogger.cjs');
 const { loadAppIcon } = require('./src/utils/appIcon.cjs');
 const { handleWindowCloseShortcut } = require('./src/utils/windowCloseShortcut.cjs');
 const { createCrashDiagnostics } = require('./src/utils/crashDiagnostics.cjs');
+const { installNeverStopBridge } = require('./src/utils/neverStopBridge.cjs');
+const { createNeverStopQuitGate } = require('./src/utils/neverStopLifecycle.cjs');
+const { resolveNeverStopPaths } = require('./src/utils/neverStopPaths.cjs');
+const { createVantageNeverStopService } = require('./never-stop/core/vantage-service.cjs');
+const { retireLegacyStartup } = require('./never-stop/core/legacy-startup.cjs');
 const packageJson = require('./package.json');
 let buildInfo = {};
 try {
@@ -103,6 +110,56 @@ let backendReadyPromise = Promise.resolve();
 let rendererCameraFramePostInFlight = false;
 let rendererCameraFramePostPending = null;
 let crashDiagnostics = null;
+let neverStopService = null;
+let neverStopServicePromise = null;
+let neverStopInitError = null;
+let neverStopBridge = null;
+let neverStopQuitGate = null;
+const neverStopNotifications = new Set();
+
+function openNeverStopPage(projectId) {
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+    mainWindow.show();
+    mainWindow.focus();
+    const contents = mainWindow.webContents;
+    const send = () => contents.send('never-stop:open', { selectedProjectId: projectId || null });
+    if (contents.isLoadingMainFrame()) mainWindow.once('ready-to-show', send);
+    else send();
+}
+
+async function pickNeverStopDirectory(create) {
+    if (create) {
+        const result = await dialog.showSaveDialog(mainWindow, {
+            title: '新建项目文件夹', buttonLabel: '新建文件夹',
+            defaultPath: '新项目', properties: ['createDirectory', 'showOverwriteConfirmation'],
+        });
+        if (result.canceled) return null;
+        await fs.promises.mkdir(result.filePath, { recursive: true });
+        return result.filePath;
+    }
+    const result = await dialog.showOpenDialog(mainWindow, {
+        title: '选择项目根目录', properties: ['openDirectory', 'createDirectory'],
+    });
+    return result.canceled ? null : result.filePaths[0];
+}
+
+function testNeverStopNotification() {
+    if (!Notification.isSupported()) throw new Error('当前平台不支持原生通知，请检查系统设置');
+    return new Promise((resolve, reject) => {
+        const notification = new Notification({ title: 'Vantage · Never Stop', body: '这是一条测试提醒。点击返回项目。' });
+        neverStopNotifications.add(notification);
+        const timer = setTimeout(() => resolve({ status: 'requested', message: '已请求系统通知；请核对通知中心。' }), 2000);
+        notification.once('show', () => { clearTimeout(timer); resolve({ status: 'shown', message: '系统已确认显示通知。' }); });
+        notification.once('failed', (_event, error) => {
+            clearTimeout(timer);
+            neverStopNotifications.delete(notification);
+            reject(new Error(`系统通知失败：${error}`));
+        });
+        notification.on('click', () => openNeverStopPage());
+        notification.on('close', () => neverStopNotifications.delete(notification));
+        notification.show();
+    });
+}
 
 function getTitleBarOverlayOptions(theme = 'dark') {
     const isLight = theme === 'light';
@@ -711,6 +768,12 @@ function createWindow() {
             log.info('Window hidden to tray');
         }
     });
+    const stopForSessionEnd = () => {
+        void neverStopServicePromise?.then(service => service.shutdown({ preserveIntent: true }))
+            .catch(error => log.error('Never Stop session shutdown failed', error));
+    };
+    mainWindow.on('query-session-end', stopForSessionEnd);
+    mainWindow.on('session-end', stopForSessionEnd);
 }
 
 function createTray() {
@@ -733,6 +796,23 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
     app.quit();
 } else {
+    neverStopBridge = installNeverStopBridge({
+        ipcMain,
+        getWebContents: () => mainWindow?.webContents,
+        isTrustedDocument: isTrustedRendererDocument,
+        getService: () => neverStopService || (neverStopInitError && {
+            invoke: async () => { throw neverStopInitError; },
+        }),
+    });
+    neverStopQuitGate = createNeverStopQuitGate({
+        getServiceReady: () => neverStopServicePromise?.catch(() => null),
+        completeQuit: () => { app.isQuitting = true; app.quit(); },
+        reportError: error => {
+            app.isQuitting = false;
+            log.error('Never Stop shutdown failed', error);
+            dialog.showErrorBox('无法结束受管理执行', String(error.message || error));
+        },
+    });
     crashDiagnostics = createCrashDiagnostics({ dataDir: runtimePaths.dataDir });
     crashDiagnostics.startNativeCollector({ app, crashReporter });
     crashDiagnostics.startSession();
@@ -787,6 +867,11 @@ if (!gotTheLock) {
 
     app.whenReady().then(async () => {
         log.info('App ready, initializing...');
+        powerMonitor.on('shutdown', event => {
+            event.preventDefault();
+            app.isQuitting = true;
+            app.quit();
+        });
         Menu.setApplicationMenu(null);
         configureMediaPermissionHandler();
         installAppProtocol({
@@ -810,6 +895,35 @@ if (!gotTheLock) {
         }
         createWindow();
         createTray();
+        const neverStopPaths = resolveNeverStopPaths({
+            runtimePaths,
+            appDataDir: app.getPath('appData'),
+            userDataDir: app.getPath('userData'),
+            env: process.env,
+        });
+        neverStopServicePromise = createVantageNeverStopService({
+            ...neverStopPaths,
+            appVersion: app.getVersion(),
+            safeStorage,
+            Notification,
+            pickDirectory: pickNeverStopDirectory,
+            testNotification: testNeverStopNotification,
+            onOpen: openNeverStopPage,
+            onChange: change => neverStopBridge.broadcast(change),
+            onError: error => log.error('Never Stop background error', error),
+        }).then(service => {
+            neverStopService = service;
+            log.info(service.migrated ? 'Never Stop data migrated into Vantage' : 'Never Stop ready');
+            if (service.legacyResolved) void retireLegacyStartup({ app }).then(removed => {
+                if (removed) log.info('Retired Never Stop standalone login item');
+            }).catch(error => log.warn(`Could not retire standalone login item: ${error.message}`));
+            return service;
+        }).catch(error => {
+            neverStopInitError = error;
+            log.error('Never Stop initialization failed', error);
+            throw error;
+        });
+        void neverStopServicePromise.catch(() => {});
 
         if (shouldLaunchBundledBackend) {
             try {
@@ -868,7 +982,11 @@ app.on('window-all-closed', () => {
     }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', event => {
+    if (neverStopQuitGate && !neverStopQuitGate(event)) {
+        app.isQuitting = false;
+        return;
+    }
     log.info('App quitting...');
     app.isQuitting = true;
     crashDiagnostics?.beginShutdown();

@@ -341,7 +341,7 @@ async function exerciseUi() {
     await expectStep(3);
     await click('.onboarding-actions button', 'Continue');
     await click('.onboarding-actions button', 'Finish Setup');
-    await waitFor('ready unified workspace', () => document.querySelectorAll('.app-nav a').length === 7
+    await waitFor('ready unified workspace', () => document.querySelectorAll('.app-nav a').length === 8
         && document.querySelector('.app-main')?.innerText.includes('Synthetic smoke action plan')
         && !document.querySelector('.onboarding-shell'));
     assert.equal(calls.filter(call => call.pathname === '/api/v1/onboarding/complete').length, 1);
@@ -361,8 +361,11 @@ async function exerciseUi() {
     await waitFor('production chart rendering', () => [...document.querySelectorAll('.app-main canvas')].some(canvas => canvas.getClientRects().length && canvas.width > 0));
     await navigate('system-logs', '.app-main', 'Synthetic unified UI smoke is ready');
     await navigate('face-history', '.app-main', 'Face Dark Circles History');
+    await click('.app-nav a[href="#never-stop"]');
+    await waitFor('Never Stop embedded page', () => location.hash === '#never-stop'
+        && document.querySelector('.never-stop-page-host')?.shadowRoot?.querySelector('.brand')?.textContent.includes('Never Stop'));
     await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
-    console.log('PASS all seven primary pages and synthetic data/chart rendering');
+    console.log('PASS all eight primary pages including embedded Never Stop');
     await waitFor('previous interrupted session notice', () => document.querySelector('.crash-diagnostics-notice')?.textContent.includes('previous session'));
     await click('.crash-diagnostics-notice button', 'Open crash records');
     await waitFor('safe diagnostics open failure', () => document.querySelector('.crash-diagnostics-notice')?.textContent.includes('Could not open'));
@@ -371,7 +374,7 @@ async function exerciseUi() {
     await waitFor('diagnostics error cleared', () => !document.querySelector('.crash-diagnostics-notice')?.textContent.includes('Could not open'));
     assert.equal(diagnosticsOpenCalls, 2);
     await click('.crash-diagnostics-notice button', 'Dismiss');
-    await waitFor('notice dismissed without blocking workspace', () => !document.querySelector('.crash-diagnostics-notice') && document.querySelectorAll('.app-nav a').length === 7);
+    await waitFor('notice dismissed without blocking workspace', () => !document.querySelector('.crash-diagnostics-notice') && document.querySelectorAll('.app-nav a').length === 8);
     previousInterrupted = false;
 
     // Settings is a page, not a dialog. Navigation is its close/cancel path:
@@ -409,7 +412,7 @@ async function exerciseUi() {
     await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
     await closeWindow();
     await createWindow();
-    await waitFor('completed setup stays complete on reopen', () => document.querySelectorAll('.app-nav a').length === 7
+    await waitFor('completed setup stays complete on reopen', () => document.querySelectorAll('.app-nav a').length === 8
         && !document.querySelector('.onboarding-shell') && document.documentElement.dataset.theme === 'light');
     await waitFor('clean startup diagnostics status fetched', () => !document.querySelector('.crash-diagnostics-notice'));
     await openSettings();
@@ -434,13 +437,13 @@ async function exerciseUi() {
     diagnosticsAvailable = false;
     await closeWindow();
     await createWindow();
-    await waitFor('Chinese workspace reopened', () => document.querySelectorAll('.app-nav a').length === 7);
+    await waitFor('Chinese workspace reopened', () => document.querySelectorAll('.app-nav a').length === 8);
     await click('.settings-entry-button');
     await click('.settings-sidebar button', '关于');
     await waitFor('diagnostics storage failure is visible and cannot open', () => document.querySelector('.settings-diagnostics')?.textContent.includes('不可用') && document.querySelector('.settings-diagnostics button')?.disabled === true);
     await checkErrors();
     console.log('PASS Chinese privacy copy and unavailable diagnostics without blocking UI');
-    console.log('RESULT', JSON.stringify({ productionOrigin: security.origin, primaryPages: 7, rendererErrors: errors.length, expectedLifecycleCancellations: expectedCancellations.length, requests: calls.length, isolated: true }));
+    console.log('RESULT', JSON.stringify({ productionOrigin: security.origin, primaryPages: 8, rendererErrors: errors.length, expectedLifecycleCancellations: expectedCancellations.length, requests: calls.length, isolated: true }));
 }
 
 async function finish(code) {
@@ -508,6 +511,9 @@ app.whenReady().then(async () => {
     handle('platform:pick-legacy-root', () => { nativeCalls.picker++; return { path: null }; });
     handle('diagnostics:get-status', () => ({ localOnly: true, available: diagnosticsAvailable, nativeCollector: diagnosticsAvailable, directory: 'synthetic-diagnostics', previousInterrupted }));
     handle('diagnostics:open-directory', () => { diagnosticsOpenCalls++; return { opened: !diagnosticsOpenFails }; });
+    handle('never-stop:invoke', method => method === 'state'
+        ? { ok: true, value: { appVersion: '0.0.0-smoke', projects: [], resources: [], settings: {}, principles: '' } }
+        : { ok: false, error: 'Unsupported synthetic Never Stop operation' });
     smokeSession = session.fromPartition('vantage-unified-ui-smoke');
     smokeSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     smokeSession.setPermissionCheckHandler(() => false);

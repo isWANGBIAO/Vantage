@@ -1,4 +1,5 @@
-:root {
+:host {
+  display: block;
   font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
   color: #263b32;
   background: #f8f9f6;
@@ -6,9 +7,6 @@
 }
 * {
   box-sizing: border-box;
-}
-body {
-  margin: 0;
 }
 button,
 input,
@@ -88,7 +86,7 @@ hr {
 }
 .app {
   display: flex;
-  min-height: 100vh;
+  min-height: 70vh;
 }
 .sidebar {
   width: 236px;
@@ -97,7 +95,7 @@ hr {
   border-right: 1px solid #e2e7dc;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  min-height: 70vh;
   position: sticky;
   top: 0;
   padding: 30px 17px 18px;
@@ -571,7 +569,7 @@ footer .error-link {
   position: fixed;
   right: 0;
   top: 0;
-  height: 100vh;
+  height: 100%;
   width: min(720px, calc(100vw - 70px));
   background: #fdfefb;
   z-index: 11;
@@ -598,6 +596,9 @@ footer .error-link {
   padding: 25px 28px;
   overflow: auto;
   flex: 1;
+}
+.principles-hint {
+  padding: 12px 28px 0;
 }
 .hint {
   font-size: 12px;

@@ -7,7 +7,7 @@ import {
   formatRuntime,
 } from "./runtime.mjs";
 
-export default function RuntimeDisplay({ totalRunMs, runTimerStartedAt }) {
+export default function RuntimeDisplay({ totalRunMs, runTimerStartedAt, isVisible = true }) {
   const clock = useRef(null);
   if (!clock.current)
     clock.current = createRuntimeClock(
@@ -27,13 +27,13 @@ export default function RuntimeDisplay({ totalRunMs, runTimerStartedAt }) {
       now,
     );
     setMilliseconds(elapsedRuntime(clock.current, now));
-    if (clock.current.anchor === null) return;
+    if (!isVisible || clock.current.anchor === null) return;
     const timer = setInterval(
       () => setMilliseconds(elapsedRuntime(clock.current, performance.now())),
       1000,
     );
     return () => clearInterval(timer);
-  }, [totalRunMs, runTimerStartedAt]);
+  }, [totalRunMs, runTimerStartedAt, isVisible]);
   return (
     <div
       className="project-runtime"

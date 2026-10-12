@@ -6,6 +6,11 @@ import { fileURLToPath } from 'node:url';
 
 import { DISPLAY_COPY, translate } from './displayCopy.js';
 
+test('Never Stop navigation has localized labels', () => {
+  assert.equal(translate('zh-CN', 'app.nav.never_stop'), 'Never Stop');
+  assert.equal(translate('en-US', 'app.nav.never_stop'), 'Never Stop');
+});
+
 test('expense copy names actual and daily consumption without changing forecast spend', () => {
   assert.equal(translate('zh-CN', 'expense.period_spend', { value: '10' }), '实际消费 10');
   assert.equal(translate('zh-CN', 'expense.daily_average', { value: '10' }), '日均消费 10');

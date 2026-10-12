@@ -52,11 +52,14 @@ the platform user-data directory, not in this repository.
 - FastAPI backend for data loading, plotting, chat, action plans, usage logs,
   face-analysis reports, and local media endpoints.
 - React UI for dashboard, action plan, chat, plots, usage, settings, expenses,
-  project progress, and face-history views.
+  project progress, face-history views, and the Never Stop project runner page.
 - Model selection is saved by the backend in the canonical provider JSON and
   shared by action plans and chat, including after a restart.
 - Ctrl+W (Command+W on macOS) closes the main window to the tray without
   quitting the application or stopping its backend.
+- Never Stop runs in the same Vantage process and installation; its projects
+  remain managed when the page or window is hidden. A former standalone
+  installation's data is copied and verified on first use, with the source kept.
 - Live presence selects the largest YuNet face occupying at least 1.0% of the
   frame and does not require a frontal pose, identity match, or gaze estimate.
   Strict frontal geometry is reserved for historical face-direction analysis.

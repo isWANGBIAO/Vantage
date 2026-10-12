@@ -296,4 +296,21 @@ contextBridge.exposeInMainWorld('vantagePlatform', {
     requestCameraAccess: () => primeRendererCameraAccess(),
     showNotification: (title, body) => ipcRenderer.send('platform:show-notification', { title, body }),
     minimizeToTray: () => ipcRenderer.send('platform:minimize-to-tray'),
+    neverStop: {
+        async invoke(method, payload = {}) {
+            const result = await ipcRenderer.invoke('never-stop:invoke', method, payload);
+            if (!result?.ok) throw new Error(result?.error || 'Never Stop 调用失败');
+            return result.value;
+        },
+        onChange(callback) {
+            const listener = (_event, value) => callback(value);
+            ipcRenderer.on('never-stop:change', listener);
+            return () => ipcRenderer.removeListener('never-stop:change', listener);
+        },
+        onOpen(callback) {
+            const listener = (_event, value) => callback(value);
+            ipcRenderer.on('never-stop:open', listener);
+            return () => ipcRenderer.removeListener('never-stop:open', listener);
+        },
+    },
 });

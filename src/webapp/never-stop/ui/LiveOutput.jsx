@@ -20,7 +20,7 @@ const labels = {
 const time = (at) =>
   at ? new Date(at).toLocaleTimeString("zh-CN", { hour12: false }) : "";
 
-export default function LiveOutput({ project, invoke, status }) {
+export default function LiveOutput({ project, invoke, status, isVisible = true }) {
   const [expanded, setExpanded] = useState(true);
   const [following, setFollowing] = useState(true);
   const [output, setOutput] = useState(emptyOutput);
@@ -34,7 +34,7 @@ export default function LiveOutput({ project, invoke, status }) {
   const viewport = useRef(null);
 
   useEffect(() => {
-    if (!expanded) return;
+    if (!isVisible || !expanded) return;
     let active = true;
     let timer;
     const poll = async () => {
@@ -73,7 +73,7 @@ export default function LiveOutput({ project, invoke, status }) {
       active = false;
       clearTimeout(timer);
     };
-  }, [expanded, project.id, invoke]);
+  }, [expanded, project.id, invoke, isVisible]);
 
   useEffect(() => {
     if (following && expanded && viewport.current)

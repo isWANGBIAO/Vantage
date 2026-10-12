@@ -164,7 +164,7 @@ class Runner extends EventEmitter {
         loop: null,
         handle: null,
         wake: null,
-        reason: "正常续跑",
+        reason: "请先读取 goal.md 执行；如果 progress.md 有跑偏，按照 goal.md 来执行",
         runtimeAnchor: null,
       });
     return this.states.get(p.id);
@@ -195,6 +195,17 @@ class Runner extends EventEmitter {
   }
   _changed() {
     this.emit("change", this.snapshot());
+  }
+  async _persistRollback(originalError) {
+    try {
+      // Other queued writes may contain the transient project state.
+      await this._save();
+    } catch (rollbackError) {
+      throw new Error(
+        `${redact(originalError.message)}；回滚状态保存失败，重启可能恢复未完成的操作：${redact(rollbackError.message)}`,
+        { cause: originalError },
+      );
+    }
   }
   addProject(options) {
     return this._enqueueDirectory(() => this._addProject(options));
@@ -233,7 +244,14 @@ class Runner extends EventEmitter {
     };
     this.projects.push(p);
     this._state(p);
-    await this._save();
+    try {
+      await this._save();
+    } catch (error) {
+      this.projects = this.projects.filter((project) => project !== p);
+      this.states.delete(p.id);
+      await this._persistRollback(error);
+      throw error;
+    }
     this._changed();
     return this.snapshot().find((x) => x.id === p.id);
   }
@@ -285,7 +303,7 @@ class Runner extends EventEmitter {
             p.adoptedRevision = 0;
             s.resetEpoch++;
             s.reason =
-              "用户切换了项目目录；从新会话开始，先读取最新 progress.md 并继续已发布目标";
+              "用户切换了项目目录；从新会话开始。请先读取 goal.md 执行；如果 progress.md 有跑偏，按照 goal.md 来执行";
             await this._save();
           },
           true,
@@ -444,8 +462,17 @@ class Runner extends EventEmitter {
         p.status = "paused";
       },
       async () => {
+        const index = this.projects.indexOf(p);
+        if (index < 0) return;
         this.projects = this.projects.filter((x) => x.id !== id);
-        await this._save();
+        try {
+          await this._save();
+        } catch (error) {
+          if (!this.projects.includes(p))
+            this.projects.splice(Math.min(index, this.projects.length), 0, p);
+          await this._persistRollback(error);
+          throw error;
+        }
         this.states.delete(id);
       },
     );
@@ -507,6 +534,7 @@ class Runner extends EventEmitter {
         const prompt = [
           this.principles,
           "# 当前已发布目标",
+          "以下为应用保存的目标快照。请读取项目 goal.md，以文件中的最新目标为准；文件缺失时使用以下快照。progress.md 仅作进展参考，跑偏时按 goal.md 纠正。",
           p.publishedGoal,
           "# 已选择资源",
           resources,

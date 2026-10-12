@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node scripts/vite-build.mjs",
-    "test": "node --test vite.config.test.js package.test.js main.test.js prepare-build-version.test.js \"src/**/*.test.js\"",
+    "test": "node --test vite.config.test.js package.test.js main.test.js prepare-build-version.test.js \"src/**/*.test.js\" \"src/**/*.test.cjs\"",
     "check": "npm run lint && npm run test && npm run build",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -17,10 +17,7 @@
     "electron:build": "node scripts/vite-build.mjs && electron-builder",
     "electron:package": "electron-builder",
     "electron:start": "electron .",
-    "never-stop:build": "vite build --config never-stop/vite.config.mjs",
-    "never-stop:start": "electron never-stop/main.cjs",
     "never-stop:test": "node --test never-stop/core/*.test.cjs never-stop/test/*.test.cjs never-stop/ui/*.test.*",
-    "never-stop:package": "npm run never-stop:build && electron-builder --config never-stop/electron-builder.cjs --win portable",
     "test:electron-protocol": "electron --headless --ozone-platform=headless --disable-gpu --disable-dev-shm-usage scripts/smoke-app-protocol.cjs",
     "test:electron-ui": "electron --headless --ozone-platform=headless --disable-gpu --disable-dev-shm-usage scripts/smoke-unified-ui.cjs",
     "test:crash-diagnostics": "node scripts/smoke-crash-diagnostics.cjs"
@@ -65,7 +62,9 @@
       "build-info.json",
       "preload.cjs",
       "src/utils/**/*.cjs",
-      "!node_modules/**/*",
+      "never-stop/core/**/*.cjs",
+      "!never-stop/core/**/*.test.cjs",
+      "never-stop/never_stop_execution_principles_v0_1.md",
       "!**/*.map"
     ],
     "extraResources": [

@@ -25,7 +25,7 @@ async function fixture(t) {
   const cli = path.join(dir, "fake.cjs");
   await fs.writeFile(
     cli,
-    "process.stdin.resume();process.stdin.on('end',()=>{require('fs').writeFileSync('invocation.json',JSON.stringify({pid:process.pid,cwd:process.cwd(),session:process.argv[2]||null}));console.log(JSON.stringify({type:'thread.started',thread_id:'session-'+require('path').basename(process.cwd())}));setInterval(()=>{},1000);});",
+    "let prompt='';process.stdin.on('data',c=>prompt+=c);process.stdin.on('end',()=>{require('fs').writeFileSync('invocation.json',JSON.stringify({pid:process.pid,cwd:process.cwd(),prompt,session:process.argv[2]||null}));console.log(JSON.stringify({type:'thread.started',thread_id:'session-'+require('path').basename(process.cwd())}));setInterval(()=>{},1000);});",
   );
   const runner = new Runner({
     dataDir: path.join(dir, "data"),
@@ -79,6 +79,9 @@ test("running directory change stops old tree before prepare and resumes a fresh
   assert.deepEqual(q.resourceIds, ["kept-resource"]);
   assert.equal(q.desiredRunning, true);
   assert.equal((await read(next)).session, null);
+  assert.ok((await read(next)).prompt.includes(
+    "请先读取 goal.md 执行；如果 progress.md 有跑偏，按照 goal.md 来执行",
+  ));
   assert.ok(q.totalRunMs > 0);
 });
 test("paused change preserves accumulated runtime and clears only execution session adoption", async (t) => {
