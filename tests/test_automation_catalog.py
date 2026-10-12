@@ -271,8 +271,12 @@ def test_catalog_covers_electron_invoke_operations_without_renderer_transport():
     # Crash records can contain private memory. These narrow desktop controls
     # do not expose record contents through the public CLI/MCP business catalog.
     diagnostics_channels = {"diagnostics:get-status", "diagnostics:open-directory"}
-    assert invoked_channels == catalog_channels | transport_channels | diagnostics_channels
+    # Never Stop executes through a trusted Electron-only bridge, not the
+    # backend's public CLI/MCP operation catalog.
+    desktop_only_channels = {"never-stop:invoke"}
+    assert invoked_channels == catalog_channels | transport_channels | diagnostics_channels | desktop_only_channels
     assert not catalog_channels & diagnostics_channels
+    assert not catalog_channels & desktop_only_channels
     assert not any("camera:" in channel for channel in catalog_channels)
 
 
