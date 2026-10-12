@@ -249,6 +249,22 @@ def test_body_analysis_path_validation_can_be_reused_after_directory_moves(tmp_p
         _backend_settings.validate_body_analysis_paths(user_config.load_settings())
 
 
+def test_body_analysis_path_error_does_not_disclose_private_directory(tmp_path, monkeypatch):
+    paths = _use_runtime_dirs(monkeypatch, tmp_path)
+    private_path = str(tmp_path / "private_photo_directory")
+
+    def fail_validation(*args, **kwargs):
+        raise OSError(f"Access denied: {private_path}")
+
+    monkeypatch.setattr(_backend_settings, "validate_body_analysis_paths", fail_validation)
+    with pytest.raises(HTTPException) as error:
+        _backend_settings.update_automation_settings({"body_analysis_leg_dir": private_path})
+
+    assert error.value.status_code == 422
+    assert private_path not in str(error.value.detail)
+    assert not (paths["config"] / "settings.json").exists()
+
+
 @pytest.mark.parametrize("field", [
     "body_analysis_leg_dir", "body_analysis_scalp_dir", "body_analysis_model_dir",
 ])

@@ -472,7 +472,11 @@ BODY_ANALYSIS_DIRECTORY_FIELDS = (
 
 def get_body_analysis_report_root() -> Path:
     """Keep generated reports outside the repository even in development mode."""
-    return (Path(Config.get_history_dir()) / "body_analysis").expanduser().resolve()
+    report_root = (Path(Config.get_history_dir()) / "body_analysis").expanduser().resolve()
+    repository = Path(Config.get_project_root()).expanduser().resolve()
+    if report_root == repository or repository in report_root.parents or report_root in repository.parents:
+        raise ValueError("Body analysis reports must remain outside the repository")
+    return report_root
 
 
 def validate_body_analysis_paths(settings: dict, *, fields=None) -> dict[str, str]:

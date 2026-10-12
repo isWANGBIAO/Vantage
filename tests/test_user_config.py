@@ -139,6 +139,18 @@ def test_body_analysis_report_root_uses_user_history_not_repository(tmp_path):
         assert user_config.get_body_analysis_report_root() == history / "body_analysis"
 
 
+@pytest.mark.parametrize("history_location", ["repository", "repository_child"])
+def test_body_analysis_report_root_rejects_repository_overlap(tmp_path, history_location):
+    user_config = _load_user_config_module()
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    history = repository if history_location == "repository" else repository / "private_history"
+    with patch.object(Config, "get_project_root", return_value=repository), \
+         patch.object(Config, "get_history_dir", return_value=history):
+        with pytest.raises(ValueError, match="outside the repository"):
+            user_config.get_body_analysis_report_root()
+
+
 def test_complete_provider_keeps_the_configured_token_limits(tmp_path):
     """provider 链必须带上窗口上限，否则预算只能退回全局兜底值。"""
     user_config = _load_user_config_module()

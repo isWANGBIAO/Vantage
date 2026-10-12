@@ -259,7 +259,10 @@ def update_automation_settings(payload: dict):
             try:
                 normalized_paths = validate_body_analysis_paths(payload, fields=submitted_body_paths)
             except (ValueError, OSError) as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
+                raise HTTPException(
+                    status_code=422,
+                    detail="Body analysis directory settings are invalid or unavailable.",
+                ) from exc
             payload = {**payload, **normalized_paths}
         original_files = _snapshot_automation_config_files()
         try:
