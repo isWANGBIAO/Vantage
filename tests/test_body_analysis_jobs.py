@@ -183,6 +183,47 @@ async def _check_thread_notification(tmp_path):
     await service.close()
 
 
+def test_settings_change_during_active_scan_cancels_old_and_starts_new_without_poll(tmp_path):
+    asyncio.run(_check_active_settings_restart(tmp_path))
+
+
+async def _check_active_settings_restart(tmp_path):
+    settings = _configured(tmp_path)
+    runner = tmp_path / "runner.py"
+    runner.write_text("runner")
+    first_started = asyncio.Event()
+    first_cancelled = asyncio.Event()
+    second_started = asyncio.Event()
+    calls = 0
+
+    async def probe(_model):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                first_cancelled.set()
+                raise
+        second_started.set()
+        return {"ready": False, "missing": ["dependencies"], "reason": "missing_dependencies"}
+
+    service = BodyAnalysisJobService(root=tmp_path / "reports", settings_loader=lambda: settings,
+                                     environment_probe=probe, runner_path=runner)
+    service.start()
+    await asyncio.wait_for(first_started.wait(), timeout=5)
+    replacement = tmp_path / "scalp-replacement"
+    replacement.mkdir()
+    settings["body_analysis_scalp_dir"] = str(replacement)
+    await asyncio.to_thread(service.notify_settings_changed)
+    await asyncio.wait_for(second_started.wait(), timeout=5)
+    assert first_cancelled.is_set()
+    await service.active_task
+    assert calls == 2 and service.status()["status"] == "missing_environment"
+    await service.close()
+
+
 def test_settings_change_poll_schedules_scan_once(tmp_path):
     asyncio.run(_check_settings_change(tmp_path))
 

@@ -148,6 +148,7 @@ class BodyAnalysisJobService:
         self._closing = False
         self._last_setting_signature: tuple | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._pending_settings_refresh = False
 
     def notify_settings_changed(self) -> None:
         """Let a settings write from FastAPI's worker thread wake this service."""
@@ -161,29 +162,42 @@ class BodyAnalysisJobService:
 
     def refresh_on_settings_change(self) -> None:
         """A settings save followed by the UI status poll schedules a new scan."""
+        if self._closing:
+            return
         try:
             settings = self.settings_loader()
             signature = tuple(settings.get(key) for key in (
                 "body_analysis_enabled", "body_analysis_leg_dir", "body_analysis_scalp_dir",
                 "body_analysis_model_dir",
             ))
-            if signature != self._last_setting_signature and not (
-                self.active_task is not None and not self.active_task.done()
-            ):
+            active = self.active_task is not None and not self.active_task.done()
+            if signature != self._last_setting_signature and active and self._last_setting_signature is not None:
+                # The previous scan must not publish a superseded config. A
+                # done callback resumes the latest settings even without UI
+                # polling (for example a CLI settings update).
+                if not self._pending_settings_refresh:
+                    self._pending_settings_refresh = True
+                    self.active_task.add_done_callback(self._resume_after_settings_change)
+                self.install_cancel.set()
+                self.active_task.cancel()
+                if not settings.get("body_analysis_enabled"):
+                    self._status = "disabled"
+                    self._last_setting_signature = signature
+            elif signature != self._last_setting_signature and not active:
                 if self._root_error:
                     self._status, self._error = "failed", "unsafe_output_root"
                 elif settings.get("body_analysis_enabled"):
-                    self.start()
+                    if self.start():
+                        self._last_setting_signature = signature
                 else:
                     self._status = "disabled"
                     self._last_setting_signature = signature
-            elif not settings.get("body_analysis_enabled") and self.active_task is not None and not self.active_task.done():
-                self.install_cancel.set()
-                self._status = "disabled"
-                self._last_setting_signature = signature
-                self.active_task.cancel()
         except Exception:
             self._status, self._error = "failed", "settings_unavailable"
+
+    def _resume_after_settings_change(self, _finished: asyncio.Task) -> None:
+        self._pending_settings_refresh = False
+        self.refresh_on_settings_change()
 
     def _current(self) -> tuple[Path, dict, str] | None:
         if self.root is None:
