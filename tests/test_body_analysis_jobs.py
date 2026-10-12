@@ -1,8 +1,13 @@
 import asyncio
 import json
+import os
+import re
 import shutil
+import threading
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from src.services.body_analysis_jobs import BodyAnalysisJobService, source_snapshot
 from src.scripts.body_analysis_sam3 import build_report, validate_report_manifest
@@ -222,6 +227,154 @@ async def _check_active_settings_restart(tmp_path):
     await service.active_task
     assert calls == 2 and service.status()["status"] == "missing_environment"
     await service.close()
+
+
+def test_report_retention_is_bounded_only_after_successful_pointer_update(tmp_path, monkeypatch):
+    asyncio.run(_check_report_retention(tmp_path, monkeypatch))
+
+
+async def _check_report_retention(tmp_path, monkeypatch):
+    settings = _configured(tmp_path)
+    Path(settings["body_analysis_leg_dir"], "a.jpg").unlink()
+    runner = tmp_path / "runner.py"
+    runner.write_text("runner")
+    root = tmp_path / "reports"
+    success = {"value": True}
+
+    async def fake_exec(*argv, **_kwargs):
+        output = Path(argv[argv.index("--output-dir") + 1])
+        output.mkdir()
+        (output / "report.json").write_text(json.dumps(build_report([], [])))
+
+        async def wait():
+            return 0 if success["value"] else 1
+
+        return SimpleNamespace(wait=wait, returncode=0 if success["value"] else 1)
+
+    monkeypatch.setattr("src.services.body_analysis_jobs.asyncio.create_subprocess_exec", fake_exec)
+    service = BodyAnalysisJobService(root=root, settings_loader=lambda: settings,
+                                     environment_probe=lambda _: {"ready": True, "missing": [], "reason": "ready", "python_executable": "python"},
+                                     runner_path=runner)
+    sentinel = root / "published" / "not-generated"
+    sentinel.mkdir(parents=True)
+    (sentinel / "private.txt").write_text("keep")
+    for _ in range(5):
+        service.start(force=True)
+        await service.active_task
+        assert service.status()["status"] == "ready"
+    generated = [item for item in (root / "published").iterdir() if re.fullmatch(r"[0-9a-f]{32}", item.name)]
+    assert len(generated) == 3
+    pointer = json.loads((root / "current.json").read_text())
+    assert (root / "published" / pointer["directory"]).is_dir()
+    assert (sentinel / "private.txt").read_text() == "keep"
+    success["value"] = False
+    service.start(force=True)
+    await service.active_task
+    assert service.status()["status"] == "failed"
+    assert json.loads((root / "current.json").read_text()) == pointer
+    assert len([item for item in (root / "published").iterdir() if re.fullmatch(r"[0-9a-f]{32}", item.name)]) == 3
+    success["value"] = True
+    monkeypatch.setattr("src.services.body_analysis_jobs._write_json_atomically",
+                        lambda *_args: (_ for _ in ()).throw(OSError("pointer failed")))
+    service.start(force=True)
+    await service.active_task
+    assert service.status()["status"] == "failed"
+    assert json.loads((root / "current.json").read_text()) == pointer
+    assert len([item for item in (root / "published").iterdir() if re.fullmatch(r"[0-9a-f]{32}", item.name)]) == 3
+    await service.close()
+
+
+def test_cancelled_optional_install_blocks_replacement_until_worker_exits(tmp_path):
+    asyncio.run(_check_install_cancel_barrier(tmp_path))
+
+
+async def _check_install_cancel_barrier(tmp_path):
+    settings = _configured(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    exited = threading.Event()
+    calls = 0
+
+    def installer(_model, *, explicit, cancel_event):
+        nonlocal calls
+        calls += 1
+        assert explicit is True
+        if calls == 1:
+            entered.set()
+            release.wait(5)
+            assert cancel_event.is_set()
+            exited.set()
+        return {"state": "missing_dependencies", "ready": False,
+                "missing": ["dependencies"], "reason": "missing_dependencies"}
+
+    service = BodyAnalysisJobService(root=tmp_path / "reports", settings_loader=lambda: settings,
+                                     environment_installer=installer)
+    assert await service.install()
+    assert await asyncio.to_thread(entered.wait, 5)
+    old_task = service.active_task
+    old_task.cancel()
+    await asyncio.sleep(0.05)
+    assert not old_task.done()
+    assert not await service.install()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await old_task
+    assert exited.is_set()
+    assert await service.install()
+    await service.active_task
+    assert calls == 2
+    await service.close()
+
+
+def test_validated_report_is_cached_by_pointer_and_manifest_revision(tmp_path, monkeypatch):
+    from src.services import body_analysis_jobs as jobs_module
+
+    root = tmp_path / "reports"
+    folder = root / "published" / "version1"
+    (folder / "masks").mkdir(parents=True)
+    (folder / "masks" / "safe.png").write_bytes(b"PNG")
+    report = build_report([], [])
+    report["assets"] = ["masks/safe.png"]
+    report_file = folder / "report.json"
+    report_file.write_text(json.dumps(report))
+    (root / "current.json").write_text(json.dumps({"directory": "version1", "fingerprint": "a" * 64}))
+    validations = []
+    original_validate = jobs_module.validate_report_manifest
+
+    def count_validate(*args):
+        validations.append(1)
+        return original_validate(*args)
+
+    monkeypatch.setattr(jobs_module, "validate_report_manifest", count_validate)
+    service = BodyAnalysisJobService(root=root, settings_loader=lambda: {"body_analysis_enabled": False})
+    assert service.status()["report_revision"] == "version1"
+    assert service.status()["report_revision"] == "version1"
+    assert service.report()["complete"] is True
+    assert service.asset("masks/safe.png") is not None
+    assert len(validations) == 1
+    report["extra"] = "updated"
+    report_file.write_text(json.dumps(report))
+    changed = report_file.stat().st_mtime_ns + 10_000_000
+    os.utime(report_file, ns=(changed, changed))
+    assert service.report()["extra"] == "updated"
+    assert len(validations) == 2
+    second = root / "published" / "version2"
+    second.mkdir()
+    (second / "report.json").write_text(json.dumps(build_report([], [])))
+    (root / "current.json").write_text(json.dumps({"directory": "version2", "fingerprint": "b" * 64}))
+    assert service.status()["report_revision"] == "version2"
+    assert len(validations) == 3
+    (root / "current.json").write_text(json.dumps({"directory": "version1", "fingerprint": "a" * 64}))
+    assert service.asset("masks/safe.png") is not None
+    source = folder / "masks" / "safe.png"
+    source.unlink()
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"private")
+    try:
+        source.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        return
+    assert service.asset("masks/safe.png") is None  # target checked even on cache hit
 
 
 def test_settings_change_poll_schedules_scan_once(tmp_path):

@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -27,6 +28,8 @@ from src.scripts.body_analysis_sam3 import IMAGE_SUFFIXES, ASSET_SUFFIXES, valid
 from src.services.body_analysis_environment import (
     install_body_analysis_environment, probe_body_analysis_environment,
 )
+
+MAX_RETAINED_REPORTS = 3
 
 
 @dataclass(frozen=True)
@@ -111,10 +114,45 @@ def _public_environment(value: dict) -> dict:
 
 def _discard_generated_staging(staging_root: Path, output: Path) -> None:
     """Remove only this service's uniquely named temporary output, never sources."""
-    if output.parent.resolve() != staging_root.resolve() or not re.fullmatch(r"[0-9a-f]{32}", output.name):
+    base = staging_root.resolve()
+    if (output.parent.resolve() != base or output.resolve().parent != base
+            or not re.fullmatch(r"[0-9a-f]{32}", output.name)):
         return
     if output.is_dir() and not output.is_symlink():
         shutil.rmtree(output)
+
+
+def _remove_generated_published(published_root: Path, directory: Path) -> None:
+    """Delete only a UUID report directly inside the verified output root."""
+    base = published_root.resolve()
+    if published_root.is_symlink() or directory.parent.resolve() != base:
+        return
+    if not re.fullmatch(r"[0-9a-f]{32}", directory.name):
+        return
+    if directory.is_symlink() or not directory.is_dir() or directory.resolve().parent != base:
+        return
+    shutil.rmtree(directory)
+
+
+def _prune_published_reports(published_root: Path, current_name: str) -> None:
+    """Retain current plus two recent complete reports after pointer commit."""
+    if published_root.is_symlink() or not published_root.is_dir():
+        return
+    candidates = []
+    for directory in published_root.iterdir():
+        if (re.fullmatch(r"[0-9a-f]{32}", directory.name) and directory.is_dir()
+                and not directory.is_symlink() and directory.resolve().parent == published_root.resolve()):
+            candidates.append(directory)
+    candidates.sort(key=lambda item: item.stat().st_mtime_ns, reverse=True)
+    keep = {current_name}
+    keep.update([item.name for item in candidates if item.name != current_name][:MAX_RETAINED_REPORTS - 1])
+    for directory in candidates:
+        if directory.name not in keep:
+            try:
+                _remove_generated_published(published_root, directory)
+            except OSError:
+                # A locked image is retried on the next successful publish.
+                pass
 
 
 def _runner_path() -> Path:
@@ -149,6 +187,9 @@ class BodyAnalysisJobService:
         self._last_setting_signature: tuple | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._pending_settings_refresh = False
+        self._report_cache_lock = threading.RLock()
+        self._report_cache_key: tuple | None = None
+        self._report_cache_value: tuple[Path, dict, str] | None = None
 
     def notify_settings_changed(self) -> None:
         """Let a settings write from FastAPI's worker thread wake this service."""
@@ -206,7 +247,10 @@ class BodyAnalysisJobService:
         try:
             if not pointer.is_file() or pointer.is_symlink() or pointer.stat().st_size > 4096:
                 return None
-            state = json.loads(pointer.read_text(encoding="utf-8"))
+            pointer_bytes = pointer.read_bytes()
+            if len(pointer_bytes) > 4096:
+                return None
+            state = json.loads(pointer_bytes)
             name, fingerprint = state["directory"], state["fingerprint"]
             if not isinstance(name, str) or len(name) > 80 or not name.isascii() or not name.isalnum():
                 return None
@@ -217,13 +261,22 @@ class BodyAnalysisJobService:
                     or not folder.is_dir() or not folder.resolve().is_relative_to(self.root.resolve())):
                 return None
             report_path = folder / "report.json"
-            if report_path.is_symlink() or report_path.stat().st_size > 50_000_000:
+            if report_path.is_symlink():
                 return None
-            report = json.loads(report_path.read_text(encoding="utf-8"))
-            validate_report_manifest(report, folder)
-            if _has_absolute_path(report):
+            report_stat = report_path.stat()
+            if report_stat.st_size > 50_000_000:
                 return None
-            return folder, report, fingerprint
+            cache_key = (pointer_bytes, report_stat.st_mtime_ns, report_stat.st_size, report_stat.st_ino)
+            with self._report_cache_lock:
+                if self._report_cache_key == cache_key:
+                    return self._report_cache_value
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                validate_report_manifest(report, folder)
+                if _has_absolute_path(report):
+                    return None
+                current = folder, report, fingerprint
+                self._report_cache_key, self._report_cache_value = cache_key, current
+                return current
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
             return None
 
@@ -245,9 +298,13 @@ class BodyAnalysisJobService:
             return None
         target = folder.joinpath(*parsed.parts)
         try:
+            if ((self.root / "published").is_symlink() or folder.is_symlink()
+                    or not folder.resolve().is_relative_to(self.root.resolve())):
+                return None
             if any(part.is_symlink() for part in (target, *target.parents) if part != folder):
                 return None
-            if target.is_file() and target.resolve().is_relative_to(folder.resolve()):
+            if (target.is_file() and target.resolve().is_relative_to(folder.resolve())
+                    and target.resolve().is_relative_to(self.root.resolve())):
                 return target
         except OSError:
             pass
@@ -259,9 +316,11 @@ class BodyAnalysisJobService:
         except Exception:
             enabled = False
             self._status, self._error = "failed", "settings_unavailable"
+        current = self._current()
         result = {"status": self._status, "enabled": enabled,
                   "environment": {key: self._environment.get(key) for key in ("ready", "missing", "reason")},
-                  "last_report_available": self._current() is not None}
+                  "last_report_available": current is not None,
+                  "report_revision": current[0].name if current else None}
         if self._error:
             result["error"] = self._error
         if self._progress:
@@ -291,6 +350,7 @@ class BodyAnalysisJobService:
 
     async def _install(self):
         self._status, self._error = "installing", None
+        install_worker: asyncio.Task | None = None
         try:
             settings = await asyncio.to_thread(self.settings_loader)
             self._last_setting_signature = tuple(settings.get(key) for key in (
@@ -303,9 +363,12 @@ class BodyAnalysisJobService:
                 self._status = "missing_environment"
                 self._environment = {"ready": False, "missing": ["model"], "reason": "missing_model"}
                 return
-            outcome = await asyncio.to_thread(
+            install_worker = asyncio.create_task(asyncio.to_thread(
                 self.environment_installer, model, explicit=True, cancel_event=self.install_cancel,
-            )
+            ))
+            # Cancellation must not release single-flight ownership while the
+            # worker still has pip/venv open against the shared optional env.
+            outcome = await asyncio.shield(install_worker)
             self._environment = _public_environment(outcome)
             if outcome.get("ready"):
                 self._status = "idle"
@@ -315,6 +378,16 @@ class BodyAnalysisJobService:
                 self._error = None if self._status == "missing_environment" else "optional_install_failed"
         except asyncio.CancelledError:
             self.install_cancel.set()
+            if install_worker is not None:
+                while not install_worker.done():
+                    try:
+                        await asyncio.shield(install_worker)
+                    except asyncio.CancelledError:
+                        self.install_cancel.set()
+                try:
+                    install_worker.result()
+                except Exception:
+                    pass
             raise
         except Exception:
             self._status, self._error = "failed", "optional_install_failed"
@@ -408,10 +481,34 @@ class BodyAnalysisJobService:
             if any(Path(latest_paths[f"body_analysis_{kind}_dir"]) != paths[kind] for kind in ("leg", "scalp", "model")):
                 raise ValueError("settings_changed")
             destination = published_root / name
+            if (output.is_symlink() or output.resolve().parent != staging_root.resolve()
+                    or destination.parent.resolve() != published_root.resolve()
+                    or destination.exists() or destination.is_symlink()):
+                raise ValueError("generated_move_boundary_invalid")
             os.replace(output, destination)
-            _write_json_atomically(self.root / "current.json", {"directory": name, "fingerprint": before.fingerprint})
+            try:
+                _write_json_atomically(self.root / "current.json", {"directory": name, "fingerprint": before.fingerprint})
+            except Exception:
+                try:
+                    await asyncio.to_thread(_remove_generated_published, published_root, destination)
+                except OSError:
+                    pass
+                raise
+            with self._report_cache_lock:
+                self._report_cache_key = None
+                self._report_cache_value = None
+            try:
+                now = time.time_ns()
+                os.utime(destination, ns=(now, now))
+            except OSError:
+                pass
             self._status = "ready"
             self._progress = {"completed": sum(before.counts.values()), "total": sum(before.counts.values())}
+            try:
+                await asyncio.to_thread(_prune_published_reports, published_root, name)
+            except OSError:
+                # The new report is already durable and must remain successful.
+                pass
         except asyncio.CancelledError:
             await self._stop_process()
             raise
