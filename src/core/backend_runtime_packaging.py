@@ -60,6 +60,7 @@ REQUIRED_ROOT_RESOURCE_NAMES = (
 REQUIRED_RESOURCE_SPECS = (
     ("src/models/face_detection_yunet_2023mar.onnx", "src/models"),
     ("src/models/LICENSE.face_detection_yunet.txt", "src/models"),
+    ("src/scripts/body_analysis_sam3.py", "src/scripts"),
 )
 
 OPTIONAL_RESOURCE_SPECS: tuple[tuple[str, str], ...] = ()
@@ -119,6 +120,7 @@ PYINSTALLER_EXCLUDES = (
     "torch",
     "torchaudio",
     "torchvision",
+    "transformers",
     "ultralytics",
 )
 
@@ -161,6 +163,7 @@ FORBIDDEN_RUNTIME_PACKAGE_NAMES = (
     "torch",
     "torchaudio",
     "torchvision",
+    "transformers",
     "ultralytics",
 )
 

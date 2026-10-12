@@ -17,6 +17,7 @@ from src.core.backend_runtime_packaging import (
     BACKEND_RUNTIME_FINGERPRINT_NAME,
     CONFLICTING_RUNTIME_DLL_NAMES,
     FORBIDDEN_RUNTIME_PACKAGE_NAMES,
+    PYINSTALLER_EXCLUDES,
     PROJECT_ACTIVITY_SNAPSHOT_NAME,
     REQUIRED_ROOT_RESOURCE_NAMES,
     RUNTIME_NAME,
@@ -42,6 +43,9 @@ def _create_required_runtime_resources(project_root: Path):
     models_dir = project_root / "src" / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     (project_root / "src" / "scripts").mkdir(parents=True, exist_ok=True)
+    (project_root / "src" / "scripts" / "body_analysis_sam3.py").write_text(
+        "# synthetic packaged runner\n", encoding="utf-8"
+    )
     (models_dir / "face_detection_yunet_2023mar.onnx").write_bytes(b"onnx")
     (models_dir / "LICENSE.face_detection_yunet.txt").write_text("MIT\n", encoding="utf-8")
     for resource_name in REQUIRED_ROOT_RESOURCE_NAMES:
@@ -85,6 +89,28 @@ def test_collect_backend_runtime_resources_includes_only_yunet_detection_model(t
     assert not any("yolox" in str(path).lower() for path in packaged_paths)
     for resource_name in REQUIRED_ROOT_RESOURCE_NAMES:
         assert Path(resource_name) in packaged_paths
+
+
+def test_body_analysis_runner_is_a_required_packaged_resource(tmp_path):
+    _create_required_runtime_resources(tmp_path)
+    runner = tmp_path / "src" / "scripts" / "body_analysis_sam3.py"
+    runner.write_text("print('test runner')\n", encoding="utf-8")
+
+    packaged_paths = {
+        resource.output_relative_path
+        for resource in collect_backend_runtime_resources(tmp_path)
+    }
+
+    assert Path("src/scripts/body_analysis_sam3.py") in packaged_paths
+    runner.unlink()
+    with pytest.raises(FileNotFoundError, match="body_analysis_sam3.py"):
+        collect_backend_runtime_resources(tmp_path)
+
+
+def test_optional_ml_libraries_are_excluded_from_frozen_backend():
+    assert "torch" in PYINSTALLER_EXCLUDES
+    assert "transformers" in PYINSTALLER_EXCLUDES
+    assert "transformers" in FORBIDDEN_RUNTIME_PACKAGE_NAMES
 
 
 def test_collect_backend_runtime_resources_rejects_missing_required_files(tmp_path):
