@@ -61,6 +61,7 @@ def test_operations_use_the_configured_loopback_backend_boundary():
     assert DEFAULT_BACKEND_BASE_URL == "http://127.0.0.1:8000"
     unavailable = {operation.name for operation in OPERATIONS if not operation.dispatchable}
     assert unavailable == {
+        "body_analysis.directory.pick",
         "settings.open_path",
         "system.locale.read",
         "window.title_bar_theme.update",
