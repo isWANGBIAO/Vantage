@@ -37,25 +37,77 @@ export async function requestOptionalInstall(status, post) {
   return true;
 }
 
-export async function refreshPublishedReport(previousReport, { readStatus, readReport }) {
+export async function refreshPublishedReport(previousReport, { previousRevision = null, readStatus, readReport, signal } = {}) {
   let status;
   try {
-    status = await readStatus();
+    status = await readStatus(signal);
   } catch {
-    return { status: null, report: previousReport, error: 'status_unavailable' };
+    return { status: null, report: previousReport, reportRevision: previousRevision, error: 'status_unavailable' };
   }
-  if (!status?.last_report_available) return { status, report: previousReport, error: null };
+  if (!status?.last_report_available) {
+    return { status, report: previousReport, reportRevision: previousRevision, error: null };
+  }
+  const publishedRevision = typeof status.report_revision === 'string' && status.report_revision.length > 0
+    ? status.report_revision : null;
+  if (previousReport && publishedRevision && publishedRevision === previousRevision) {
+    return { status, report: previousReport, reportRevision: previousRevision, error: null };
+  }
   try {
-    const candidate = await readReport();
+    const candidate = await readReport(signal);
     if (candidate?.complete === true && candidate.schema_version === 1) {
-      return { status, report: candidate, error: null };
+      return { status, report: candidate, reportRevision: publishedRevision, error: null };
     }
   } catch {
     // A transient fetch error cannot invalidate the previously published report.
   }
-  return { status, report: previousReport, error: 'report_unavailable' };
+  return { status, report: previousReport, reportRevision: previousRevision, error: 'report_unavailable' };
 }
 
 export function shouldMountFaceHistory(subtab) {
   return subtab === 'dark-circles';
+}
+
+export function createBodyAnalysisPoller({ readStatus, readReport, onResult }) {
+  let report = null;
+  let reportRevision = null;
+  let inFlight = null;
+  let controller = null;
+  let requestId = 0;
+  let disposed = false;
+
+  function refresh({ force = false } = {}) {
+    if (disposed) return Promise.resolve(null);
+    if (inFlight && !force) return inFlight;
+    if (force) controller?.abort();
+    const current = ++requestId;
+    const requestController = new AbortController();
+    controller = requestController;
+    const request = (async () => {
+      const result = await refreshPublishedReport(report, {
+        previousRevision: reportRevision,
+        readStatus,
+        readReport,
+        signal: requestController.signal,
+      });
+      if (!disposed && current === requestId && !requestController.signal.aborted) {
+        report = result.report;
+        reportRevision = result.reportRevision;
+        onResult(result);
+      }
+      return result;
+    })().finally(() => {
+      if (inFlight === request) inFlight = null;
+      if (controller === requestController) controller = null;
+    });
+    inFlight = request;
+    return request;
+  }
+
+  function dispose() {
+    disposed = true;
+    requestId += 1;
+    controller?.abort();
+  }
+
+  return { refresh, dispose };
 }

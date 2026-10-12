@@ -42,8 +42,10 @@ test('report renders inspectable masks and only eligible trend records', () => {
 
 test('component delegates folder, report, and install transitions to tested behavior helpers', () => {
   assert.match(source, /chooseAndSaveDirectory\(/);
-  assert.match(source, /refreshPublishedReport\(/);
+  assert.match(actionsSource, /refreshPublishedReport\(/);
   assert.match(source, /requestOptionalInstall\(/);
   assert.match(source, /shouldMountFaceHistory\(subtab\)/);
   assert.match(source, /environmentGuidance\(status\)/);
+  assert.match(source, /createBodyAnalysisPoller\(/);
+  assert.match(source, /poller\.dispose\(\)/);
 });

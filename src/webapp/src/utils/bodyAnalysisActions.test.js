@@ -4,6 +4,7 @@ import { createPlatformAdapter } from './platformAdapter.js';
 import { saveSettingsState } from './settingsState.js';
 import {
   chooseAndSaveDirectory,
+  createBodyAnalysisPoller,
   environmentGuidance,
   refreshPublishedReport,
   requestOptionalInstall,
@@ -79,6 +80,114 @@ test('failed refresh keeps the last complete report visible', async () => {
   });
   assert.equal(unavailable.report, previous);
   assert.equal(unavailable.error, 'status_unavailable');
+});
+
+test('unchanged publication revision skips the full report download', async () => {
+  const previous = { schema_version: 1, complete: true };
+  let reportReads = 0;
+  const result = await refreshPublishedReport(previous, {
+    previousRevision: 'published-a',
+    readStatus: async () => ({ status: 'ready', last_report_available: true, report_revision: 'published-a' }),
+    readReport: async () => { reportReads += 1; return { schema_version: 1, complete: true }; },
+  });
+  assert.equal(result.report, previous);
+  assert.equal(result.reportRevision, 'published-a');
+  assert.equal(reportReads, 0);
+});
+
+test('changed revision downloads once and a failed download is retried next time', async () => {
+  const previous = { schema_version: 1, complete: true, marker: 'old' };
+  const next = { schema_version: 1, complete: true, marker: 'new' };
+  let reportReads = 0;
+  const readStatus = async () => ({ status: 'ready', last_report_available: true, report_revision: 'published-b' });
+  const failed = await refreshPublishedReport(previous, {
+    previousRevision: 'published-a', readStatus,
+    readReport: async () => { reportReads += 1; throw new Error('offline'); },
+  });
+  assert.equal(failed.report, previous);
+  assert.equal(failed.reportRevision, 'published-a');
+  const retried = await refreshPublishedReport(failed.report, {
+    previousRevision: failed.reportRevision, readStatus,
+    readReport: async () => { reportReads += 1; return next; },
+  });
+  assert.equal(retried.report, next);
+  assert.equal(retried.reportRevision, 'published-b');
+  assert.equal(reportReads, 2);
+});
+
+test('older backends without a revision still refresh complete reports', async () => {
+  let reportReads = 0;
+  const previous = { schema_version: 1, complete: true };
+  const result = await refreshPublishedReport(previous, {
+    previousRevision: 'published-a',
+    readStatus: async () => ({ status: 'ready', last_report_available: true }),
+    readReport: async () => { reportReads += 1; return { schema_version: 1, complete: true }; },
+  });
+  assert.equal(reportReads, 1);
+  assert.equal(result.reportRevision, null);
+});
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+test('poller ignores an older response arriving after a newer publication', async () => {
+  const firstStatus = deferred();
+  let calls = 0;
+  const seen = [];
+  const poller = createBodyAnalysisPoller({
+    readStatus: async () => {
+      calls += 1;
+      return calls === 1 ? firstStatus.promise : { status: 'ready', last_report_available: true, report_revision: 'new' };
+    },
+    readReport: async () => ({ schema_version: 1, complete: true, marker: 'new' }),
+    onResult: (result) => seen.push(result),
+  });
+  const old = poller.refresh();
+  const newest = poller.refresh({ force: true });
+  await newest;
+  firstStatus.resolve({ status: 'ready', last_report_available: true, report_revision: 'old' });
+  await old;
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].report.marker, 'new');
+  poller.dispose();
+});
+
+test('timer polls coalesce while a slow full report is in flight', async () => {
+  const pending = deferred();
+  let statusReads = 0;
+  const poller = createBodyAnalysisPoller({
+    readStatus: async () => { statusReads += 1; return pending.promise; },
+    readReport: async () => { throw new Error('unreachable'); },
+    onResult: () => {},
+  });
+  const first = poller.refresh();
+  const repeated = poller.refresh();
+  assert.equal(statusReads, 1);
+  assert.equal(first, repeated);
+  pending.resolve({ status: 'idle', last_report_available: false });
+  await first;
+  poller.dispose();
+});
+
+test('poller aborts in-flight work and never updates a disposed page', async () => {
+  const pending = deferred();
+  const seen = [];
+  let signal;
+  const poller = createBodyAnalysisPoller({
+    readStatus: async (currentSignal) => { signal = currentSignal; return pending.promise; },
+    readReport: async () => { throw new Error('unreachable'); },
+    onResult: (result) => seen.push(result),
+  });
+  const work = poller.refresh();
+  await Promise.resolve();
+  poller.dispose();
+  assert.equal(signal.aborted, true);
+  pending.resolve({ status: 'ready', last_report_available: false });
+  await work;
+  assert.deepEqual(seen, []);
 });
 
 test('FaceHistory mounts only on the dark-circles subpage', () => {

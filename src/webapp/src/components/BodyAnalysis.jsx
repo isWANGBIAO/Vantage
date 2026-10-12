@@ -5,7 +5,7 @@ import { buildBackendUrl, fetchBackendJson } from '../utils/backendRequest.js';
 import { loadSettingsState, saveSettingsState } from '../utils/settingsState.js';
 import { getPlatformAdapter } from '../utils/platformAdapter.js';
 import { assetPathForRecord, formatMetric, safeRecordName, visibleTrend } from '../utils/bodyAnalysisViewModel.js';
-import { chooseAndSaveDirectory, environmentGuidance, refreshPublishedReport, requestOptionalInstall, shouldMountFaceHistory } from '../utils/bodyAnalysisActions.js';
+import { chooseAndSaveDirectory, createBodyAnalysisPoller, environmentGuidance, requestOptionalInstall, shouldMountFaceHistory } from '../utils/bodyAnalysisActions.js';
 
 const DIRECTORY_FIELDS = {
   leg: 'bodyAnalysisLegDir',
@@ -70,32 +70,39 @@ export default function BodyAnalysis() {
   const [settings, setSettings] = useState(null);
   const [status, setStatus] = useState(null);
   const [report, setReport] = useState(null);
-  const reportRef = useRef(null);
+  const pollerRef = useRef(null);
+  const tRef = useRef(t);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
 
-  const refresh = useCallback(async () => {
-    const result = await refreshPublishedReport(reportRef.current, {
-      readStatus: () => fetchBackendJson('/api/v1/body-analysis/status', { retryPolicy: 'poll' }),
-      readReport: () => fetchBackendJson('/api/v1/body-analysis/report', { retryPolicy: 'poll' }),
-    });
-    if (result.status) setStatus(result.status);
-    if (result.report !== reportRef.current) {
-      reportRef.current = result.report;
-      setReport(result.report);
-    }
-    if (result.error === 'status_unavailable') setMessage(t('body_analysis.status_unavailable'));
-  }, [t]);
+  useEffect(() => { tRef.current = t; }, [t]);
+
+  const refresh = useCallback((options) => pollerRef.current?.refresh(options) ?? Promise.resolve(null), []);
 
   useEffect(() => {
     let mounted = true;
-    void loadSettingsState().then((state) => { if (mounted) setSettings(state.settings); }).catch(() => {
-      if (mounted) setMessage(t('body_analysis.settings_unavailable'));
+    const poller = createBodyAnalysisPoller({
+      readStatus: (signal) => fetchBackendJson('/api/v1/body-analysis/status', { retryPolicy: 'poll', signal }),
+      readReport: (signal) => fetchBackendJson('/api/v1/body-analysis/report', { retryPolicy: 'poll', signal }),
+      onResult: (result) => {
+        if (result.status) setStatus(result.status);
+        if (result.report) setReport(result.report);
+        if (result.error === 'status_unavailable') setMessage(tRef.current('body_analysis.status_unavailable'));
+      },
     });
-    void refresh();
-    const timer = window.setInterval(() => { void refresh(); }, 5000);
-    return () => { mounted = false; window.clearInterval(timer); };
-  }, [refresh, t]);
+    pollerRef.current = poller;
+    void loadSettingsState().then((state) => { if (mounted) setSettings(state.settings); }).catch(() => {
+      if (mounted) setMessage(tRef.current('body_analysis.settings_unavailable'));
+    });
+    void poller.refresh();
+    const timer = window.setInterval(() => { void poller.refresh(); }, 5000);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+      poller.dispose();
+      if (pollerRef.current === poller) pollerRef.current = null;
+    };
+  }, []);
 
   const saveField = async (field, value) => {
     setBusy(true);
@@ -103,7 +110,7 @@ export default function BodyAnalysis() {
     try {
       const next = await saveSettingsState({ [field]: value });
       setSettings(next.settings);
-      await refresh();
+      await refresh({ force: true });
     } catch {
       setMessage(t('body_analysis.save_failed'));
     } finally {
@@ -121,7 +128,7 @@ export default function BodyAnalysis() {
       });
       if (result) {
         setSettings(result.settings);
-        await refresh();
+        await refresh({ force: true });
       }
     } catch {
       setMessage(t('body_analysis.pick_failed'));
@@ -139,7 +146,7 @@ export default function BodyAnalysis() {
       } else {
         await fetchBackendJson('/api/v1/body-analysis/retry', { method: 'POST', retryPolicy: 'mutation' });
       }
-      await refresh();
+      await refresh({ force: true });
     } catch {
       setMessage(t('body_analysis.action_failed'));
     } finally {
