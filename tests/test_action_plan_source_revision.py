@@ -141,7 +141,7 @@ def test_copy_failure_returns_retryable_error():
         assert _revision().status_code == 503
 
 
-def test_revision_reports_saved_complete_plan_and_ignores_incomplete_newer_output(tmp_path):
+def test_revision_does_not_certify_older_complete_plan_when_latest_is_incomplete(tmp_path):
     from datetime import datetime
 
     today = datetime.now().strftime("%Y%m%d")
@@ -167,6 +167,6 @@ def test_revision_reports_saved_complete_plan_and_ignores_incomplete_newer_outpu
 
     assert payload == {
         "revision": "a" * 64,
-        "generated_revision": "b" * 64,
-        "has_generated_plan": True,
+        "generated_revision": None,
+        "has_generated_plan": False,
     }

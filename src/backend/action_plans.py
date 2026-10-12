@@ -235,24 +235,25 @@ def _compute_action_plan_source_revision():
 
 
 def _get_generated_action_plan_source_revision():
-    """Only a complete saved plan can certify an earlier source revision."""
+    """Only today's latest visible plan may certify a source revision."""
     today = datetime.now().strftime("%Y%m%d")
-    for filename in sorted(_list_today_action_plan_files(today), key=os.path.getmtime, reverse=True):
-        try:
-            with Path(filename).open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-        except (ValueError, UnicodeError):
-            continue
-        if not complete_plan(payload):
-            continue
-        if "date" in payload and normalize_plan_date(payload["date"]) != today:
-            continue
-        meta = payload.get("meta")
-        revision = meta.get("source_revision") if isinstance(meta, dict) else None
-        if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{64}", revision) is None:
-            revision = None
-        return revision, True
-    return None, False
+    filename = _get_latest_action_plan_file(today)
+    if filename is None:
+        return None, False
+    try:
+        with Path(filename).open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (ValueError, UnicodeError):
+        return None, False
+    if not complete_plan(payload):
+        return None, False
+    if "date" in payload and normalize_plan_date(payload["date"]) != today:
+        return None, False
+    meta = payload.get("meta")
+    revision = meta.get("source_revision") if isinstance(meta, dict) else None
+    if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{64}", revision) is None:
+        revision = None
+    return revision, True
 
 @router.get("/api/v1/action-plan/source-revision")
 async def get_action_plan_source_revision():
