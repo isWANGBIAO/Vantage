@@ -17,6 +17,8 @@ test('Body Analysis subpages and optional setup have aligned translations', () =
     'body_analysis.tab.leg', 'body_analysis.tab.scalp', 'body_analysis.install',
     'body_analysis.environment_missing', 'body_analysis.no_verified_trend',
     'body_analysis.leg_proxy_notice', 'body_analysis.no_verified_scalp_trend',
+    'body_analysis.status_checking', 'body_analysis.missing_model',
+    'body_analysis.missing_python', 'body_analysis.missing_cuda',
   ];
   for (const language of ['en-US', 'zh-CN']) {
     for (const key of keys) assert.ok(DISPLAY_COPY[language][key], `${language} missing ${key}`);

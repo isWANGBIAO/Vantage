@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import FaceHistory from './FaceHistory';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 import { buildBackendUrl, fetchBackendJson } from '../utils/backendRequest.js';
 import { loadSettingsState, saveSettingsState } from '../utils/settingsState.js';
 import { getPlatformAdapter } from '../utils/platformAdapter.js';
 import { assetPathForRecord, formatMetric, safeRecordName, visibleTrend } from '../utils/bodyAnalysisViewModel.js';
+import { chooseAndSaveDirectory, environmentGuidance, refreshPublishedReport, requestOptionalInstall, shouldMountFaceHistory } from '../utils/bodyAnalysisActions.js';
 
 const DIRECTORY_FIELDS = {
   leg: 'bodyAnalysisLegDir',
@@ -69,24 +70,21 @@ export default function BodyAnalysis() {
   const [settings, setSettings] = useState(null);
   const [status, setStatus] = useState(null);
   const [report, setReport] = useState(null);
+  const reportRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
 
   const refresh = useCallback(async () => {
-    try {
-      const nextStatus = await fetchBackendJson('/api/v1/body-analysis/status', { retryPolicy: 'poll' });
-      setStatus(nextStatus);
-      if (nextStatus.last_report_available) {
-        try {
-          const nextReport = await fetchBackendJson('/api/v1/body-analysis/report', { retryPolicy: 'poll' });
-          if (nextReport?.complete === true && nextReport.schema_version === 1) setReport(nextReport);
-        } catch {
-          // Keep the last complete report while a refresh fails.
-        }
-      }
-    } catch {
-      setMessage(t('body_analysis.status_unavailable'));
+    const result = await refreshPublishedReport(reportRef.current, {
+      readStatus: () => fetchBackendJson('/api/v1/body-analysis/status', { retryPolicy: 'poll' }),
+      readReport: () => fetchBackendJson('/api/v1/body-analysis/report', { retryPolicy: 'poll' }),
+    });
+    if (result.status) setStatus(result.status);
+    if (result.report !== reportRef.current) {
+      reportRef.current = result.report;
+      setReport(result.report);
     }
+    if (result.error === 'status_unavailable') setMessage(t('body_analysis.status_unavailable'));
   }, [t]);
 
   useEffect(() => {
@@ -114,11 +112,21 @@ export default function BodyAnalysis() {
   };
 
   const chooseDirectory = async (kind) => {
+    setBusy(true);
+    setMessage('');
     try {
-      const result = await getPlatformAdapter().paths.pickBodyAnalysisDirectory(kind);
-      if (result?.path) await saveField(DIRECTORY_FIELDS[kind], result.path);
+      const result = await chooseAndSaveDirectory(kind, {
+        pick: getPlatformAdapter().paths.pickBodyAnalysisDirectory,
+        save: (fields) => saveSettingsState(fields),
+      });
+      if (result) {
+        setSettings(result.settings);
+        await refresh();
+      }
     } catch {
       setMessage(t('body_analysis.pick_failed'));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -126,7 +134,11 @@ export default function BodyAnalysis() {
     setBusy(true);
     setMessage('');
     try {
-      await fetchBackendJson(`/api/v1/body-analysis/${action}`, { method: 'POST', retryPolicy: 'mutation' });
+      if (action === 'install') {
+        await requestOptionalInstall(status, () => fetchBackendJson('/api/v1/body-analysis/install', { method: 'POST', retryPolicy: 'mutation' }));
+      } else {
+        await fetchBackendJson('/api/v1/body-analysis/retry', { method: 'POST', retryPolicy: 'mutation' });
+      }
       await refresh();
     } catch {
       setMessage(t('body_analysis.action_failed'));
@@ -134,6 +146,8 @@ export default function BodyAnalysis() {
       setBusy(false);
     }
   };
+
+  const guidance = environmentGuidance(status);
 
   return (
     <section style={{ padding: '1rem', minHeight: '100%' }}>
@@ -145,7 +159,7 @@ export default function BodyAnalysis() {
           ['scalp', 'body_analysis.tab.scalp'],
         ].map(([key, label]) => <button type="button" key={key} aria-current={subtab === key ? 'page' : undefined} onClick={() => setSubtab(key)}>{t(label)}</button>)}
       </nav>
-      {subtab === 'dark-circles' ? <FaceHistory isVisible /> : (
+      {shouldMountFaceHistory(subtab) ? <FaceHistory isVisible /> : (
         <>
           <div className="glass-panel" style={{ padding: 16, marginBottom: 16 }}>
             <h3>{t('body_analysis.local_setup')}</h3>
@@ -159,8 +173,8 @@ export default function BodyAnalysis() {
             </div>
             <p>{t('body_analysis.status')}: {t(`body_analysis.status_${status?.status || 'unknown'}`)}</p>
             {status?.progress && <p>{t('body_analysis.progress', { done: status.progress.completed ?? 0, total: status.progress.total ?? 0 })}</p>}
-            {status?.status === 'missing_environment' && <p>{t('body_analysis.environment_missing')}</p>}
-            {status?.status === 'missing_environment' && <button type="button" disabled={busy} onClick={() => { void runAction('install'); }}>{t('body_analysis.install')}</button>}
+            {guidance && <p>{t(guidance.messageKey)}</p>}
+            {guidance?.canInstall && <button type="button" disabled={busy} onClick={() => { void runAction('install'); }}>{t('body_analysis.install')}</button>}
             <button type="button" disabled={busy || settings?.bodyAnalysisEnabled !== true} onClick={() => { void runAction('retry'); }}>{t('body_analysis.retry')}</button>
             {message && <p role="alert">{message}</p>}
             {status?.error && <p role="alert">{t('body_analysis.action_failed')}</p>}

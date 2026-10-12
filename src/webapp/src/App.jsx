@@ -8,6 +8,7 @@ import OnboardingShell from './components/OnboardingShell';
 import CrashDiagnosticsNotice from './components/CrashDiagnosticsNotice';
 import { completeOnboardingSetup, loadOnboardingState, pickLegacyRoot } from './utils/onboardingState';
 import { loadSettingsState, saveSettingsState } from './utils/settingsState';
+import { resolveLegacyTabHash } from './utils/appNavigation.js';
 import {
   DisplayLanguageProvider,
   useDisplayLanguage,
@@ -49,7 +50,6 @@ const NAV_ITEMS = [
 
 const TAB_HASH_TO_KEY = Object.fromEntries([
   ...NAV_ITEMS.map((item) => [item.key.replaceAll(' ', '-'), item.key]),
-  ['face-history', 'body-analysis'],
   ['settings', 'settings'],
 ]);
 
@@ -60,7 +60,7 @@ const TAB_KEY_TO_HASH = Object.fromEntries([
 
 function getTabKeyFromHash(hash) {
   const normalizedHash = String(hash || '').replace(/^#/, '').trim().toLowerCase();
-  return TAB_HASH_TO_KEY[normalizedHash] || null;
+  return TAB_HASH_TO_KEY[normalizedHash] || resolveLegacyTabHash(normalizedHash);
 }
 
 function DisplayLanguageSelect() {

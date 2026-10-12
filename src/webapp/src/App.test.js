@@ -95,7 +95,7 @@ test('App passes visibility into SystemLogs so hidden panels do not poll logs', 
 
 test('Body Analysis replaces Face History navigation and legacy hash remains valid', () => {
   assert.match(appSource, /key: 'body-analysis', labelKey: 'app\.nav\.body_analysis'/);
-  assert.match(appSource, /\['face-history', 'body-analysis'\]/);
+  assert.match(appSource, /resolveLegacyTabHash\(normalizedHash\)/);
   assert.match(appSource, /<BodyAnalysis/);
   assert.equal(appSource.includes("key: 'face history', labelKey: 'app.nav.face_history'"), false);
 });
