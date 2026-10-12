@@ -17,13 +17,13 @@ function displayDirectory(value) {
   return value ? safeRecordName(value.replace(/[\\/]+$/, '')) : '—';
 }
 
-function ReportImage({ path, report, label }) {
-  const assetPath = assetPathForRecord(path, report?.assets);
+function ReportImage({ path, report, assetVersion, label }) {
+  const assetPath = assetPathForRecord(path, report?.assets, assetVersion);
   if (!assetPath) return null;
-  return <figure style={{ margin: 0 }}><img src={buildBackendUrl(assetPath)} alt={label} loading="lazy" style={{ maxWidth: '100%', maxHeight: 250, borderRadius: 8 }} /><figcaption>{label}</figcaption></figure>;
+  return <figure style={{ margin: 0 }}><img key={assetPath} src={buildBackendUrl(assetPath)} alt={label} loading="lazy" style={{ maxWidth: '100%', maxHeight: 250, borderRadius: 8 }} /><figcaption>{label}</figcaption></figure>;
 }
 
-function ReportSection({ kind, report, t }) {
+function ReportSection({ kind, report, assetVersion, t }) {
   const records = Array.isArray(report?.[kind]?.records) ? report[kind].records : [];
   const trend = visibleTrend(report, kind);
   return (
@@ -50,12 +50,12 @@ function ReportSection({ kind, report, t }) {
               <details><summary>{t('body_analysis.quality')}</summary><ul>{record.quality_flags.map((flag, flagIndex) => <li key={flagIndex}>{String(flag)}</li>)}</ul></details>
             )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, marginTop: 12 }}>
-              <ReportImage path={record.overlay_path} report={report} label={t('body_analysis.overlay')} />
-              <ReportImage path={record.mask_path} report={report} label={t('body_analysis.mask')} />
-              <ReportImage path={record.texture_mask_path} report={report} label={t('body_analysis.texture_mask')} />
-              <ReportImage path={record.line_mask_path} report={report} label={t('body_analysis.line_mask')} />
-              {kind === 'scalp' && <ReportImage path={record.scalp_candidate_overlay_path} report={report} label={t('body_analysis.rejected_candidate')} />}
-              {kind === 'scalp' && <ReportImage path={record.scalp_candidate_mask_path} report={report} label={t('body_analysis.rejected_candidate_mask')} />}
+              <ReportImage path={record.overlay_path} report={report} assetVersion={assetVersion} label={t('body_analysis.overlay')} />
+              <ReportImage path={record.mask_path} report={report} assetVersion={assetVersion} label={t('body_analysis.mask')} />
+              <ReportImage path={record.texture_mask_path} report={report} assetVersion={assetVersion} label={t('body_analysis.texture_mask')} />
+              <ReportImage path={record.line_mask_path} report={report} assetVersion={assetVersion} label={t('body_analysis.line_mask')} />
+              {kind === 'scalp' && <ReportImage path={record.scalp_candidate_overlay_path} report={report} assetVersion={assetVersion} label={t('body_analysis.rejected_candidate')} />}
+              {kind === 'scalp' && <ReportImage path={record.scalp_candidate_mask_path} report={report} assetVersion={assetVersion} label={t('body_analysis.rejected_candidate_mask')} />}
             </div>
           </article>
         ))}
@@ -69,7 +69,11 @@ export default function BodyAnalysis() {
   const [subtab, setSubtab] = useState('dark-circles');
   const [settings, setSettings] = useState(null);
   const [status, setStatus] = useState(null);
-  const [report, setReport] = useState(null);
+  const [publishedReport, setPublishedReport] = useState(null);
+  const publishedRef = useRef(null);
+  const legacyAssetVersionRef = useRef(0);
+  const report = publishedReport?.report || null;
+  const assetVersion = publishedReport?.assetVersion || null;
   const pollerRef = useRef(null);
   const tRef = useRef(t);
   const [busy, setBusy] = useState(false);
@@ -86,7 +90,14 @@ export default function BodyAnalysis() {
       readReport: (signal) => fetchBackendJson('/api/v1/body-analysis/report', { retryPolicy: 'poll', signal }),
       onResult: (result) => {
         if (result.status) setStatus(result.status);
-        if (result.report) setReport(result.report);
+        if (result.report && result.report !== publishedRef.current?.report) {
+          const next = {
+            report: result.report,
+            assetVersion: result.reportRevision || `legacy-${++legacyAssetVersionRef.current}`,
+          };
+          publishedRef.current = next;
+          setPublishedReport(next);
+        }
         if (result.error === 'status_unavailable') setMessage(tRef.current('body_analysis.status_unavailable'));
       },
     });
@@ -186,7 +197,7 @@ export default function BodyAnalysis() {
             {message && <p role="alert">{message}</p>}
             {status?.error && <p role="alert">{t('body_analysis.action_failed')}</p>}
           </div>
-          {report && <ReportSection kind={subtab} report={report} t={t} />}
+          {report && <ReportSection kind={subtab} report={report} assetVersion={assetVersion} t={t} />}
           {!report && <p>{t('body_analysis.no_report')}</p>}
           {report && status?.status === 'running' && <p>{t('body_analysis.showing_previous_report')}</p>}
           {report && status?.status === 'failed' && <p>{t('body_analysis.showing_previous_report')}</p>}

@@ -3,14 +3,16 @@ const TREND_KEYS = {
   scalp: ['hair_region_fraction_percent', 'texture_fraction_percent'],
 };
 
-export function assetPathForRecord(path, manifest) {
+export function assetPathForRecord(path, manifest, version = null) {
   if (typeof path !== 'string' || !Array.isArray(manifest) || !manifest.includes(path)) return null;
   const segments = path.split('/');
   if (segments.length < 2 || segments.some((segment) => !/^[A-Za-z0-9._-]+$/.test(segment) || segment === '.' || segment === '..')) {
     return null;
   }
   const encodedPath = segments.map(encodeURIComponent).join('/');
-  return `/api/v1/body-analysis/assets/${encodedPath}`;
+  const assetPath = `/api/v1/body-analysis/assets/${encodedPath}`;
+  return typeof version === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(version)
+    ? `${assetPath}?v=${encodeURIComponent(version)}` : assetPath;
 }
 
 export function visibleTrend(report, kind) {

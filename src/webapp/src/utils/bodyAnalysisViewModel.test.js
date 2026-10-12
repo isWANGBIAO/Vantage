@@ -10,6 +10,17 @@ test('generated image references must belong to the report manifest and stay rel
   }
 });
 
+test('new publication reloads same-named generated assets without widening the allowlist', () => {
+  const manifest = ['masks/leg-0001.png'];
+  const oldUrl = assetPathForRecord('masks/leg-0001.png', manifest, 'published-a');
+  const newUrl = assetPathForRecord('masks/leg-0001.png', manifest, 'published-b');
+  assert.equal(oldUrl, '/api/v1/body-analysis/assets/masks/leg-0001.png?v=published-a');
+  assert.equal(newUrl, '/api/v1/body-analysis/assets/masks/leg-0001.png?v=published-b');
+  assert.notEqual(oldUrl, newUrl);
+  assert.equal(assetPathForRecord('masks/private.png', manifest, 'published-b'), null);
+  assert.equal(assetPathForRecord('masks/leg-0001.png', manifest, '../bad'), '/api/v1/body-analysis/assets/masks/leg-0001.png');
+});
+
 test('automatic leg photo proxies may trend only when date and quality are verified', () => {
   const report = { leg: { records: [
     { review_status: 'unreviewed', trend_eligible: true, timestamp_verified: true, captured_at: '2026-01-01T09:00:00' },

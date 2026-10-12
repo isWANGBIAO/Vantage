@@ -40,6 +40,13 @@ test('report renders inspectable masks and only eligible trend records', () => {
   assert.match(source, /body_analysis\.no_verified_scalp_trend/);
 });
 
+test('report and asset version switch together only after a complete publication', () => {
+  assert.match(source, /assetPathForRecord\(path, report\?\.assets, assetVersion\)/);
+  assert.match(source, /result\.reportRevision/);
+  assert.match(source, /result\.report !== publishedRef\.current\?\.report/);
+  assert.match(source, /setPublishedReport\(next\)/);
+});
+
 test('component delegates folder, report, and install transitions to tested behavior helpers', () => {
   assert.match(source, /chooseAndSaveDirectory\(/);
   assert.match(actionsSource, /refreshPublishedReport\(/);
