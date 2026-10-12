@@ -81,6 +81,7 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 | 重置聊天上下文 | chat.context.reset | vantage chat context reset |
 | 读取模型用量 | usage.read | vantage usage read |
 | 列出已配置模型 | models.list | vantage models list |
+| 保存默认服务与模型（写操作，仅接受 provider_route 与 model） | models.preference.update | vantage models preference update |
 | 发现特殊 provider 模型 | providers.special_models.discover | vantage providers special-models discover |
 | 发现模型 | models.discover | vantage models discover |
 | 向模型发送聊天并读取流 | chat.send | vantage chat send |

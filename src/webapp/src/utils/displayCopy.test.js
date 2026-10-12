@@ -6,6 +6,15 @@ import { fileURLToPath } from 'node:url';
 
 import { DISPLAY_COPY, translate } from './displayCopy.js';
 
+test('expense copy names actual and daily consumption without changing forecast spend', () => {
+  assert.equal(translate('zh-CN', 'expense.period_spend', { value: '10' }), '实际消费 10');
+  assert.equal(translate('zh-CN', 'expense.daily_average', { value: '10' }), '日均消费 10');
+  assert.equal(translate('zh-CN', 'expense.balance_chart_title'), '资产与消费趋势');
+  assert.equal(translate('en-US', 'expense.period_spend', { value: '10' }), 'Actual consumption 10');
+  assert.equal(translate('en-US', 'expense.daily_average', { value: '10' }), 'Daily consumption 10');
+  assert.equal(translate('en-US', 'expense.forecast_planned_spend'), 'Planned monthly spend');
+});
+
 const UI_SOURCE_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const MANUAL_KEYS = [
   'app.language.follow_system',

@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from src.core.cpu_runtime_policy import configure_cpu_runtime
+
+configure_cpu_runtime()
+
 import cv2
 import matplotlib
 import numpy as np

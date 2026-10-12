@@ -111,26 +111,25 @@ export function findModelOption(options, value) {
   )) || null;
 }
 
-export function resolvePreferredModelOption(options, storage = globalThis.localStorage) {
+export function resolvePreferredModelOption(options) {
   if (!Array.isArray(options) || options.length === 0) {
     return null;
   }
 
-  const storedRef = storage?.getItem?.(PREFERRED_LLM_MODEL_REF_STORAGE_KEY);
-  const storedModel = storage?.getItem?.(PREFERRED_LLM_MODEL_STORAGE_KEY);
   return (
-    findModelOption(options, storedRef)
-    || findModelOption(options, storedModel)
-    || options.find((option) => option.is_default)
+    options.find((option) => option.is_default)
     || options[0]
   );
 }
 
-export function persistPreferredModelOption(option, storage = globalThis.localStorage) {
-  if (!option || !storage?.setItem) {
-    return;
+export async function persistPreferredModelOption(option, request) {
+  if (!option?.provider_route || !option?.model) {
+    throw new Error('请选择已配置的模型服务。');
   }
-
-  storage.setItem(PREFERRED_LLM_MODEL_REF_STORAGE_KEY, option.id);
-  storage.setItem(PREFERRED_LLM_MODEL_STORAGE_KEY, option.model);
+  await request('/api/v1/models/preference', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider_route: option.provider_route, model: option.model }),
+  });
+  return option;
 }

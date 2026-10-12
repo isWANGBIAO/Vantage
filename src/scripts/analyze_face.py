@@ -4,13 +4,17 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from tqdm import tqdm
 
 current_dir = Path(__file__).resolve().parent
 project_root = current_dir.parent.parent
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
+from src.core.cpu_runtime_policy import configure_cpu_runtime
+
+configure_cpu_runtime()
+
+from tqdm import tqdm
 from src.core.config import Config
 from src.services.face_analysis_pipeline import (
     AnalysisConfig,

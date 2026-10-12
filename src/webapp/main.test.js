@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import { runInNewContext } from 'node:vm';
 import protocol from './src/utils/configurationProtocol.cjs';
 import transport from './src/utils/backendTransport.cjs';
 import connection from './src/utils/backendConnection.cjs';
@@ -14,6 +15,28 @@ const settingsSource = readFileSync(new URL('./src/components/Settings.jsx', imp
 const packageJson = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 );
+
+test('Electron disables hardware acceleration synchronously before loading startup dependencies', () => {
+  // Execute the real entry point only up to its first non-Electron dependency.
+  // No native Electron process, window, backend, or graphics context is started.
+  for (const platform of ['win32', 'darwin', 'linux']) {
+    for (const isPackaged of [false, true]) {
+      const calls = [];
+      const startupBoundary = new Error('startup dependency boundary');
+      assert.throws(() => runInNewContext(mainSource, {
+        process: { platform, env: {} },
+        require: specifier => {
+          if (specifier !== 'electron') throw startupBoundary;
+          return { app: { isPackaged, disableHardwareAcceleration: () => calls.push('software-rendering') } };
+        },
+      }), error => error === startupBoundary);
+      assert.deepEqual(calls, ['software-rendering'], `${platform}, packaged=${isPackaged}`);
+    }
+  }
+  const policyIndex = mainSource.indexOf('app.disableHardwareAcceleration();');
+  assert.ok(policyIndex < mainSource.indexOf('app.whenReady()'));
+  assert.ok(policyIndex < mainSource.indexOf('new BrowserWindow('));
+});
 
 test('startup transport waits for backend readiness before sending onboarding and settings requests', async () => {
   let release;
@@ -43,6 +66,11 @@ test('startup transport waits for backend readiness before sending onboarding an
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+test('window-local close shortcut uses the existing hide-to-tray close handler', () => {
+  assert.match(mainSource, /webContents\.on\('before-input-event',\s*\(event, input\) => \{\s*handleWindowCloseShortcut\(event, input, mainWindow\);\s*\}\)/);
+  assert.match(mainSource, /mainWindow\.on\('close',\s*\(event\) => \{\s*if \(!app\.isQuitting\) \{\s*event\.preventDefault\(\);\s*mainWindow\.hide\(\);/);
 });
 
 test('Electron main process loads the bounded logger factory but starts with a no-op logger', () => {

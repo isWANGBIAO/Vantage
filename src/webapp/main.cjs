@@ -12,7 +12,13 @@ const {
     session,
     Notification,
     protocol,
+    crashReporter,
 } = require('electron');
+
+// Vantage's UI does not require hardware acceleration. Apply the app-wide
+// software-rendering policy synchronously, before readiness or any windows.
+app.disableHardwareAcceleration();
+
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -29,6 +35,8 @@ const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('.
 const { resolveAppBuildInfo } = require('./src/utils/buildInfo.cjs');
 const { createBoundedLogger } = require('./src/utils/boundedLogger.cjs');
 const { loadAppIcon } = require('./src/utils/appIcon.cjs');
+const { handleWindowCloseShortcut } = require('./src/utils/windowCloseShortcut.cjs');
+const { createCrashDiagnostics } = require('./src/utils/crashDiagnostics.cjs');
 const packageJson = require('./package.json');
 let buildInfo = {};
 try {
@@ -94,6 +102,7 @@ let bundledBackendProcess = null;
 let backendReadyPromise = Promise.resolve();
 let rendererCameraFramePostInFlight = false;
 let rendererCameraFramePostPending = null;
+let crashDiagnostics = null;
 
 function getTitleBarOverlayOptions(theme = 'dark') {
     const isLight = theme === 'light';
@@ -648,6 +657,10 @@ function createWindow() {
         ...getWindowChromeOptions(),
     });
 
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+        handleWindowCloseShortcut(event, input, mainWindow);
+    });
+
     if (isDev) {
         log.info('Loading Vite dev server: http://localhost:5173');
         void mainWindow.loadURL('http://localhost:5173');
@@ -677,6 +690,7 @@ function createWindow() {
 
     mainWindow.webContents.on('render-process-gone', (event, details) => {
         log.error(`Renderer process gone: ${details.reason}`);
+        crashDiagnostics?.recordExit('renderer', details);
     });
 
     mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDesc, validatedURL) => {
@@ -719,6 +733,23 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
     app.quit();
 } else {
+    crashDiagnostics = createCrashDiagnostics({ dataDir: runtimePaths.dataDir });
+    crashDiagnostics.startNativeCollector({ app, crashReporter });
+    crashDiagnostics.startSession();
+    crashDiagnostics.startPeriodicCleanup();
+    crashDiagnostics.installIpc({
+        ipcMain,
+        getWebContents: () => mainWindow?.webContents,
+        isTrustedSender: event => event.senderFrame === mainWindow?.webContents.mainFrame
+            && isTrustedRendererDocument(event.senderFrame?.url),
+        shell,
+    });
+    app.on('child-process-gone', (_event, details) => {
+        crashDiagnostics.recordExit('child', details);
+    });
+    process.on('uncaughtExceptionMonitor', () => {
+        crashDiagnostics.recordExit('main', { reason: 'crashed' });
+    });
     log = createBoundedLogger({
         logFile,
         consoleObject: console,
@@ -790,6 +821,10 @@ if (!gotTheLock) {
                     resourcesPath: process.resourcesPath,
                     platform: process.platform,
                     logger: log,
+                    onSpawned: child => {
+                        bundledBackendProcess = child;
+                        crashDiagnostics.observeBackend(child);
+                    },
                 });
                 bundledBackendProcess = backendBootstrap.process;
                 backendReady();
@@ -836,8 +871,14 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
     log.info('App quitting...');
     app.isQuitting = true;
+    crashDiagnostics?.beginShutdown();
     terminateBundledBackendProcess(bundledBackendProcess, {
         platform: process.platform,
         logger: log,
     });
+});
+
+// before-quit can be canceled; clear the marker only after graceful exit is final.
+app.on('quit', (_event, exitCode) => {
+    if (app.isQuitting && exitCode === 0) crashDiagnostics?.markClean();
 });

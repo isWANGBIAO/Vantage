@@ -800,6 +800,112 @@ class BalanceSheetEndpointTests(unittest.TestCase):
         self.assertEqual(len(trend_points), 1)
         self.assertEqual(trend_points[0]["date"], "2026-04-30")
 
+    def test_consumption_trend_and_summary_prefer_new_workbook_fields(self):
+        sheet = pd.DataFrame({
+            "日期": ["2020-04-30"],
+            "现金及现金等价物+股票": [5000.0],
+            "实际消费": [900.0],
+            "日均消费": [30.0],
+            "期间支出": [1500.0],
+            "日均支出": [50.0],
+            "月支出": [1500.0],
+        })
+
+        point = _backend_finance_data._build_expense_trend_points({"开销": sheet})[0]
+        summary = _backend_finance_data._build_balance_summary({"开销": sheet})["time_cost"]
+
+        self.assertEqual(point["period_spend"], 900.0)
+        self.assertEqual(point["daily_average"], 30.0)
+        self.assertEqual(summary["monthly_total"], 900.0)
+        self.assertEqual(summary["daily_average"], 30.0)
+        self.assertEqual(summary["source"]["monthly_total"]["field"], "实际消费")
+        self.assertEqual(summary["source"]["daily_average"]["field"], "日均消费")
+
+    def test_new_consumption_fields_preserve_zero_and_missing_values(self):
+        for value in [0.0, None]:
+            with self.subTest(value=value):
+                sheet = pd.DataFrame({
+                    "日期": ["2020-04-30"],
+                    "现金及现金等价物+股票": [5000.0],
+                    "实际消费": [value],
+                    "日均消费": [value],
+                    "期间支出": [1500.0],
+                    "日均支出": [50.0],
+                    "月支出": [1500.0],
+                })
+                point = _backend_finance_data._build_expense_trend_points({"开销": sheet})[0]
+                summary = _backend_finance_data._build_balance_summary({"开销": sheet})["time_cost"]
+                self.assertEqual(point["period_spend"], value)
+                self.assertEqual(point["daily_average"], value)
+                self.assertEqual(summary["monthly_total"], value)
+                self.assertEqual(summary["daily_average"], value)
+
+    def test_new_consumption_fields_do_not_change_forecast_cash_spend(self):
+        sheet = pd.DataFrame({
+            "日期": ["2020-04-30", "2020-05-31"],
+            "记录类型": ["实际", "预测"],
+            "现金及现金等价物+股票": [5000.0, None],
+            "实际消费": [900.0, None],
+            "日均消费": [30.0, None],
+            "期间支出": [1500.0, 2000.0],
+            "期间收入": [3000.0, 3000.0],
+        })
+        points = _backend_finance_data._build_balance_forecast_points(
+            {"开销": sheet}, as_of=date(2020, 5, 1)
+        )
+        self.assertEqual(points[0]["planned_spend"], 1500.0)
+        self.assertEqual(points[0]["projected_balance"], 6500.0)
+
+    def test_new_daily_consumption_missing_does_not_use_monthly_estimate(self):
+        sheet = pd.DataFrame({
+            "日期": ["2020-04-30"],
+            "实际消费": [900.0],
+            "日均消费": [None],
+            "日均支出": [50.0],
+            "月均支出": [1500.0],
+        })
+        summary = _backend_finance_data._build_balance_summary({"开销": sheet})["time_cost"]
+        self.assertEqual(summary["monthly_total"], 900.0)
+        self.assertIsNone(summary["daily_average"])
+        self.assertIsNone(summary["per_minute"])
+
+    def test_missing_consumption_metric_does_not_read_cumulative_columns(self):
+        sheet = pd.DataFrame({
+            "日期": ["2020-04-30"],
+            "实际消费": [None],
+            "日均消费": [None],
+            "累计实际消费": [9000.0],
+            "累计日均消费": [300.0],
+        })
+        summary = _backend_finance_data._build_balance_summary({"开销": sheet})["time_cost"]
+        self.assertIsNone(summary["monthly_total"])
+        self.assertIsNone(summary["daily_average"])
+
+    def test_new_consumption_columns_identify_unnamed_expense_sheet(self):
+        sheet = pd.DataFrame({
+            "日期": ["2020-04-30"],
+            "实际消费": [900.0],
+            "日均消费": [30.0],
+        })
+        points = _backend_finance_data._build_expense_trend_points({"记录": sheet})
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0]["period_spend"], 900.0)
+        self.assertEqual(points[0]["daily_average"], 30.0)
+
+    def test_legacy_consumption_columns_remain_compatible(self):
+        sheet = pd.DataFrame({
+            "日期": ["2020-04-30"],
+            "期间支出": [1500.0],
+            "日均支出": [50.0],
+            "月支出": [1500.0],
+        })
+        points = _backend_finance_data._build_expense_trend_points({"开销": sheet})
+        summary = _backend_finance_data._build_balance_summary({"开销": sheet})["time_cost"]
+        self.assertEqual(points[0]["period_spend"], 1500.0)
+        self.assertEqual(points[0]["daily_average"], 50.0)
+        self.assertEqual(summary["monthly_total"], 1500.0)
+        self.assertEqual(summary["daily_average"], 50.0)
+
     def test_balance_sheet_route_splits_actual_trend_from_forecast_points(self):
         route = next((route for route in iter_registered_routes(server.app) if route.path == "/api/v1/finance/balance-sheet"), None)
 

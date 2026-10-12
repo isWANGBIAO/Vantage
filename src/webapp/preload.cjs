@@ -283,6 +283,8 @@ ipcRenderer.on(CAMERA_FRAME_BRIDGE_START_CHANNEL, async (event, options = {}) =>
 
 // Replaceable platform contract. No arbitrary IPC or Node access is exposed.
 contextBridge.exposeInMainWorld('vantagePlatform', {
+  getDiagnosticsStatus: () => ipcRenderer.invoke('diagnostics:get-status'),
+  openDiagnosticsDirectory: () => ipcRenderer.invoke('diagnostics:open-directory'),
     descriptor: ipcRenderer.sendSync('platform:get-descriptor'),
     waitUntilBackendReady: () => ipcRenderer.invoke('backend:wait-until-ready'),
     requestConfiguration: (method, path, payload) => ipcRenderer.invoke('backend:configuration-request', method, path, payload),

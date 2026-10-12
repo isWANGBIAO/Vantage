@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from src.core.cpu_runtime_policy import configure_cpu_runtime
+
+configure_cpu_runtime()
+
 import requests
 
 from src.services.automation_catalog import OPERATIONS, Operation, get_operation

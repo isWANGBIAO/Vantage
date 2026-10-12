@@ -36,6 +36,10 @@ const expectedCancellations = [];
 const activeRequests = new Set();
 let lastNetworkActivity = 0;
 const nativeCalls = { picker: 0, preferences: 0, themes: [] };
+let previousInterrupted = true;
+let diagnosticsOpenFails = true;
+let diagnosticsOpenCalls = 0;
+let diagnosticsAvailable = true;
 const settings = {
     display_language: 'en-US', theme: 'dark', theme_mode: 'dark',
     launch_at_login: false, action_plan_auto_generate: false,
@@ -359,6 +363,16 @@ async function exerciseUi() {
     await navigate('face-history', '.app-main', 'Face Dark Circles History');
     await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
     console.log('PASS all seven primary pages and synthetic data/chart rendering');
+    await waitFor('previous interrupted session notice', () => document.querySelector('.crash-diagnostics-notice')?.textContent.includes('previous session'));
+    await click('.crash-diagnostics-notice button', 'Open crash records');
+    await waitFor('safe diagnostics open failure', () => document.querySelector('.crash-diagnostics-notice')?.textContent.includes('Could not open'));
+    diagnosticsOpenFails = false;
+    await click('.crash-diagnostics-notice button', 'Open crash records');
+    await waitFor('diagnostics error cleared', () => !document.querySelector('.crash-diagnostics-notice')?.textContent.includes('Could not open'));
+    assert.equal(diagnosticsOpenCalls, 2);
+    await click('.crash-diagnostics-notice button', 'Dismiss');
+    await waitFor('notice dismissed without blocking workspace', () => !document.querySelector('.crash-diagnostics-notice') && document.querySelectorAll('.app-nav a').length === 7);
+    previousInterrupted = false;
 
     // Settings is a page, not a dialog. Navigation is its close/cancel path:
     // unmounting without Save must discard edits, including after Back/Forward.
@@ -381,6 +395,11 @@ async function exerciseUi() {
     for (const section of ['AI Provider', 'Voice Provider', 'Data & Logs', 'Performance', 'About', 'General']) {
         await click('.settings-sidebar button', section);
         await waitFor(`settings section ${section}`, section => document.querySelector('.settings-header h2')?.textContent === section, section);
+        if (section === 'About') {
+            await waitFor('local diagnostics privacy explanation', () => document.querySelector('.settings-diagnostics')?.textContent.includes('never uploaded automatically'));
+            await click('.settings-diagnostics button', 'Open crash records');
+            assert.equal(diagnosticsOpenCalls, 3);
+        }
     }
     await click('.settings-segmented button', 'Light');
     await click('.settings-save-button');
@@ -392,6 +411,7 @@ async function exerciseUi() {
     await createWindow();
     await waitFor('completed setup stays complete on reopen', () => document.querySelectorAll('.app-nav a').length === 7
         && !document.querySelector('.onboarding-shell') && document.documentElement.dataset.theme === 'light');
+    await waitFor('clean startup diagnostics status fetched', () => !document.querySelector('.crash-diagnostics-notice'));
     await openSettings();
     await waitFor('saved settings survive window reopen', () => document.querySelector('.settings-segmented .is-active')?.textContent === 'Light');
     await checkErrors();
@@ -401,6 +421,25 @@ async function exerciseUi() {
     }
     assert.equal(calls.some(call => call.pathname.includes('/camera/stream')), false);
     console.log('PASS settings cancel/reopen, repeated entry, Back/Forward, sections, save/reopen');
+    console.log('PASS crash notice, local-only privacy copy, narrow folder action and clean startup');
+    await evaluate(() => {
+        const select = document.querySelector('.settings-section select');
+        select.value = 'zh-CN';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await click('.settings-save-button');
+    await waitFor('Chinese display saved', () => document.querySelector('.settings-header h2')?.textContent === '通用');
+    await click('.settings-sidebar button', '关于');
+    await waitFor('Chinese local-only privacy copy', () => document.querySelector('.settings-diagnostics')?.textContent.includes('不会自动上传'));
+    diagnosticsAvailable = false;
+    await closeWindow();
+    await createWindow();
+    await waitFor('Chinese workspace reopened', () => document.querySelectorAll('.app-nav a').length === 7);
+    await click('.settings-entry-button');
+    await click('.settings-sidebar button', '关于');
+    await waitFor('diagnostics storage failure is visible and cannot open', () => document.querySelector('.settings-diagnostics')?.textContent.includes('不可用') && document.querySelector('.settings-diagnostics button')?.disabled === true);
+    await checkErrors();
+    console.log('PASS Chinese privacy copy and unavailable diagnostics without blocking UI');
     console.log('RESULT', JSON.stringify({ productionOrigin: security.origin, primaryPages: 7, rendererErrors: errors.length, expectedLifecycleCancellations: expectedCancellations.length, requests: calls.length, isolated: true }));
 }
 
@@ -467,6 +506,8 @@ app.whenReady().then(async () => {
     handle('platform:apply-saved-preferences', () => { nativeCalls.preferences++; return { applied: true }; });
     handle('platform:set-title-bar-theme', theme => { nativeCalls.themes.push(theme); return { applied: true }; });
     handle('platform:pick-legacy-root', () => { nativeCalls.picker++; return { path: null }; });
+    handle('diagnostics:get-status', () => ({ localOnly: true, available: diagnosticsAvailable, nativeCollector: diagnosticsAvailable, directory: 'synthetic-diagnostics', previousInterrupted }));
+    handle('diagnostics:open-directory', () => { diagnosticsOpenCalls++; return { opened: !diagnosticsOpenFails }; });
     smokeSession = session.fromPartition('vantage-unified-ui-smoke');
     smokeSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     smokeSession.setPermissionCheckHandler(() => false);

@@ -53,6 +53,10 @@ the platform user-data directory, not in this repository.
   face-analysis reports, and local media endpoints.
 - React UI for dashboard, action plan, chat, plots, usage, settings, expenses,
   project progress, and face-history views.
+- Model selection is saved by the backend in the canonical provider JSON and
+  shared by action plans and chat, including after a restart.
+- Ctrl+W (Command+W on macOS) closes the main window to the tray without
+  quitting the application or stopping its backend.
 - Live presence selects the largest YuNet face occupying at least 1.0% of the
   frame and does not require a frontal pose, identity match, or gaze estimate.
   Strict frontal geometry is reserved for historical face-direction analysis.
@@ -120,13 +124,13 @@ GitHub Releases are automated for version tags. Keep
 tag:
 
 ```powershell
-git tag -a v1.0.82 -m "Vantage 1.0.82"
-git push origin v1.0.82
+git tag -a v1.0.87 -m "Vantage 1.0.87"
+git push origin v1.0.87
 ```
 
 The `Release` workflow builds the Windows installer, generates `SHA256SUMS.txt`,
 and publishes the assets to the matching GitHub Release. The tag must match the
-frontend package version, for example `v1.0.82` for package version `1.0.82`.
+frontend package version, for example `v1.0.87` for package version `1.0.87`.
 
 macOS full build, install, and launch:
 
@@ -151,6 +155,13 @@ Packaged macOS builds use:
 - `~/Library/Application Support/Vantage/history`
 - `~/Library/Application Support/Vantage/logs`
 - `~/Library/Application Support/Vantage/plot_outputs`
+
+## Local Crash Records
+
+Vantage records crash evidence locally without automatic uploads. Open it from
+Settings → About → Local crash records. Dumps may contain private memory data;
+inspect before sharing. See [local crash diagnostics](docs/local-crash-diagnostics.md)
+for coverage, retention limits, and isolated verification.
 
 ## Configuration
 

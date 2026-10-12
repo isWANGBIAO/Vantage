@@ -13,6 +13,11 @@ project_root = current_dir.parent.parent
 sys.path.append(str(project_root))
 
 from src.core.config import Config
+from src.core.crash_diagnostics import install_crash_diagnostics
+
+if __name__ == "__main__":
+    _CRASH_DIAGNOSTICS = install_crash_diagnostics(role="run-prompt")
+
 from src.core.context import ContextManager, atomic_write_json, context_transaction, write_context_messages
 from src.services.llm_client import LLMClient, StreamIncompleteError
 from src.services.audio_service import AudioService, AudioTranscriptionError

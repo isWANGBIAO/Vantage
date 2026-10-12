@@ -97,9 +97,9 @@ test('ActionPlan shows actual execution metadata and flags fallback runs', () =>
 });
 
 test('ActionPlan uses provider-aware model options before falling back to legacy models', () => {
-  assert.ok(actionPlanSource.includes('const defaultModel = data?.default_model'));
+  assert.ok(actionPlanSource.includes('resolvePreferredModelOption(modelList)'));
   assert.ok(actionPlanSource.includes('buildModelOptionsFromCatalog(data)'));
-  assert.ok(actionPlanSource.includes('preferred_llm_model_ref'));
+  assert.ok(!actionPlanSource.includes('preferred_llm_model_ref'));
   assert.ok(actionPlanSource.includes('provider_route'));
   assert.ok(actionPlanSource.includes("vantage:llm-models-updated"));
 });

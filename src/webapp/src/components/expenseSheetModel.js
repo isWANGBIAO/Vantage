@@ -93,6 +93,11 @@ function getColumnIndex(sheet, aliases) {
   );
 }
 
+function getConsumptionCell(sheet, row, column, legacyAliases) {
+  const index = sheet.columns.findIndex((value) => normalizeText(value) === column);
+  return index >= 0 ? row[index] : getCell(sheet, row, legacyAliases);
+}
+
 function getCell(sheet, row, aliases) {
   const index = getColumnIndex(sheet, aliases);
   if (index < 0) return null;
@@ -136,8 +141,8 @@ function buildRecentSpending(sheet, anchorTimestamp) {
     .map((row) => {
       const date = normalizeText(getCell(sheet, row, ['日期', 'date']));
       const sortValue = parseDateValue(date);
-      const periodSpend = toNumber(getCell(sheet, row, ['期间支出', '支出']));
-      const dailyAverage = toNumber(getCell(sheet, row, ['日均支出', '日均开销']));
+      const periodSpend = toNumber(getConsumptionCell(sheet, row, '实际消费', ['期间支出', '支出']));
+      const dailyAverage = toNumber(getConsumptionCell(sheet, row, '日均消费', ['日均支出', '日均开销']));
       const incomeNote = normalizeText(getCell(sheet, row, ['收入说明']));
       const note = normalizeText(getCell(sheet, row, ['大支出说明']));
 
@@ -330,8 +335,8 @@ function buildSheetTrendPoints(sheet, anchorTimestamp) {
             '现金',
             '股票',
           ]),
-          daily_average: getCell(sheet, row, ['日均支出', '日均开销']),
-          period_spend: getCell(sheet, row, ['期间支出', '支出']),
+          daily_average: getConsumptionCell(sheet, row, '日均消费', ['日均支出', '日均开销']),
+          period_spend: getConsumptionCell(sheet, row, '实际消费', ['期间支出', '支出']),
         },
         anchorTimestamp
       )
@@ -552,7 +557,7 @@ export function buildExpenseSheetViewModel(payload = {}, options = {}) {
     },
     kpis: [
       { id: 'cashAndStock', label: '现金及等价物', value: cashAndStock, unit: 'currency' },
-      { id: 'dailyBurn', label: '最近日均支出', value: dailyAverage, unit: 'currency' },
+      { id: 'dailyBurn', label: '最近日均消费', value: dailyAverage, unit: 'currency' },
       { id: 'requiredBudget', label: '每月必须预算', value: monthlyRequired, unit: 'currency' },
       { id: 'coverageDays', label: '现金覆盖天数', value: coverageDays, unit: 'days' },
     ],

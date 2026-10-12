@@ -11,6 +11,10 @@ from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.parse import quote, unquote
 
+from src.core.cpu_runtime_policy import configure_cpu_runtime
+
+configure_cpu_runtime()
+
 import mcp.types as types
 import requests
 from mcp.server import Server, ServerRequestContext

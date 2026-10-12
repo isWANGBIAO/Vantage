@@ -46,7 +46,31 @@ def _ensure_project_root_on_sys_path(
 
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
+from src.core.cpu_runtime_policy import configure_cpu_runtime
+
+configure_cpu_runtime()
+
 from src.core.config import Config
+from src.core.crash_diagnostics import install_crash_diagnostics
+
+
+def _initialize_packaged_app_mode(*, env=None, is_frozen=None):
+    """Standalone installed CLI/MCP lacks the Electron parent's runtime env."""
+    resolved_env = os.environ if env is None else env
+    frozen = getattr(sys, "frozen", False) if is_frozen is None else is_frozen
+    if frozen and not resolved_env.get("VANTAGE_APP_MODE"):
+        resolved_env["VANTAGE_APP_MODE"] = "packaged"
+
+
+# Packaging uses this file for the server and all --run-* child modes. Start
+# before importing services so import-time/native dependency faults are covered.
+if __name__ == "__main__":
+    _initialize_packaged_app_mode()
+    _mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    _role = {"--run-prompt": "run-prompt", "--run-cli": "cli",
+             "--run-face-analysis": "face-analysis"}.get(_mode, "backend")
+    _CRASH_DIAGNOSTICS = install_crash_diagnostics(role=_role)
+
 from src.core.runtime_library_bootstrap import apply_runtime_library_dirs
 from src.utils.sensitive_data import RedactingPipeLog, build_log_path_prefixes
 

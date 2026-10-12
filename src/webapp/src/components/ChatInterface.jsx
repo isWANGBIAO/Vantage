@@ -8,6 +8,7 @@ import { Bot, Trash2 } from 'lucide-react';
 
 import { fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import { loadSettingsState } from '../utils/settingsState';
+import { redactSensitiveText } from '../utils/sensitiveText';
 import {
   CHAT_CONTEXT_BASE_UPDATED_EVENT,
   normalizeBackendChatContext,
@@ -259,6 +260,8 @@ export default function ChatInterface({ embedded = false } = {}) {
     const [modelReasoningSupport, setModelReasoningSupport] = useState({});
 
     const [selectedModel, setSelectedModel] = useState('');
+    const [modelPreferenceSaving, setModelPreferenceSaving] = useState(false);
+    const modelPreferenceSavingRef = useRef(false);
 
     const [fastModeEnabled, setFastModeEnabled] = useState(() => loadStoredFastModeEnabled());
 
@@ -405,12 +408,6 @@ export default function ChatInterface({ embedded = false } = {}) {
                 );
                 contextPreferredModelRef.current = preferredModelRef || '';
                 setContextPreferredModelId(preferredModelRef || '');
-                if (!manualModelSelectionRef.current && preferredModelRef && availableModelsRef.current.length > 0) {
-                    const inheritedOption = findModelOption(availableModelsRef.current, preferredModelRef);
-                    if (inheritedOption) {
-                        setSelectedModel(inheritedOption.id);
-                    }
-                }
 
             } catch (error) {
 
@@ -432,20 +429,9 @@ export default function ChatInterface({ embedded = false } = {}) {
             availableModelsRef.current = modelList;
 
             setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
-            const defaultModel = data?.default_model;
-            const storedModelRef = localStorage.getItem('preferred_llm_model_ref');
-            const storedModel = localStorage.getItem('preferred_llm_model');
 
             if (modelList.length > 0) {
-                const nextOption = (
-                    (!manualModelSelectionRef.current && findModelOption(modelList, contextPreferredModelRef.current))
-                    || findModelOption(modelList, selectedModelRef.current)
-                    || findModelOption(modelList, storedModelRef)
-                    || findModelOption(modelList, storedModel)
-                    || resolvePreferredModelOption(modelList)
-                    || findModelOption(modelList, defaultModel)
-                    || modelList[0]
-                );
+                const nextOption = resolvePreferredModelOption(modelList);
 
                 setSelectedModel(nextOption.id);
 
@@ -478,6 +464,13 @@ export default function ChatInterface({ embedded = false } = {}) {
             applyModelCatalog(event.detail);
         };
         window.addEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
+        const handlePreferenceUpdated = (event) => {
+            manualModelSelectionRef.current = true;
+            setSelectedModel(event.detail.id);
+            selectedModelRef.current = event.detail.id;
+            setAvailableModels((options) => options.map((item) => ({ ...item, is_default: item.id === event.detail.id })));
+        };
+        window.addEventListener('vantage:llm-model-preference-updated', handlePreferenceUpdated);
 
         const handleChatContextBaseUpdated = (event) => {
             const preferredModelRef = (
@@ -489,12 +482,6 @@ export default function ChatInterface({ embedded = false } = {}) {
             }
             contextPreferredModelRef.current = preferredModelRef || '';
             setContextPreferredModelId(preferredModelRef || '');
-            if (!manualModelSelectionRef.current && preferredModelRef && availableModelsRef.current.length > 0) {
-                const inheritedOption = findModelOption(availableModelsRef.current, preferredModelRef);
-                if (inheritedOption) {
-                    setSelectedModel(inheritedOption.id);
-                }
-            }
             chatAbortControllerRef.current?.abort();
             void syncChatContext();
         };
@@ -507,6 +494,7 @@ export default function ChatInterface({ embedded = false } = {}) {
             chatAbortControllerRef.current?.abort();
             syncChatContextRef.current = null;
             window.removeEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
+            window.removeEventListener('vantage:llm-model-preference-updated', handlePreferenceUpdated);
             window.removeEventListener(CHAT_CONTEXT_BASE_UPDATED_EVENT, handleChatContextBaseUpdated);
         };
 
@@ -576,15 +564,24 @@ export default function ChatInterface({ embedded = false } = {}) {
 
 
 
-    const handleModelChange = (event) => {
+    const handleModelChange = async (event) => {
+        if (modelPreferenceSavingRef.current) return;
+        modelPreferenceSavingRef.current = true;
+        setModelPreferenceSaving(true);
 
         const nextModel = event.target.value;
 
-        manualModelSelectionRef.current = true;
-
-        setSelectedModel(nextModel);
-
-        persistPreferredModelOption(findModelOption(availableModels, nextModel));
+        try {
+            const option = await persistPreferredModelOption(findModelOption(availableModels, nextModel), fetchBackendJson);
+            manualModelSelectionRef.current = true;
+            setSelectedModel(option.id);
+            window.dispatchEvent(new CustomEvent('vantage:llm-model-preference-updated', { detail: option }));
+        } catch (error) {
+            setChatError(`模型选择保存失败，仍使用原模型：${redactSensitiveText(error.message || String(error))}`);
+        } finally {
+            modelPreferenceSavingRef.current = false;
+            setModelPreferenceSaving(false);
+        }
 
     };
 
@@ -1384,7 +1381,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                             <select
                                 value={selectedModel}
                                 onChange={handleModelChange}
-                                disabled={isLoading || availableModels.length === 0}
+                                disabled={isLoading || modelPreferenceSaving || availableModels.length === 0}
                                 style={{
                                     padding: '0.3rem 0.6rem',
                                     borderRadius: '6px',
@@ -1648,7 +1645,7 @@ export default function ChatInterface({ embedded = false } = {}) {
                         <select
                             value={selectedModel}
                             onChange={handleModelChange}
-                            disabled={isLoading || availableModels.length === 0}
+                            disabled={isLoading || modelPreferenceSaving || availableModels.length === 0}
                             style={{
                                 padding: '0.3rem 0.6rem',
                                 borderRadius: '6px',

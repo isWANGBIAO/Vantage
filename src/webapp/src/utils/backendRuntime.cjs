@@ -188,6 +188,7 @@ async function ensureBundledBackendReady({
   spawnProcess = spawn,
   waitForStatusFn = waitForBackendStatus,
   logger = console,
+  onSpawned = () => {},
 } = {}) {
   if (isDev) {
     return {
@@ -230,6 +231,7 @@ async function ensureBundledBackendReady({
     stdio: 'ignore',
     windowsHide: true,
   });
+  onSpawned(childProcess);
 
   if (typeof childProcess.unref === 'function') {
     childProcess.unref();

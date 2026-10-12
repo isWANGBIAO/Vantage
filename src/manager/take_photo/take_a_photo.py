@@ -1,3 +1,7 @@
+from src.core.cpu_runtime_policy import configure_cpu_runtime
+
+configure_cpu_runtime()
+
 import cv2
 import os
 import queue

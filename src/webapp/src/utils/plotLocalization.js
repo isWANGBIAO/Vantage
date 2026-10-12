@@ -31,6 +31,9 @@ const ENGLISH_TEXT = {
   '按真实日期展示每次间隔，左右轴分别承载两类节奏，避免小间隔被长间隔压扁。':
     'Plot each interval on its actual date, with separate axes for the two rhythms so long gaps do not flatten short intervals.',
   '资产与支出': 'Assets and Spending',
+  '资产与消费': 'Assets and Consumption',
+  '把总资产、分账户资产和实际消费、日均消费放进同一张可筛选图，而不是只看一张静态资金曲线。':
+    'Combine total assets, account-level assets, actual consumption, and daily consumption into one filterable chart instead of one static balance curve.',
   '把总资产、分账户资产和日均支出放进同一张可筛选图，而不是只看一张静态资金曲线。':
     'Combine total assets, account-level assets, and daily spending into one filterable chart instead of one static balance curve.',
   '跑步配速-心率耦合': 'Running Pace and Heart Rate Coupling',
@@ -84,7 +87,9 @@ const ENGLISH_TEXT = {
   '性生活间隔（天）': 'Sex Interval (days)',
   '自慰间隔（天）': 'Masturbation Interval (days)',
   '资产 (元)': 'Assets (RMB)',
+  '资产 / 消费 (元)': 'Assets / Consumption (RMB)',
   '日均支出 (元/天)': 'Daily Spending (RMB/day)',
+  '日均消费 (元/天)': 'Daily Consumption (RMB/day)',
   '当月收入': 'Monthly Income',
   '现金及现金等价物+股票': 'Cash and Equivalents + Stocks',
   '预测期末现金+股票': 'Projected Month-End Cash + Stocks',
@@ -93,6 +98,8 @@ const ENGLISH_TEXT = {
   '微信资产': 'WeChat Assets',
   '股票资产': 'Stocks',
   '日均支出': 'Daily Spending',
+  '实际消费': 'Actual Consumption',
+  '日均消费': 'Daily Consumption',
   '配速 (min/km)': 'Pace (min/km)',
   '心率 (bpm)': 'Heart Rate (bpm)',
   '距离 (km)': 'Distance (km)',
@@ -122,6 +129,8 @@ const ENGLISH_TEXT = {
   '自慰平均间隔': 'Average Masturbation Interval',
   '最新总资产': 'Latest Total Assets',
   '最新日均支出': 'Latest Daily Spending',
+  '最新实际消费': 'Latest Actual Consumption',
+  '最新日均消费': 'Latest Daily Consumption',
   '最新配速': 'Latest Pace',
   '最新距离': 'Latest Distance',
   '总跑量': 'Total Distance',

@@ -189,6 +189,8 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
   const [availableModels, setAvailableModels] = useState([]);
   const [modelReasoningSupport, setModelReasoningSupport] = useState({});
   const [selectedModel, setSelectedModel] = useState('');
+  const [modelPreferenceSaving, setModelPreferenceSaving] = useState(false);
+  const modelPreferenceSavingRef = useRef(false);
   const selectedModelOption = findModelOption(availableModels, selectedModel);
   const [isGenerating, setIsGenerating] = useState(false);
   const [checkIntervalMinutes, setCheckIntervalMinutes] = useState(null);
@@ -442,10 +444,21 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
     setSelectedReasoningEffort(nextValue);
   };
 
-  const handleModelChange = (event) => {
+  const handleModelChange = async (event) => {
+    if (modelPreferenceSavingRef.current) return;
+    modelPreferenceSavingRef.current = true;
+    setModelPreferenceSaving(true);
     const nextModel = event.target.value;
-    setSelectedModel(nextModel);
-    persistPreferredModelOption(findModelOption(availableModels, nextModel));
+    try {
+      const option = await persistPreferredModelOption(findModelOption(availableModels, nextModel), fetchBackendJson);
+      setSelectedModel(option.id);
+      window.dispatchEvent(new CustomEvent('vantage:llm-model-preference-updated', { detail: option }));
+    } catch (error) {
+      setAutoRefreshStatus(`模型选择保存失败，仍使用原模型：${redactSensitiveText(error.message || String(error))}`);
+    } finally {
+      modelPreferenceSavingRef.current = false;
+      setModelPreferenceSaving(false);
+    }
   };
 
   const handleFastModeChange = (event) => {
@@ -645,17 +658,8 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       setAvailableModels(modelList);
       setModelReasoningSupport(parseModelReasoningSupport(data?.providers));
 
-      const storageModelRef = localStorage.getItem('preferred_llm_model_ref');
-      const storageModel = localStorage.getItem('preferred_llm_model');
       if (modelList.length > 0) {
-        const defaultModel = data?.default_model;
-        const nextModel = (
-          findModelOption(modelList, storageModelRef)
-          || findModelOption(modelList, storageModel)
-          || resolvePreferredModelOption(modelList)
-          || findModelOption(modelList, defaultModel)
-          || modelList[0]
-        );
+        const nextModel = resolvePreferredModelOption(modelList);
         setSelectedModel(nextModel.id);
         return nextModel;
       }
@@ -748,9 +752,17 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
       applyModelCatalog(event.detail);
     };
     window.addEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
+    const handlePreferenceUpdated = (event) => {
+      const option = event.detail;
+      setSelectedModel(option.id);
+      selectedModelRef.current = option;
+      setAvailableModels((options) => options.map((item) => ({ ...item, is_default: item.id === option.id })));
+    };
+    window.addEventListener('vantage:llm-model-preference-updated', handlePreferenceUpdated);
 
     return () => {
       window.removeEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
+      window.removeEventListener('vantage:llm-model-preference-updated', handlePreferenceUpdated);
       controller.abort();
       monitor.stop();
       if (jobMonitorRef.current === monitor) jobMonitorRef.current = null;
@@ -906,7 +918,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
             <select
               value={selectedModel}
               onChange={handleModelChange}
-              disabled={isGenerating || availableModels.length === 0}
+              disabled={isGenerating || modelPreferenceSaving || availableModels.length === 0}
               style={{
                 padding: '0.65rem 0.85rem',
                 borderRadius: '8px',

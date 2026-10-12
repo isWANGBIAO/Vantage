@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { redactSensitiveText } from '../utils/sensitiveText';
 import {
   BarChart3,
   CalendarRange,
@@ -269,6 +270,8 @@ export default function ExpenseSheet({ theme = 'dark' }) {
   const [purchaseRecommendationCount, setPurchaseRecommendationCount] = useState(() => loadStoredPurchaseRecommendationCount());
   const [availableModels, setAvailableModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
+  const [modelPreferenceSaving, setModelPreferenceSaving] = useState(false);
+  const modelPreferenceSavingRef = useRef(false);
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState(() => loadStoredActionPlanReasoningEffort());
   const [fastModeEnabled, setFastModeEnabled] = useState(() => loadStoredFastModeEnabled());
   const [dismissedPurchaseItems, setDismissedPurchaseItems] = useState([]);
@@ -333,9 +336,15 @@ export default function ExpenseSheet({ theme = 'dark' }) {
       applyModelCatalog(event.detail);
     };
     window.addEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
+    const handlePreferenceUpdated = (event) => {
+      setSelectedModel(event.detail.id);
+      setAvailableModels((options) => options.map((item) => ({ ...item, is_default: item.id === event.detail.id })));
+    };
+    window.addEventListener('vantage:llm-model-preference-updated', handlePreferenceUpdated);
     return () => {
       cancelled = true;
       window.removeEventListener('vantage:llm-models-updated', handleModelCatalogUpdated);
+      window.removeEventListener('vantage:llm-model-preference-updated', handlePreferenceUpdated);
     };
   }, [applyModelCatalog]);
 
@@ -559,10 +568,21 @@ export default function ExpenseSheet({ theme = 'dark' }) {
     setPurchaseRecommendationCount(savePurchaseRecommendationCount(event.target.value));
   }, []);
 
-  const handlePurchaseModelChange = useCallback((event) => {
+  const handlePurchaseModelChange = useCallback(async (event) => {
+    if (modelPreferenceSavingRef.current) return;
+    modelPreferenceSavingRef.current = true;
+    setModelPreferenceSaving(true);
     const nextModel = event.target.value;
-    setSelectedModel(nextModel);
-    persistPreferredModelOption(findModelOption(availableModels, nextModel));
+    try {
+      const option = await persistPreferredModelOption(findModelOption(availableModels, nextModel), fetchBackendJson);
+      setSelectedModel(option.id);
+      window.dispatchEvent(new CustomEvent('vantage:llm-model-preference-updated', { detail: option }));
+    } catch (error) {
+      setPurchaseError(`模型选择保存失败，仍使用原模型：${redactSensitiveText(error.message || String(error))}`);
+    } finally {
+      modelPreferenceSavingRef.current = false;
+      setModelPreferenceSaving(false);
+    }
   }, [availableModels]);
 
   const handlePurchaseReasoningEffortChange = useCallback((event) => {
@@ -784,7 +804,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
             <select
               value={selectedModel}
               onChange={handlePurchaseModelChange}
-              disabled={purchaseGenerating || availableModels.length === 0}
+              disabled={purchaseGenerating || modelPreferenceSaving || availableModels.length === 0}
             >
               {availableModels.map((modelOption) => (
                 <option key={modelOption.id} value={modelOption.id}>

@@ -42,6 +42,7 @@ EXPECTED_OPERATION_NAMES = {
     "media.transcribe",
     "models.discover",
     "models.list",
+    "models.preference.update",
     "plots.read",
     "plots.refresh",
     "project_progress.read",
@@ -69,6 +70,15 @@ EXPECTED_OPERATION_NAMES = {
 FRONTEND_PLUMBING_ROUTES = {
     "/api/v1/camera/stream",
 }
+
+
+def test_model_preference_operation_is_a_narrow_shared_mutation():
+    operation = get_operation("models.preference.update")
+    assert (operation.method, operation.path) == ("PUT", "/api/v1/models/preference")
+    assert operation.mutation
+    assert set(operation.input_schema['properties']) == {'provider_route', 'model'}
+    assert set(operation.input_schema['required']) == {'provider_route', 'model'}
+    assert operation.input_schema['additionalProperties'] is False
 
 
 def _normalized_route(path):
@@ -258,7 +268,11 @@ def test_catalog_covers_electron_invoke_operations_without_renderer_transport():
     }
 
     transport_channels = {"backend:wait-until-ready", "backend:configuration-request", "platform:apply-saved-preferences"}
-    assert invoked_channels == catalog_channels | transport_channels
+    # Crash records can contain private memory. These narrow desktop controls
+    # do not expose record contents through the public CLI/MCP business catalog.
+    diagnostics_channels = {"diagnostics:get-status", "diagnostics:open-directory"}
+    assert invoked_channels == catalog_channels | transport_channels | diagnostics_channels
+    assert not catalog_channels & diagnostics_channels
     assert not any("camera:" in channel for channel in catalog_channels)
 
 
