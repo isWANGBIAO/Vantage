@@ -12,10 +12,10 @@ EXPECTED_SHARED_CORE_LINES = {
     "APScheduler==3.11.3",
     "SciencePlots==2.2.2",
     "chinese-calendar==1.11.0",
-    "cv2-enumerate-cameras==1.3.3",
-    "fastapi==0.141.1",
-    "matplotlib==3.11.1",
-    "mcp==2.2.0",
+    "cv2-enumerate-cameras==1.4.0",
+    "fastapi==0.143.0",
+    "matplotlib==3.11.2",
+    "mcp==2.3.0",
     "mss==10.2.0",
     'numpy==2.2.6; python_version < "3.12"',
     'numpy==2.5.1; python_version >= "3.12"',
@@ -26,13 +26,13 @@ EXPECTED_SHARED_CORE_LINES = {
     "piexif==1.1.3",
     "pillow==10.4.0",
     "psutil==6.1.1",
-    "pydantic==2.13.4",
-    "pydantic_core==2.46.4",
-    "python-dotenv==1.2.2",
+    "pydantic==2.14.0",
+    "pydantic_core==2.50.0",
+    "python-dotenv==1.2.4",
     "python-multipart==0.0.32",
     "requests==2.34.2",
-    "tqdm==4.70.0",
-    "uvicorn==0.52.1",
+    "tqdm==4.70.1",
+    "uvicorn==0.54.0",
     'winsdk==1.0.0b10; sys_platform == "win32"',
     "zhdate==0.1",
 }
@@ -320,8 +320,8 @@ def test_ci_covers_packaging_python_and_current_python_without_incompatible_nump
 
 def test_development_requirements_pin_compatible_pydantic_pair():
     expected = {
-        "pydantic==2.13.4",
-        "pydantic_core==2.46.4",
+        "pydantic==2.14.0",
+        "pydantic_core==2.50.0",
     }
     actual = [
         line.strip()
@@ -336,7 +336,7 @@ def test_development_requirements_pin_compatible_pydantic_pair():
 def test_development_requirements_split_scipy_by_python_version():
     expected = {
         'scipy==1.17.1; python_version < "3.12"',
-        'scipy==1.18.0; python_version >= "3.12"',
+        'scipy==1.18.1; python_version >= "3.12"',
     }
     actual = [
         line.strip()
@@ -353,8 +353,8 @@ def test_development_requirements_keep_resolvable_cuda_and_compatibility_pins():
 
     assert "--extra-index-url https://download.pytorch.org/whl/cu130" in content
     expected = {
-        "ipykernel": {"ipykernel==6.29.5"},
-        "mpmath": {"mpmath==1.3.0"},
+        "ipykernel": {"ipykernel==6.31.0"},
+        "mpmath": {"mpmath==1.4.1"},
         "webcolors": {"webcolors==25.10.0"},
     }
     for package_name, expected_lines in expected.items():
