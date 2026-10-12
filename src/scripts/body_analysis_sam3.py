@@ -52,7 +52,7 @@ def read_capture_time(path: Path) -> tuple[str, str, bool]:
             continue
         for form in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
             try:
-                return datetime.strptime(str(value).strip(), form).isoformat(timespec="seconds"), tag, True
+                return datetime.strptime(str(value).strip(), form).isoformat(timespec="seconds"), tag, tag == "DateTimeOriginal"
             except ValueError:
                 continue
     return datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"), "file_mtime", False
@@ -240,7 +240,7 @@ def analyze_photo(
     record.update({
         "hair_region_fraction_percent": float(area / primary.size * 100) if area else None,
         "scalp_candidate_fraction_percent": float(exposed.sum() / union.sum() * 100)
-        if union.any() and secondary.any() else None,
+        if area and union.any() and secondary.any() else None,
         "scalp_sam_scores": [float(score) for score in secondary_scores],
         "scalp_candidate_mask_path": candidate_mask_path,
         "scalp_candidate_overlay_path": candidate_overlay_path,
@@ -280,10 +280,89 @@ def build_report(leg_records: list[dict[str, Any]], scalp_records: list[dict[str
     """Construct a complete machine-readable report; no raw image is copied."""
     return {
         "schema_version": SCHEMA_VERSION, "complete": True, "engine": "sam3",
+        "input_counts": {"leg": len(leg_records), "scalp": len(scalp_records)},
         "leg": {"records": leg_records, "trend": aggregate_trends(leg_records, "leg")},
         "scalp": {"records": scalp_records, "trend": aggregate_trends(scalp_records, "scalp")},
         "assets": sorted(set(path for record in leg_records + scalp_records for path in _record_assets(record))),
     }
+
+
+def _finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _validate_record(record: Any, kind: str, assets: set[str]) -> None:
+    if not isinstance(record, dict):
+        raise ValueError("invalid report record")
+    required = {
+        "kind", "file_name", "captured_at", "timestamp_source", "timestamp_verified",
+        "analysis_width", "analysis_height", "roi_area_px", "roi_area_ratio",
+        "sam_scores", "sharpness", "quality_flags", "review_status", "trend_eligible",
+        "mask_path", "overlay_path", "texture_mask_path", "texture_overlay_path",
+        "line_mask_path", "line_overlay_path", "texture_fraction_percent",
+    }
+    required |= {"hair_count", "hair_density_per_mpx"} if kind == "leg" else {
+        "hair_region_fraction_percent", "scalp_candidate_fraction_percent", "scalp_sam_scores",
+        "scalp_candidate_mask_path", "scalp_candidate_overlay_path", "scalp_candidate_review_status",
+    }
+    if not required.issubset(record) or record["kind"] != kind:
+        raise ValueError("incomplete report record")
+    name = record["file_name"]
+    if not isinstance(name, str) or name in {"", ".", ".."} or any(char in name for char in "/\\:"):
+        raise ValueError("invalid photo name")
+    if not isinstance(record["captured_at"], str):
+        raise ValueError("invalid capture time")
+    try:
+        datetime.fromisoformat(record["captured_at"])
+    except ValueError as exc:
+        raise ValueError("invalid capture time") from exc
+    source = record["timestamp_source"]
+    if not isinstance(source, str) or source not in {"DateTimeOriginal", "DateTimeDigitized", "DateTime", "file_mtime"}:
+        raise ValueError("invalid capture time source")
+    if type(record["timestamp_verified"]) is not bool or record["timestamp_verified"] != (source == "DateTimeOriginal"):
+        raise ValueError("invalid capture verification")
+    width, height, area = (record[key] for key in ("analysis_width", "analysis_height", "roi_area_px"))
+    if any(type(value) is not int for value in (width, height, area)) or width <= 0 or height <= 0 or not 0 <= area <= width * height:
+        raise ValueError("invalid analysis dimensions")
+    ratio = record["roi_area_ratio"]
+    if not _finite_number(ratio) or not math.isclose(ratio, area / (width * height), abs_tol=1e-8):
+        raise ValueError("invalid analysis area ratio")
+    if not _finite_number(record["sharpness"]) or record["sharpness"] < 0:
+        raise ValueError("invalid image sharpness")
+    for key in ("sam_scores", "scalp_sam_scores") if kind == "scalp" else ("sam_scores",):
+        scores = record[key]
+        if not isinstance(scores, list) or any(not _finite_number(score) or not 0 <= score <= 1 for score in scores):
+            raise ValueError("invalid model scores")
+    flags = record["quality_flags"]
+    if not isinstance(flags, list) or any(not isinstance(flag, str) for flag in flags):
+        raise ValueError("invalid quality flags")
+    if not isinstance(record["review_status"], str) or record["review_status"] not in {"unreviewed", "accepted", "rejected"} or type(record["trend_eligible"]) is not bool:
+        raise ValueError("invalid review status")
+    if record["trend_eligible"] and (record["review_status"] != "accepted" or not record["timestamp_verified"]):
+        raise ValueError("unreviewed measurement in trend")
+    for key in ("texture_fraction_percent", "hair_region_fraction_percent", "scalp_candidate_fraction_percent"):
+        if key in record and record[key] is not None and (not _finite_number(record[key]) or not 0 <= record[key] <= 100):
+            raise ValueError("invalid proxy percentage")
+    if kind == "leg":
+        count, density = record["hair_count"], record["hair_density_per_mpx"]
+        if count is not None and (type(count) is not int or count < 0):
+            raise ValueError("invalid line count")
+        if density is not None and (not _finite_number(density) or density < 0):
+            raise ValueError("invalid line density")
+        if (area == 0) != (count is None and density is None):
+            raise ValueError("invalid missing detection")
+        if area == 0 and record["texture_fraction_percent"] is not None:
+            raise ValueError("invalid missing detection")
+    else:
+        if record["scalp_candidate_review_status"] != "rejected":
+            raise ValueError("unreviewed scalp candidate")
+        if area == 0 and any(record[key] is not None for key in (
+            "hair_region_fraction_percent", "texture_fraction_percent", "scalp_candidate_fraction_percent"
+        )):
+            raise ValueError("invalid missing detection")
+    for key in required:
+        if key.endswith("_path") and (not isinstance(record[key], str) or record[key] not in assets):
+            raise ValueError("unlisted report asset")
 
 
 def validate_report_manifest(report: dict[str, Any], output_root: Path) -> bool:
@@ -296,6 +375,12 @@ def validate_report_manifest(report: dict[str, Any], output_root: Path) -> bool:
         value = report.get(section)
         if not isinstance(value, dict) or not isinstance(value.get("records"), list) or not isinstance(value.get("trend"), list):
             raise ValueError("invalid report section")
+    counts = report.get("input_counts")
+    if not isinstance(counts, dict) or set(counts) != {"leg", "scalp"}:
+        raise ValueError("invalid input counts")
+    for section in ("leg", "scalp"):
+        if type(counts[section]) is not int or counts[section] < 0 or counts[section] != len(report[section]["records"]):
+            raise ValueError("invalid input counts")
     assets = report.get("assets")
     if not isinstance(assets, list) or not all(isinstance(path, str) for path in assets):
         raise ValueError("invalid report assets")
@@ -315,10 +400,12 @@ def validate_report_manifest(report: dict[str, Any], output_root: Path) -> bool:
             raise ValueError("asset symlink forbidden")
         if not absolute.is_file() or not absolute.resolve().is_relative_to(root.resolve()):
             raise ValueError("missing or escaped report asset")
+    asset_set = set(assets)
     for section in ("leg", "scalp"):
         for record in report[section]["records"]:
-            if not isinstance(record, dict) or any(path not in assets for path in _record_assets(record)):
-                raise ValueError("invalid report record")
+            _validate_record(record, section, asset_set)
+        if report[section]["trend"] != aggregate_trends(report[section]["records"], section):
+            raise ValueError("invalid report trend")
     return True
 
 

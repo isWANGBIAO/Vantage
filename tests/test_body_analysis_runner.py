@@ -23,11 +23,11 @@ def runner():
     return importlib.import_module("src.scripts.body_analysis_sam3")
 
 
-def _photo(path: Path, *, exif_time: str | None = None) -> None:
+def _photo(path: Path, *, exif_time: str | None = None, exif_tag: int = 36867) -> None:
     image = Image.new("RGB", (48, 40), color=(170, 140, 110))
     if exif_time:
         exif = image.getexif()
-        exif[36867] = exif_time
+        exif[exif_tag] = exif_time
         image.save(path, exif=exif)
     else:
         image.save(path)
@@ -62,6 +62,15 @@ def test_capture_time_uses_exif_and_marks_mtime_unverified(tmp_path, runner):
     captured_at, source, verified = runner.read_capture_time(undated)
     assert captured_at.startswith("2026-01-03T12:00:00")
     assert (source, verified) == ("file_mtime", False)
+
+
+@pytest.mark.parametrize("tag,expected_source", [(36868, "DateTimeDigitized"), (306, "DateTime")])
+def test_non_original_exif_dates_are_display_only(tmp_path, runner, tag, expected_source):
+    photo = tmp_path / "not-original.jpg"
+    _photo(photo, exif_time="2026:02:03 04:05:06", exif_tag=tag)
+    captured_at, source, verified = runner.read_capture_time(photo)
+    assert (captured_at, source) == ("2026-02-03T04:05:06", expected_source)
+    assert verified is False
 
 
 def test_new_output_must_be_direct_child_and_must_not_exist(tmp_path, runner):
@@ -137,6 +146,26 @@ def test_scalp_candidate_is_visible_but_excluded_from_trend(tmp_path, runner):
     assert runner.aggregate_trends([record], "scalp") == []
 
 
+def test_missing_primary_hair_detection_does_not_imply_full_scalp_visibility(tmp_path, runner):
+    import numpy as np
+
+    photo = tmp_path / "scalp.jpg"
+    _photo(photo)
+    output = tmp_path / "report"
+    output.mkdir()
+
+    def segment(image, prompt):
+        mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        if prompt == "scalp":
+            mask[5:30, 5:30] = 1
+        return mask, [0.9]
+
+    record = runner.analyze_photo(photo, "scalp", output, 1, segment)
+    assert record["hair_region_fraction_percent"] is None
+    assert record["scalp_candidate_fraction_percent"] is None
+    assert (output / record["scalp_candidate_mask_path"]).is_file()
+
+
 def test_trends_require_verified_time_and_accepted_review(runner):
     base = {
         "kind": "leg", "captured_at": "2026-01-02T12:00:00", "timestamp_verified": True,
@@ -158,6 +187,7 @@ def test_report_manifest_rejects_traversal_and_symlink_assets(tmp_path, runner):
     (report / "masks" / "1.png").write_bytes(b"png")
     valid = {
         "schema_version": 1, "complete": True, "engine": "sam3",
+        "input_counts": {"leg": 0, "scalp": 0},
         "leg": {"records": [], "trend": []}, "scalp": {"records": [], "trend": []},
         "assets": ["masks/1.png"],
     }
@@ -174,6 +204,44 @@ def test_report_manifest_rejects_traversal_and_symlink_assets(tmp_path, runner):
     else:
         with pytest.raises(ValueError):
             runner.validate_report_manifest(dict(valid, assets=["masks/link.png"]), report)
+
+
+def test_manifest_requires_exact_input_counts(tmp_path, runner):
+    output = tmp_path / "report"
+    output.mkdir()
+    valid = runner.build_report([], [])
+    assert valid["input_counts"] == {"leg": 0, "scalp": 0}
+    assert runner.validate_report_manifest(valid, output)
+    for invalid in (None, {"leg": 1, "scalp": 0}, {"leg": False, "scalp": 0}, {"leg": 0}):
+        with pytest.raises(ValueError, match="input counts"):
+            runner.validate_report_manifest(dict(valid, input_counts=invalid), output)
+
+
+def test_manifest_rejects_incomplete_or_wrongly_typed_photo_records(tmp_path, runner):
+    import numpy as np
+
+    photo = tmp_path / "leg.jpg"
+    _photo(photo, exif_time="2026:01:02 03:04:05")
+    output = tmp_path / "report"
+    output.mkdir()
+    record = runner.analyze_photo(
+        photo, "leg", output, 1,
+        lambda image, _prompt: (np.ones(image.shape[:2], dtype=np.uint8), [0.9]),
+    )
+    valid = runner.build_report([record], [])
+    assert runner.validate_report_manifest(valid, output)
+    mutations = (
+        {key: value for key, value in record.items() if key != "mask_path"},
+        dict(record, file_name="../private.jpg"),
+        dict(record, timestamp_verified="true"),
+        dict(record, roi_area_px="100"),
+        dict(record, review_status="accepted", trend_eligible=True, timestamp_verified=False),
+        dict(record, overlay_path="masks/not-listed.png"),
+    )
+    for bad in mutations:
+        tampered = dict(valid, leg={"records": [bad], "trend": []})
+        with pytest.raises(ValueError):
+            runner.validate_report_manifest(tampered, output)
 
 
 def test_runner_help_and_invalid_checkpoint_work_without_gpu_dependencies(tmp_path, runner):
