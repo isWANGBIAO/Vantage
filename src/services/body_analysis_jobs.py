@@ -61,6 +61,10 @@ def source_snapshot(paths: dict[str, Path], runner_path: Path) -> SourceSnapshot
     counts = {}
     for kind in ("leg", "scalp", "model"):
         root = Path(paths[kind])
+        # Two different configured roots can contain byte-identical files and
+        # matching metadata. The digest must still distinguish their identity.
+        # No root path is stored outside this one-way fingerprint.
+        digest.update(os.path.normcase(str(root.resolve())).encode("utf-8") + b"\0")
         files = _files(root, IMAGE_SUFFIXES if kind != "model" else None)
         if kind != "model":
             counts[kind] = len(files)
@@ -143,6 +147,17 @@ class BodyAnalysisJobService:
         self._progress: dict | None = None
         self._closing = False
         self._last_setting_signature: tuple | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def notify_settings_changed(self) -> None:
+        """Let a settings write from FastAPI's worker thread wake this service."""
+        loop = self._loop
+        if loop is not None and loop.is_running() and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(self.refresh_on_settings_change)
+            except RuntimeError:
+                # Shutdown won the race; the next process start will scan.
+                pass
 
     def refresh_on_settings_change(self) -> None:
         """A settings save followed by the UI status poll schedules a new scan."""
@@ -242,12 +257,14 @@ class BodyAnalysisJobService:
     def start(self, *, force: bool = False) -> bool:
         if self._root_error or self._closing or (self.active_task is not None and not self.active_task.done()):
             return False
+        self._loop = asyncio.get_running_loop()
         self.active_task = asyncio.create_task(self._run(force=force))
         return True
 
     async def install(self) -> bool:
         if self._root_error or self._closing or (self.active_task is not None and not self.active_task.done()):
             return False
+        self._loop = asyncio.get_running_loop()
         self.install_cancel = threading.Event()
         self.active_task = asyncio.create_task(self._install())
         return True
@@ -309,13 +326,13 @@ class BodyAnalysisJobService:
             paths = {kind: Path(configured[f"body_analysis_{kind}_dir"]) for kind in ("leg", "scalp", "model")}
             before = await asyncio.to_thread(source_snapshot, paths, self.runner_path)
             previous = await asyncio.to_thread(self._current)
-            if not force and previous and previous[2] == before.fingerprint:
-                self._status = "ready"
-                return
             environment = await self._probe(paths["model"])
             self._environment = _public_environment(environment)
             if not environment.get("ready") or not environment.get("python_executable"):
                 self._status = "missing_environment"
+                return
+            if not force and previous and previous[2] == before.fingerprint:
+                self._status = "ready"
                 return
             await self._generate(paths, before, str(environment["python_executable"]), self._last_setting_signature)
         except asyncio.CancelledError:

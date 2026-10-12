@@ -209,6 +209,21 @@ def test_body_analysis_update_preserves_other_settings_and_normalizes_paths(tmp_
     assert persisted["display_language"] == "en-US"
 
 
+def test_body_analysis_settings_save_notifies_running_service_only_after_success(tmp_path, monkeypatch):
+    _use_runtime_dirs(monkeypatch, tmp_path)
+    from src.backend import application
+
+    calls = []
+    monkeypatch.setattr(application, "notify_body_analysis_settings_change", lambda: calls.append("notified"))
+    _backend_settings.update_automation_settings({"body_analysis_enabled": True})
+    assert calls == ["notified"]
+    _backend_settings.update_automation_settings({"theme": "dark"})
+    assert calls == ["notified"]
+    with pytest.raises(HTTPException):
+        _backend_settings.update_automation_settings({"body_analysis_leg_dir": str(tmp_path / "missing")})
+    assert calls == ["notified"]
+
+
 @pytest.mark.parametrize("invalid_kind", ["file", "missing", "repository", "repository_child", "output", "output_parent"])
 def test_body_analysis_update_rejects_unsafe_source_paths_without_writing(tmp_path, monkeypatch, invalid_kind):
     paths = _use_runtime_dirs(monkeypatch, tmp_path)

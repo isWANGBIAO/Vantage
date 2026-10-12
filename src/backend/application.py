@@ -113,6 +113,15 @@ def get_services() -> ApplicationServices:
     return _services
 
 
+def notify_body_analysis_settings_change() -> None:
+    """Wake only an existing lifespan service after a committed settings write."""
+    services = _services
+    if services is not None:
+        notify = getattr(services.body_analysis, "notify_settings_changed", None)
+        if callable(notify):
+            notify()
+
+
 async def start():
     services = get_services()
     services.scheduler.start()

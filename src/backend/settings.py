@@ -282,7 +282,14 @@ def update_automation_settings(payload: dict):
                 provider_to_save = _sanitize_provider_config(provider_to_save)
 
             _persist_automation_settings_update(settings_to_save, provider_to_save)
-            return _masked_settings_payload()
+            response = _masked_settings_payload()
+            if settings_updates.keys() & ({"body_analysis_enabled"} | set(BODY_ANALYSIS_DIRECTORY_FIELDS)):
+                # The UI, CLI and MCP share this settings route. Notify only
+                # after the JSON transaction succeeds; the service schedules
+                # the scan on its event loop, never in this request thread.
+                from . import application
+                application.notify_body_analysis_settings_change()
+            return response
         except Exception as update_error:
             _restore_config_files(original_files, update_error)
             raise

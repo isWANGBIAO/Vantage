@@ -1,5 +1,6 @@
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +29,22 @@ def test_snapshot_changes_only_for_supported_images_and_model(tmp_path):
     assert source_snapshot(paths, runner).fingerprint == first.fingerprint
     (paths["scalp"] / "new.png").write_bytes(b"new")
     assert source_snapshot(paths, runner).fingerprint != first.fingerprint
+
+
+def test_snapshot_distinguishes_different_roots_with_identical_file_metadata(tmp_path):
+    settings = _configured(tmp_path)
+    paths = {key: Path(settings[f"body_analysis_{key}_dir"]) for key in ("leg", "scalp", "model")}
+    runner = tmp_path / "runner.py"
+    runner.write_text("runner")
+    before = source_snapshot(paths, runner)
+    alternate_leg = tmp_path / "leg-alternate"
+    alternate_leg.mkdir()
+    shutil.copy2(paths["leg"] / "a.jpg", alternate_leg / "a.jpg")
+    assert (alternate_leg / "a.jpg").stat().st_mtime_ns == (paths["leg"] / "a.jpg").stat().st_mtime_ns
+    paths["leg"] = alternate_leg
+    after = source_snapshot(paths, runner)
+    assert after.counts == before.counts
+    assert after.fingerprint != before.fingerprint
 
 
 def test_start_is_nonblocking_singleflight_and_missing_environment(tmp_path):
@@ -120,12 +137,49 @@ async def _check_publication(tmp_path, monkeypatch):
     service.start()
     await service.active_task
     assert len(launches) == 1
+    service.environment_probe = lambda _: {"ready": False, "missing": ["dependencies"], "reason": "missing_dependencies"}
+    service.start()
+    await service.active_task
+    assert service.status()["status"] == "missing_environment"
+    assert service.status()["last_report_available"] is True
+    assert len(launches) == 1
+    service.environment_probe = lambda _: {"ready": True, "missing": [], "reason": "ready", "python_executable": "python"}
     Path(settings["body_analysis_leg_dir"], "new.png").write_bytes(b"new")
     service.start()
     await service.active_task
     assert len(launches) == 2
     assert service.status()["status"] == "failed"  # runner reported zero for one photo
     assert json.loads((root / "current.json").read_text()) == pointer
+    await service.close()
+
+
+def test_settings_notification_from_worker_thread_starts_scan_without_status_poll(tmp_path):
+    asyncio.run(_check_thread_notification(tmp_path))
+
+
+async def _check_thread_notification(tmp_path):
+    settings = _configured(tmp_path)
+    settings["body_analysis_enabled"] = False
+    runner = tmp_path / "runner.py"
+    runner.write_text("runner")
+    probe_started = asyncio.Event()
+    release_probe = asyncio.Event()
+
+    async def probe(_model):
+        probe_started.set()
+        await release_probe.wait()
+        return {"ready": False, "missing": ["dependencies"], "reason": "missing_dependencies"}
+
+    service = BodyAnalysisJobService(root=tmp_path / "reports", settings_loader=lambda: settings,
+                                     environment_probe=probe, runner_path=runner)
+    service.start()
+    await service.active_task
+    settings["body_analysis_enabled"] = True
+    await asyncio.to_thread(service.notify_settings_changed)
+    await asyncio.wait_for(probe_started.wait(), timeout=5)
+    assert service.status()["status"] == "checking"
+    release_probe.set()
+    await service.active_task
     await service.close()
 
 
