@@ -9,12 +9,56 @@ from src.backend import media as _backend_media
 from src.backend import plots as _backend_plots
 from src.backend import runtime as _backend_runtime
 from src import server
+from src.backend import application as _backend_application
 
 STATIC_ROUTE_PATHS = (
     "/static/photos",
     "/static/plots",
     "/static/screenshots",
 )
+
+
+def test_application_lifespan_starts_one_body_analysis_job_and_closes_it(monkeypatch):
+    events = []
+
+    class FakeBodyAnalysis:
+        started = False
+
+        def start(self):
+            if self.started:
+                return False
+            self.started = True
+            events.append("body_start")
+            return True
+
+        async def close(self):
+            events.append("body_close")
+
+    class FakeScheduler:
+        def start(self):
+            events.append("scheduler_start")
+
+        async def close(self):
+            events.append("scheduler_close")
+
+    class FakeJobs:
+        async def close(self):
+            events.append("jobs_close")
+
+    from types import SimpleNamespace
+
+    services = SimpleNamespace(body_analysis=FakeBodyAnalysis(), scheduler=FakeScheduler(), jobs=FakeJobs())
+    monkeypatch.setattr(_backend_application, "get_services", lambda: services)
+    monkeypatch.setattr(_backend_application, "_services", services)
+
+    async def run():
+        await _backend_application.start()
+        await _backend_application.start()
+        await _backend_application.stop()
+
+    asyncio.run(run())
+    assert events.count("body_start") == 1  # service owns deduplication
+    assert events.count("body_close") == 1
 
 
 class _DummyThread:

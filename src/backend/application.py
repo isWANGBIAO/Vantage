@@ -29,6 +29,7 @@ from src.services.action_plan_jobs import ActionPlanJobService
 from src.services.action_plan_scheduler import ActionPlanScheduler
 from src.services.action_plan_store import ActionPlanStore
 from src.services.automation_catalog import OPERATIONS
+from src.services.body_analysis_jobs import BodyAnalysisJobService
 
 
 async def _read_today():
@@ -94,6 +95,7 @@ async def _generate(request, *, source_revision=None):
 class ApplicationServices:
     jobs: ActionPlanJobService
     scheduler: ActionPlanScheduler
+    body_analysis: BodyAnalysisJobService
 
 
 _services: ApplicationServices | None = None
@@ -107,18 +109,21 @@ def get_services() -> ApplicationServices:
             jobs, load_settings, _read_today, _read_revision,
             Path(Config.get_runtime_dir()) / "action-plan-scheduler.json",
         )
-        _services = ApplicationServices(jobs, scheduler)
+        _services = ApplicationServices(jobs, scheduler, BodyAnalysisJobService())
     return _services
 
 
 async def start():
-    get_services().scheduler.start()
+    services = get_services()
+    services.scheduler.start()
+    services.body_analysis.start()
 
 
 async def stop():
     global _services
     services, _services = _services, None
     if services is not None:
+        await services.body_analysis.close()
         await services.scheduler.close()
         await services.jobs.close()
 

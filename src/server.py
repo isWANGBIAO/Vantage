@@ -33,6 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.backend import (
     action_plans,
+    body_analysis,
     camera,
     chat,
     face,
@@ -69,6 +70,7 @@ app.add_middleware(security.LoopbackAccessMiddleware)
 
 ROUTE_MODULES = (
     settings,
+    body_analysis,
     camera,
     system,
     media,
