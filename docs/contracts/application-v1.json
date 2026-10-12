@@ -1768,6 +1768,22 @@
               "title": "Action Plan Check Interval Minutes",
               "type": "integer"
             },
+            "body_analysis_enabled": {
+              "title": "Body Analysis Enabled",
+              "type": "boolean"
+            },
+            "body_analysis_leg_dir": {
+              "title": "Body Analysis Leg Dir",
+              "type": "string"
+            },
+            "body_analysis_scalp_dir": {
+              "title": "Body Analysis Scalp Dir",
+              "type": "string"
+            },
+            "body_analysis_model_dir": {
+              "title": "Body Analysis Model Dir",
+              "type": "string"
+            },
             "voice_provider_mode": {
               "enum": [
                 "inherit_ai",
@@ -1870,6 +1886,10 @@
             "theme_mode",
             "action_plan_auto_generate",
             "action_plan_check_interval_minutes",
+            "body_analysis_enabled",
+            "body_analysis_leg_dir",
+            "body_analysis_scalp_dir",
+            "body_analysis_model_dir",
             "voice_provider_mode",
             "voice_base_url",
             "voice_api_key",
@@ -2599,6 +2619,22 @@
           "description": "Automatic action-plan check interval in minutes (0 disables it).",
           "minimum": 0,
           "maximum": 35791
+        },
+        "body_analysis_enabled": {
+          "type": "boolean",
+          "description": "Enable local body-analysis startup scanning when configured."
+        },
+        "body_analysis_leg_dir": {
+          "type": "string",
+          "description": "Local leg-photo source directory; empty clears it."
+        },
+        "body_analysis_scalp_dir": {
+          "type": "string",
+          "description": "Local scalp-photo source directory; empty clears it."
+        },
+        "body_analysis_model_dir": {
+          "type": "string",
+          "description": "Local SAM3 checkpoint directory; empty clears it."
         },
         "voice_provider_mode": {
           "type": "string",

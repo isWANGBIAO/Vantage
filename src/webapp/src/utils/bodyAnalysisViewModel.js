@@ -9,7 +9,8 @@ export function assetPathForRecord(path, manifest) {
   if (segments.length < 2 || segments.some((segment) => !/^[A-Za-z0-9._-]+$/.test(segment) || segment === '.' || segment === '..')) {
     return null;
   }
-  return `/api/v1/body-analysis/assets/${segments.map(encodeURIComponent).join('/')}`;
+  const encodedPath = segments.map(encodeURIComponent).join('/');
+  return `/api/v1/body-analysis/assets/${encodedPath}`;
 }
 
 export function visibleTrend(report, kind) {

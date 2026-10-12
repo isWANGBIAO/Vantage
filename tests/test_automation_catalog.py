@@ -14,6 +14,12 @@ from src.services.automation_catalog import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 EXPECTED_OPERATION_NAMES = {
+    "body_analysis.asset.read",
+    "body_analysis.directory.pick",
+    "body_analysis.environment.install",
+    "body_analysis.report.read",
+    "body_analysis.run.retry",
+    "body_analysis.status.read",
     "system.capabilities.read",
     "action_plan.source_revision.read",
     "action_plan.jobs.create",
@@ -86,6 +92,20 @@ def test_settings_update_catalog_declares_body_analysis_paths_and_toggle():
     assert properties["body_analysis_enabled"]["type"] == "boolean"
     for name in ("body_analysis_leg_dir", "body_analysis_scalp_dir", "body_analysis_model_dir"):
         assert properties[name]["type"] == "string"
+
+
+def test_body_analysis_catalog_marks_private_reports_and_explicit_install():
+    for name in (
+        "body_analysis.status.read", "body_analysis.report.read", "body_analysis.asset.read",
+        "body_analysis.environment.install", "body_analysis.run.retry", "body_analysis.directory.pick",
+    ):
+        assert get_operation(name).sensitive is True
+    install = get_operation("body_analysis.environment.install")
+    assert (install.method, install.path) == ("POST", "/api/v1/body-analysis/install")
+    assert install.mutation and install.side_effect
+    picker = get_operation("body_analysis.directory.pick")
+    assert picker.availability == "desktop_only"
+    assert picker.source_ipc_channel == "platform:pick-body-analysis-directory"
 
 
 def _normalized_route(path):
