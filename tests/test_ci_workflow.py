@@ -25,7 +25,7 @@ def test_python_ci_step_isolates_vantage_runtime_dirs():
 
 
 def test_frontend_workflows_pin_electron_node_runtime():
-    expected_electron_version = "42.8.0"
+    expected_electron_version = "42.11.12"
     expected_electron_range = f"^{expected_electron_version}"
     expected_node_version = "24.18.0"
 
@@ -63,8 +63,8 @@ def test_frontend_workflows_pin_electron_node_runtime():
     readme = Path("README.md").read_text(encoding="utf-8")
     assert 'alt="Node.js 24.18.0"' in readme
     assert "Node.js-24.18.0-" in readme
-    assert 'alt="Electron 42.8.0"' in readme
-    assert "Electron-42.8.0-" in readme
+    assert 'alt="Electron 42.11.12"' in readme
+    assert "Electron-42.11.12-" in readme
 
     requirements = readme.split("## Requirements", maxsplit=1)[1].split(
         "\n## ", maxsplit=1
@@ -73,7 +73,7 @@ def test_frontend_workflows_pin_electron_node_runtime():
 
 
 def test_readme_react_badge_matches_frontend_dependency_contract():
-    expected_react_version = "19.2.8"
+    expected_react_version = "19.3.0"
     expected_react_range = f"^{expected_react_version}"
 
     package = json.loads(Path("src/webapp/package.json").read_text(encoding="utf-8"))
@@ -92,8 +92,8 @@ def test_readme_react_badge_matches_frontend_dependency_contract():
     )
 
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert 'alt="React 19.2.8"' in readme
-    assert "React-19.2.8-" in readme
+    assert 'alt="React 19.3.0"' in readme
+    assert "React-19.3.0-" in readme
 
 
 def test_readme_fastapi_badge_matches_backend_runtime_contract():
