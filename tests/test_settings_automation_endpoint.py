@@ -181,6 +181,71 @@ def test_settings_read_update_round_trip_uses_python_json_and_masks_secrets(tmp_
     assert paths["config"].joinpath("providers.json").exists()
 
 
+def test_body_analysis_update_preserves_other_settings_and_normalizes_paths(tmp_path, monkeypatch):
+    paths = _use_runtime_dirs(monkeypatch, tmp_path)
+    leg = tmp_path / "photos" / "leg"
+    scalp = tmp_path / "photos" / "scalp"
+    model = tmp_path / "checkpoints"
+    for directory in (leg, scalp, model):
+        directory.mkdir(parents=True)
+    user_config.save_settings({"display_language": "en-US"})
+
+    updated = _backend_settings.update_automation_settings({
+        "body_analysis_enabled": True,
+        "body_analysis_leg_dir": f"  {leg}  ",
+        "body_analysis_scalp_dir": str(scalp),
+        "body_analysis_model_dir": str(model),
+    })
+    assert updated["settings"]["body_analysis_enabled"] is True
+    assert updated["settings"]["body_analysis_leg_dir"] == str(leg.resolve())
+    assert updated["settings"]["display_language"] == "en-US"
+
+    _backend_settings.update_automation_settings({"body_analysis_enabled": False})
+    persisted = json.loads((paths["config"] / "settings.json").read_text(encoding="utf-8"))
+    assert persisted["body_analysis_enabled"] is False
+    assert persisted["body_analysis_leg_dir"] == str(leg.resolve())
+    assert persisted["body_analysis_scalp_dir"] == str(scalp.resolve())
+    assert persisted["body_analysis_model_dir"] == str(model.resolve())
+    assert persisted["display_language"] == "en-US"
+
+
+@pytest.mark.parametrize("invalid_kind", ["file", "missing", "repository", "output", "output_parent"])
+def test_body_analysis_update_rejects_unsafe_source_paths_without_writing(tmp_path, monkeypatch, invalid_kind):
+    paths = _use_runtime_dirs(monkeypatch, tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    output = paths["history"] / "body_analysis"
+    output.mkdir(parents=True)
+    invalid = {
+        "file": tmp_path / "photo.jpg",
+        "missing": tmp_path / "missing",
+        "repository": project,
+        "output": output,
+        "output_parent": paths["history"],
+    }[invalid_kind]
+    if invalid_kind == "file":
+        invalid.touch()
+    user_config.save_settings({"display_language": "en-US"})
+    original = (paths["config"] / "settings.json").read_bytes()
+
+    with pytest.raises(HTTPException) as error:
+        _backend_settings.update_automation_settings({"body_analysis_leg_dir": str(invalid)})
+
+    assert error.value.status_code == 422
+    assert (paths["config"] / "settings.json").read_bytes() == original
+
+
+def test_body_analysis_path_validation_can_be_reused_after_directory_moves(tmp_path, monkeypatch):
+    _use_runtime_dirs(monkeypatch, tmp_path)
+    source = tmp_path / "photos"
+    source.mkdir()
+    _backend_settings.update_automation_settings({"body_analysis_leg_dir": str(source)})
+    source.rmdir()
+
+    with pytest.raises(ValueError, match="body_analysis_leg_dir"):
+        _backend_settings.validate_body_analysis_paths(user_config.load_settings())
+
+
 def test_concurrent_display_language_and_settings_updates_preserve_both_fields(tmp_path, monkeypatch):
     _use_runtime_dirs(monkeypatch, tmp_path)
     user_config.save_settings({"display_language": "en-US", "action_plan_auto_generate": False})

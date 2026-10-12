@@ -31,6 +31,10 @@ def test_load_settings_creates_default_settings_file(tmp_path):
         "theme_mode": "dark",
         "action_plan_auto_generate": True,
         "action_plan_check_interval_minutes": 60,
+        "body_analysis_enabled": False,
+        "body_analysis_leg_dir": "",
+        "body_analysis_scalp_dir": "",
+        "body_analysis_model_dir": "",
         "voice_provider_mode": "inherit_ai",
         "voice_base_url": "",
         "voice_api_key": "",
@@ -91,6 +95,48 @@ def test_invalid_action_plan_check_interval_uses_default(tmp_path, value):
     user_config = _load_user_config_module()
     result = user_config.save_settings({"action_plan_check_interval_minutes": value}, tmp_path / "settings.json")
     assert result["action_plan_check_interval_minutes"] == 60
+
+
+def test_body_analysis_settings_round_trip_and_sanitize_types(tmp_path):
+    user_config = _load_user_config_module()
+    settings_file = tmp_path / "settings.json"
+    leg = tmp_path / "leg"
+    scalp = tmp_path / "scalp"
+    model = tmp_path / "model"
+    for directory in (leg, scalp, model):
+        directory.mkdir()
+
+    saved = user_config.save_settings({
+        "body_analysis_enabled": True,
+        "body_analysis_leg_dir": f"  {leg}  ",
+        "body_analysis_scalp_dir": str(scalp),
+        "body_analysis_model_dir": str(model),
+    }, settings_file)
+    assert saved["body_analysis_enabled"] is True
+    assert saved["body_analysis_leg_dir"] == str(leg)
+    assert user_config.load_settings(settings_file)["body_analysis_model_dir"] == str(model)
+    assert json.loads(settings_file.read_text(encoding="utf-8"))["body_analysis_scalp_dir"] == str(scalp)
+
+    sanitized = user_config.save_settings({
+        "body_analysis_enabled": "true",
+        "body_analysis_leg_dir": 123,
+        "body_analysis_scalp_dir": "  ",
+    }, settings_file)
+    assert sanitized["body_analysis_enabled"] is False
+    assert sanitized["body_analysis_leg_dir"] == ""
+    assert sanitized["body_analysis_scalp_dir"] == ""
+
+
+def test_body_analysis_report_root_uses_user_history_not_repository(tmp_path):
+    user_config = _load_user_config_module()
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    history = tmp_path / "private_history"
+    history.mkdir()
+    with patch.object(Config, "get_project_root", return_value=repository), \
+         patch.object(Config, "get_data_dir", return_value=repository), \
+         patch.object(Config, "get_history_dir", return_value=history):
+        assert user_config.get_body_analysis_report_root() == history / "body_analysis"
 
 
 def test_complete_provider_keeps_the_configured_token_limits(tmp_path):
@@ -363,6 +409,10 @@ def test_save_settings_normalizes_partial_payload(tmp_path):
         "action_plan_auto_generate": True,
         "voice_provider_mode": "inherit_ai",
         "action_plan_check_interval_minutes": 60,
+        "body_analysis_enabled": False,
+        "body_analysis_leg_dir": "",
+        "body_analysis_scalp_dir": "",
+        "body_analysis_model_dir": "",
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",
@@ -408,6 +458,10 @@ def test_load_settings_repairs_invalid_display_language(tmp_path):
         "action_plan_auto_generate": True,
         "voice_provider_mode": "inherit_ai",
         "action_plan_check_interval_minutes": 60,
+        "body_analysis_enabled": False,
+        "body_analysis_leg_dir": "",
+        "body_analysis_scalp_dir": "",
+        "body_analysis_model_dir": "",
         "voice_base_url": "",
         "voice_api_key": "",
         "voice_model": "FunAudioLLM/SenseVoiceSmall",

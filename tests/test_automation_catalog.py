@@ -81,6 +81,13 @@ def test_model_preference_operation_is_a_narrow_shared_mutation():
     assert operation.input_schema['additionalProperties'] is False
 
 
+def test_settings_update_catalog_declares_body_analysis_paths_and_toggle():
+    properties = get_operation("settings.update").input_schema["properties"]
+    assert properties["body_analysis_enabled"]["type"] == "boolean"
+    for name in ("body_analysis_leg_dir", "body_analysis_scalp_dir", "body_analysis_model_dir"):
+        assert properties[name]["type"] == "string"
+
+
 def _normalized_route(path):
     path = path.split("?", maxsplit=1)[0]
     path = re.sub(r"\$\{[^}]+\}", "{}", path)

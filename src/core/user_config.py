@@ -86,6 +86,10 @@ DEFAULT_SETTINGS = {
     "theme_mode": "dark",
     "action_plan_auto_generate": True,
     "action_plan_check_interval_minutes": 60,
+    "body_analysis_enabled": False,
+    "body_analysis_leg_dir": "",
+    "body_analysis_scalp_dir": "",
+    "body_analysis_model_dir": "",
     "voice_provider_mode": PROVIDER_MODE_INHERIT_AI,
     "voice_base_url": "",
     "voice_api_key": "",
@@ -440,6 +444,10 @@ def _sanitize_settings(payload: dict | None) -> dict:
         "theme_mode": _coerce_theme_mode(payload),
         "action_plan_auto_generate": _coerce_bool(payload, "action_plan_auto_generate", True),
         "action_plan_check_interval_minutes": interval,
+        "body_analysis_enabled": _coerce_bool(payload, "body_analysis_enabled", False),
+        "body_analysis_leg_dir": _coerce_optional_str(payload, "body_analysis_leg_dir") or "",
+        "body_analysis_scalp_dir": _coerce_optional_str(payload, "body_analysis_scalp_dir") or "",
+        "body_analysis_model_dir": _coerce_optional_str(payload, "body_analysis_model_dir") or "",
         "voice_provider_mode": _coerce_special_provider_mode(payload, prefix="voice"),
         "voice_base_url": _coerce_optional_str(payload, "voice_base_url") or "",
         "voice_api_key": _coerce_optional_str(payload, "voice_api_key") or "",
@@ -453,6 +461,47 @@ def _sanitize_settings(payload: dict | None) -> dict:
         "image_models": _coerce_model_list(payload, "image_models", _coerce_optional_str(payload, "image_model")),
         "image_last_refreshed_at": _coerce_optional_str(payload, "image_last_refreshed_at"),
     }
+
+
+BODY_ANALYSIS_DIRECTORY_FIELDS = (
+    "body_analysis_leg_dir",
+    "body_analysis_scalp_dir",
+    "body_analysis_model_dir",
+)
+
+
+def get_body_analysis_report_root() -> Path:
+    """Keep generated reports outside the repository even in development mode."""
+    return (Path(Config.get_history_dir()) / "body_analysis").expanduser().resolve()
+
+
+def validate_body_analysis_paths(settings: dict, *, fields=None) -> dict[str, str]:
+    """Resolve configured input directories; call again immediately before scanning.
+
+    Never let a source directory include the repository or the generated report
+    root. The returned paths are normalized, but no directories are created.
+    """
+    selected = BODY_ANALYSIS_DIRECTORY_FIELDS if fields is None else fields
+    repository = Path(Config.get_project_root()).expanduser().resolve()
+    output = get_body_analysis_report_root()
+    normalized = {}
+    for key in selected:
+        raw = settings.get(key, "")
+        if not isinstance(raw, str):
+            raise ValueError(f"{key} must be a directory path")
+        value = raw.strip()
+        if not value:
+            normalized[key] = ""
+            continue
+        path = Path(value).expanduser().resolve()
+        if not path.is_dir():
+            raise ValueError(f"{key} must be an existing directory")
+        if path == repository or path in repository.parents:
+            raise ValueError(f"{key} cannot contain the repository root")
+        if path == output or path in output.parents or output in path.parents:
+            raise ValueError(f"{key} cannot overlap generated output")
+        normalized[key] = str(path)
+    return normalized
 
 
 def _sanitize_provider_config(payload: dict | None) -> dict:

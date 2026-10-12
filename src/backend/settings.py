@@ -17,6 +17,8 @@ from src.core.user_config import (
     _atomic_write_bytes,
     _sanitize_provider_config,
     _sanitize_settings,
+    BODY_ANALYSIS_DIRECTORY_FIELDS,
+    validate_body_analysis_paths,
     get_migration_state_file,
     get_provider_chain_config,
     get_providers_file,
@@ -52,6 +54,8 @@ _AUTOMATION_SETTINGS_FIELDS = frozenset({
     "launch_at_login",
     "action_plan_auto_generate",
     "action_plan_check_interval_minutes",
+    "body_analysis_enabled",
+    *BODY_ANALYSIS_DIRECTORY_FIELDS,
     "voice_provider_mode",
     "voice_base_url",
     "voice_api_key",
@@ -248,6 +252,15 @@ def update_automation_settings(payload: dict):
                 ),
             )
         _validate_provider_configuration_payload(payload)
+        if "body_analysis_enabled" in payload and not isinstance(payload["body_analysis_enabled"], bool):
+            raise HTTPException(status_code=422, detail="body_analysis_enabled must be a boolean.")
+        submitted_body_paths = set(payload).intersection(BODY_ANALYSIS_DIRECTORY_FIELDS)
+        if submitted_body_paths:
+            try:
+                normalized_paths = validate_body_analysis_paths(payload, fields=submitted_body_paths)
+            except (ValueError, OSError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            payload = {**payload, **normalized_paths}
         original_files = _snapshot_automation_config_files()
         try:
             settings_updates = {key: value for key, value in payload.items() if key in _AUTOMATION_SETTINGS_FIELDS}
