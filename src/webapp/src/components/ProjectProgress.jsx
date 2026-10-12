@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Target, CheckCircle2, Circle, GitCommit, TrendingUp, RefreshCw, AlertCircle } from 'lucide-react';
 import './ProjectProgress.css';
 import { fetchBackendJson } from '../utils/backendRequest';
+import { createProjectProgressRefresh, getProjectProgressViewState } from '../utils/projectProgressRefresh';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 
 const ProjectProgress = () => {
@@ -11,26 +12,38 @@ const ProjectProgress = () => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const refreshRef = useRef(null);
 
-    const fetchProgress = useCallback(async () => {
-        setLoading(true);
-        setError(null);
-        try {
-            const result = await fetchBackendJson('/api/v1/projects/progress', { retryPolicy: 'load' });
-            setData(result);
-        } catch (error) {
-            setError('project_progress.error.body');
-            console.error(error);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
+    const fetchProgress = useCallback(() => refreshRef.current?.refresh(), []);
 
     useEffect(() => {
-        fetchProgress();
-    }, [fetchProgress]);
+        const refresh = createProjectProgressRefresh({
+            focusTarget: window,
+            load: signal => fetchBackendJson('/api/v1/projects/progress', { retryPolicy: 'load', signal }),
+            onData: (result) => {
+                setData(result);
+                setError(null);
+            },
+            onError: (requestError) => {
+                setError('project_progress.error.body');
+                console.error(requestError);
+            },
+            onLoading: (isLoading) => {
+                setLoading(isLoading);
+                if (isLoading) setError(null);
+            },
+        });
+        refreshRef.current = refresh;
+        refresh.start();
+        return () => {
+            refreshRef.current = null;
+            refresh.dispose();
+        };
+    }, []);
 
-    if (loading) {
+    const viewState = getProjectProgressViewState({ data, loading, error });
+
+    if (viewState === 'loading') {
         return (
             <div className="progress-loading">
                 <RefreshCw className="animate-spin" size={32} />
@@ -39,7 +52,7 @@ const ProjectProgress = () => {
         );
     }
 
-    if (error) {
+    if (viewState === 'error') {
         return (
             <div className="progress-error">
                 <AlertCircle size={48} />
@@ -50,7 +63,7 @@ const ProjectProgress = () => {
         );
     }
 
-    if (!data) return null;
+    if (viewState === 'empty') return null;
 
     const { tasks, commits, stats } = data;
 
@@ -62,16 +75,23 @@ const ProjectProgress = () => {
     }, {});
 
     return (
-        <div className="project-progress-container">
+        <div className="project-progress-container" aria-busy={loading}>
             <header className="progress-header">
                 <div className="header-title">
                     <Target className="icon-target" size={28} />
                     <h2>{t('project_progress.title')}</h2>
                 </div>
                 <button className="refresh-btn" onClick={fetchProgress} title={t('project_progress.refresh')}>
-                    <RefreshCw size={18} />
+                    <RefreshCw size={18} className={loading ? 'animate-spin' : undefined} />
                 </button>
             </header>
+
+            {viewState === 'content' && error && (
+                <p role="alert" className="text-warning">
+                    <AlertCircle size={16} aria-hidden="true" /> {t(error)}{' '}
+                    <button className="retry-btn" onClick={fetchProgress}>{t('project_progress.retry')}</button>
+                </p>
+            )}
 
             <div className="progress-dashboard">
                 {/* Left Column: Active Focus (Pending Tasks) */}
