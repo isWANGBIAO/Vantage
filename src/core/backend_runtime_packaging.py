@@ -46,15 +46,20 @@ BACKEND_RUNTIME_SOURCE_INPUTS = (
 BACKEND_RUNTIME_SOURCE_SUFFIXES = (".py",)
 
 REQUIRED_ROOT_RESOURCE_NAMES = (
-    "Prompt_Action_Plan.md",
     "Prompt_Advisor_Requirements.md",
-    "Prompt_AI_Instructions.md",
     "Prompt_Goals.md",
     "Prompt_Inventory.md",
     "Prompt_Personal_Info.md",
     "Prompt_Project_Management.md",
     "Prompt_Scientific_Theory.md",
     "Prompt_System.md",
+)
+
+# These templates are user-owned prompt data. Include local copies in a private
+# build when available, but never require or publish them with the public source.
+OPTIONAL_ROOT_RESOURCE_NAMES = (
+    "1_长期行动计划.md",
+    "2_今日行动计划.md",
 )
 
 REQUIRED_RESOURCE_SPECS = (
@@ -341,6 +346,11 @@ def collect_backend_runtime_resources(
             missing.append(resource_name)
             continue
         resources.append(BundledResource(resource_path, Path(".")))
+
+    for resource_name in OPTIONAL_ROOT_RESOURCE_NAMES:
+        resource_path = resolved_root / resource_name
+        if resource_path.is_file():
+            resources.append(BundledResource(resource_path, Path(".")))
 
     for relative_source, relative_destination in REQUIRED_RESOURCE_SPECS:
         resource_path = resolved_root / relative_source

@@ -11,6 +11,20 @@ from unittest.mock import patch
 from src.scripts import run_prompt
 
 
+def test_default_today_action_prompt_injects_daily_context_without_a_private_prompt_file():
+    prompt = run_prompt.DEFAULT_TODAY_ACTION_PLAN_TEMPLATE
+
+    for marker in (
+        "{current_time}",
+        "{today_data_row}",
+        "{yesterday_data_row}",
+        "{past_7_days_rows}",
+        "{future_planned_rows}",
+    ):
+        assert marker in prompt
+    assert "# 今日行动计划" in prompt
+
+
 class _FakeLLMClient:
     def __init__(self):
         self.call_count = 0
@@ -652,7 +666,7 @@ class RunPromptTests(unittest.TestCase):
             temp_path = Path(temp_dir)
             history_dir = temp_path / "history"
             history_dir.mkdir()
-            (temp_path / "Prompt_Action_Plan.md").write_text(
+            (temp_path / "2_今日行动计划.md").write_text(
                 "Now {current_time}\nPast {past_7_days_rows}\nYesterday {yesterday_data_row}\nToday {today_data_row}",
                 encoding="utf-8",
             )
@@ -710,7 +724,9 @@ class RunPromptTests(unittest.TestCase):
             output_lines = stdout.getvalue().splitlines()
 
         self.assertIn('STREAM_ANALYSIS_SYSTEM:"system prompt"', output_lines)
-        self.assertIn('STREAM_ANALYSIS_PROMPT:"analysis prompt"', output_lines)
+        self.assertTrue(
+            any(line.startswith('STREAM_ANALYSIS_PROMPT:"analysis prompt\\n\\n##') for line in output_lines)
+        )
         plan_prompt_payload = "".join(
             json.loads(line.split(":", 1)[1])
             for line in output_lines
@@ -1252,8 +1268,8 @@ class RunPromptTests(unittest.TestCase):
         # No plan file may be written when both rounds came back empty.
         self.assertFalse(list(history_dir.glob("action_plan_*.json")))
 
-    def test_action_plan_mode_signals_a_missing_plan_prompt(self):
-        """缺少计划模板时也要发标记，不能只打印一行普通文字。"""
+    def test_action_plan_mode_uses_generic_plan_prompt_when_private_template_is_missing(self):
+        """缺少本地私有模板时仍用通用模板完成第二轮调用。"""
         fake_client = _EmptyContentLLMClient()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1292,7 +1308,9 @@ class RunPromptTests(unittest.TestCase):
 
         printed = stdout.getvalue()
         self.assertIn("STREAM_PLAN_ERROR:", printed)
-        self.assertIn("missing", printed)
+        self.assertIn("STREAM_PLAN_PROMPT:", printed)
+        self.assertIn("first-round long-term plan", printed)
+        self.assertNotIn("prompt file is missing", printed)
 
     def test_chat_mode_passes_provider_route_to_llm_client(self):
         fake_client = _CapturingLLMClient(
@@ -1531,6 +1549,13 @@ class RunPromptTests(unittest.TestCase):
         self.assertEqual(second_kwargs["entrypoint"], "src/scripts/run_prompt.py")
         self.assertEqual(first_kwargs["session_id"], second_kwargs["session_id"])
         self.assertTrue(first_kwargs["session_id"])
+        first_prompt = fake_client.calls[0]["messages"][1]["content"]
+        self.assertIn("本轮只输出长期行动计划，不生成今日行动表", first_prompt)
+        second_messages = fake_client.calls[1]["messages"]
+        self.assertEqual(second_messages[2], {"role": "assistant", "content": "analysis reply"})
+        self.assertEqual(second_messages[3]["role"], "user")
+        self.assertIn("使用上一轮 assistant 输出的长期行动计划", second_messages[3]["content"])
+        self.assertIn("只输出今日行动安排，不复述长期分析", second_messages[3]["content"])
 
     def test_analysis_mode_passes_time_json_cache_metadata_to_llm_client(self):
         fake_client = _CapturingLLMClient(
@@ -1701,7 +1726,8 @@ class RunPromptTests(unittest.TestCase):
         self.assertNotIn("historical_total_tokens", saved_payload["meta"]["stats"])
         self.assertEqual(saved_payload["meta"]["stats"]["total_duration"], 3.5)
         self.assertEqual(saved_payload["meta"]["input"]["system_prompt"], "system prompt")
-        self.assertEqual(saved_payload["meta"]["input"]["analysis_prompt"], "analysis prompt")
+        self.assertTrue(saved_payload["meta"]["input"]["analysis_prompt"].startswith("analysis prompt"))
+        self.assertIn("本轮只输出长期行动计划", saved_payload["meta"]["input"]["analysis_prompt"])
         self.assertTrue(saved_payload["meta"]["input"]["plan_prompt"].startswith("Now "))
         self.assertEqual(len(saved_payload["meta"]["stats"]["requests"]), 2)
         self.assertEqual(saved_payload["meta"]["stats"]["requests"][0]["section"], "analysis")

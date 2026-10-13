@@ -171,12 +171,12 @@ ACTION_PLAN_CONTENT_FILES = (
     "Balance Sheet.xlsx",
     "Prompt_System.md",
     "Prompt_Personal_Info.md",
-    "Prompt_Action_Plan.md",
+    "1_长期行动计划.md",
+    "2_今日行动计划.md",
     "Prompt_Project_Management.md",
     "Prompt_Advisor_Requirements.md",
     "Prompt_Goals.md",
     "Prompt_Inventory.md",
-    "Prompt_AI_Instructions.md",
     "Prompt_Scientific_Theory.md",
 )
 

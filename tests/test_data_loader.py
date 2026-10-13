@@ -25,6 +25,30 @@ def extract_current_day_block(content):
 
 
 class DataLoaderFuturePlansTests(unittest.TestCase):
+    def test_renamed_action_plan_prompts_prefer_new_names_and_fall_back_to_legacy_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            legacy_long_term = root / "Prompt_AI_Instructions.md"
+            legacy_today = root / "Prompt_Action_Plan.md"
+            new_long_term = root / "1_长期行动计划.md"
+            legacy_long_term.write_text("legacy long-term", encoding="utf-8")
+            legacy_today.write_text("legacy today", encoding="utf-8")
+            new_long_term.write_text("new long-term", encoding="utf-8")
+
+            with patch.dict(os.environ, {"AI_DATA_ROOT": "", "DATA_ROOT": ""}), patch.object(
+                DataLoader,
+                "_data_root_candidates",
+                return_value=[root],
+            ):
+                self.assertEqual(DataLoader.resolve_data_path(new_long_term.name), new_long_term)
+                self.assertEqual(
+                    DataLoader.resolve_data_path("2_今日行动计划.md"),
+                    legacy_today,
+                )
+                self.assertEqual(DataLoader.resolve_data_path(new_long_term.name), new_long_term)
+                new_long_term.unlink()
+                self.assertEqual(DataLoader.resolve_data_path(new_long_term.name), legacy_long_term)
+
     def test_construct_prompt_truncates_time_rows_by_explicit_token_budget(self):
         today = datetime.now().date()
         df = pd.DataFrame(
@@ -173,6 +197,8 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
             excel_path.write_text("placeholder", encoding="utf-8")
             (temp_path / "Prompt_Project_Management.md").write_text("project context", encoding="utf-8")
             (temp_path / "Prompt_Goals.md").write_text("goal text", encoding="utf-8")
+            (temp_path / "1_长期行动计划.md").write_text("long-term plan rules", encoding="utf-8")
+            (temp_path / "Prompt_AI_Instructions.md").write_text("obsolete mixed-round rules", encoding="utf-8")
 
             def fake_resolve_data_path(filename, user_home=None, onedrive_env=None):
                 return temp_path / filename
@@ -195,6 +221,9 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
         self.assertIn("project context", combined)
         self.assertIn("# Goals", combined)
         self.assertIn("goal text", combined)
+        self.assertIn("# Long-Term Action Plan", combined)
+        self.assertIn("long-term plan rules", combined)
+        self.assertNotIn("obsolete mixed-round rules", combined)
 
         marker = "## Time Series Data (JSON)\n\n```json\n"
         start = combined.index(marker) + len(marker)

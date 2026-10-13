@@ -338,9 +338,10 @@ def test_real_prompt_entrypoint_stages_plan_and_all_context_but_preserves_usage(
     assert usage_roots == [history]
     assert (history / "state.db").read_bytes() == b"usage-stays-here"
     saved = store.publish(pending)
-    assert json.loads(saved.path.read_text())["plan"]["body"] == "plan reply"
-    assert json.loads(saved.path.read_text())["meta"]["source_revision"] == "b" * 64
-    assert "plan reply" in (history / "latest_action_plan_context.json").read_text()
+    saved_payload = json.loads(saved.path.read_text(encoding="utf-8"))
+    assert saved_payload["plan"]["body"] == "plan reply"
+    assert saved_payload["meta"]["source_revision"] == "b" * 64
+    assert "plan reply" in (history / "latest_action_plan_context.json").read_text(encoding="utf-8")
     store.discard(pending)
 
 

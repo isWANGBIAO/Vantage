@@ -19,6 +19,7 @@ from src.core.backend_runtime_packaging import (
     FORBIDDEN_RUNTIME_PACKAGE_NAMES,
     PYINSTALLER_EXCLUDES,
     PROJECT_ACTIVITY_SNAPSHOT_NAME,
+    OPTIONAL_ROOT_RESOURCE_NAMES,
     REQUIRED_ROOT_RESOURCE_NAMES,
     RUNTIME_NAME,
     backend_runtime_fingerprint_matches,
@@ -107,6 +108,26 @@ def test_body_analysis_runner_is_a_required_packaged_resource(tmp_path):
         collect_backend_runtime_resources(tmp_path)
 
 
+def test_action_plan_prompts_are_optional_local_resources(tmp_path):
+    _create_required_runtime_resources(tmp_path)
+    long_term = tmp_path / "1_长期行动计划.md"
+    today = tmp_path / "2_今日行动计划.md"
+    long_term.write_text("local long-term prompt", encoding="utf-8")
+    today.write_text("local daily prompt", encoding="utf-8")
+
+    packaged_paths = {
+        resource.output_relative_path
+        for resource in collect_backend_runtime_resources(tmp_path)
+    }
+
+    assert {long_term.name, today.name} == set(OPTIONAL_ROOT_RESOURCE_NAMES)
+    assert Path(long_term.name) in packaged_paths
+    assert Path(today.name) in packaged_paths
+    long_term.unlink()
+    today.unlink()
+    collect_backend_runtime_resources(tmp_path)
+
+
 def test_optional_ml_libraries_are_excluded_from_frozen_backend():
     assert "torch" in PYINSTALLER_EXCLUDES
     assert "transformers" in PYINSTALLER_EXCLUDES
@@ -117,7 +138,7 @@ def test_collect_backend_runtime_resources_rejects_missing_required_files(tmp_pa
     with pytest.raises(FileNotFoundError) as excinfo:
         collect_backend_runtime_resources(tmp_path)
 
-    assert "Prompt_Action_Plan.md" in str(excinfo.value)
+    assert "Prompt_System.md" in str(excinfo.value)
 
 
 def test_collect_backend_runtime_resources_rejects_missing_yunet_model(tmp_path):

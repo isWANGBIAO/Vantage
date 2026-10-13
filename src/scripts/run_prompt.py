@@ -34,6 +34,27 @@ from src.utils.prompt_budget import estimate_tokens
 
 ACTION_PLAN_EMPTY_CONTENT_RETRY_COUNT = 1
 RUN_PROMPT_ENTRYPOINT = "src/scripts/run_prompt.py"
+LONG_TERM_PLAN_SCOPE = (
+    "\n\n## 第一轮输出边界\n"
+    "本轮只输出长期行动计划，不生成今日行动表。请先分析可持续的长期方向、优先级和原则；"
+    "第二轮会使用本轮结果，结合当天记录生成今日行动计划。"
+)
+TODAY_PLAN_SCOPE = (
+    "\n\n## 第二轮输出边界\n"
+    "使用上一轮 assistant 输出的长期行动计划作为依据，并结合本条消息中的当天和近期记录。"
+    "本轮只输出今日行动安排，不复述长期分析、长期原则或优先级表。"
+    "如当天状态与长期计划冲突，说明调整原因并优先遵守当前安全与恢复信息。"
+)
+DEFAULT_TODAY_ACTION_PLAN_TEMPLATE = (
+    "Current time: {current_time}\n\n"
+    "Today's row:\n\n{today_data_row}\n\n"
+    "Yesterday's row:\n\n{yesterday_data_row}\n\n"
+    "Past seven days:\n\n{past_7_days_rows}\n\n"
+    "Future planned rows:\n\n{future_planned_rows}\n\n"
+    "Use the first-round long-term plan as context. Combine it with the supplied records, "
+    "then produce a concise Chinese daily plan with concrete actions, evidence, fallback options, "
+    "and risks. Do not repeat the long-term analysis. Start with '# 今日行动计划'."
+)
 ACTION_PLAN_TIME_SERIES_START_DATE = "2025-01-01"
 ACTION_PLAN_PROXY_PROMPT_TOKEN_LIMIT = 250_000
 ACTION_PLAN_DEFAULT_OUTPUT_RESERVE_TOKENS = 32_768
@@ -762,10 +783,8 @@ def main():
                     DataLoader.resolve_data_path("Time.xlsx"),
                     **_build_action_plan_prompt_kwargs(prompt_budget["input_budget_tokens"]),
                 )
+            prompt_text = f"{prompt_text}{LONG_TERM_PLAN_SCOPE}"
             prompt_cache_metadata = DataLoader.build_prompt_cache_metadata(prompt_text)
-            
-            # [User Request] Repeat the prompt content twice to emphasize it
-            # Handled in llm_client now
             
             # Clear previous context for fresh analysis? 
             # Original script seemed to start fresh in "Normal Mode" but didn't explicitly clear if context file wasn't passed.
@@ -783,29 +802,35 @@ def main():
             action_plan_session_id = _create_new_context_session_id(context_mgr.context_file, "action_plan")
             action_plan_msg = None
 
-            action_plan_prompt_path = DataLoader.resolve_data_path("Prompt_Action_Plan.md")
-            if action_plan_prompt_path.exists():
-                action_plan_template = action_plan_prompt_path.read_text(encoding="utf-8")
-                time_data_path = DataLoader.resolve_data_path("Time.xlsx")
-                past_7_days_rows = DataLoader.get_past_seven_days_rows(time_data_path)
-                today_data = DataLoader.get_today_data_row(time_data_path)
-                yesterday_data = DataLoader.get_yesterday_data_row(time_data_path)
-                future_planned_rows = DataLoader.get_future_planned_rows(time_data_path)
-                current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
-                action_plan_msg = action_plan_template.replace("{current_time}", current_time_str)
-                if "{past_7_days_rows}" in action_plan_msg:
-                    action_plan_msg = action_plan_msg.replace("{past_7_days_rows}", past_7_days_rows)
-                else:
-                    action_plan_msg = f"{action_plan_msg}\n\n{past_7_days_rows}"
-                action_plan_msg = action_plan_msg.replace("{today_data_row}", today_data)
-                action_plan_msg = action_plan_msg.replace("{yesterday_data_row}", yesterday_data)
-                if "{future_planned_rows}" in action_plan_msg:
-                    action_plan_msg = action_plan_msg.replace("{future_planned_rows}", future_planned_rows)
-                else:
-                    action_plan_msg = f"{action_plan_msg}\n\n{future_planned_rows}"
+            action_plan_prompt_path = DataLoader.resolve_data_path("2_今日行动计划.md")
+            if not action_plan_prompt_path.exists():
+                action_plan_prompt_path = DataLoader.resolve_data_path("Prompt_Action_Plan.md")
+            action_plan_template = (
+                action_plan_prompt_path.read_text(encoding="utf-8")
+                if action_plan_prompt_path.exists()
+                else DEFAULT_TODAY_ACTION_PLAN_TEMPLATE
+            )
+            time_data_path = DataLoader.resolve_data_path("Time.xlsx")
+            past_7_days_rows = DataLoader.get_past_seven_days_rows(time_data_path)
+            today_data = DataLoader.get_today_data_row(time_data_path)
+            yesterday_data = DataLoader.get_yesterday_data_row(time_data_path)
+            future_planned_rows = DataLoader.get_future_planned_rows(time_data_path)
+            current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+            action_plan_msg = action_plan_template.replace("{current_time}", current_time_str)
+            if "{past_7_days_rows}" in action_plan_msg:
+                action_plan_msg = action_plan_msg.replace("{past_7_days_rows}", past_7_days_rows)
+            else:
+                action_plan_msg = f"{action_plan_msg}\n\n{past_7_days_rows}"
+            action_plan_msg = action_plan_msg.replace("{today_data_row}", today_data)
+            action_plan_msg = action_plan_msg.replace("{yesterday_data_row}", yesterday_data)
+            if "{future_planned_rows}" in action_plan_msg:
+                action_plan_msg = action_plan_msg.replace("{future_planned_rows}", future_planned_rows)
+            else:
+                action_plan_msg = f"{action_plan_msg}\n\n{future_planned_rows}"
+            action_plan_msg = f"{action_plan_msg}{TODAY_PLAN_SCOPE}"
             
-            print("正在生成初始分析报告，请稍候...")
-            # === ROUND 1: General Analysis ===
+            print("正在生成长期行动计划，请稍候...")
+            # === ROUND 1: Long-Term Action Plan ===
             # Emit initial stats
             estimated_prompt_tokens = estimate_action_plan_prompt_tokens(prompt_text, sys_content)
             initial_stats = {
@@ -859,9 +884,6 @@ def main():
             # === ROUND 2: Specific Action Plan ===
             
             if action_plan_msg is not None:
-                # [User Request] Repeat the prompt content twice for Round 2 as well
-                # Handled in llm_client now
-                
                 # 1. Append to history
                 analysis_messages.append({"role": "user", "content": action_plan_msg})
                 
@@ -1081,7 +1103,7 @@ def main():
                             )
 
             else:
-                print("Error: Prompt_Action_Plan.md not found. Skipping second round.")
+                print("Error: 2_今日行动计划.md not found. Skipping second round.")
                 emit_action_plan_stream_event(
                     "plan",
                     "error",

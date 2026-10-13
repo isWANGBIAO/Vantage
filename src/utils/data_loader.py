@@ -12,6 +12,10 @@ from src.core.config import Config
 from src.utils.prompt_budget import estimate_tokens, select_rows_by_budget
 
 class DataLoader:
+    PROMPT_FILENAME_LEGACY_ALIASES = {
+        "1_长期行动计划.md": ("Prompt_AI_Instructions.md",),
+        "2_今日行动计划.md": ("Prompt_Action_Plan.md",),
+    }
     HEALTH_DATA_DIR_NAMES = ("mi_fiteness_data", "zepplift_data")
     HEALTH_ARCHIVE_DIR_PATTERN = re.compile(r"^\d{8}\s+.*(?:健康历史数据|health history data)$", re.IGNORECASE)
     STALE_SNAPSHOT_AGE_SECONDS = 24 * 3600
@@ -136,16 +140,25 @@ class DataLoader:
 
     @staticmethod
     def resolve_data_path(filename, user_home=None, onedrive_env=None):
+        legacy_names = DataLoader.PROMPT_FILENAME_LEGACY_ALIASES.get(filename, ())
         env_root = os.environ.get("AI_DATA_ROOT") or os.environ.get("DATA_ROOT")
         if env_root:
             path = Path(env_root) / filename
             if path.exists():
                 return path
+            for legacy_name in legacy_names:
+                legacy_path = Path(env_root) / legacy_name
+                if legacy_path.exists():
+                    return legacy_path
         else:
             for root in DataLoader._data_root_candidates(user_home=user_home, onedrive_env=onedrive_env):
                 path = root / filename
                 if path.exists():
                     return path
+                for legacy_name in legacy_names:
+                    legacy_path = root / legacy_name
+                    if legacy_path.exists():
+                        return legacy_path
             
         # Check Project Root
         project_root = Config.get_project_root()
@@ -770,7 +783,7 @@ class DataLoader:
             "Prompt_Advisor_Requirements.md": "# Advisor Requirements",
             "Prompt_Goals.md": "# Goals",
             "Prompt_Inventory.md": "# Personal Resources & Inventory",
-            "Prompt_AI_Instructions.md": "# AI Instructions",
+            "1_长期行动计划.md": "# Long-Term Action Plan",
             "Prompt_Scientific_Theory.md": "# Scientific Theory Guidelines"
         }
 
