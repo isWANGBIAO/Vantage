@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assetPathForRecord, visibleTrend, safeRecordName, formatMetric } from './bodyAnalysisViewModel.js';
+import { assetPathForRecord, visibleTrend, visibleLegTrendSeries, safeRecordName, formatMetric } from './bodyAnalysisViewModel.js';
 
 test('generated image references must belong to the report manifest and stay relative', () => {
   const manifest = ['masks/leg-0001.png'];
@@ -26,10 +26,14 @@ test('automatic leg photo proxies may trend only when date and quality are verif
     { review_status: 'unreviewed', trend_eligible: true, timestamp_verified: true, captured_at: '2026-01-01T09:00:00' },
     { review_status: 'unreviewed', trend_eligible: false, timestamp_verified: true, captured_at: '2026-01-02T09:00:00' },
   ], trend: [
-    { date: '2026-01-01', hair_count: 4, hair_density_per_mpx: 5 },
+    { date: '2026-01-01', hair_count: 4, hair_density_per_mpx: 5, n: 2 },
     { date: '2026-01-02', hair_count: 8, hair_density_per_mpx: 9 },
   ] } };
-  assert.deepEqual(visibleTrend(report, 'leg'), [{ date: '2026-01-01', hair_count: 4, hair_density_per_mpx: 5 }]);
+  assert.deepEqual(visibleTrend(report, 'leg'), [{ date: '2026-01-01', hair_count: 4, hair_density_per_mpx: 5, n: 2 }]);
+  assert.deepEqual(visibleLegTrendSeries(report), [
+    { key: 'hair_count', data: [['2026-01-01', 4, 2]] },
+    { key: 'hair_density_per_mpx', data: [['2026-01-01', 5, 2]] },
+  ]);
 });
 
 test('scalp candidate and unreviewed records never enter a trend', () => {

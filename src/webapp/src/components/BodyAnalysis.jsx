@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import FaceHistory from './FaceHistory';
+import ReactECharts from '../utils/echarts.js';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 import { buildBackendUrl, fetchBackendJson } from '../utils/backendRequest.js';
 import { loadSettingsState, saveSettingsState } from '../utils/settingsState.js';
 import { getPlatformAdapter } from '../utils/platformAdapter.js';
-import { assetPathForRecord, formatMetric, safeRecordName, visibleTrend } from '../utils/bodyAnalysisViewModel.js';
+import { assetPathForRecord, formatMetric, safeRecordName, visibleLegTrendSeries, visibleTrend } from '../utils/bodyAnalysisViewModel.js';
 import { chooseAndSaveDirectory, createBodyAnalysisPoller, environmentGuidance, requestOptionalInstall, shouldMountFaceHistory } from '../utils/bodyAnalysisActions.js';
+import { getChartTheme } from '../utils/chartTheme.js';
 
 const DIRECTORY_FIELDS = {
   leg: 'bodyAnalysisLegDir',
@@ -23,14 +25,79 @@ function ReportImage({ path, report, assetVersion, label }) {
   return <figure style={{ margin: 0 }}><img key={assetPath} src={buildBackendUrl(assetPath)} alt={label} loading="lazy" style={{ maxWidth: '100%', maxHeight: 250, borderRadius: 8 }} /><figcaption>{label}</figcaption></figure>;
 }
 
-function ReportSection({ kind, report, assetVersion, t }) {
+function TrendChart({ title, unit, data, color, theme, t }) {
+  const themeTokens = getChartTheme(theme);
+  const dates = data.map(([date]) => date);
+  const option = {
+    animation: false,
+    color: [color],
+    grid: { left: 54, right: 18, top: 24, bottom: 38, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: themeTokens.tooltipBackground,
+      textStyle: { color: themeTokens.tooltipText },
+      borderColor: themeTokens.gridColor,
+      formatter: (items) => {
+        const item = items?.[0];
+        if (!item) return '';
+        const photos = data[item.dataIndex]?.[2] ?? 1;
+        return `${item.axisValue}<br/>${item.marker}${title}: ${formatMetric(item.value)} ${unit}<br/>${t('body_analysis.photo_samples', { count: photos })}`;
+      },
+    },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: dates,
+      axisLabel: { color: themeTokens.axisColor },
+      axisLine: { lineStyle: { color: themeTokens.gridColor } },
+    },
+    yAxis: {
+      type: 'value',
+      name: unit,
+      min: 0,
+      nameTextStyle: { color: themeTokens.axisColor },
+      axisLabel: { color: themeTokens.axisColor },
+      axisLine: { lineStyle: { color: themeTokens.gridColor } },
+      splitLine: { lineStyle: { color: themeTokens.gridColor } },
+    },
+    series: [{
+      name: title,
+      type: 'line',
+      data: data.map(([, value]) => value),
+      showSymbol: true,
+      symbol: 'circle',
+      symbolSize: 8,
+      smooth: false,
+      lineStyle: { width: 3 },
+      emphasis: { focus: 'series' },
+    }],
+  };
+  return <article className="glass-panel" style={{ minWidth: 0, padding: 16 }}>
+    <h3>{title}</h3>
+    <ReactECharts option={option} notMerge lazyUpdate style={{ width: '100%', height: 280 }} />
+  </article>;
+}
+
+function ReportSection({ kind, report, assetVersion, t, theme }) {
   const records = Array.isArray(report?.[kind]?.records) ? report[kind].records : [];
   const trend = visibleTrend(report, kind);
+  const legSeries = kind === 'leg' ? visibleLegTrendSeries(report) : [];
   return (
     <section aria-label={t(kind === 'leg' ? 'body_analysis.tab.leg' : 'body_analysis.tab.scalp')}>
       <p>{t('body_analysis.record_count', { count: records.length })}</p>
       {trend.length === 0 && <p>{t(kind === 'leg' ? 'body_analysis.no_verified_trend' : 'body_analysis.no_verified_scalp_trend')}</p>}
       {kind === 'leg' && trend.length > 0 && <p>{t('body_analysis.leg_proxy_notice')}</p>}
+      {kind === 'leg' && trend.length > 0 && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))', gap: 16, marginBottom: 16 }}>
+        {legSeries.map((series, index) => <TrendChart
+          key={series.key}
+          title={t(index === 0 ? 'body_analysis.hair_count_chart' : 'body_analysis.density_chart')}
+          unit={t(index === 0 ? 'body_analysis.hair_count_unit' : 'body_analysis.density_unit')}
+          data={series.data}
+          color={index === 0 ? '#4f7cff' : '#46a17d'}
+          theme={theme}
+          t={t}
+        />)}
+      </div>}
       {trend.length > 0 && <div style={{ overflowX: 'auto', marginBottom: 16 }}><table>
         <thead><tr><th>{t('body_analysis.captured_at')}</th><th>{t(kind === 'leg' ? 'body_analysis.hair_count' : 'body_analysis.hair_region')}</th><th>{t(kind === 'leg' ? 'body_analysis.density' : 'body_analysis.texture')}</th></tr></thead>
         <tbody>{trend.map((point) => <tr key={point.date}><td>{point.date}</td><td>{formatMetric(kind === 'leg' ? point.hair_count : point.hair_region_fraction_percent)}</td><td>{formatMetric(kind === 'leg' ? point.hair_density_per_mpx : point.texture_fraction_percent)}</td></tr>)}</tbody>
@@ -64,7 +131,7 @@ function ReportSection({ kind, report, assetVersion, t }) {
   );
 }
 
-export default function BodyAnalysis() {
+export default function BodyAnalysis({ theme = 'dark' }) {
   const { t } = useDisplayLanguage();
   const [subtab, setSubtab] = useState('dark-circles');
   const [settings, setSettings] = useState(null);
@@ -197,7 +264,7 @@ export default function BodyAnalysis() {
             {message && <p role="alert">{message}</p>}
             {status?.error && <p role="alert">{t('body_analysis.action_failed')}</p>}
           </div>
-          {report && <ReportSection kind={subtab} report={report} assetVersion={assetVersion} t={t} />}
+          {report && <ReportSection kind={subtab} report={report} assetVersion={assetVersion} t={t} theme={theme} />}
           {!report && <p>{t('body_analysis.no_report')}</p>}
           {report && status?.status === 'running' && <p>{t('body_analysis.showing_previous_report')}</p>}
           {report && status?.status === 'failed' && <p>{t('body_analysis.showing_previous_report')}</p>}

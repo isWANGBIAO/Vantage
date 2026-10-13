@@ -32,6 +32,10 @@ test('optional environment install is user-triggered and last report remains vis
 
 test('report renders inspectable masks and only eligible trend records', () => {
   assert.match(source, /visibleTrend\(report, kind\)/);
+  assert.match(source, /ReactECharts/);
+  assert.match(source, /visibleLegTrendSeries\(report\)/);
+  assert.match(source, /body_analysis\.hair_count_chart/);
+  assert.match(source, /body_analysis\.density_chart/);
   assert.match(source, /trend\.map/);
   assert.match(source, /texture_mask_path/);
   assert.match(source, /line_mask_path/);

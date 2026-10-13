@@ -31,6 +31,14 @@ export function visibleTrend(report, kind) {
     .filter((key) => Object.hasOwn(item, key)).map((key) => [key, item[key]])));
 }
 
+export function visibleLegTrendSeries(report) {
+  const trend = visibleTrend(report, 'leg');
+  return [
+    { key: 'hair_count', data: trend.map((item) => [item.date, item.hair_count, item.n ?? 1]) },
+    { key: 'hair_density_per_mpx', data: trend.map((item) => [item.date, item.hair_density_per_mpx, item.n ?? 1]) },
+  ];
+}
+
 export function safeRecordName(value) {
   if (typeof value !== 'string') return '';
   return value.split(/[\\/]/).at(-1) || '';

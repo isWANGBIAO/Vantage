@@ -540,7 +540,7 @@ function AppShell() {
         </Suspense>
         <Suspense fallback={null}>
           {activeTab === 'body-analysis' ? (
-            <BodyAnalysis />
+            <BodyAnalysis theme={theme} />
           ) : null}
         </Suspense>
         <Suspense fallback={null}>
