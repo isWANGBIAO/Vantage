@@ -328,6 +328,8 @@ class FaceReportEndpointTests(unittest.TestCase):
             }
 
             with patch.object(_backend_face, "FACE_ANALYSIS_DB_FILE", db_path), patch.object(
+                _backend_face, "configuration_status", return_value={"ready": True}
+            ), patch.object(
                 _backend_plots, "FACE_REPORT_PLOT_OUTPUT_DIR", output_dir
             ), patch.object(
                 _backend_face, "get_face_analysis_runtime", return_value=(object(), object(), object())

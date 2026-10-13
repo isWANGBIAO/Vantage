@@ -66,6 +66,10 @@ REQUIRED_RESOURCE_SPECS = (
     ("src/models/face_detection_yunet_2023mar.onnx", "src/models"),
     ("src/models/LICENSE.face_detection_yunet.txt", "src/models"),
     ("src/scripts/body_analysis_sam3.py", "src/scripts"),
+    ("src/scripts/face_model_worker.py", "src/scripts"),
+    ("src/services/face_brow_analysis.py", "src/services"),
+    ("src/utils/face_score.py", "src/utils"),
+    ("src/core/cpu_runtime_policy.py", "src/core"),
 )
 
 OPTIONAL_RESOURCE_SPECS: tuple[tuple[str, str], ...] = ()

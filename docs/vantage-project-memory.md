@@ -47,6 +47,10 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 
 ## 身体分析与可选 SAM3
 
+黑眼圈页面支持外部 ONNX（默认 BiSeNet ResNet18 19 类）和 SAM3。`face_analysis_method`、`face_analysis_python`、`face_analysis_sam3_python`、`face_analysis_onnx_model`、`face_analysis_sam3_model_dir` 由同一 settings.json 保存；SAM3 Python 留空时沿用通用 Python。公开默认路径为空，主包仅带桥接和共享采样脚本，不捆绑 ONNX Runtime/PyTorch/Transformers 或新增模型权重，不自动下载。外部进程离线串行分析，缺依赖会提示自行处理。眉眼缺失、区域不足和明显曝光/姿态/左右光照差异直接跳过，不用固定椭圆补分数。眉眼间距决定眼下皮肤带，脸颊对照不重叠；所得分数为相对外观指标，不是医学严重程度。
+
+本地黑眼圈历史位于 history/face_local 的方法/模型/算法 profile 子目录，旧 face_analysis.db 保留、不混合；每 profile 独立趋势和采样图。覆盖图橙色表示眼下，绿色表示脸颊，受界面隐私显示开关控制。切换方法不会把旧方法分数直接画进新曲线；分析任务运行期间不允许修改模型设置。导出只读取缓存，不隐式加载模型或启动分析。
+
 “身体分析”统一承载黑眼圈历史、腿毛和头皮三个子页面。腿毛与头皮由本地 SAM3 脚本分析；主安装包仅带脱敏脚本，不捆绑 PyTorch、Transformers 或模型权重。`settings.json` 的 `body_analysis_enabled`、`body_analysis_leg_dir`、`body_analysis_scalp_dir`、`body_analysis_model_dir` 是唯一配置入口，默认关闭且没有机器专属路径。目录必须存在，不能与源码仓库或报告输出位置重叠。保存设置、后台启动或显式重试均由同一后端服务检查照片版本；未变化时复用上次完整报告，失败时保留旧报告。
 
 可选 GPU 环境缺失时只显示提示；唯有用户明确点击安装，才会在用户数据目录建立独立环境并下载依赖。不会自动下载受限 SAM3 权重，不会上传照片。报告与掩膜/覆盖图留在用户数据目录；接口只读取当前完整报告及其清单列出的生成图片，不提供任意源照片路径。腿毛数量、密度和头皮纹理均是照片代理指标；无检出值为 null，缺少可信拍摄时间不进入时间趋势，未验证的头皮候选不得生成趋势。真实模型效果须单独在本机验证，单元测试或安装成功不能代替。
@@ -105,6 +109,7 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 | 读取面部历史报告 | face.report.read | vantage face report read |
 | 导出面部历史 Excel | face.export | vantage face export |
 | 读取面部分析进度 | face.progress.read | vantage face progress read |
+| 本地黑眼圈模型环境状态 | face.local_status.read | vantage face local-status read |
 | 读取身体分析状态 | body_analysis.status.read | vantage body-analysis status read |
 | 读取最新身体分析报告 | body_analysis.report.read | vantage body-analysis report read |
 | 查看报告生成的掩膜/覆盖图 | body_analysis.asset.read | vantage body-analysis asset read |

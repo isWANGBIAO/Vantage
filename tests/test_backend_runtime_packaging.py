@@ -21,6 +21,7 @@ from src.core.backend_runtime_packaging import (
     PROJECT_ACTIVITY_SNAPSHOT_NAME,
     OPTIONAL_ROOT_RESOURCE_NAMES,
     REQUIRED_ROOT_RESOURCE_NAMES,
+    REQUIRED_RESOURCE_SPECS,
     RUNTIME_NAME,
     backend_runtime_fingerprint_matches,
     build_backend_runtime_manifest,
@@ -41,6 +42,11 @@ from src.core.backend_runtime_packaging import (
 
 
 def _create_required_runtime_resources(project_root: Path):
+    for source, _ in REQUIRED_RESOURCE_SPECS:
+        target = project_root / source
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.endswith(".py"):
+            target.write_text("# synthetic packaged support code\n", encoding="utf-8")
     models_dir = project_root / "src" / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     (project_root / "src" / "scripts").mkdir(parents=True, exist_ok=True)

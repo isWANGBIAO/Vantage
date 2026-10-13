@@ -495,6 +495,9 @@ def _stability_fail_reasons(left_metrics, right_metrics, resized_img, config: An
 
 
 def analyze_image_data(image_bgr, detector, parser, source_path="", observed_at=None, config=None):
+    if getattr(parser, "is_external_local", False):
+        return parser.analyze(image_bgr, source_path=source_path, observed_at=observed_at,
+                              detector=detector, config=config)
     config = config or AnalysisConfig()
     observed_at = observed_at or datetime.now()
 

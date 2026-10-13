@@ -1,7 +1,7 @@
 {
   "name": "vantage",
   "private": true,
-  "version": "1.0.89",
+  "version": "1.0.90",
   "description": "Vantage Electron Desktop Application",
   "author": "Biao Wang",
   "main": "main.cjs",

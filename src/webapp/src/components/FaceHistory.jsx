@@ -9,6 +9,8 @@ import {
   buildChartModel,
 } from './faceTrendChart';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
+import FaceAnalysisSettings from './FaceAnalysisSettings.jsx';
+import { faceSkipReasonKey, formatFaceScore, getFaceOverlayUrl } from '../utils/faceLocalSettings';
 
 const initialProgress = { percent: 0, status: 'idle', current_file: '' };
 const initialLiveData = {
@@ -26,7 +28,7 @@ const visibleLivePollIntervalMs = 1000;
 const hiddenLivePollIntervalMs = 30000;
 
 function formatScore(score) {
-  return Number.isFinite(Number(score)) ? Number(score).toFixed(2) : '--';
+  return formatFaceScore(score);
 }
 
 function StatPill({ label, value, accent }) {
@@ -336,6 +338,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
   const [error, setError] = useState(null);
   const [reportStatus, setReportStatus] = useState('loading');
   const [privacyRevealed, setPrivacyRevealed] = useState(false);
+  const [localAnalysis, setLocalAnalysis] = useState(null);
 
   const fetchReport = useCallback(async ({ showLoading = false } = {}) => {
     const controller = new AbortController();
@@ -351,6 +354,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
         signal: controller.signal,
       });
       const nextState = getFaceReportState(json);
+      setLocalAnalysis(json?.local_analysis || null);
       setData(nextState.data);
       setError(nextState.error);
       setReportStatus(nextState.status);
@@ -533,18 +537,18 @@ export default function FaceHistory({ isVisible = true } = {}) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '2rem' }}>
           <ExtremeCard
             title={t('face_history.lightest')}
-            date={data.lightest.date}
-            score={data.lightest.score}
-            imageUrl={data.lightest.url}
+            date={data.lightest?.date}
+            score={data.lightest?.score}
+            imageUrl={data.lightest?.url}
             accent="#2ecc71"
             privacyRevealed={privacyRevealed}
           />
 
           <ExtremeCard
             title={t('face_history.heaviest')}
-            date={data.heaviest.date}
-            score={data.heaviest.score}
-            imageUrl={data.heaviest.url}
+            date={data.heaviest?.date}
+            score={data.heaviest?.score}
+            imageUrl={data.heaviest?.url}
             accent="#e74c3c"
             privacyRevealed={privacyRevealed}
           />
@@ -552,6 +556,8 @@ export default function FaceHistory({ isVisible = true } = {}) {
       </>
     );
   };
+
+  const overlayUrl = getFaceOverlayUrl(localAnalysis?.overlay_url);
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: '2rem' }}>
@@ -682,6 +688,28 @@ export default function FaceHistory({ isVisible = true } = {}) {
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+        <FaceAnalysisSettings onSaved={fetchReport} analysisRunning={loading} />
+        <div className="glass-panel" style={{ padding: '1.25rem', display: 'grid', gap: '0.75rem' }}>
+          <p style={{ margin: 0, color: 'var(--text-secondary)' }}>{t('face_local.disclaimer')}</p>
+          {localAnalysis && <div>{t('face_local.report_profile')}: {localAnalysis.method?.toUpperCase()} · {localAnalysis.algorithm_version || '--'}</div>}
+          {localAnalysis && (
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <StatPill label={t('face_local.left_score')} value={formatScore(localAnalysis.latest_score_left)} accent="#74b9ff" />
+              <StatPill label={t('face_local.right_score')} value={formatScore(localAnalysis.latest_score_right)} accent="#a29bfe" />
+              <StatPill label={t('face_history.latest_time')} value={localAnalysis.latest_datetime || '--'} accent="#fdcb6e" />
+            </div>
+          )}
+          {localAnalysis?.skip_reason_counts && Object.keys(localAnalysis.skip_reason_counts).length > 0 && (
+            <div>
+              <strong>{t('face_local.skipped')}</strong>
+              <ul style={{ marginBottom: 0 }}>{Object.entries(localAnalysis.skip_reason_counts).map(([reason, count]) => <li key={reason}>{t(faceSkipReasonKey(reason))}: {count}</li>)}</ul>
+            </div>
+          )}
+          <h3 style={{ margin: 0 }}>{t('face_local.overlay')}</h3>
+          {privacyRevealed && overlayUrl ? (
+            <img src={buildBackendUrl(overlayUrl)} alt={t('face_local.overlay')} style={{ maxWidth: '100%', maxHeight: '480px', objectFit: 'contain', justifySelf: 'start' }} />
+          ) : <div style={{ color: 'var(--text-muted)' }}>{overlayUrl ? t('dashboard.media.hidden') : t('face_local.no_overlay')}</div>}
+        </div>
         <PulseCard liveData={liveData} />
         {renderHistoryBody()}
       </div>

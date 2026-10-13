@@ -21,3 +21,22 @@ test('FaceHistory throttles hidden live polling through visibility state', () =>
   assert.ok(faceHistorySource.includes("`/api/v1/face/live?active=${isVisible ? '1' : '0'}`"));
   assert.equal(faceHistorySource.includes('livePollIntervalMs = 100'), false);
 });
+
+test('FaceHistory exposes external local models and privacy-gated sampling overlay', () => {
+  assert.ok(faceHistorySource.includes('<FaceAnalysisSettings'));
+  assert.ok(faceHistorySource.includes('onSaved={fetchReport}'));
+  assert.ok(faceHistorySource.includes('localAnalysis'));
+  assert.ok(faceHistorySource.includes('privacyRevealed && overlayUrl'));
+  assert.ok(faceHistorySource.includes("t('face_local.disclaimer')"));
+  assert.ok(faceHistorySource.includes("t('face_local.skipped')"));
+});
+
+test('FaceHistory can display zero-passing reports without missing extrema crashes', () => {
+  assert.ok(faceHistorySource.includes('date={data.lightest?.date}'));
+  assert.ok(faceHistorySource.includes('date={data.heaviest?.date}'));
+});
+
+test('FaceHistory presents separate left and right relative darkness scores', () => {
+  assert.ok(faceHistorySource.includes('localAnalysis.latest_score_left'));
+  assert.ok(faceHistorySource.includes('localAnalysis.latest_score_right'));
+});

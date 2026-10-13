@@ -35,6 +35,7 @@ EXPECTED_OPERATION_NAMES = {
     "face.analyze",
     "face.export",
     "face.live.read",
+    "face.local_status.read",
     "face.progress.read",
     "face.report.read",
     "finance.balance_sheet.read",

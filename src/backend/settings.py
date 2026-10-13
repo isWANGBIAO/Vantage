@@ -3,7 +3,7 @@
 import logging
 import os
 import shutil
-from contextlib import suppress
+from contextlib import suppress, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,6 +18,8 @@ from src.core.user_config import (
     _sanitize_provider_config,
     _sanitize_settings,
     BODY_ANALYSIS_DIRECTORY_FIELDS,
+    FACE_ANALYSIS_PATH_FIELDS,
+    validate_face_analysis_settings,
     validate_body_analysis_paths,
     get_migration_state_file,
     get_provider_chain_config,
@@ -56,6 +58,8 @@ _AUTOMATION_SETTINGS_FIELDS = frozenset({
     "action_plan_check_interval_minutes",
     "body_analysis_enabled",
     *BODY_ANALYSIS_DIRECTORY_FIELDS,
+    "face_analysis_method",
+    *FACE_ANALYSIS_PATH_FIELDS,
     "voice_provider_mode",
     "voice_base_url",
     "voice_api_key",
@@ -235,7 +239,9 @@ def get_automation_settings():
 @router.put("/api/v1/settings", response_model=SettingsState, response_model_exclude_unset=True,
             openapi_extra=_request_contract("settings.update"))
 def update_automation_settings(payload: dict):
-    with _automation_config_lock:
+    from . import face
+    changing_face = isinstance(payload, dict) and bool(set(payload).intersection({"face_analysis_method", *FACE_ANALYSIS_PATH_FIELDS}))
+    with _automation_config_lock, (face._face_analysis_job_lock if changing_face else nullcontext()):
         _validate_automation_payload(payload, _AUTOMATION_SETTINGS_FIELDS | {"provider_config"})
         interval = payload.get("action_plan_check_interval_minutes")
         if "action_plan_check_interval_minutes" in payload and (
@@ -252,6 +258,16 @@ def update_automation_settings(payload: dict):
                 ),
             )
         _validate_provider_configuration_payload(payload)
+        face_fields = set(payload).intersection({"face_analysis_method", *FACE_ANALYSIS_PATH_FIELDS})
+        if face_fields:
+            from . import face
+            if face._face_analysis_job_running:
+                raise HTTPException(status_code=409, detail="Face analysis is running; wait before changing its model settings.")
+            try:
+                normalized_face = validate_face_analysis_settings(payload, fields=face_fields)
+            except (ValueError, OSError) as exc:
+                raise HTTPException(status_code=422, detail="Local face-analysis method or paths are invalid or unavailable.") from exc
+            payload = {**payload, **normalized_face}
         if "body_analysis_enabled" in payload and not isinstance(payload["body_analysis_enabled"], bool):
             raise HTTPException(status_code=422, detail="body_analysis_enabled must be a boolean.")
         submitted_body_paths = set(payload).intersection(BODY_ANALYSIS_DIRECTORY_FIELDS)

@@ -309,6 +309,7 @@ def store_live_face_result(result):
                 "timestamp": float(result["timestamp"]),
                 "datetime": result["datetime"],
                 "score": float(result["score"]),
+                **({"profile_id": result["profile_id"]} if result.get("profile_id") else {}),
             }
         )
         _prune_live_face_points(result["timestamp"])
@@ -340,7 +341,7 @@ def has_active_face_live_viewer(now_ts=None):
     return (now_ts - last_seen_at) <= FACE_LIVE_VIEWER_TTL_SECONDS
 
 def should_run_face_live_analysis(now_ts=None):
-    return True
+    return not _face._face_analysis_job_running
 
 def register_video_stream_client():
     with _runtime.state.lock:
@@ -675,8 +676,6 @@ def face_live_loop():
 
         if frame_available:
             try:
-                detector, parser, config = _face.get_face_analysis_runtime()
-                pipeline = _face.get_face_analysis_pipeline_module()
                 _runtime.wait_for_next_inference_start(
                     last_inference_started_at,
                     FACE_LIVE_SAMPLE_INTERVAL_SECONDS,
@@ -693,13 +692,21 @@ def face_live_loop():
                 if frame_copy is None:
                     continue
 
-                last_inference_started_at = time.monotonic()
-                result = pipeline.analyze_image_data(
-                    frame_copy,
-                    detector=detector,
-                    parser=parser,
-                    config=config,
-                )
+                with _face._face_execution_lock:
+                    if not should_run_face_live_analysis():
+                        continue
+                    detector, parser, config = _face.get_face_analysis_runtime()
+                    pipeline = _face.get_face_analysis_pipeline_module()
+                    last_inference_started_at = time.monotonic()
+                    result = pipeline.analyze_image_data(
+                        frame_copy,
+                        detector=detector,
+                        parser=parser,
+                        config=config,
+                    )
+                    if (result.get("profile_id") and
+                            result["profile_id"] != _face.profile_paths()["profile_id"]):
+                        continue
                 update_live_face_overlay_state(result)
                 store_live_face_result(result)
             except Exception as exc:

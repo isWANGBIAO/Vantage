@@ -140,6 +140,11 @@ class SettingsValues(ExtensibleModel):
     body_analysis_leg_dir: str
     body_analysis_scalp_dir: str
     body_analysis_model_dir: str
+    face_analysis_method: Literal["onnx", "sam3"]
+    face_analysis_python: str
+    face_analysis_sam3_python: str
+    face_analysis_onnx_model: str
+    face_analysis_sam3_model_dir: str
     voice_provider_mode: Literal["inherit_ai", "custom"]
     voice_base_url: str
     voice_api_key: Literal["", "********"]

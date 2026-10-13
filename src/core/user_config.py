@@ -90,6 +90,11 @@ DEFAULT_SETTINGS = {
     "body_analysis_leg_dir": "",
     "body_analysis_scalp_dir": "",
     "body_analysis_model_dir": "",
+    "face_analysis_method": "onnx",
+    "face_analysis_python": "",
+    "face_analysis_sam3_python": "",
+    "face_analysis_onnx_model": "",
+    "face_analysis_sam3_model_dir": "",
     "voice_provider_mode": PROVIDER_MODE_INHERIT_AI,
     "voice_base_url": "",
     "voice_api_key": "",
@@ -448,6 +453,12 @@ def _sanitize_settings(payload: dict | None) -> dict:
         "body_analysis_leg_dir": _coerce_optional_str(payload, "body_analysis_leg_dir") or "",
         "body_analysis_scalp_dir": _coerce_optional_str(payload, "body_analysis_scalp_dir") or "",
         "body_analysis_model_dir": _coerce_optional_str(payload, "body_analysis_model_dir") or "",
+        "face_analysis_method": ((payload or {}).get("face_analysis_method")
+                                 if (payload or {}).get("face_analysis_method") in ("onnx", "sam3") else "onnx"),
+        "face_analysis_python": _coerce_optional_str(payload, "face_analysis_python") or "",
+        "face_analysis_sam3_python": _coerce_optional_str(payload, "face_analysis_sam3_python") or "",
+        "face_analysis_onnx_model": _coerce_optional_str(payload, "face_analysis_onnx_model") or "",
+        "face_analysis_sam3_model_dir": _coerce_optional_str(payload, "face_analysis_sam3_model_dir") or "",
         "voice_provider_mode": _coerce_special_provider_mode(payload, prefix="voice"),
         "voice_base_url": _coerce_optional_str(payload, "voice_base_url") or "",
         "voice_api_key": _coerce_optional_str(payload, "voice_api_key") or "",
@@ -468,6 +479,41 @@ BODY_ANALYSIS_DIRECTORY_FIELDS = (
     "body_analysis_scalp_dir",
     "body_analysis_model_dir",
 )
+
+FACE_ANALYSIS_PATH_FIELDS = (
+    "face_analysis_python",
+    "face_analysis_sam3_python",
+    "face_analysis_onnx_model",
+    "face_analysis_sam3_model_dir",
+)
+
+
+def validate_face_analysis_settings(settings: dict, *, fields=None) -> dict[str, str]:
+    """Validate local model references without launching or installing anything."""
+    selected = set(settings) if fields is None else set(fields)
+    normalized = {}
+    if "face_analysis_method" in selected:
+        method = settings.get("face_analysis_method")
+        if method not in ("onnx", "sam3"):
+            raise ValueError("face_analysis_method must be onnx or sam3")
+        normalized["face_analysis_method"] = method
+    for key in selected.intersection(FACE_ANALYSIS_PATH_FIELDS):
+        raw = settings.get(key)
+        if not isinstance(raw, str):
+            raise ValueError(f"{key} must be a string")
+        value = raw.strip()
+        if not value:
+            normalized[key] = ""
+            continue
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            raise ValueError(f"{key} must be an absolute local path")
+        path = path.resolve(strict=True)
+        directory = key == "face_analysis_sam3_model_dir"
+        if not (path.is_dir() if directory else path.is_file()):
+            raise ValueError(f"{key} has an invalid path type")
+        normalized[key] = str(path)
+    return normalized
 
 
 def get_body_analysis_report_root() -> Path:

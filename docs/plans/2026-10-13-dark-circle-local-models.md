@@ -40,4 +40,4 @@ Files: src/core/backend_runtime_packaging.py and packaging tests, version config
 2. Run `.venv-backend-runtime-gpu/Scripts/python.exe -m pytest -q`, `npm --prefix src/webapp run check`. Run real ONNX and SAM3 on bounded sample locally and inspect overlay/score.
 3. Review spec and code quality, address findings, update release version coherently. Run RUN.bat without forced timeout. Verify installed backend version/settings/report and no added model weights in package.
 
-Task state: design approved; implementation pending. Do not claim completion until fresh evidence from tests, build and installed runtime.
+Task state: implementation and targeted model/ROI/settings tests complete; full verification and installed acceptance required. Added a separate optional SAM3 interpreter because ONNX and SAM3 may live in different existing environments. Review fixes cover total IPC deadline, model execution exclusion, immutable model settings during history jobs, profile-specific plots, and timestamp-matched overlays. Do not claim installation completion without installed runtime evidence.

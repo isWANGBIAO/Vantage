@@ -17,8 +17,10 @@ class AnalyzeFaceCliProgressTests(unittest.TestCase):
                 "get_plot_dir",
                 return_value=plot_dir,
             ):
-                self.assertEqual(analyze_face.get_default_db_file(), history_dir / "face_analysis.db")
-                self.assertEqual(analyze_face.get_default_plot_output_dir(), plot_dir)
+                current = analyze_face.get_default_db_file()
+                self.assertTrue(current.is_relative_to(history_dir / "face_local"))
+                self.assertEqual(current.name, "face_analysis.db")
+                self.assertEqual(analyze_face.get_default_plot_output_dir(), current.parent / "plots")
 
     def test_run_analysis_wraps_pending_photos_with_tqdm(self):
         photos = [

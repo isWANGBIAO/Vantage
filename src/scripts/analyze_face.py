@@ -16,6 +16,7 @@ configure_cpu_runtime()
 
 from tqdm import tqdm
 from src.core.config import Config
+from src.services.face_local_runtime import get_local_runtime, profile_paths, configuration_status, close_local_runtimes
 from src.services.face_analysis_pipeline import (
     AnalysisConfig,
     FaceParser,
@@ -48,13 +49,13 @@ DEFAULT_MODEL_PATH = os.path.join("src", "scripts", "models", "face_parsing.farl
 def get_default_db_file():
     if DB_FILE:
         return Path(DB_FILE)
-    return get_face_analysis_db_file()
+    return profile_paths()["db_file"]
 
 
 def get_default_plot_output_dir():
     if PLOT_OUTPUT_DIR:
         return Path(PLOT_OUTPUT_DIR)
-    return Path(Config.get_plot_dir())
+    return profile_paths()["root"] / "plots"
 
 
 def update_progress(current, total, status="analyzing", current_file="", percent=None):
@@ -72,14 +73,14 @@ def update_progress(current, total, status="analyzing", current_file="", percent
     )
 
 
-def run_analysis(search_paths, model_path, db_file, output_dir, day=None, limit=None, rebuild=False):
+def run_analysis(search_paths, model_path, db_file, output_dir, day=None, limit=None, rebuild=False, external_local=False):
     Path(db_file).parent.mkdir(parents=True, exist_ok=True)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     initialize_face_analysis_storage(db_file)
 
     config = AnalysisConfig()
     detector = MediaPipeFaceDetector(min_detection_confidence=config.min_detection_confidence)
-    parser = FaceParser(model_path)
+    parser = get_local_runtime() if external_local else FaceParser(model_path)
 
     photos = scan_photos(search_paths, day=day)
     if limit:
@@ -156,27 +157,18 @@ def main():
     args = parser.parse_args()
     db_file = get_default_db_file()
     output_dir = get_default_plot_output_dir()
+    # Installed and CLI workflows use configured external models only. Legacy
+    # parser remains callable for old explicit test/research entry points.
+    status = configuration_status()
+    if not args.export and not status["ready"]:
+        update_progress(0, 0, status="error")
+        raise RuntimeError(status["message"])
 
     if args.export:
         exported = export_excel(db_file)
         if exported is None:
-            search_paths = args.dir if args.dir else discover_photo_search_paths()
-            if not search_paths:
-                print("Export skipped: no cached data or photo directories found.")
-                return
-            _, report = run_analysis(
-                search_paths=search_paths,
-                model_path=args.model,
-                db_file=db_file,
-                output_dir=output_dir,
-                day=args.day,
-                limit=args.limit,
-                rebuild=args.rebuild,
-            )
-            if report.get("count", 0) == 0:
-                print("Export skipped: no valid analyzed rows.")
-                return
-            exported = export_excel(db_file)
+            print("Export skipped: no cached valid data; run analysis explicitly first.")
+            return
 
         if exported:
             print(f"EXPORT_PATH:{exported}")
@@ -198,6 +190,7 @@ def main():
         day=args.day,
         limit=args.limit,
         rebuild=args.rebuild,
+        external_local=True,
     )
 
 
