@@ -17,6 +17,7 @@ class DataLoader:
         "2_今日行动计划.md": ("Prompt_Action_Plan.md",),
     }
     HEALTH_DATA_DIR_NAMES = ("mi_fiteness_data", "zepplift_data")
+    HEALTH_CONTAINER_DIR_NAMES = ("01 Health",)
     HEALTH_ARCHIVE_DIR_PATTERN = re.compile(r"^\d{8}\s+.*(?:健康历史数据|health history data)$", re.IGNORECASE)
     STALE_SNAPSHOT_AGE_SECONDS = 24 * 3600
 
@@ -108,15 +109,19 @@ class DataLoader:
             add(env_root)
 
         for root in DataLoader._data_root_candidates(user_home=user_home, onedrive_env=onedrive_env):
-            if root.exists():
-                dated_archives = [
-                    child
-                    for child in root.iterdir()
-                    if child.is_dir() and DataLoader.HEALTH_ARCHIVE_DIR_PATTERN.match(child.name)
-                ]
-                for archive in sorted(dated_archives, key=lambda path: path.name, reverse=True):
-                    add(archive)
-            add(root)
+            # Search only known containers and their immediate dated archives.
+            # Do not recursively walk unrelated personal folders.
+            containers = [root / name for name in DataLoader.HEALTH_CONTAINER_DIR_NAMES]
+            for container in (*containers, root):
+                if container.is_dir():
+                    dated_archives = [
+                        child
+                        for child in container.iterdir()
+                        if child.is_dir() and DataLoader.HEALTH_ARCHIVE_DIR_PATTERN.match(child.name)
+                    ]
+                    for archive in sorted(dated_archives, key=lambda path: path.name, reverse=True):
+                        add(archive)
+                add(container)
 
         add(Config.get_project_root() / "data")
         return candidates

@@ -271,6 +271,82 @@ class BackendPathResolutionTests(unittest.TestCase):
 
         self.assertEqual(resolved, archive_root)
 
+    def test_health_root_finds_archives_in_known_health_container(self):
+        for archive_name in ("20260101 MiFitness health history data", "20260101 健康历史数据"):
+            for required_dir in DataLoader.HEALTH_DATA_DIR_NAMES:
+                with self.subTest(archive=archive_name, required_dir=required_dir), tempfile.TemporaryDirectory() as tmpdir:
+                    root = Path(tmpdir)
+                    archive = root / "01 Health" / archive_name
+                    (archive / required_dir).mkdir(parents=True)
+                    with patch.dict(os.environ, {}, clear=True), patch.object(
+                        DataLoader, "_data_root_candidates", return_value=[root]
+                    ):
+                        self.assertEqual(DataLoader.resolve_health_data_root(required_dir), archive)
+                        self.assertEqual(DataLoader.resolve_health_data_root(), archive)
+
+    def test_health_root_prefers_newest_matching_archive_in_health_container(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            older = root / "01 Health" / "20260101 health history data"
+            newest = root / "01 Health" / "20260201 health history data"
+            (older / "mi_fiteness_data").mkdir(parents=True)
+            (newest / "zepplift_data").mkdir(parents=True)
+            with patch.dict(os.environ, {}, clear=True), patch.object(
+                DataLoader, "_data_root_candidates", return_value=[root]
+            ):
+                self.assertEqual(DataLoader.resolve_health_data_root(), newest)
+                self.assertEqual(DataLoader.resolve_health_data_root("mi_fiteness_data"), older)
+
+    def test_health_root_preserves_direct_data_layouts(self):
+        for relative_root in (".", "01 Health"):
+            with self.subTest(layout=relative_root), tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                data_root = root / relative_root
+                (data_root / "mi_fiteness_data").mkdir(parents=True)
+                with patch.dict(os.environ, {}, clear=True), patch.object(
+                    DataLoader, "_data_root_candidates", return_value=[root]
+                ):
+                    self.assertEqual(DataLoader.resolve_health_data_root("mi_fiteness_data"), data_root)
+
+    def test_health_root_explicit_override_precedes_discovered_archives(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            explicit = root / "explicit"
+            nested = root / "01 Health" / "20260101 health history data"
+            legacy = root / "20260102 health history data"
+            for candidate in (explicit, nested, legacy):
+                (candidate / "mi_fiteness_data").mkdir(parents=True)
+            with patch.dict(os.environ, {"AI_HEALTH_DATA_ROOT": str(explicit)}, clear=True), patch.object(
+                DataLoader, "_data_root_candidates", return_value=[root]
+            ):
+                self.assertEqual(DataLoader.resolve_health_data_root("mi_fiteness_data"), explicit)
+
+    def test_health_root_override_missing_requested_export_keeps_discovery_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            explicit = root / "explicit"
+            nested = root / "01 Health" / "20260101 health history data"
+            (explicit / "mi_fiteness_data").mkdir(parents=True)
+            (nested / "zepplift_data").mkdir(parents=True)
+            with patch.dict(os.environ, {"AI_HEALTH_DATA_ROOT": str(explicit)}, clear=True), patch.object(
+                DataLoader, "_data_root_candidates", return_value=[root]
+            ):
+                self.assertEqual(DataLoader.resolve_health_data_root("zepplift_data"), nested)
+
+    def test_health_root_does_not_recursively_search_unrelated_or_deeper_folders(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            unrelated = root / "Other" / "20260101 health history data"
+            too_deep = root / "01 Health" / "Other" / "20260101 health history data"
+            for candidate in (unrelated, too_deep):
+                (candidate / "mi_fiteness_data").mkdir(parents=True)
+            with patch.dict(os.environ, {}, clear=True), patch.object(
+                DataLoader, "_data_root_candidates", return_value=[root]
+            ):
+                candidates = DataLoader._health_data_root_candidates()
+            self.assertNotIn(unrelated, candidates)
+            self.assertNotIn(too_deep, candidates)
+
     def test_plot_running_data_root_uses_health_archive_resolver(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             archive_root = Path(tmpdir)
