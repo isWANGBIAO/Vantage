@@ -56,3 +56,19 @@ increasing the timeout or removing the scenario is not acceptable.
   closure status.
 
 No final CI or main success is claimed in this pre-merge acceptance record.
+
+## Python 3.13 CI fixture correction
+
+The first combined CI head bbbda27 passed Python 3.11, frontend, arm64 and
+CodeQL, but one Python 3.13 test failed: its global os.walk fault injection also
+intercepted tempfile cleanup (Python 3.13 shutil uses os.walk there). The
+synthetic PermissionError lacked a filename, so cleanup raised TypeError rather
+than exercising only the intended source-read failure.
+
+An unrelated-tree completeness assertion first failed in both root/child
+variants. Fault injection is now limited to the synthetic legacy source, uses
+an OS-shaped error and explicitly proves that source fault still occurs.
+All original data/config rollback and same-source retry assertions remain.
+Independent six-variant review plus 86 focused settings/media/storage tests and
+Ruff passed. No production code or CI gate changed; the new exact head must
+rerun the complete CI matrix.

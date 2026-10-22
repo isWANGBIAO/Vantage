@@ -657,6 +657,7 @@ def test_onboarding_import_failure_rolls_back_only_new_files_and_retry_can_finis
     migration_file = user_config.get_migration_state_file()
     migration_bytes = migration_file.read_bytes()
     payload = {"skip_chat_setup": True, "import_legacy_data": True, "legacy_root": str(source)}
+    faulted_walks = []
     with monkeypatch.context() as failing:
         if failure == "copy":
             copy = _backend_settings.shutil.copyfileobj
@@ -677,14 +678,25 @@ def test_onboarding_import_failure_rolls_back_only_new_files_and_retry_can_finis
         else:
             walk = _backend_settings.os.walk
             def unreadable(root, **kwargs):
+                if Path(root).resolve() != (source / "history").resolve():
+                    yield from walk(root, **kwargs)
+                    return
+                faulted_walks.append(Path(root).resolve())
                 if failure == "walk-child":
                     yield next(walk(root, **kwargs))
-                error = PermissionError("synthetic directory read denied")
+                error = PermissionError(13, "synthetic directory read denied", str(root))
                 if kwargs.get("onerror"):
                     kwargs["onerror"](error)
             failing.setattr(_backend_settings.os, "walk", unreadable)
+            # tempfile cleanup also uses os.walk on newer Python versions.
+            # Fault injection must not truncate an unrelated directory tree.
+            unrelated = tmp_path / "unrelated-cleanup"
+            (unrelated / "nested").mkdir(parents=True)
+            assert len(list(_backend_settings.os.walk(unrelated))) == 2
         with pytest.raises((OSError, HTTPException)):
             _backend_settings.complete_automation_onboarding(payload)
+        if failure in {"walk-root", "walk-child"}:
+            assert faulted_walks == [(source / "history").resolve()]
     assert _backend_settings._snapshot_automation_config_files() == original_files
     if failure in {"settings", "migration-final"}:
         assert user_config.load_migration_state()["completed"] is False
