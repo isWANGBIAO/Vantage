@@ -426,7 +426,12 @@ async function exerciseUi() {
         readFixtures['/api/v1/action-plan/jobs'] = { jobs: [], active: null };
         await waitFor('missing job reports transient saved-view failure', () => document.querySelector('.app-main')?.innerText.includes('Reconnecting to backend status'));
         await waitFor('next healthy poll recovers complete saved plan', () => document.querySelector('.app-main')?.innerText.includes('Synthetic smoke action plan')
-            && !document.querySelector('.app-main')?.innerText.includes('Synthetic incomplete progress'));
+            && !document.querySelector('.app-main')?.innerText.includes('Synthetic incomplete progress')
+            && !document.querySelector('.app-main')?.innerText.includes('partial output is incomplete')
+            && !document.querySelector('.app-main')?.innerText.includes('Reconnecting to backend status'));
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.action-plan-copy-button')]
+            .filter(button => button.textContent.trim() === 'Copy Reply' && !button.disabled).length), 2,
+            'Both restored complete replies must become available for copying.');
         assert.equal(todayReadFailuresObserved, 1);
         assert.equal(calls.some(call => call.method === 'POST' && call.pathname.startsWith('/api/v1/action-plan/jobs')), false,
             'Recovery observes existing work and must not generate or cancel.');
