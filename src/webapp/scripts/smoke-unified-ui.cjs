@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createServer } = require('node:http');
 const { setTimeout: delay } = require('node:timers/promises');
-const { app, BrowserWindow, ipcMain, protocol, session } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeImage, protocol, session } = require('electron');
 const { APP_SCHEME, APP_ENTRY_URL, APP_SCHEME_PRIVILEGES, installAppProtocol } = require('../src/utils/appProtocol.cjs');
 const { resolveBackendConnection } = require('../src/utils/backendConnection.cjs');
 const { createBackendJsonRequester } = require('../src/utils/backendTransport.cjs');
@@ -253,12 +253,12 @@ async function waitForFixture(label, predicate) {
     throw new Error(`Timed out waiting for synthetic backend: ${label}`);
 }
 
-function sendCameraFrame(response) {
+function sendCameraFrame(response, { jpeg = cameraJpeg, includeContentLength = true } = {}) {
     assert.ok(response && !response.destroyed, 'A current multipart transport must be open');
     const write = () => {
         if (response.destroyed) return;
-        response.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${cameraJpeg.length}\r\n\r\n`);
-        response.write(cameraJpeg);
+        response.write(`--frame\r\nContent-Type: image/jpeg\r\n${includeContentLength ? `Content-Length: ${jpeg.length}\r\n` : ''}\r\n`);
+        response.write(jpeg);
         response.write('\r\n');
     };
     write();
@@ -688,9 +688,31 @@ async function exerciseUi() {
         await waitFor('reshown preview decodes before Live', () => document.querySelector('img[alt="Live camera stream"]')?.naturalWidth === 4
             && [...document.querySelectorAll('.dashboard-page div')].some(node => node.textContent.trim() === 'Live'));
         await click('.dashboard-media-privacy', 'Hide media');
+        const synthetic4k = nativeImage.createFromBitmap(Buffer.alloc(3840 * 2160 * 4, 255), { width: 3840, height: 2160 }).toJPEG(80);
+        const before4k = cameraAttempts;
+        await click('.dashboard-media-privacy', 'Show media');
+        await waitForFixture('4K preview opens a fresh transport', () => cameraAttempts > before4k);
+        // Match the real backend: continuous 4K JPEG parts, no part Content-Length.
+        sendCameraFrame(cameraResponses.at(-1), { jpeg: synthetic4k, includeContentLength: false });
+        await waitFor('decoded-complete 4K preview becomes Live without an overlay', () => {
+            const image = document.querySelector('img[alt="Live camera stream"]');
+            return image?.naturalWidth === 3840 && image.naturalHeight === 2160 && image.complete
+                && !document.querySelector('.camera-preview-recovery')
+                && [...document.querySelectorAll('.dashboard-page div')].some(node => node.textContent.trim() === 'Live');
+        });
+        const healthy4kAttempts = cameraAttempts;
+        for (let sample = 0; sample < 4; sample++) {
+            await delay(300); // Cross multiple real 500ms lifecycle observations.
+            assert.equal(cameraAttempts, healthy4kAttempts, 'Decoded continuous 4K video must not reconnect because img.complete is true.');
+            assert.equal(await evaluate(() => Boolean(document.querySelector('.camera-preview-recovery'))), false,
+                'The connecting overlay must stay absent while decoded 4K video is live.');
+        }
+        cameraResponses.at(-1).socket.destroy();
+        await waitForFixture('4K TCP interruption still reconnects', () => cameraAttempts > healthy4kAttempts);
+        await click('.dashboard-media-privacy', 'Hide media');
         readFixtures['/api/v1/system/status'].camera_online = false;
         await waitForFixture('all hidden camera TCP responses are closed', () => cameraResponses.every(response => response.destroyed));
-        console.log('PASS actual broken multipart TCP reconnects, hides, and resumes without false Live (#132)');
+        console.log('PASS actual multipart TCP reconnects, privacy cleanup and decoded-complete 4K video without stale overlay (#132)');
     }
     await navigate('project-progress', '.project-progress-container', 'Verify the unified workspace');
     await navigate('expense-sheet', '.expense-sheet', 'Expense Sheet');

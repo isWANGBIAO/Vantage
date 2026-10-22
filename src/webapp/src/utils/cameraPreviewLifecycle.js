@@ -9,11 +9,11 @@ export function createCameraPreviewLifecycle({ onChange, schedule = setTimeout, 
   const lifecycle = {
     observe(attempt, image) {
       if (closed || attempt !== state.attempt) return;
-      // An img can lose a multipart connection without firing onError. For
-      // this continuous stream endpoint, complete means the transport ended.
-      if (image?.complete === true) lifecycle.failed(attempt);
-      else if (Number.isFinite(image?.naturalWidth) && image.naturalWidth > 0
+      // Chromium may mark a decoded MJPEG part complete while video continues.
+      // Only a completed image without usable pixels is evidence of failure.
+      if (Number.isFinite(image?.naturalWidth) && image.naturalWidth > 0
         && Number.isFinite(image?.naturalHeight) && image.naturalHeight > 0) lifecycle.loaded(attempt);
+      else if (image?.complete === true) lifecycle.failed(attempt);
     },
     loaded(attempt) {
       if (!closed && attempt === state.attempt && state.phase === 'connecting') {

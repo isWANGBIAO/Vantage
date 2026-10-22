@@ -57,7 +57,7 @@ test('hide/unmount cancels scheduled retries and ignores late image callbacks', 
   assert.equal(f.timers.size, 0);
 });
 
-test('decoded multipart pixels can establish live without a load event, and completed transport retries', () => {
+test('decoded multipart pixels establish live and completed images without pixels retry', () => {
   const f = fixture();
   f.lifecycle.observe(0, { naturalWidth: 0, naturalHeight: 0, complete: false });
   assert.equal(f.states.at(-1).phase, 'connecting');
@@ -72,8 +72,21 @@ test('decoded multipart pixels can establish live without a load event, and comp
   f.lifecycle.observe(0, { naturalWidth: 4, naturalHeight: 4, complete: false });
   assert.equal(f.states.at(-1).phase, 'connecting');
   f.lifecycle.observe(1, { naturalWidth: 4, naturalHeight: 4, complete: true });
+  assert.equal(f.states.at(-1).phase, 'live');
+  f.lifecycle.observe(1, { naturalWidth: 0, naturalHeight: 0, complete: true });
   assert.equal(f.states.at(-1).phase, 'waiting');
   f.lifecycle.close();
   f.lifecycle.observe(1, { naturalWidth: 4, naturalHeight: 4, complete: false });
   assert.equal(f.states.at(-1).phase, 'waiting');
+});
+
+test('decoded 4K multipart images stay live when the browser marks a part complete', () => {
+  const f = fixture();
+  for (let frame = 0; frame < 12; frame += 1) {
+    f.lifecycle.observe(0, { naturalWidth: 3840, naturalHeight: 2160, complete: true });
+    assert.equal(f.states.at(-1).phase, 'live');
+    assert.equal(f.states.at(-1).attempt, 0);
+    assert.equal(f.timers.size, 0);
+  }
+  f.lifecycle.close();
 });
