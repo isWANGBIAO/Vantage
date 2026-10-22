@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
   Copy,
@@ -202,6 +202,9 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
   const [refreshingSpecialModels, setRefreshingSpecialModels] = useState(null);
   const [saveStatus, setSaveStatus] = useState('');
   const [diagnosticsStatus, setDiagnosticsStatus] = useState(null);
+  const initialFormDefaults = useRef({ displayLanguage, theme: currentTheme, themeMode: currentThemeMode });
+  const translateRef = useRef(t);
+  useEffect(() => { translateRef.current = t; }, [t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -246,9 +249,9 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         setActiveProviderRoute(providerConfig.selected_provider);
         setProviderRouteDraft(providerConfig.selected_provider);
         setForm({
-          displayLanguage: nextState.settings.displayLanguage || displayLanguage,
-          theme: nextState.settings.theme || currentTheme,
-          themeMode: nextState.settings.themeMode || nextState.settings.theme || currentThemeMode,
+          displayLanguage: nextState.settings.displayLanguage || initialFormDefaults.current.displayLanguage,
+          theme: nextState.settings.theme || initialFormDefaults.current.theme,
+          themeMode: nextState.settings.themeMode || nextState.settings.theme || initialFormDefaults.current.themeMode,
           launchAtLogin: Boolean(nextState.settings.launchAtLogin),
           actionPlanAutoGenerate: nextState.settings.actionPlanAutoGenerate !== false,
           voiceProviderMode: nextState.settings.voiceProviderMode || 'inherit_ai',
@@ -269,7 +272,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         });
       } catch (error) {
         if (!cancelled) {
-          setSaveStatus(t('settings.load.failed', { error: error.message || String(error) }));
+          setSaveStatus(translateRef.current('settings.load.failed', { error: error.message || String(error) }));
         }
       }
     }
@@ -279,7 +282,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     return () => {
       cancelled = true;
     };
-  }, [currentTheme, currentThemeMode, displayLanguage, t]);
+  }, []);
 
   const providerRoutes = Object.keys(form.providerConfig.providers);
   const currentProviderRoute = form.providerConfig.providers[activeProviderRoute]
