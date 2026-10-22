@@ -100,6 +100,20 @@ test('Body Analysis replaces Face History navigation and legacy hash remains val
   assert.equal(appSource.includes("key: 'face history', labelKey: 'app.nav.face_history'"), false);
 });
 
+test('production UI smoke navigates only to current primary page entries', () => {
+  const smokeSource = readFileSync(new URL('../scripts/smoke-unified-ui.cjs', import.meta.url), 'utf8');
+  const navigationEntries = [...appSource.matchAll(/\{ key: '([^']+)', labelKey: 'app\.nav\./g)]
+    .map((match) => match[1].replaceAll(' ', '-'));
+  const smokeEntries = [...smokeSource.matchAll(/await navigate\('([^']+)'/g)]
+    .map((match) => match[1]);
+
+  assert.ok(smokeEntries.length > 0, 'The smoke must exercise primary navigation.');
+  for (const entry of smokeEntries) {
+    assert.ok(navigationEntries.includes(entry), `Smoke navigates to missing primary page: ${entry}`);
+  }
+  assert.ok(smokeEntries.includes('body-analysis'), 'The integrated Body Analysis page must be exercised.');
+});
+
 test('FaceHistory is not prewarmed invisibly after moving inside Body Analysis', () => {
   const preloadedTabs = appSource.match(/const BACKGROUND_TAB_COMPONENTS = \[([\s\S]*?)\];/)[1];
   assert.equal(preloadedTabs.includes('FaceHistory'), false);

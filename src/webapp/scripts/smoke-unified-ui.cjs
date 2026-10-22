@@ -90,6 +90,8 @@ const readFixtures = {
     '/api/v1/health/sedentary': { status: 'active', detection_status: 'unknown', is_sitting: false, duration_minutes: 0, duration_seconds: 0, away_duration_seconds: 0, active_timer: 'none', threshold_minutes: 60 },
     '/api/v1/face/report': { error: 'No report generated' },
     '/api/v1/face/live': { camera_online: false, points: [], window_seconds: 60 },
+    '/api/v1/face/local-status': { ready: false, method: 'onnx', message: 'Synthetic local environment is not configured' },
+    '/api/v1/body-analysis/status': { status: 'disabled', last_report_available: false },
     '/api/v1/usage': { summary: {}, sources: [], sessions: [] },
 };
 
@@ -360,7 +362,16 @@ async function exerciseUi() {
     await navigate('plots', '.app-main', 'Synthetic sleep chart');
     await waitFor('production chart rendering', () => [...document.querySelectorAll('.app-main canvas')].some(canvas => canvas.getClientRects().length && canvas.width > 0));
     await navigate('system-logs', '.app-main', 'Synthetic unified UI smoke is ready');
-    await navigate('face-history', '.app-main', 'Face Dark Circles History');
+    await navigate('body-analysis', '.app-main', 'Body Analysis');
+    await waitFor('active dark-circles subpage', () => {
+        const sections = document.querySelector('.app-main nav[aria-label="Body analysis sections"]');
+        const selected = sections?.querySelector('button[aria-current="page"]');
+        return selected?.textContent.trim() === 'Dark Circles'
+            && sections.querySelectorAll('button[aria-current="page"]').length === 1
+            && [...document.querySelectorAll('.app-main h2')].some(heading =>
+                heading.getClientRects().length > 0 && heading.textContent.trim() === 'Face Dark Circles History');
+    });
+    assert.ok(calls.some(call => call.method === 'GET' && call.pathname === '/api/v1/face/report'), 'The dark-circles subpage must load its report.');
     await click('.app-nav a[href="#never-stop"]');
     await waitFor('Never Stop embedded page', () => location.hash === '#never-stop'
         && document.querySelector('.never-stop-page-host')?.shadowRoot?.querySelector('.brand')?.textContent.includes('Never Stop'));
