@@ -143,11 +143,17 @@ def _masked_settings_payload():
         masked_entry["api_key"] = "********" if has_key else ""
         masked_providers[route] = masked_entry
     provider_payload = {**provider, "providers": masked_providers}
+    chain = get_provider_chain_config()
+    inherited = chain[0] if chain else None
     migration = load_migration_state()
     runtime_paths = Config.get_runtime_paths()
     return {
         "settings": settings_payload,
         "provider": provider_payload,
+        "inherited_ai_provider": {
+            "route": inherited["route"], "name": inherited["name"], "type": inherited["type"],
+            "base_url": inherited["base_url"], "has_api_key": bool(inherited.get("api_key")),
+        } if inherited else None,
         "migration": {
             "completed": migration["completed"],
             "source_path": migration["source_path"],

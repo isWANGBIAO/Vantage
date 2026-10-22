@@ -168,9 +168,18 @@ class MigrationState(ExtensibleModel):
     imported_at: str | None
 
 
+class InheritedAiProvider(BaseModel):
+    route: str
+    name: str
+    type: str
+    base_url: str
+    has_api_key: bool
+
+
 class SettingsState(ExtensibleModel):
     settings: SettingsValues
     provider: ProviderState
+    inherited_ai_provider: InheritedAiProvider | None = None
     migration: MigrationState
     runtime_paths: dict[str, str]
 

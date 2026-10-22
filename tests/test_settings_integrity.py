@@ -139,3 +139,20 @@ def test_changing_provider_destination_does_not_inherit_cached_capabilities(sett
     }}}})
     assert moved.status_code == 200, moved.text
     assert moved.json()["provider"]["providers"]["primary"]["model_capabilities"] == {}
+
+
+def test_inherited_provider_metadata_uses_backend_priority_with_integer_routes(settings_http):
+    http, _root = settings_http
+    response = http.put("/api/v1/settings", json={"provider_config": {
+        "selected_provider": "disabled", "providers": {
+            "disabled": {"enabled": False},
+            "10": {"api_key": "synthetic-ten", "base_url": "https://ten.invalid/v1"},
+            "2": {"api_key": "synthetic-two", "base_url": "https://two.invalid/v1"},
+        },
+    }})
+    assert response.status_code == 200, response.text
+    resolved = response.json()["inherited_ai_provider"]
+    assert resolved["route"] == "10"
+    assert resolved["base_url"] == "https://ten.invalid/v1"
+    assert resolved["has_api_key"] is True
+    assert "api_key" not in resolved

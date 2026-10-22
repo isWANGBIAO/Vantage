@@ -1459,6 +1459,39 @@
     },
     "SettingsState": {
       "$defs": {
+        "InheritedAiProvider": {
+          "properties": {
+            "route": {
+              "title": "Route",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            },
+            "base_url": {
+              "title": "Base Url",
+              "type": "string"
+            },
+            "has_api_key": {
+              "title": "Has Api Key",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "route",
+            "name",
+            "type",
+            "base_url",
+            "has_api_key"
+          ],
+          "title": "InheritedAiProvider",
+          "type": "object"
+        },
         "MaskedProvider": {
           "additionalProperties": true,
           "properties": {
@@ -1970,6 +2003,17 @@
         },
         "provider": {
           "$ref": "#/$defs/ProviderState"
+        },
+        "inherited_ai_provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InheritedAiProvider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "migration": {
           "$ref": "#/$defs/MigrationState"

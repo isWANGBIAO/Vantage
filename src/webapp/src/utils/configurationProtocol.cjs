@@ -143,6 +143,7 @@ function fromBackendSettings(payload, { mode = 'browser', app = {}, systemLocale
             imageModels: settings.image_models,
             imageLastRefreshedAt: settings.image_last_refreshed_at,
         },
+        inheritedAiProvider: payload.inherited_ai_provider || null,
         provider: {
             ...provider,
             providers: Object.fromEntries(Object.entries(provider.providers || {}).map(([route, entry]) => [

@@ -52,6 +52,7 @@ let shuttingDown = false;
 let backendConnection;
 let smokeSession;
 let providerConfig = { version: 2, selected_provider: null, providers: {} };
+let inheritedProviderRouteOverride = null;
 const pendingDiscoveries = [];
 
 function syntheticProviders() {
@@ -112,7 +113,12 @@ function onboardingState() {
 }
 
 function settingsState() {
-    return { settings: { ...settings }, provider: providerConfig, runtime_paths: {}, migration: {} };
+    const route = inheritedProviderRouteOverride || [providerConfig.selected_provider, ...Object.keys(providerConfig.providers)]
+        .find(route => providerConfig.providers[route]?.enabled !== false && providerConfig.providers[route]?.api_key && providerConfig.providers[route]?.base_url);
+    const inherited = providerConfig.providers[route];
+    return { settings: { ...settings }, provider: providerConfig, inherited_ai_provider: inherited ? {
+        route, name: inherited.name || route, type: inherited.type || 'openai-compatible', base_url: inherited.base_url, has_api_key: true,
+    } : null, runtime_paths: {}, migration: {} };
 }
 
 async function serveFixture(req, res) {
@@ -331,8 +337,9 @@ async function editSettingsInput(label, value) {
     await delay(50);
 }
 
-async function resetProviderSettings(config = syntheticProviders()) {
+async function resetProviderSettings(config = syntheticProviders(), inheritedRoute = null) {
     providerConfig = config;
+    inheritedProviderRouteOverride = inheritedRoute;
     await navigate('dashboard', '.dashboard-page', 'System Dashboard');
     await openSettings();
     await click('.settings-sidebar button', 'AI Provider');
@@ -390,6 +397,16 @@ async function exerciseProviderSettings() {
         assert.equal(await evaluate(() => document.querySelector('.settings-section input')?.value), 'https://beta.invalid/v1');
     }
     console.log('PASS voice inheritance follows the persisted active provider, not the browsed editor');
+    await resetProviderSettings({ version: 2, selected_provider: 'disabled', providers: {
+        disabled: { enabled: false },
+        10: { name: 'Numeric Ten', api_key: '********', base_url: 'https://ten.invalid/v1', model: 'ten' },
+        2: { name: 'Numeric Two', api_key: '********', base_url: 'https://two.invalid/v1', model: 'two' },
+    } }, '10');
+    await evaluate(() => [...document.querySelectorAll('.settings-provider-item')].find(node => node.textContent.includes('Numeric Two')).click());
+    await click('.settings-sidebar button', 'Voice Provider');
+    assert.match(await evaluate(() => document.querySelector('.settings-section')?.innerText), /Numeric Ten/);
+    assert.equal(await evaluate(() => document.querySelector('.settings-section input')?.value), 'https://ten.invalid/v1');
+    console.log('PASS numeric route inheritance uses backend priority despite JavaScript object ordering');
     for (const edit of ['delete', 'endpoint', 'rename']) {
         await resetProviderSettings();
         if (edit === 'rename') await editSettingsInput('API Key', 'synthetic-reentered-key');

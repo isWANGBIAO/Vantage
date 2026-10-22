@@ -295,7 +295,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
   const currentProvider = form.providerConfig.providers[currentProviderRoute] || createProviderEntry(currentProviderRoute);
   // inherit_ai is resolved by the backend from saved configuration, not from
   // whichever provider happens to be open in this unsaved editor.
-  const inheritedAiProvider = resolveInheritedAiProvider(state?.provider);
+  const inheritedAiProvider = resolveInheritedAiProvider(state);
 
   const diagnosticsText = useMemo(() => {
     if (!state) {
