@@ -17,9 +17,9 @@ const {
     powerMonitor,
 } = require('electron');
 
-// Vantage's UI does not require hardware acceleration. Apply the app-wide
-// software-rendering policy synchronously, before readiness or any windows.
-app.disableHardwareAcceleration();
+// Keep Chromium's normal compositor: blanket software rendering makes the
+// blurred, high-DPI UI scroll slowly. Unneeded page WebGL is disabled below;
+// the backend's independent OpenCL policy remains unchanged.
 
 const path = require('path');
 const fs = require('fs');
@@ -716,6 +716,7 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.cjs'),
             contextIsolation: true,
             nodeIntegration: false,
+            webgl: false,
         },
         icon: loadAppIcon({ appRoot: __dirname, nativeImage }).iconPath,
         title: 'Vantage',
@@ -877,6 +878,11 @@ if (!gotTheLock) {
 
     app.whenReady().then(async () => {
         log.info('App ready, initializing...');
+        const logGraphicsStatus = () => {
+            log.info(`Graphics feature status: ${JSON.stringify(app.getGPUFeatureStatus())}`);
+        };
+        logGraphicsStatus();
+        app.on('gpu-info-update', logGraphicsStatus);
         powerMonitor.on('shutdown', event => {
             event.preventDefault();
             app.isQuitting = true;

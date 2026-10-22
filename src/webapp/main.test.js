@@ -18,7 +18,7 @@ const packageJson = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 );
 
-test('Electron disables hardware acceleration synchronously before loading startup dependencies', () => {
+test('Electron preserves normal compositor acceleration across supported startup modes', () => {
   // Execute the real entry point only up to its first non-Electron dependency.
   // No native Electron process, window, backend, or graphics context is started.
   for (const platform of ['win32', 'darwin', 'linux']) {
@@ -32,12 +32,24 @@ test('Electron disables hardware acceleration synchronously before loading start
           return { app: { isPackaged, disableHardwareAcceleration: () => calls.push('software-rendering') } };
         },
       }), error => error === startupBoundary);
-      assert.deepEqual(calls, ['software-rendering'], `${platform}, packaged=${isPackaged}`);
+      assert.deepEqual(calls, [], `${platform}, packaged=${isPackaged}`);
     }
   }
-  const policyIndex = mainSource.indexOf('app.disableHardwareAcceleration();');
-  assert.ok(policyIndex < mainSource.indexOf('app.whenReady()'));
-  assert.ok(policyIndex < mainSource.indexOf('new BrowserWindow('));
+  assert.doesNotMatch(mainSource, /app\.disableHardwareAcceleration\s*\(/);
+  assert.doesNotMatch(mainSource, /appendSwitch\(['"]disable-gpu['"]/);
+});
+
+test('the main window disables webpage WebGL without weakening renderer isolation', () => {
+  const windowPreferences = mainSource.match(/new BrowserWindow\(\{[\s\S]*?webPreferences:\s*\{([^}]+)\}/)?.[1];
+  assert.ok(windowPreferences, 'main window webPreferences must exist');
+  assert.match(windowPreferences, /webgl:\s*false/);
+  assert.match(windowPreferences, /contextIsolation:\s*true/);
+  assert.match(windowPreferences, /nodeIntegration:\s*false/);
+});
+
+test('desktop startup records the actual graphics feature status for diagnosis', () => {
+  assert.match(mainSource, /app\.getGPUFeatureStatus\(\)/);
+  assert.match(mainSource, /gpu-info-update/);
 });
 
 test('main preload exposes Never Stop only through the Vantage platform bridge', async () => {
