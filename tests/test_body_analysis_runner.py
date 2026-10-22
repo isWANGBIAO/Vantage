@@ -9,6 +9,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from PIL import Image
@@ -21,6 +22,30 @@ RUNNER_PATH = Path(__file__).resolve().parents[1] / "src" / "scripts" / "body_an
 def runner():
     assert RUNNER_PATH.is_file(), "the standalone SAM3 runner is missing"
     return importlib.import_module("src.scripts.body_analysis_sam3")
+
+
+@pytest.fixture
+def empty_texture_skeleton(monkeypatch):
+    """Isolate optional skeletonization only for uniform, texture-free photos.
+
+    These contract tests exercise real ROI handling, component extraction,
+    report assets and validation, not scikit-image's thinning algorithm. The
+    skeleton of an empty mask is exactly that empty mask. Refuse nonempty
+    input so a changed fixture cannot silently bypass the real algorithm.
+    """
+    morphology = ModuleType("skimage.morphology")
+
+    def skeletonize_empty(mask):
+        assert mask.ndim == 2 and mask.dtype.kind == "b"
+        assert not mask.any(), "nonempty textures need the real optional skeletonizer"
+        return mask.copy()
+
+    morphology.skeletonize = skeletonize_empty
+    package = ModuleType("skimage")
+    package.__path__ = []
+    package.morphology = morphology
+    monkeypatch.setitem(sys.modules, "skimage", package)
+    monkeypatch.setitem(sys.modules, "skimage.morphology", morphology)
 
 
 def _photo(path: Path, *, exif_time: str | None = None, exif_tag: int = 36867) -> None:
@@ -160,7 +185,7 @@ def test_no_detection_is_null_and_masks_remain_inspectable(tmp_path, runner):
     assert (report_dir / record["overlay_path"]).is_file()
 
 
-def test_scalp_candidate_is_visible_but_excluded_from_trend(tmp_path, runner):
+def test_scalp_candidate_is_visible_but_excluded_from_trend(tmp_path, runner, empty_texture_skeleton):
     import numpy as np
 
     photo = tmp_path / "scalp.jpg"
@@ -176,6 +201,7 @@ def test_scalp_candidate_is_visible_but_excluded_from_trend(tmp_path, runner):
         return mask, [0.9]
 
     record = runner.analyze_photo(photo, "scalp", report_dir, 1, segment)
+    assert record["texture_fraction_percent"] == 0.0
     assert record["scalp_candidate_fraction_percent"] is not None
     assert record["scalp_candidate_review_status"] == "rejected"
     assert record["trend_eligible"] is False
@@ -276,7 +302,7 @@ def test_manifest_requires_exact_input_counts(tmp_path, runner):
             runner.validate_report_manifest(dict(valid, input_counts=invalid), output)
 
 
-def test_manifest_rejects_incomplete_or_wrongly_typed_photo_records(tmp_path, runner):
+def test_manifest_rejects_incomplete_or_wrongly_typed_photo_records(tmp_path, runner, empty_texture_skeleton):
     import numpy as np
 
     photo = tmp_path / "leg.jpg"
@@ -287,6 +313,8 @@ def test_manifest_rejects_incomplete_or_wrongly_typed_photo_records(tmp_path, ru
         photo, "leg", output, 1,
         lambda image, _prompt: (np.ones(image.shape[:2], dtype=np.uint8), [0.9]),
     )
+    assert record["hair_count"] == 0
+    assert record["hair_density_per_mpx"] == 0.0
     valid = runner.build_report([record], [])
     assert runner.validate_report_manifest(valid, output)
     mutations = (
@@ -336,7 +364,7 @@ def test_progress_is_atomic_json_with_no_source_paths(tmp_path, runner):
     assert sorted(path.name for path in output.iterdir()) == ["progress.json"]
 
 
-def test_synthetic_run_writes_complete_report_without_gpu(tmp_path, monkeypatch, runner):
+def test_synthetic_run_writes_complete_report_without_gpu(tmp_path, monkeypatch, runner, empty_texture_skeleton):
     import numpy as np
 
     leg, scalp, model, staging = (tmp_path / name for name in ("leg", "scalp", "model", "staging"))
@@ -360,6 +388,12 @@ def test_synthetic_run_writes_complete_report_without_gpu(tmp_path, monkeypatch,
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert runner.validate_report_manifest(report, output) is True
     assert len(report["leg"]["records"]) == len(report["scalp"]["records"]) == 1
+    leg_record = report["leg"]["records"][0]
+    assert leg_record["hair_count"] == 0
+    assert leg_record["texture_fraction_percent"] == 0.0
+    for field in ("texture_mask_path", "line_mask_path"):
+        with Image.open(output / leg_record[field]) as mask:
+            assert mask.getextrema() == (0, 0)
     assert len(report["leg"]["trend"]) == 1
     assert report["leg"]["trend"][0]["review_status"] == "unreviewed"
     assert report["leg"]["trend"][0]["measurement_type"] == "photographic_proxy"
