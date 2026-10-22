@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { TextDecoder } = require('node:util');
 const { MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES } = require('./automationLimits.cjs');
 
 const DEFAULT_SETTINGS = {
@@ -102,16 +103,33 @@ function getMigrationStateFile(runtimePaths) {
   return path.join(runtimePaths.migrationDir, 'migration-state.json');
 }
 
+class ConfigurationReadError extends Error {
+  constructor(filePath, problem, recovery) {
+    super(`${path.basename(filePath)} ${problem}; the original file was preserved. ${recovery}`);
+    this.name = 'ConfigurationReadError';
+  }
+}
+
 function readJsonFile(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return null;
+  let content;
+  try {
+    content = fs.readFileSync(filePath);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw new ConfigurationReadError(filePath, 'cannot be read', 'Check file permissions, then retry.');
   }
 
+  let payload;
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    payload = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(content));
   } catch {
-    return null;
+    // Parser and OS errors may include credentials or other file contents.
+    throw new ConfigurationReadError(filePath, 'is invalid JSON', 'Repair it or restore a valid backup, then retry.');
   }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new ConfigurationReadError(filePath, 'must be a JSON object', 'Repair it or restore a valid backup, then retry.');
+  }
+  return payload;
 }
 
 function writeJsonFile(filePath, payload) {
