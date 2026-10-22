@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
+import { Buffer } from 'node:buffer';
 
 const require = createRequire(import.meta.url);
-const { loadProviderConfig } = require('./onboardingConfig.cjs');
+const { loadProviderConfig, sanitizeProviderConfig, saveProviderConfig } = require('./onboardingConfig.cjs');
 const { ensureBundledBackendReady } = require('./backendRuntime.cjs');
 
 function fixture(t) {
@@ -98,3 +99,41 @@ for (const platform of ['win32', 'darwin']) {
     assert.deepEqual(fs.readFileSync(file), original);
   });
 }
+
+test('provider sanitizer retains and normalizes positive token capacities without inventing missing limits', () => {
+  for (const value of [16_384, '16384', '  +16384  ']) {
+    const provider = sanitizeProviderConfig({ providers: {
+      primary: { context_window_tokens: value, max_output_tokens: 2048 },
+    } }).providers.primary;
+    assert.equal(provider.context_window_tokens, 16_384);
+    assert.equal(provider.max_output_tokens, 2048);
+  }
+  for (const value of [undefined, null, 0, -1, '', 'n/a', [], {}, '1.5']) {
+    const provider = sanitizeProviderConfig({ providers: {
+      primary: { context_window_tokens: value, max_output_tokens: value },
+    } }).providers.primary;
+    assert.equal(Object.hasOwn(provider, 'context_window_tokens'), false);
+    assert.equal(Object.hasOwn(provider, 'max_output_tokens'), false);
+  }
+});
+
+test('provider load/save preserves selected and backup capacities and supports explicit removal', t => {
+  const { runtimePaths, file } = fixture(t);
+  fs.writeFileSync(file, JSON.stringify({ selected_provider: 'primary', providers: {
+    primary: { api_key: 'synthetic-key', context_window_tokens: 16384, max_output_tokens: 2048 },
+    backup: { api_key: 'synthetic-backup', context_window_tokens: 32768, max_output_tokens: 4096 },
+  } }));
+  const first = loadProviderConfig(runtimePaths);
+  assert.equal(first.providers.primary.context_window_tokens, 16384);
+  assert.equal(first.providers.backup.max_output_tokens, 4096);
+  const bytes = fs.readFileSync(file);
+  assert.deepEqual(loadProviderConfig(runtimePaths), first);
+  assert.deepEqual(fs.readFileSync(file), bytes);
+  delete first.providers.primary.context_window_tokens;
+  delete first.providers.primary.max_output_tokens;
+  saveProviderConfig(runtimePaths, first);
+  const removed = loadProviderConfig(runtimePaths);
+  assert.equal(Object.hasOwn(removed.providers.primary, 'context_window_tokens'), false);
+  assert.equal(Object.hasOwn(removed.providers.primary, 'max_output_tokens'), false);
+  assert.equal(removed.providers.backup.context_window_tokens, 32768);
+});

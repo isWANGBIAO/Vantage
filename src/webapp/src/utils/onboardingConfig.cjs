@@ -253,6 +253,17 @@ function containsRemovedProvider(value) {
   return String(value || '').toLowerCase().includes(REMOVED_PROVIDER_KEYWORD);
 }
 
+function normalizeOptionalPositiveInt(value) {
+  // Match the persisted Python provider sanitizer's positive integer coercion.
+  if (typeof value === 'string') {
+    if (!/^[+-]?\d+$/.test(value.trim())) return null;
+  } else if (typeof value !== 'number' && typeof value !== 'boolean') {
+    return null;
+  }
+  const normalized = Math.trunc(Number(value));
+  return Number.isSafeInteger(normalized) && normalized > 0 ? normalized : null;
+}
+
 function sanitizeProviderEntry(route, entry) {
   const safeEntry = entry && typeof entry === 'object' ? entry : {};
   const rawModel = normalizeOptionalString(safeEntry.model) || '';
@@ -260,7 +271,7 @@ function sanitizeProviderEntry(route, entry) {
     .filter((item) => !containsRemovedProvider(item));
   const model = containsRemovedProvider(rawModel) ? (models[0] || '') : (rawModel || models[0] || '');
   const baseUrl = normalizeOptionalString(safeEntry.base_url) || defaultBaseUrlForProvider(route) || '';
-  return {
+  const sanitized = {
     route,
     name: normalizeOptionalString(safeEntry.name) || route,
     type: normalizeProviderType(safeEntry.type),
@@ -271,6 +282,11 @@ function sanitizeProviderEntry(route, entry) {
     models,
     last_refreshed_at: normalizeOptionalString(safeEntry.last_refreshed_at),
   };
+  for (const key of ['context_window_tokens', 'max_output_tokens']) {
+    const value = normalizeOptionalPositiveInt(safeEntry[key]);
+    if (value !== null) sanitized[key] = value;
+  }
+  return sanitized;
 }
 
 function sanitizeProviderConfig(payload) {
