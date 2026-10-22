@@ -270,6 +270,9 @@ export default function App({ isVisible = true, openRequest }) {
           </div>
           <span className="edition">Vantage · Never Stop</span>
         </header>
+        {state.resourceWarnings?.map((warning, index) => (
+          <div role="status" className="banner" key={`${index}:${warning}`}>{warning}</div>
+        ))}
         {error && (
           <div role="alert" className="banner">
             <AlertCircle size={17} />
