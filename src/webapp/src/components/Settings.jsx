@@ -17,6 +17,7 @@ import {
   normalizeModelList,
   normalizeProviderModels,
   resolveRefreshedModelSelection,
+  resolveInheritedAiProvider,
 } from '../utils/providerModels';
 import { loadSettingsState, openSettingsPath, saveSettingsState } from '../utils/settingsState';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
@@ -292,6 +293,9 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     ? activeProviderRoute
     : form.providerConfig.selected_provider;
   const currentProvider = form.providerConfig.providers[currentProviderRoute] || createProviderEntry(currentProviderRoute);
+  // inherit_ai is resolved by the backend from saved configuration, not from
+  // whichever provider happens to be open in this unsaved editor.
+  const inheritedAiProvider = resolveInheritedAiProvider(state?.provider);
 
   const diagnosticsText = useMemo(() => {
     if (!state) {
@@ -525,10 +529,10 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         body: JSON.stringify({
           kind,
           mode,
-          route: mode === 'inherit_ai' ? currentProviderRoute : kind,
+          route: mode === 'inherit_ai' ? (inheritedAiProvider?.route || '') : kind,
           base_url: isVoice ? form.voiceBaseUrl : form.imageBaseUrl,
           api_key: isVoice ? form.voiceApiKey : form.imageApiKey,
-          type: currentProvider.type,
+          type: mode === 'inherit_ai' ? inheritedAiProvider?.type : currentProvider.type,
         }),
         retryPolicy: 'mutation',
       });
@@ -875,9 +879,9 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
 
   const renderVoiceProvider = () => {
     const inheritAi = form.voiceProviderMode === 'inherit_ai';
-    const effectiveBaseUrl = inheritAi ? currentProvider.base_url : form.voiceBaseUrl;
+    const effectiveBaseUrl = inheritAi ? (inheritedAiProvider?.base_url || '') : form.voiceBaseUrl;
     const effectiveApiKey = inheritAi
-      ? (currentProvider.api_key || currentProvider.has_api_key ? '********' : '')
+      ? (inheritedAiProvider ? '********' : '')
       : form.voiceApiKey;
 
     return (
@@ -886,7 +890,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         {inheritAi ? (
           <div className="settings-status-line">
             <Info size={16} />
-            {t('settings.provider.inherited_from_ai', { name: currentProvider.name || currentProviderRoute })}
+            {t('settings.provider.inherited_from_ai', { name: inheritedAiProvider?.name || inheritedAiProvider?.route || '--' })}
           </div>
         ) : null}
         <SettingsRow label={t('settings.voice_provider.base_url')}>

@@ -5,7 +5,22 @@ import {
   normalizeModelList,
   normalizeProviderModels,
   resolveRefreshedModelSelection,
+  resolveInheritedAiProvider,
 } from './providerModels.js';
+
+test('voice inheritance resolves saved complete providers and local proxy defaults', () => {
+  const config = { selected_provider: 'alpha', providers: {
+    alpha: { enabled: true, api_key: '********', base_url: 'https://alpha.invalid/v1' },
+    beta: { enabled: true, api_key: '********', base_url: 'https://beta.invalid/v1' },
+  } };
+  assert.equal(resolveInheritedAiProvider(config).route, 'alpha');
+  config.providers.alpha.enabled = false;
+  assert.equal(resolveInheritedAiProvider(config).route, 'beta');
+  config.providers.beta.api_key = '';
+  assert.equal(resolveInheritedAiProvider(config), null);
+  assert.equal(resolveInheritedAiProvider({ providers: { custom: { api_key: '********' } } }).base_url, 'http://127.0.0.1:8317/v1');
+  assert.equal(resolveInheritedAiProvider(null), null);
+});
 
 test('resolveRefreshedModelSelection drops stale selected model when discovery returns a list', () => {
   const selection = resolveRefreshedModelSelection({

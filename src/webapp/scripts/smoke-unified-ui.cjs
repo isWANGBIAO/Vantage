@@ -331,8 +331,8 @@ async function editSettingsInput(label, value) {
     await delay(50);
 }
 
-async function resetProviderSettings() {
-    providerConfig = syntheticProviders();
+async function resetProviderSettings(config = syntheticProviders()) {
+    providerConfig = config;
     await navigate('dashboard', '.dashboard-page', 'System Dashboard');
     await openSettings();
     await click('.settings-sidebar button', 'AI Provider');
@@ -362,6 +362,24 @@ async function exerciseProviderSettings() {
     const revealed = await window.webContents.debugger.sendCommand('Accessibility.getFullAXTree');
     assert(revealed.nodes.some(node => node.role?.value === 'textbox' && node.name?.value === 'API Key'));
     console.log('PASS provider controls retain accessible labels, including revealed credentials');
+    await evaluate(() => [...document.querySelectorAll('.settings-provider-item')].find(node => node.textContent.includes('Beta Provider')).click());
+    await click('.settings-sidebar button', 'Voice Provider');
+    assert.match(await evaluate(() => document.querySelector('.settings-section')?.innerText), /Alpha Provider/);
+    assert.equal(await evaluate(() => document.querySelector('.settings-section input')?.value), 'https://alpha.invalid/v1');
+    await click('.settings-icon-button[title="Refresh Models"]');
+    await waitFor('voice discovery completed', () => document.querySelector('.settings-provider-model-select')?.value === 'synthetic-voice');
+    await waitForNetworkIdle();
+    assert.equal(calls.filter(call => call.pathname === '/api/v1/providers/models/discover').at(-1)?.payload.route, 'alpha');
+    for (const incomplete of ['disabled', 'keyless']) {
+        const config = syntheticProviders();
+        if (incomplete === 'disabled') config.providers.alpha.enabled = false;
+        else config.providers.alpha.api_key = '';
+        await resetProviderSettings(config);
+        await click('.settings-sidebar button', 'Voice Provider');
+        assert.match(await evaluate(() => document.querySelector('.settings-section')?.innerText), /Beta Provider/);
+        assert.equal(await evaluate(() => document.querySelector('.settings-section input')?.value), 'https://beta.invalid/v1');
+    }
+    console.log('PASS voice inheritance follows the persisted active provider, not the browsed editor');
     await click('.settings-sidebar button', 'General');
 }
 
