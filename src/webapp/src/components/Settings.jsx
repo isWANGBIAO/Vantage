@@ -17,6 +17,7 @@ import {
   normalizeModelList,
   normalizeProviderModels,
   resolveRefreshedModelSelection,
+  resolveInheritedAiProvider,
 } from '../utils/providerModels';
 import { loadSettingsState, openSettingsPath, saveSettingsState } from '../utils/settingsState';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
@@ -81,6 +82,7 @@ function ModelSelectControl({
   value,
   models = [],
   placeholder,
+  label,
   onChange,
 }) {
   const hasDiscoveredModels = models.length > 0;
@@ -89,6 +91,7 @@ function ModelSelectControl({
   if (hasDiscoveredModels && options.length > 0) {
     return (
       <select
+        aria-label={label}
         className="settings-input settings-provider-model-select"
         value={value || options[0]}
         onChange={(event) => onChange(event.target.value)}
@@ -104,6 +107,7 @@ function ModelSelectControl({
 
   return (
     <input
+      aria-label={label}
       className="settings-input settings-provider-model-select"
       value={value}
       placeholder={placeholder}
@@ -289,6 +293,9 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     ? activeProviderRoute
     : form.providerConfig.selected_provider;
   const currentProvider = form.providerConfig.providers[currentProviderRoute] || createProviderEntry(currentProviderRoute);
+  // inherit_ai is resolved by the backend from saved configuration, not from
+  // whichever provider happens to be open in this unsaved editor.
+  const inheritedAiProvider = resolveInheritedAiProvider(state);
 
   const diagnosticsText = useMemo(() => {
     if (!state) {
@@ -347,6 +354,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       if (key === 'model') {
         nextProvider.models = normalizeProviderModels(nextProvider);
       }
+      if (key === 'base_url' || key === 'api_key') nextProvider.model_capabilities = {};
       return {
         ...providerConfig,
         providers: {
@@ -366,6 +374,11 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
 
     const providers = { ...form.providerConfig.providers };
     const current = createProviderEntry(currentProviderRoute, providers[currentProviderRoute]);
+    if (current.api_key === '********') {
+      setProviderRouteDraft(currentProviderRoute);
+      setSaveStatus(t('settings.provider.rename_requires_key'));
+      return;
+    }
     delete providers[currentProviderRoute];
     const safeRoute = buildProviderRoute(normalizedRoute, providers);
     providers[safeRoute] = createProviderEntry(safeRoute, {
@@ -478,6 +491,9 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       });
       const discoveredModels = Array.isArray(payload?.models) ? payload.models : [];
       updateProviderConfig((providerConfig) => {
+        // A response belongs to the exact draft entry that initiated it. A
+        // deleted, renamed, edited, or replaced provider must never be rebuilt.
+        if (providerConfig.providers[currentProviderRoute] !== currentProvider) return providerConfig;
         const provider = createProviderEntry(currentProviderRoute, providerConfig.providers[currentProviderRoute]);
         const nextSelection = resolveRefreshedModelSelection({
           currentModel: provider.model,
@@ -492,6 +508,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
               ...provider,
               model: nextSelection.model,
               models: nextSelection.models,
+              model_capabilities: payload?.model_capabilities || {},
               last_refreshed_at: new Date().toISOString(),
             }),
           },
@@ -517,10 +534,10 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         body: JSON.stringify({
           kind,
           mode,
-          route: mode === 'inherit_ai' ? currentProviderRoute : kind,
+          route: mode === 'inherit_ai' ? (inheritedAiProvider?.route || '') : kind,
           base_url: isVoice ? form.voiceBaseUrl : form.imageBaseUrl,
           api_key: isVoice ? form.voiceApiKey : form.imageApiKey,
-          type: currentProvider.type,
+          type: mode === 'inherit_ai' ? inheritedAiProvider?.type : currentProvider.type,
         }),
         retryPolicy: 'mutation',
       });
@@ -666,6 +683,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     <section className="settings-section">
       <SettingsRow label={t('settings.general.language')}>
         <select
+          aria-label={t('settings.general.language')}
           className="settings-input"
           value={form.displayLanguage}
           onChange={(event) => setForm((prev) => ({ ...prev, displayLanguage: event.target.value }))}
@@ -766,6 +784,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           </div>
           <SettingsRow label={t('settings.provider.name')}>
             <input
+              aria-label={t('settings.provider.name')}
               className="settings-input"
               value={currentProvider.name}
               onChange={(event) => updateProvider('name', event.target.value)}
@@ -773,6 +792,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           </SettingsRow>
           <SettingsRow label={t('settings.provider.route')}>
             <input
+              aria-label={t('settings.provider.route')}
               className="settings-input"
               value={providerRouteDraft}
               onChange={(event) => setProviderRouteDraft(event.target.value)}
@@ -786,6 +806,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           </SettingsRow>
           <SettingsRow label={t('settings.provider.base_url')}>
             <input
+              aria-label={t('settings.provider.base_url')}
               className="settings-input"
               value={currentProvider.base_url}
               onChange={(event) => updateProvider('base_url', event.target.value)}
@@ -794,6 +815,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           <SettingsRow label={t('settings.provider.api_key')}>
             <span className="settings-secret-input">
               <input
+                aria-label={t('settings.provider.api_key')}
                 className="settings-input"
                 type={showApiKey ? 'text' : 'password'}
                 value={currentProvider.api_key}
@@ -812,6 +834,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           <SettingsRow label={t('settings.provider.model')}>
             <span className="settings-secret-input">
               <ModelSelectControl
+                label={t('settings.provider.model')}
                 value={currentProvider.model}
                 models={currentProvider.models}
                 placeholder="gpt-5.5"
@@ -861,9 +884,9 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
 
   const renderVoiceProvider = () => {
     const inheritAi = form.voiceProviderMode === 'inherit_ai';
-    const effectiveBaseUrl = inheritAi ? currentProvider.base_url : form.voiceBaseUrl;
+    const effectiveBaseUrl = inheritAi ? (inheritedAiProvider?.base_url || '') : form.voiceBaseUrl;
     const effectiveApiKey = inheritAi
-      ? (currentProvider.api_key || currentProvider.has_api_key ? '********' : '')
+      ? (inheritedAiProvider ? '********' : '')
       : form.voiceApiKey;
 
     return (
@@ -872,11 +895,12 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         {inheritAi ? (
           <div className="settings-status-line">
             <Info size={16} />
-            {t('settings.provider.inherited_from_ai', { name: currentProvider.name || currentProviderRoute })}
+            {t('settings.provider.inherited_from_ai', { name: inheritedAiProvider?.name || inheritedAiProvider?.route || '--' })}
           </div>
         ) : null}
         <SettingsRow label={t('settings.voice_provider.base_url')}>
           <input
+            aria-label={t('settings.voice_provider.base_url')}
             className="settings-input"
             value={effectiveBaseUrl}
             disabled={inheritAi}
@@ -887,6 +911,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         <SettingsRow label={t('settings.voice_provider.api_key')}>
           <span className="settings-secret-input">
             <input
+              aria-label={t('settings.voice_provider.api_key')}
               className="settings-input"
               type={showVoiceApiKey ? 'text' : 'password'}
               value={effectiveApiKey}
@@ -910,6 +935,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         <SettingsRow label={t('settings.voice_provider.model')}>
           <span className="settings-secret-input">
             <ModelSelectControl
+              label={t('settings.voice_provider.model')}
               value={form.voiceModel}
               models={form.voiceModels}
               placeholder={DEFAULT_VOICE_MODEL}

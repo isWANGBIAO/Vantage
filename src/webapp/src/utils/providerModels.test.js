@@ -5,7 +5,20 @@ import {
   normalizeModelList,
   normalizeProviderModels,
   resolveRefreshedModelSelection,
+  resolveInheritedAiProvider,
 } from './providerModels.js';
+
+test('voice inheritance uses authoritative backend metadata instead of JavaScript numeric-key order', () => {
+  const config = { selected_provider: 'disabled', providers: {
+    disabled: { enabled: false },
+    10: { api_key: '********', base_url: 'https://ten.invalid/v1' },
+    2: { api_key: '********', base_url: 'https://two.invalid/v1' },
+  } };
+  assert.deepEqual(Object.keys(config.providers), ['2', '10', 'disabled']);
+  assert.equal(resolveInheritedAiProvider({ provider: config, inheritedAiProvider: { route: '10', base_url: 'https://ten.invalid/v1', has_api_key: true } }).route, '10');
+  assert.equal(resolveInheritedAiProvider({ provider: config }), null);
+  assert.equal(resolveInheritedAiProvider(null), null);
+});
 
 test('resolveRefreshedModelSelection drops stale selected model when discovery returns a list', () => {
   const selection = resolveRefreshedModelSelection({

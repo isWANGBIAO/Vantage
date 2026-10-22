@@ -51,6 +51,16 @@ let server;
 let shuttingDown = false;
 let backendConnection;
 let smokeSession;
+let providerConfig = { version: 2, selected_provider: null, providers: {} };
+let inheritedProviderRouteOverride = null;
+const pendingDiscoveries = [];
+
+function syntheticProviders() {
+    return { version: 2, selected_provider: 'alpha', providers: Object.fromEntries(['alpha', 'beta'].map(route => [route, {
+        route, name: `${route === 'alpha' ? 'Alpha' : 'Beta'} Provider`, type: 'openai-compatible', enabled: true,
+        api_key: '********', base_url: `https://${route}.invalid/v1`, model: `${route}-model`, models: [`${route}-model`],
+    }])) };
+}
 
 const chart = (id, title) => ({
     id, title, summary: [],
@@ -103,7 +113,12 @@ function onboardingState() {
 }
 
 function settingsState() {
-    return { settings: { ...settings }, provider: { version: 2, selected_provider: null, providers: {} }, runtime_paths: {}, migration: {} };
+    const route = inheritedProviderRouteOverride || [providerConfig.selected_provider, ...Object.keys(providerConfig.providers)]
+        .find(route => providerConfig.providers[route]?.enabled !== false && providerConfig.providers[route]?.api_key && providerConfig.providers[route]?.base_url);
+    const inherited = providerConfig.providers[route];
+    return { settings: { ...settings }, provider: providerConfig, inherited_ai_provider: inherited ? {
+        route, name: inherited.name || route, type: inherited.type || 'openai-compatible', base_url: inherited.base_url, has_api_key: true,
+    } : null, runtime_paths: {}, migration: {} };
 }
 
 async function serveFixture(req, res) {
@@ -120,7 +135,12 @@ async function serveFixture(req, res) {
     else if (req.method === 'GET' && pathname === '/api/v1/onboarding') result = onboardingState();
     else if (req.method === 'PUT' && pathname === '/api/v1/settings') {
         Object.assign(settings, payload);
+        if (payload.provider_config) providerConfig = payload.provider_config;
         result = settingsState();
+    } else if (req.method === 'POST' && pathname === '/api/v1/models/discover') {
+        result = await new Promise(resolve => pendingDiscoveries.push(resolve));
+    } else if (req.method === 'POST' && pathname === '/api/v1/providers/models/discover') {
+        result = { models: ['synthetic-voice'] };
     } else if (req.method === 'PUT' && pathname === '/api/v1/settings/display-language') {
         settings.display_language = payload.display_language;
         result = { display_language: settings.display_language };
@@ -300,6 +320,124 @@ async function openSettings() {
     await waitForNetworkIdle();
 }
 
+async function editSettingsInput(label, value) {
+    await evaluate((label, value) => {
+        const row = [...document.querySelectorAll('.settings-row')].find(node => node.querySelector('.settings-row-label')?.textContent === label);
+        const input = row?.querySelector('input');
+        if (!input) throw new Error(`Missing settings input ${label}`);
+        input.focus();
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }, label, value);
+    await delay(50);
+    await evaluate(label => {
+        const input = [...document.querySelectorAll('.settings-row')].find(node => node.querySelector('.settings-row-label')?.textContent === label)?.querySelector('input');
+        input?.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    }, label);
+    await delay(50);
+}
+
+async function resetProviderSettings(config = syntheticProviders(), inheritedRoute = null) {
+    providerConfig = config;
+    inheritedProviderRouteOverride = inheritedRoute;
+    await navigate('dashboard', '.dashboard-page', 'System Dashboard');
+    await openSettings();
+    await click('.settings-sidebar button', 'AI Provider');
+}
+
+async function takePendingDiscovery() {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+        if (pendingDiscoveries.length) return pendingDiscoveries.shift();
+        await checkErrors();
+        await delay(25);
+    }
+    throw new Error('The synthetic provider discovery request did not arrive');
+}
+
+async function exerciseProviderSettings() {
+    await resetProviderSettings();
+    await editSettingsInput('Provider Route', 'alpha-renamed');
+    assert.equal(await evaluate(() => document.querySelector('.settings-provider-item.is-active .settings-provider-name')?.textContent), 'Alpha Provider');
+    assert.equal(await evaluate(() => [...document.querySelectorAll('.settings-row')].find(row => row.querySelector('.settings-row-label')?.textContent === 'Provider Route')?.querySelector('input')?.value), 'alpha');
+    assert.match(await evaluate(() => document.querySelector('.settings-page')?.innerText), /API key/i);
+    await editSettingsInput('API Key', 'synthetic-new-alpha');
+    await editSettingsInput('Provider Route', 'alpha-renamed');
+    await click('.settings-save-button');
+    await waitFor('explicit-key route rename saved', () => document.querySelector('.settings-save-status')?.textContent?.includes('Saved') || !document.querySelector('.settings-save-button')?.disabled);
+    assert.equal(providerConfig.selected_provider, 'alpha-renamed');
+    assert.equal(providerConfig.providers['alpha-renamed'].api_key, 'synthetic-new-alpha');
+    assert.equal(Object.hasOwn(providerConfig.providers, 'alpha'), false);
+    console.log('PASS provider rename refuses masked credentials and accepts an explicit new key');
+    await resetProviderSettings();
+    const tree = await window.webContents.debugger.sendCommand('Accessibility.getFullAXTree');
+    const controls = tree.nodes.filter(node => ['textbox', 'combobox'].includes(node.role?.value) && !node.ignored);
+    for (const name of ['Name', 'Provider Route', 'Base URL', 'API Key', 'Model']) {
+        assert(controls.some(node => node.name?.value === name), `Missing accessible settings control ${name}`);
+    }
+    await click('.settings-icon-button[title="Show API key"]');
+    const revealed = await window.webContents.debugger.sendCommand('Accessibility.getFullAXTree');
+    assert(revealed.nodes.some(node => node.role?.value === 'textbox' && node.name?.value === 'API Key'));
+    console.log('PASS provider controls retain accessible labels, including revealed credentials');
+    await evaluate(() => [...document.querySelectorAll('.settings-provider-item')].find(node => node.textContent.includes('Beta Provider')).click());
+    await click('.settings-sidebar button', 'Voice Provider');
+    assert.match(await evaluate(() => document.querySelector('.settings-section')?.innerText), /Alpha Provider/);
+    assert.equal(await evaluate(() => document.querySelector('.settings-section input')?.value), 'https://alpha.invalid/v1');
+    await click('.settings-icon-button[title="Refresh Models"]');
+    await waitFor('voice discovery completed', () => document.querySelector('.settings-provider-model-select')?.value === 'synthetic-voice');
+    await waitForNetworkIdle();
+    assert.equal(calls.filter(call => call.pathname === '/api/v1/providers/models/discover').at(-1)?.payload.route, 'alpha');
+    for (const incomplete of ['disabled', 'keyless']) {
+        const config = syntheticProviders();
+        if (incomplete === 'disabled') config.providers.alpha.enabled = false;
+        else config.providers.alpha.api_key = '';
+        await resetProviderSettings(config);
+        await click('.settings-sidebar button', 'Voice Provider');
+        assert.match(await evaluate(() => document.querySelector('.settings-section')?.innerText), /Beta Provider/);
+        assert.equal(await evaluate(() => document.querySelector('.settings-section input')?.value), 'https://beta.invalid/v1');
+    }
+    console.log('PASS voice inheritance follows the persisted active provider, not the browsed editor');
+    await resetProviderSettings({ version: 2, selected_provider: 'disabled', providers: {
+        disabled: { enabled: false },
+        10: { name: 'Numeric Ten', api_key: '********', base_url: 'https://ten.invalid/v1', model: 'ten' },
+        2: { name: 'Numeric Two', api_key: '********', base_url: 'https://two.invalid/v1', model: 'two' },
+    } }, '10');
+    await evaluate(() => [...document.querySelectorAll('.settings-provider-item')].find(node => node.textContent.includes('Numeric Two')).click());
+    await click('.settings-sidebar button', 'Voice Provider');
+    assert.match(await evaluate(() => document.querySelector('.settings-section')?.innerText), /Numeric Ten/);
+    assert.equal(await evaluate(() => document.querySelector('.settings-section input')?.value), 'https://ten.invalid/v1');
+    console.log('PASS numeric route inheritance uses backend priority despite JavaScript object ordering');
+    for (const edit of ['delete', 'endpoint', 'rename']) {
+        await resetProviderSettings();
+        if (edit === 'rename') await editSettingsInput('API Key', 'synthetic-reentered-key');
+        await click('.settings-icon-button[title="Refresh Models"]');
+        const respond = await takePendingDiscovery();
+        if (edit === 'delete') {
+            // Only the native confirmation boundary is replaced; real React deletion runs.
+            await evaluate(() => { window.confirm = () => true; });
+            await click('.settings-provider-editor-actions button', 'Delete');
+        } else if (edit === 'endpoint') await editSettingsInput('Base URL', 'https://changed.invalid/v1');
+        else await editSettingsInput('Provider Route', 'alpha-renamed');
+        respond({ models: ['late-model'], model_capabilities: { 'late-model': [] } });
+        await waitFor('stale discovery settled', () => document.querySelector('.settings-icon-button[title="Refresh Models"]')?.disabled === false);
+        await waitForNetworkIdle();
+        assert.equal(await evaluate(() => document.querySelector('.settings-provider-model-select')?.value), edit === 'delete' ? 'beta-model' : 'alpha-model');
+        if (edit === 'delete') assert.deepEqual(await evaluate(() => [...document.querySelectorAll('.settings-provider-name')].map(node => node.textContent)), ['Beta Provider']);
+        if (edit === 'rename') assert.equal(await evaluate(() => document.querySelector('input[aria-label="Provider Route"]')?.value), 'alpha-renamed');
+    }
+    console.log('PASS late model discovery cannot recreate deleted or overwrite edited providers');
+    await resetProviderSettings();
+    await click('.settings-icon-button[title="Refresh Models"]');
+    const respond = await takePendingDiscovery();
+    respond({ models: ['alpha-refreshed'], model_capabilities: { 'alpha-refreshed': ['temperature', 'top_p'] } });
+    await waitFor('current provider discovered', () => document.querySelector('.settings-provider-model-select')?.value === 'alpha-refreshed');
+    await click('.settings-save-button');
+    await waitForNetworkIdle();
+    assert.deepEqual(providerConfig.providers.alpha.model_capabilities, { 'alpha-refreshed': ['temperature', 'top_p'] });
+    console.log('PASS discovered model capabilities are submitted and survive the saved state');
+    await click('.settings-sidebar button', 'General');
+}
+
 async function exerciseUi() {
     await createWindow();
     await expectStep(1);
@@ -445,6 +583,7 @@ async function exerciseUi() {
     assert.equal(calls.some(call => call.pathname.includes('/camera/stream')), false);
     console.log('PASS settings cancel/reopen, repeated entry, Back/Forward, sections, save/reopen');
     console.log('PASS crash notice, local-only privacy copy, narrow folder action and clean startup');
+    await exerciseProviderSettings();
     await evaluate(() => {
         const select = document.querySelector('.settings-section select');
         select.value = 'zh-CN';

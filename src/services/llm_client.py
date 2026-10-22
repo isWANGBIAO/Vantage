@@ -632,7 +632,11 @@ class LLMClient:
             "model": model,
             "models": models,
             "headers": self._build_headers(user_provider["api_key"]),
-            "model_capabilities": {model_id: None for model_id in models},
+            "model_capabilities": {
+                model_id: self._normalize_supported_parameters(
+                    (user_provider.get("model_capabilities") or {}).get(model_id)
+                ) for model_id in models
+            },
             "context_window_tokens": user_provider.get("context_window_tokens"),
             "max_output_tokens": user_provider.get("max_output_tokens"),
         }

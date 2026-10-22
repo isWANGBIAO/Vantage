@@ -1459,6 +1459,39 @@
     },
     "SettingsState": {
       "$defs": {
+        "InheritedAiProvider": {
+          "properties": {
+            "route": {
+              "title": "Route",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "type": {
+              "title": "Type",
+              "type": "string"
+            },
+            "base_url": {
+              "title": "Base Url",
+              "type": "string"
+            },
+            "has_api_key": {
+              "title": "Has Api Key",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "route",
+            "name",
+            "type",
+            "base_url",
+            "has_api_key"
+          ],
+          "title": "InheritedAiProvider",
+          "type": "object"
+        },
         "MaskedProvider": {
           "additionalProperties": true,
           "properties": {
@@ -1536,6 +1569,31 @@
               ],
               "default": null,
               "title": "Max Output Tokens"
+            },
+            "model_capabilities": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Capabilities"
             }
           },
           "required": [
@@ -1945,6 +2003,17 @@
         },
         "provider": {
           "$ref": "#/$defs/ProviderState"
+        },
+        "inherited_ai_provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InheritedAiProvider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "migration": {
           "$ref": "#/$defs/MigrationState"
@@ -2911,6 +2980,19 @@
                     "type": "integer",
                     "description": "Optional provider maximum output-token limit.",
                     "minimum": 1
+                  },
+                  "model_capabilities": {
+                    "type": "object",
+                    "description": "Discovered supported parameters by model; null means unknown, [] means none.",
+                    "additionalProperties": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    }
                   }
                 }
               }

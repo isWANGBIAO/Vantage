@@ -135,6 +135,7 @@ def _masked_settings_payload():
                 "last_refreshed_at",
                 "context_window_tokens",
                 "max_output_tokens",
+                "model_capabilities",
             )
             if key in entry
         }
@@ -142,11 +143,17 @@ def _masked_settings_payload():
         masked_entry["api_key"] = "********" if has_key else ""
         masked_providers[route] = masked_entry
     provider_payload = {**provider, "providers": masked_providers}
+    chain = get_provider_chain_config()
+    inherited = chain[0] if chain else None
     migration = load_migration_state()
     runtime_paths = Config.get_runtime_paths()
     return {
         "settings": settings_payload,
         "provider": provider_payload,
+        "inherited_ai_provider": {
+            "route": inherited["route"], "name": inherited["name"], "type": inherited["type"],
+            "base_url": inherited["base_url"], "has_api_key": bool(inherited.get("api_key")),
+        } if inherited else None,
         "migration": {
             "completed": migration["completed"],
             "source_path": migration["source_path"],
@@ -161,6 +168,11 @@ def _configuration_api_key(submitted_key, base_url, saved_key, saved_base_url):
     submitted_key = None if submitted_key is None else str(submitted_key).strip()
     if submitted_key == "":
         return ""
+    if submitted_key == "********" and not saved_key:
+        raise HTTPException(
+            status_code=422,
+            detail="This provider has no saved credential. Enter an explicit API key, or an explicit empty key to clear it.",
+        )
     destination = _provider_destination(base_url)
     if (saved_key and submitted_key in (None, "********")
             and (destination is None or destination != _provider_destination(saved_base_url))):
@@ -185,6 +197,10 @@ def _prepare_provider_configuration(payload, current_provider):
         for route, submitted_entry in submitted_providers.items():
             old_entry = current_provider.get("providers", {}).get(route, {})
             entry = {**old_entry, **submitted_entry}
+            if ("model_capabilities" not in submitted_entry
+                    and _provider_destination(entry.get("base_url", ""))
+                    != _provider_destination(old_entry.get("base_url", ""))):
+                entry["model_capabilities"] = {}
             entry["api_key"] = _configuration_api_key(
                 submitted_entry.get("api_key"), entry.get("base_url", ""),
                 old_entry.get("api_key", ""), old_entry.get("base_url", ""),

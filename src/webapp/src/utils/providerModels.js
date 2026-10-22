@@ -21,6 +21,12 @@ export function normalizeModelList(models, model) {
   return normalizeProviderModels({ model, models });
 }
 
+export function resolveInheritedAiProvider(settingsState) {
+  // JavaScript reorders integer object keys; it must not reconstruct Python's
+  // provider priority. The backend publishes this resolved, credential-free DTO.
+  return settingsState?.inheritedAiProvider || null;
+}
+
 export function resolveRefreshedModelSelection({
   currentModel,
   currentModels = [],

@@ -286,6 +286,12 @@ function sanitizeProviderEntry(route, entry) {
     const value = normalizeOptionalPositiveInt(safeEntry[key]);
     if (value !== null) sanitized[key] = value;
   }
+  const capabilities = safeEntry.model_capabilities;
+  if (capabilities && typeof capabilities === 'object' && !Array.isArray(capabilities)) {
+    sanitized.model_capabilities = Object.fromEntries(Object.entries(capabilities)
+      .filter(([model, parameters]) => model.trim() && (parameters === null || (Array.isArray(parameters) && parameters.every(item => typeof item === 'string'))))
+      .map(([model, parameters]) => [model.trim(), parameters === null ? null : [...new Set(parameters.map(item => item.trim()).filter(Boolean))].sort()]));
+  }
   return sanitized;
 }
 
