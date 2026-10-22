@@ -34,3 +34,25 @@ An existing ten-real-process Never Stop test repeatedly exceeded one shared
 15-second deadline on Windows. The diagnosis and progress-based test repair
 must preserve process ownership/cleanup and the ten-attempt contract; simply
 increasing the timeout or removing the scenario is not acceptable.
+
+## Final local acceptance before CI
+
+- Combined production code: full Python 2094 passed, 16 POSIX-only skips,
+  101 subtests; Ruff passed. The pre-existing Starlette deprecation warning
+  remains non-failing.
+- Frontend: lint, 649 tests and production build passed.
+- Never Stop: 171/171 passed with default parallel execution. The diagnosed
+  retry test now checks each real state transition, without changing production
+  cleanup/backoff or increasing the existing per-progress timeout.
+- Actual Electron app protocol passed; eight production React pages completed
+  381 synthetic requests with zero renderer errors. Real TCP multipart failure,
+  hidden-stream cleanup and queued/transport-failed/running/idle analysis
+  recovery passed in the combined harness alongside provider-settings cases.
+- Independent cross-contract review: 117 Python and 17 usage UI tests passed;
+  partial/invalid usage, nullable DTOs and output-only speed points covered.
+- Additional three build-cache issues were individually closed after exact-main
+  f45ece3 CI and CodeQL passed; nine issues closed, 86 remain open at this
+  pre-merge snapshot. The issue links and final PR record carry subsequent live
+  closure status.
+
+No final CI or main success is claimed in this pre-merge acceptance record.
