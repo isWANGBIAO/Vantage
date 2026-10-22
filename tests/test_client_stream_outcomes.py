@@ -10,6 +10,8 @@ import pytest
 from mcp import Client
 
 from src.mcp_server import create_mcp_server
+from src import cli
+from unittest.mock import Mock
 
 
 @pytest.mark.parametrize("events,success", [
@@ -57,3 +59,11 @@ def test_cli_and_mcp_require_successful_chat_completion(events, success):
         server.shutdown()
         server.server_close()
         thread.join(5)
+
+
+def test_cli_closes_owned_session_after_stream_completion(monkeypatch):
+    client = Mock()
+    client.invoke.return_value = iter([{"done": True}])
+    monkeypatch.setattr(cli, "VantageClient", lambda *args: client)
+    assert cli.main(["chat", "send", "--message", "synthetic"]) == 0
+    client.session.close.assert_called_once()

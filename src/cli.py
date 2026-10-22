@@ -515,6 +515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write_error("Invalid command-line arguments. Run 'vantage --help' for usage.")
         return EXIT_INPUT_ERROR
 
+    client = None
     try:
         if getattr(namespace, "mcp_server", False):
             from src.mcp_server import run_stdio
@@ -575,6 +576,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except OSError:
         _write_error("Unable to write Vantage output.")
         return EXIT_OUTPUT_ERROR
+    finally:
+        close = getattr(getattr(client, "session", None), "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass  # Cleanup must not replace the operation's exit status.
 
 
 if __name__ == "__main__":
