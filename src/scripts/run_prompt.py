@@ -429,11 +429,22 @@ def run_action_plan_round(
         if emit_start_before_first_attempt or attempt > 1:
             emit_action_plan_stream_event(section, "start", "", emit=emit)
 
+        # LLMClient reports errors per attempt. Do not publish a terminal round
+        # error until the retry policy is exhausted: downstream jobs latch it.
+        attempt_errors = []
+        stream_printer = build_action_plan_stream_printer(section, emit=emit)
+
+        def attempt_callback(tag, content):
+            if tag == "error":
+                attempt_errors.append(content)
+            else:
+                stream_printer(tag, content)
+
         try:
             result = client.chat(
                 messages,
                 stream=True,
-                print_callback=build_action_plan_stream_printer(section, emit=emit),
+                print_callback=attempt_callback,
                 model=model_override,
                 provider_route=provider_route,
                 service_tier=service_tier,
@@ -443,7 +454,7 @@ def run_action_plan_round(
                 context_file=context_file,
                 metadata=metadata,
             )
-        except StreamIncompleteError:
+        except StreamIncompleteError as error:
             if attempt < total_attempts:
                 logging.warning(
                     "Action plan %s round stream ended incomplete on attempt %s/%s; retrying same round",
@@ -457,6 +468,11 @@ def run_action_plan_round(
                 section,
                 total_attempts,
             )
+            stream_printer("error", attempt_errors[-1] if attempt_errors else str(error))
+            raise
+        except Exception:
+            for error_message in attempt_errors:
+                stream_printer("error", error_message)
             raise
         last_result = dict(result or {})
         attempt_usage = last_result.get("usage")
@@ -718,11 +734,13 @@ def main():
             
             # Handle Result
             content = result["content"]
-            if content:
+            if isinstance(content, str) and content.strip():
                 context_mgr.add_message("assistant", content)
                 context_mgr.save()
             else:
                 logging.error("No content returned from API")
+                print(f"STREAM_ERROR:{json.dumps('Model returned no chat content; please retry.')}", flush=True)
+                raise SystemExit(1)
 
             # Print Stats for GUI
             usage = result.get("usage", {})

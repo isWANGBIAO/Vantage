@@ -7,6 +7,31 @@ import { normalizeBackendChatContext } from '../utils/chatContextState.js';
 const chatSource = readFileSync(new URL('./ChatInterface.jsx', import.meta.url), 'utf8');
 const displayCopySource = readFileSync(new URL('../utils/displayCopy.js', import.meta.url), 'utf8');
 
+test('failed chat restores the submitted text for retry without overwriting a new draft', async () => {
+  const start = chatSource.indexOf('    const sendMessage = async () => {');
+  const end = chatSource.indexOf('    const handleKeyDown =', start);
+  assert.ok(start >= 0 && end > start);
+  for (const nextDraft of ['', 'new draft']) {
+    let draft = 'submitted question';
+    const noop = () => {};
+    const sandbox = {
+      input: draft, isLoading: false, contextReady: true,
+      chatAbortControllerRef: { current: null }, contextRequestVersionRef: { current: 0 },
+      syncChatContextRef: { current: noop }, stats: {}, availableModels: [], selectedModel: '',
+      fastModeEnabled: false, AbortController, Date, console,
+      setInput: (value) => { draft = typeof value === 'function' ? value(draft) : value; },
+      setChatError: noop, setMessages: noop, setIsLoading: noop, setStats: noop,
+      buildClientSentAt: () => 'synthetic', findModelOption: () => null,
+      loadStoredActionPlanReasoningEffort: () => 'high', normalizeReasoningEffortForModel: () => 'high',
+      resolveFastServiceTier: () => null, fetchBackend: async () => ({}),
+      processStreamResponse: async () => { draft = nextDraft; return false; }, t: (key) => key,
+    };
+    vm.runInNewContext(`${chatSource.slice(start, end)}; globalThis.send = sendMessage;`, sandbox);
+    await sandbox.send();
+    assert.equal(draft, nextDraft || 'submitted question');
+  }
+});
+
 function loadChatHelpers() {
   const start = chatSource.indexOf('function consumeChatStreamChunk');
   const end = chatSource.indexOf('export default function ChatInterface');
