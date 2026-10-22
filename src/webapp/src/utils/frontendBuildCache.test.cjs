@@ -91,3 +91,20 @@ test('build wrapper publishes cache only after success and checker rejects delet
   assert.equal(fs.existsSync(path.join(root, 'dist', STATE_NAME)), false);
   assert.equal(run('check_build.js').status, 1);
 });
+
+for (const location of ['src', 'dist']) {
+  test(`${location} symbolic links cannot escape or recurse during cache validation`, (t) => {
+    const root = fixture(t);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'vantage-external-fixture-'));
+    t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(outside, 'synthetic.txt'), 'must not be hashed');
+    const link = path.join(root, location, 'link');
+    fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    assert.equal(isBuildCurrent(root), false);
+    if (location === 'src') assert.throws(() => inputFingerprint(root), /symbolic links/);
+    else assert.throws(() => recordBuild(root, inputFingerprint(root)), /symbolic links/);
+    fs.unlinkSync(link);
+    fs.symlinkSync(path.join(root, location), link, process.platform === 'win32' ? 'junction' : 'dir');
+    assert.equal(isBuildCurrent(root), false);
+  });
+}

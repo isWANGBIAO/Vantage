@@ -14,8 +14,15 @@ function fingerprintFiles(root, entries, excluded = new Set()) {
   function visit(relative) {
     if (excluded.has(relative)) return;
     const absolute = path.join(root, relative);
-    if (!fs.existsSync(absolute)) return;
-    if (fs.statSync(absolute).isDirectory()) {
+    let stat;
+    try {
+      stat = fs.lstatSync(absolute);
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) throw new Error('Build cache cannot certify symbolic links');
+    if (stat.isDirectory()) {
       for (const name of fs.readdirSync(absolute).sort()) {
         visit(path.posix.join(relative, name));
       }
