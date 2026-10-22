@@ -8,6 +8,25 @@ const usagePanelSource = readFileSync(new URL('./UsagePanel.jsx', import.meta.ur
 const usagePanelStyleSource = readFileSync(new URL('./UsagePanel.css', import.meta.url), 'utf8');
 const displayCopySource = readFileSync(new URL('../utils/displayCopy.js', import.meta.url), 'utf8');
 
+test('usage formatters keep unknown measurements distinct from recorded zero', () => {
+  const helperSource = usagePanelSource.slice(usagePanelSource.indexOf('function formatCompactNumber'), usagePanelSource.indexOf('function toTimestamp'));
+  const sandbox = { globalThis: {} };
+  vm.runInNewContext(`${helperSource}\nglobalThis.compact = formatCompactNumber; globalThis.ratio = formatRatio;`, sandbox);
+  assert.equal(sandbox.globalThis.compact(null), '—');
+  assert.equal(sandbox.globalThis.ratio(null), '—');
+  assert.equal(sandbox.globalThis.compact(0), '0');
+  assert.equal(sandbox.globalThis.ratio(0), '0.00 tok/s');
+  assert.ok(usagePanelSource.includes("t('usage.label.incomplete_usage'"));
+  assert.ok(displayCopySource.includes("'usage.label.incomplete_usage':"));
+});
+
+test('usage speed chart leaves an unknown output rate null rather than plotting zero', () => {
+  const buildOption = loadUsagePanelChartHelper();
+  const option = buildOption([{ call_id: 'partial', model: 'synthetic', created_at: '2026-01-01T00:00:00Z', output_tokens_per_second: null, average_tokens_per_second: 10 }], (key) => key);
+  assert.equal(option.series[0].data[0].value[1], null);
+  assert.equal(option.series[1].data[0].value[1], 10);
+});
+
 function loadUsagePanelSortHelper() {
   const start = usagePanelSource.indexOf('function toTimestamp');
   const end = usagePanelSource.indexOf('function SummaryCard');
