@@ -24,6 +24,7 @@ from src.services.automation_catalog import OPERATIONS, Operation, get_operation
 from src.services.vantage_client import (
     ArgumentValidationError,
     BackendHTTPError,
+    BackendStreamError,
     BackendUnavailableError,
     FileDownload,
     OperationUnavailableError,
@@ -130,6 +131,9 @@ def _consume_stream(stream: Any) -> list[Any]:
     events: list[Any] = []
     try:
         events.extend(stream)
+    except BackendStreamError as error:
+        error.events = events
+        raise
     finally:
         close = getattr(stream, "close", None)
         if callable(close):
@@ -238,6 +242,10 @@ class _MCPCallState:
     def is_cancelled(self) -> bool:
         with self._lock:
             return self._cancelled
+
+    def mark_cancelled(self) -> None:
+        with self._lock:
+            self._cancelled = True
 
     def attach_client(self, client: VantageClient) -> bool:
         with self._lock:
@@ -367,7 +375,15 @@ def create_mcp_server(
         try:
             return await asyncio.shield(worker)
         except asyncio.CancelledError:
-            call_state.close_resources(cancelled=True)
+            call_state.mark_cancelled()
+            # requests/urllib3 close() can wait for a read-buffer lock held by
+            # the operation worker. Never take that socket lock on this loop,
+            # or await it before returning cancellation to the MCP caller.
+            cleanup = asyncio.create_task(
+                asyncio.to_thread(call_state.close_resources),
+                name=f"vantage-mcp-cleanup-{operation.name}",
+            )
+            cleanup.add_done_callback(lambda task: None if task.cancelled() else task.exception())
             worker.add_done_callback(_consume_worker_result)
             raise
         except OperationUnavailableError as error:
@@ -382,6 +398,12 @@ def create_mcp_server(
             )
         except BackendHTTPError as error:
             return _error_result(_backend_http_message(error))
+        except BackendStreamError as error:
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=str(error))],
+                structured_content={"events": error.events},
+                is_error=True,
+            )
         except requests.exceptions.RequestException:
             return _error_result(
                 "The Vantage connection was interrupted. Confirm the backend is healthy and retry."
@@ -398,9 +420,6 @@ def create_mcp_server(
                 "Vantage could not complete this operation due to an internal error. "
                 "Check the Vantage logs and retry."
             )
-        finally:
-            call_state.close_resources()
-
     async def list_resources(
         _context: ServerRequestContext,
         _params: types.PaginatedRequestParams | None,

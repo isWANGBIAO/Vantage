@@ -620,7 +620,7 @@ class RunPromptTests(unittest.TestCase):
             api_key="sk-voice",
             model="sensevoice",
         )
-        self.assertIn("TRANSCRIPTION_RESULT:hello", stdout.getvalue())
+        self.assertIn('TRANSCRIPTION_RESULT_JSON:"hello"', stdout.getvalue())
 
     def test_transcribe_mode_reads_voice_api_key_from_environment(self):
         stdout = io.StringIO()
@@ -657,7 +657,7 @@ class RunPromptTests(unittest.TestCase):
             api_key="sk-env-voice",
             model="sensevoice",
         )
-        self.assertIn("TRANSCRIPTION_RESULT:hello", stdout.getvalue())
+        self.assertIn('TRANSCRIPTION_RESULT_JSON:"hello"', stdout.getvalue())
 
     def test_analysis_mode_streams_both_round_prompts(self):
         fake_client = _FakeLLMClient()

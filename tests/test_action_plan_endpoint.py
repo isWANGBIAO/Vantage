@@ -30,12 +30,15 @@ class _FakeStdout:
             return self._lines.pop(0)
         return b""
 
-    async def read(self):
+    async def read(self, n=-1):
         if not self._lines:
             return b""
         remaining = b"".join(self._lines)
-        self._lines.clear()
-        return remaining
+        if n < 0:
+            self._lines.clear()
+            return remaining
+        self._lines = [remaining[n:]] if remaining[n:] else []
+        return remaining[:n]
 
 
 class _CancelOnReadStdout:

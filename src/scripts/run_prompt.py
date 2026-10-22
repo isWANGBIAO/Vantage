@@ -646,7 +646,7 @@ def main():
             if text is None:
                 print("TRANSCRIPTION_ERROR:Audio transcription failed")
                 raise SystemExit(1)
-            print(f"TRANSCRIPTION_RESULT:{text}")
+            print(f"TRANSCRIPTION_RESULT_JSON:{json.dumps(text)}")
             return
 
         # Backend-managed plan jobs isolate only their output/context files.

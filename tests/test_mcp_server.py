@@ -388,7 +388,7 @@ def test_stream_error_closes_response_and_session_without_leaking_transport_deta
     assert session.closed is True
 
 
-def test_cancelling_blocked_stream_closes_response_and_session_immediately(monkeypatch):
+def test_cancelling_blocked_stream_eventually_closes_response_and_session_off_loop(monkeypatch):
     stream_started = threading.Event()
     release_stream = threading.Event()
     worker_finished = threading.Event()
@@ -445,6 +445,9 @@ def test_cancelling_blocked_stream_closes_response_and_session_immediately(monke
             else:
                 raise AssertionError("the MCP handler should propagate cancellation")
 
+            cleanup_tasks = [pending for pending in asyncio.all_tasks()
+                             if pending.get_name().startswith("vantage-mcp-cleanup-")]
+            await asyncio.wait_for(asyncio.gather(*cleanup_tasks), timeout=2)
             assert response.closed is True
             assert session.closed is True
             assert await asyncio.wait_for(asyncio.to_thread(worker_finished.wait, 1), timeout=2)
@@ -526,6 +529,9 @@ def test_cancellation_before_stream_result_attaches_closes_late_result(monkeypat
             else:
                 raise AssertionError("the MCP handler should propagate cancellation")
 
+            cleanup_tasks = [pending for pending in asyncio.all_tasks()
+                             if pending.get_name().startswith("vantage-mcp-cleanup-")]
+            await asyncio.wait_for(asyncio.gather(*cleanup_tasks), timeout=2)
             assert session.closed is True
             assert await asyncio.wait_for(asyncio.to_thread(response_closed.wait, 1), timeout=2)
             assert response.closed is True

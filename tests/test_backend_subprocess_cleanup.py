@@ -1,5 +1,6 @@
 """Subprocess exit races must not mask cancellation or leave children unreaped."""
 import asyncio
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -70,3 +71,88 @@ def test_reaping_already_exited_child_still_waits():
     process.returncode = 0
     asyncio.run(processes.reap_subprocess(process))
     assert process.wait_calls == 1
+
+
+@pytest.mark.parametrize("fd", [1, 2])
+def test_real_paused_output_pipe_does_not_deadlock_reaping(fd):
+    async def exercise():
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-c",
+            f"import os,time; chunk=b'x'*4095+b'\\n'; [os.write({fd},chunk) for _ in range(10000)]; time.sleep(30)",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stream = process.stdout if fd == 1 else process.stderr
+        reaping = None
+        try:
+            async def wait_for_backpressure():
+                while not stream._paused:
+                    await asyncio.sleep(0.005)
+            await asyncio.wait_for(wait_for_backpressure(), timeout=5)
+            reaping = asyncio.create_task(processes.reap_subprocess(process))
+            await asyncio.wait_for(asyncio.shield(reaping), timeout=1)
+            assert process.returncode is not None
+            assert process.stdout.at_eof()
+            assert process.stderr.at_eof()
+        finally:
+            if process.returncode is None:
+                process.kill()
+            # Test-owned cleanup also lets the original broken helper finish.
+            await process.communicate()
+            if reaping is not None:
+                await reaping
+
+    asyncio.run(exercise())
+
+
+def test_http_job_cancel_releases_active_slot_with_real_backpressured_child(monkeypatch):
+    from datetime import date
+    import httpx
+    from fastapi import FastAPI
+    from src.backend import application
+    from src.services.action_plan_jobs import ActionPlanJobService
+
+    async def exercise():
+        ready = asyncio.Event()
+        children = []
+
+        async def generate(_request):
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", "import os,time; [os.write(1,b'x'*4095+b'\\n') for _ in range(10000)]; time.sleep(30)",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            children.append(process)
+            try:
+                while not process.stdout._paused:
+                    await asyncio.sleep(0.005)
+                ready.set()
+                yield {"log": "synthetic provider waiting"}
+                await asyncio.Event().wait()
+            finally:
+                await processes.reap_subprocess(process)
+
+        service = ActionPlanJobService(generate, lambda: {"exists": False, "date": date.today().isoformat()})
+        monkeypatch.setattr(application, "get_services", lambda: SimpleNamespace(jobs=service))
+        app = FastAPI()
+        app.include_router(application.build_router())
+        try:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                first = (await client.post("/api/v1/action-plan/jobs", json={})).json()
+                await asyncio.wait_for(ready.wait(), 5)
+                cancelled = await asyncio.wait_for(client.post(f"/api/v1/action-plan/jobs/{first['id']}/cancel"), 2)
+                assert cancelled.status_code == 200
+                assert cancelled.json()["status"] == "cancelled"
+                ready.clear()
+                second = (await client.post("/api/v1/action-plan/jobs", json={})).json()
+                assert second["id"] != first["id"]
+                assert not second["reused"]
+                await asyncio.wait_for(ready.wait(), 5)
+                await asyncio.wait_for(service.cancel(second["id"]), 2)
+                assert all(child.returncode is not None for child in children)
+        finally:
+            for child in children:
+                if child.returncode is None:
+                    child.kill()
+                await child.communicate()
+            await service.close()
+
+    asyncio.run(exercise())
