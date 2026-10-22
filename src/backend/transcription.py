@@ -36,10 +36,18 @@ async def transcribe_audio(file: UploadFile = File(...)):
             },
         )
 
+    # The parent owns the whole request workspace. A forcibly killed child
+    # cannot run AudioService's finally block to remove converted audio.
+    with tempfile.TemporaryDirectory(prefix="vantage-transcribe-") as request_directory:
+        return await _transcribe_in_workspace(file, voice_config, request_directory)
+
+
+async def _transcribe_in_workspace(file, voice_config, request_directory):
+
     original_filename = file.filename or "recording.webm"
     ext = os.path.splitext(original_filename)[1] or ".webm"
 
-    temp_fd, temp_filename = tempfile.mkstemp(prefix="temp_audio_", suffix=ext)
+    temp_fd, temp_filename = tempfile.mkstemp(prefix="temp_audio_", suffix=ext, dir=request_directory)
 
     print(f"[Transcribe] Saving uploaded file to: {temp_filename}")
 
@@ -78,13 +86,8 @@ async def transcribe_audio(file: UploadFile = File(...)):
                 timeout=TRANSCRIBE_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
-            if proc.returncode is None:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                with suppress(Exception):
-                    await asyncio.wait_for(proc.wait(), timeout=5)
+            with suppress(Exception):
+                await asyncio.wait_for(_processes.reap_subprocess(proc, terminate_descendants=True), timeout=5)
             return JSONResponse(
                 status_code=504,
                 content={
@@ -169,13 +172,6 @@ async def transcribe_audio(file: UploadFile = File(...)):
             "voice_provider_route": voice_config.get("route"),
         }
     finally:
-        try:
-            if proc is not None and proc.returncode is None:
-                with suppress(Exception):
-                    await asyncio.wait_for(_processes.reap_subprocess(proc), timeout=5)
-        finally:
-            if os.path.exists(temp_filename):
-                try:
-                    os.remove(temp_filename)
-                except OSError as exc:
-                    print(f"[Transcribe] Failed to remove temp file {temp_filename}: {exc}")
+        if proc is not None:
+            with suppress(Exception):
+                await asyncio.wait_for(_processes.reap_subprocess(proc, terminate_descendants=True), timeout=5)

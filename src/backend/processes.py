@@ -5,6 +5,8 @@ import os
 import sys
 from pathlib import Path
 
+import psutil
+
 from src.core.config import Config
 
 from . import source_paths as _source_paths
@@ -54,10 +56,24 @@ def terminate_subprocess(process):
             pass
 
 
-async def reap_subprocess(process):
+async def reap_subprocess(process, *, terminate_descendants=False):
     """Kill the child and drain owned pipes so wait cannot stall on backpressure."""
     if process is None:
         return
+    descendants = []
+    if terminate_descendants and process.returncode is None and isinstance(getattr(process, "pid", None), int):
+        def kill_descendants():
+            try:
+                children = psutil.Process(process.pid).children(recursive=True)
+            except psutil.NoSuchProcess:
+                return []
+            for child in reversed(children):
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
+            return children
+        descendants = await asyncio.to_thread(kill_descendants)
     if process.returncode is None:
         try:
             process.kill()
@@ -77,3 +93,5 @@ async def reap_subprocess(process):
         discard_output(getattr(process, "stderr", None)),
         process.wait(),
     )
+    if descendants:
+        await asyncio.to_thread(psutil.wait_procs, descendants, timeout=2)
