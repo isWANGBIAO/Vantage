@@ -20,7 +20,7 @@ const DROP_LINE_PATTERNS = [
 ];
 
 function sanitizeLine(line) {
-  let sanitized = line.trimEnd();
+  let sanitized = line;
   sanitized = sanitized.replace(/(?:<strong>-<\/strong>){2,}/gi, ' ');
   sanitized = sanitized.replace(/<b<br>>/gi, ' ');
   sanitized = sanitized.replace(/<b(?:<b)+<?b*/gi, ' ');
@@ -32,21 +32,20 @@ function sanitizeLine(line) {
   sanitized = sanitized.replace(/<\/li>/gi, ' ');
   sanitized = sanitized.replace(/<\/?(ul|ol|strong|em)\b[^>]*>/gi, '');
   sanitized = sanitized.replace(/&nbsp;/gi, ' ');
-  sanitized = sanitized.replace(/\s{2,}/g, ' ');
 
   if (DROP_LINE_PATTERNS.some((pattern) => pattern.test(sanitized.trim()))) {
     return '';
   }
 
-  return sanitized.trimEnd();
+  return sanitized;
 }
 
 function collapseBlankLines(lines) {
   const collapsed = [];
   let blankCount = 0;
 
-  for (const line of lines) {
-    if (!line.trim()) {
+  for (const { line, literal } of lines) {
+    if (!literal && !line.trim()) {
       blankCount += 1;
       if (blankCount > 2) {
         continue;
@@ -57,7 +56,25 @@ function collapseBlankLines(lines) {
     collapsed.push(line);
   }
 
-  return collapsed.join('\n').trim();
+  return collapsed.join('\n').replace(/^\n+|\n+$/g, '');
+}
+
+function sanitizeDocument(content) {
+  let fence = null;
+  let indented = false;
+  return content.split('\n').map(line => {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (marker && marker[1][0] === fence.character && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+      return { line, literal: true };
+    }
+    if (marker && !(marker[1][0] === '`' && marker[2].includes('`'))) {
+      fence = { character: marker[1][0], length: marker[1].length };
+      return { line, literal: true };
+    }
+    if (line.trim()) indented = line.startsWith('    ') || line.startsWith('\t');
+    return { line: indented ? line : sanitizeLine(line), literal: indented };
+  });
 }
 
 function unwrapMarkdownDocumentFence(content) {
@@ -76,7 +93,7 @@ export function normalizeActionPlanContent(content) {
   }
 
   const normalized = unwrapMarkdownDocumentFence(content.replace(/\r\n/g, '\n'));
-  return collapseBlankLines(normalized.split('\n').map(sanitizeLine));
+  return collapseBlankLines(sanitizeDocument(normalized));
 }
 
 export function shouldRenderActionPlanAsPlainText(content) {
@@ -85,7 +102,8 @@ export function shouldRenderActionPlanAsPlainText(content) {
   }
 
   const normalized = normalizeActionPlanContent(content);
-  return CORRUPTION_PATTERNS.some((pattern) => pattern.test(normalized));
+  const prose = sanitizeDocument(normalized).filter(({ literal }) => !literal).map(({ line }) => line).join('\n');
+  return CORRUPTION_PATTERNS.some((pattern) => pattern.test(prose));
 }
 
 export function toPlainTextActionPlanContent(content) {

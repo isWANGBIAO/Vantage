@@ -39,6 +39,8 @@ class Application extends EventEmitter {
     };
     runner.on("change", () => this.emit("change"));
     this.settingsQueue = Promise.resolve();
+    this.resourceQueue = Promise.resolve();
+    this.resourceWarnings = [];
     this.projectFileQueues = new Map();
     this.principlesStore = dataDir
       ? new PrinciplesStore({ dataDir, defaultText: principles || "" })
@@ -52,6 +54,15 @@ class Application extends EventEmitter {
     const raw = await readText(path.join(this.dataDir, "settings.json"));
     if (raw) this.settings = { ...this.settings, ...JSON.parse(raw) };
     delete this.settings.startupError;
+    const available = new Set(this.resources?.list().map((resource) => resource.id) || []);
+    for (const project of this.resources ? this.runner.snapshot() : []) {
+      const selected = project.resourceIds || [];
+      const retained = selected.filter((id) => available.has(id));
+      if (retained.length !== selected.length) {
+        await this.runner.setResources(project.id, retained);
+        this.resourceWarnings.push(`项目「${project.name || project.id}」已移除不可用的资源选择。`);
+      }
+    }
     try { await this.reconcileStartup?.(this.settings); }
     catch (error) { this.settings.startupError = String(error.message).slice(0, 1000); }
   }
@@ -66,6 +77,11 @@ class Application extends EventEmitter {
     return project;
   }
   async invoke(method, payload = {}) {
+    if (["project.resources", "project.remove", "resources.remove", "resources.save", "resources.import"].includes(method)) {
+      const operation = this.resourceQueue.catch(() => {}).then(() => this.invokeUnlocked(method, payload));
+      this.resourceQueue = operation;
+      return operation;
+    }
     if (
       [
         "project.directory.change",
@@ -100,6 +116,7 @@ class Application extends EventEmitter {
           settings: this.settings,
           resources: this.resources.list(),
           principles: this.principles,
+          resourceWarnings: this.resourceWarnings,
         };
       case "project.pick":
         return this.pickDirectory(Boolean(payload.create));
@@ -191,7 +208,26 @@ class Application extends EventEmitter {
         return result;
       }
       case "resources.remove": {
-        await this.resources.remove(id);
+        // Persist references before deleting the resource. A crash between the
+        // two writes may leave an unused resource, never an unusable selection.
+        const changed = [];
+        try {
+          for (const project of this.runner.snapshot()) {
+            const previous = project.resourceIds || [];
+            if (!previous.includes(id)) continue;
+            changed.push([project.id, previous]);
+            await this.runner.setResources(project.id, previous.filter((value) => value !== id));
+          }
+          await this.resources.remove(id);
+        } catch (error) {
+          const failures = [];
+          for (const [projectId, previous] of changed.reverse()) {
+            try { await this.runner.setResources(projectId, previous); }
+            catch (rollbackError) { failures.push(rollbackError); }
+          }
+          if (failures.length) throw new AggregateError([error, ...failures], "资源删除失败，部分项目选择恢复失败；请检查存储后重试。");
+          throw error;
+        }
         this.emit("change");
         return true;
       }
