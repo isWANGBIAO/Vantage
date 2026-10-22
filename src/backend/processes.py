@@ -1,5 +1,6 @@
 """Packaged/development subprocess entry points and working directories."""
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -54,7 +55,7 @@ def terminate_subprocess(process):
 
 
 async def reap_subprocess(process):
-    """Kill any remaining child and always wait for its exit to be collected."""
+    """Kill the child and drain owned pipes so wait cannot stall on backpressure."""
     if process is None:
         return
     if process.returncode is None:
@@ -62,4 +63,17 @@ async def reap_subprocess(process):
             process.kill()
         except ProcessLookupError:
             pass
-    await process.wait()
+    async def discard_output(stream):
+        read = getattr(stream, "read", None)
+        if callable(read):
+            while await read(64 * 1024):
+                pass
+
+    # StreamReader pauses its transport when output exceeds the buffer limit.
+    # Process.wait may then wait for pipe closure even after the child exited.
+    # Discard in bounded chunks, not communicate(), which retains all output.
+    await asyncio.gather(
+        discard_output(getattr(process, "stdout", None)),
+        discard_output(getattr(process, "stderr", None)),
+        process.wait(),
+    )

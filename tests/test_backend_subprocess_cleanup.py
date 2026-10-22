@@ -1,5 +1,6 @@
 """Subprocess exit races must not mask cancellation or leave children unreaped."""
 import asyncio
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -70,3 +71,34 @@ def test_reaping_already_exited_child_still_waits():
     process.returncode = 0
     asyncio.run(processes.reap_subprocess(process))
     assert process.wait_calls == 1
+
+
+@pytest.mark.parametrize("fd", [1, 2])
+def test_real_paused_output_pipe_does_not_deadlock_reaping(fd):
+    async def exercise():
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-c",
+            f"import os,time; chunk=b'x'*4095+b'\\n'; [os.write({fd},chunk) for _ in range(10000)]; time.sleep(30)",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stream = process.stdout if fd == 1 else process.stderr
+        reaping = None
+        try:
+            async def wait_for_backpressure():
+                while not stream._paused:
+                    await asyncio.sleep(0.005)
+            await asyncio.wait_for(wait_for_backpressure(), timeout=5)
+            reaping = asyncio.create_task(processes.reap_subprocess(process))
+            await asyncio.wait_for(asyncio.shield(reaping), timeout=1)
+            assert process.returncode is not None
+            assert process.stdout.at_eof()
+            assert process.stderr.at_eof()
+        finally:
+            if process.returncode is None:
+                process.kill()
+            # Test-owned cleanup also lets the original broken helper finish.
+            await process.communicate()
+            if reaping is not None:
+                await reaping
+
+    asyncio.run(exercise())
