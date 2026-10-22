@@ -18,7 +18,9 @@ from src.scripts.sync_backend_runtime_environment import (
 class RequirementsSnapshotTests(unittest.TestCase):
     def exercise(self, phase):
         with TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            # Windows may return an 8.3 temporary path. Match the production
+            # guard's canonical project root before deriving its dedicated venv.
+            root = Path(temporary).resolve()
             core = root / 'requirements-core.txt'
             core.write_text('opencv-contrib-python==4.14.0.94\nqa-package==1.0\n')
             overlay = root / 'requirements-backend-runtime-gpu.txt'

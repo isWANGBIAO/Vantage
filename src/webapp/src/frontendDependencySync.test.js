@@ -1631,3 +1631,58 @@ for (const entryKind of ['bin', 'main']) {
     });
   });
 }
+
+test('import-only exports override an unpublished legacy main entry', () => {
+  withFixture((webappRoot) => {
+    const directory = writePackage(webappRoot, 'esm-only', 'esm-only', '1.0.0');
+    writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+      name: 'esm-only', version: '1.0.0', type: 'module', main: 'missing.js',
+      exports: { import: { types: './missing.d.ts', default: './src/index.js' } },
+    }));
+    mkdirSync(path.join(directory, 'src'));
+    writeFileSync(path.join(directory, 'src/index.js'), 'export default 1;');
+    assert.equal(scanInstalledPackages({ webappRoot }).length, 1);
+    writeDesiredState(webappRoot);
+    assert.equal(synchronizeDependencies({
+      webappRoot, runtime: TEST_RUNTIME, env: {}, logger: SILENT_LOGGER,
+      runCommand(_command, args) { assert.notEqual(args[0], 'ci'); },
+    }).synchronized, false);
+    rmSync(path.join(directory, 'src/index.js'));
+    assert.throws(() => scanInstalledPackages({ webappRoot }), /Missing installed package entry/);
+  });
+});
+
+test('root and subpath-only exports do not require a legacy main entry', () => {
+  withFixture((webappRoot) => {
+    const directory = writePackage(webappRoot, 'exported', 'exported', '1.0.0');
+    const metadata = { name: 'exported', version: '1.0.0', main: 'missing.js' };
+    writeFileSync(path.join(directory, 'index.cjs'), 'module.exports = 1;');
+    writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+      ...metadata, exports: { '.': { require: './index.cjs', default: './index.cjs' } },
+    }));
+    assert.equal(scanInstalledPackages({ webappRoot }).length, 1);
+    writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+      ...metadata, exports: { './feature': './index.cjs' },
+    }));
+    assert.equal(scanInstalledPackages({ webappRoot }).length, 1);
+  });
+});
+
+test('custom export conditions do not require unpublished development sources', () => {
+  withFixture((webappRoot) => {
+    const directory = writePackage(webappRoot, 'conditional', 'conditional', '1.0.0');
+    writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+      name: 'conditional', version: '1.0.0',
+      exports: { '.': {
+        'development-source': './unpublished.ts',
+        import: { types: './unpublished.d.ts', default: './runtime.js' },
+        require: './runtime.cjs',
+      } },
+    }));
+    writeFileSync(path.join(directory, 'runtime.js'), 'export default 1;');
+    writeFileSync(path.join(directory, 'runtime.cjs'), 'module.exports = 1;');
+    assert.equal(scanInstalledPackages({ webappRoot }).length, 1);
+    rmSync(path.join(directory, 'runtime.cjs'));
+    assert.throws(() => scanInstalledPackages({ webappRoot }), /Missing installed package entry/);
+  });
+});

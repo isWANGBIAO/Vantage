@@ -1310,7 +1310,41 @@ function scanInstalledPackages({ webappRoot, fileSystem = fs }) {
         throw new Error(`Missing installed package executable: ${relativePackagePath}`);
       }
     }
-    if (typeof metadata.main === 'string' && metadata.main) {
+    if (Object.hasOwn(metadata, 'exports')) {
+      // exports takes precedence over main, including import-only packages.
+      // Inspect file targets without loading code or requiring CJS support.
+      const exports = metadata.exports;
+      const rootExport = exports && typeof exports === 'object' && !Array.isArray(exports)
+        && Object.keys(exports).some((key) => key.startsWith('.'))
+        ? exports['.'] : exports;
+      function selectExport(target, mode) {
+        if (typeof target === 'string' || target === null) return target;
+        if (Array.isArray(target)) {
+          return target.map((entry) => selectExport(entry, mode))
+            .find((entry) => entry !== undefined);
+        }
+        if (target && typeof target === 'object') {
+          for (const [condition, value] of Object.entries(target)) {
+            if (['node', 'node-addons', 'module-sync', 'default', mode].includes(condition)) {
+              const selected = selectExport(value, mode);
+              if (selected !== undefined) return selected;
+            }
+          }
+        }
+        return undefined;
+      }
+      try {
+        for (const mode of ['import', 'require']) {
+          const target = selectExport(rootExport, mode);
+          if (typeof target === 'string'
+            && !fileSystem.statSync(path.resolve(packageDirectory, target)).isFile()) {
+            throw new Error('Export entry is not a file');
+          }
+        }
+      } catch {
+        throw new Error(`Missing installed package entry: ${relativePackagePath}`);
+      }
+    } else if (typeof metadata.main === 'string' && metadata.main) {
       try {
         const entryPath = require.resolve(packageDirectory);
         if (!fileSystem.statSync(entryPath).isFile()) {
