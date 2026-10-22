@@ -13,7 +13,7 @@ EXPECTED_SHARED_CORE_LINES = {
     "SciencePlots==2.2.2",
     "chinese-calendar==1.11.0",
     "cv2-enumerate-cameras==1.4.0",
-    "fastapi==0.143.0",
+    "fastapi==0.143.2",
     "matplotlib==3.11.2",
     "mcp==2.3.0",
     "mss==10.2.0",
@@ -26,8 +26,8 @@ EXPECTED_SHARED_CORE_LINES = {
     "piexif==1.1.3",
     "pillow==10.4.0",
     "psutil==6.1.1",
-    "pydantic==2.14.0",
-    "pydantic_core==2.50.0",
+    "pydantic==2.14.1",
+    "pydantic_core==2.50.1",
     "python-dotenv==1.2.4",
     "python-multipart==0.0.32",
     "requests==2.34.2",
@@ -320,8 +320,8 @@ def test_ci_covers_packaging_python_and_current_python_without_incompatible_nump
 
 def test_development_requirements_pin_compatible_pydantic_pair():
     expected = {
-        "pydantic==2.14.0",
-        "pydantic_core==2.50.0",
+        "pydantic==2.14.1",
+        "pydantic_core==2.50.1",
     }
     actual = [
         line.strip()

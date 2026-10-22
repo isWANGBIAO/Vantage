@@ -12,9 +12,9 @@
   <a href="https://github.com/isWANGBIAO/Vantage#features"><img alt="macOS supported" src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&amp;logo=apple&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Python 3.11" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Node.js 24.18.0" src="https://img.shields.io/badge/Node.js-24.18.0-5FA04E?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/requirements-core.txt"><img alt="FastAPI 0.143.0" src="https://img.shields.io/badge/FastAPI-0.143.0-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="React 19.3.0" src="https://img.shields.io/badge/React-19.3.0-61DAFB?style=flat-square&amp;logo=react&amp;logoColor=black"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="Electron 42.11.12" src="https://img.shields.io/badge/Electron-42.11.12-47848F?style=flat-square&amp;logo=electron&amp;logoColor=white"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/requirements-core.txt"><img alt="FastAPI 0.143.2" src="https://img.shields.io/badge/FastAPI-0.143.2-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="React 19.3.1" src="https://img.shields.io/badge/React-19.3.1-61DAFB?style=flat-square&amp;logo=react&amp;logoColor=black"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="Electron 42.11.14" src="https://img.shields.io/badge/Electron-42.11.14-47848F?style=flat-square&amp;logo=electron&amp;logoColor=white"></a>
 </p>
 <p align="center">
   <a href="https://github.com/isWANGBIAO/Vantage/commits/main"><img alt="Last commit on main" src="https://img.shields.io/github/last-commit/isWANGBIAO/Vantage/main?style=flat-square&amp;label=Last%20Commit"></a>
