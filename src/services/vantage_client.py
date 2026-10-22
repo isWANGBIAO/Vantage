@@ -26,6 +26,7 @@ from src.core.backend_connection import DEFAULT_BACKEND_BASE_URL, normalize_back
 
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
+OPERATION_TIMEOUT_SECONDS = {"face.export": 90.0}
 _PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _UNSAFE_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WINDOWS_RESERVED_FILENAMES = {
@@ -56,6 +57,10 @@ class ArgumentValidationError(VantageClientError):
 
 class BackendUnavailableError(VantageClientError):
     """Raised when the local Vantage backend cannot be reached."""
+
+
+class BackendTimeoutError(VantageClientError):
+    """A reachable backend did not finish within the finite request budget."""
 
 
 class BackendHTTPError(VantageClientError):
@@ -352,11 +357,12 @@ class VantageClient:
         base_url: str | None = None,
         *,
         session=None,
-        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        timeout: float | None = None,
     ):
         self.base_url = resolve_backend_url(base_url)
         self.session = session if session is not None else requests.Session()
-        self.timeout = timeout
+        self.timeout = DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout
+        self._explicit_timeout = timeout is not None
 
     @staticmethod
     def _normalize_base_url(value: str) -> str:
@@ -392,7 +398,8 @@ class VantageClient:
         headers = dict(descriptor.required_headers)
 
         with ExitStack() as stack:
-            request_kwargs: dict[str, Any] = {"timeout": self.timeout}
+            timeout = self.timeout if self._explicit_timeout else OPERATION_TIMEOUT_SECONDS.get(descriptor.name, self.timeout)
+            request_kwargs: dict[str, Any] = {"timeout": timeout}
             if headers:
                 request_kwargs["headers"] = headers
             if descriptor.stream or descriptor.download:
@@ -481,6 +488,10 @@ class VantageClient:
                 allow_redirects=False,
                 **request_kwargs,
             )
+        except requests.exceptions.Timeout:
+            raise BackendTimeoutError(
+                "Vantage operation timed out while waiting for the backend. The backend may still be running; check its status before retrying."
+            ) from None
         except requests.exceptions.RequestException:
             raise BackendUnavailableError(
                 "Vantage backend is unavailable. Start Vantage and try again."
