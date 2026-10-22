@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -141,7 +142,7 @@ def export_excel(db_file):
 
     export_dir = Path(Config.get_runtime_dir()) / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
-    output_path = str(export_dir / "Face_Analysis_History.xlsx")
+    output_path = str(export_dir / f"Face_Analysis_History_{uuid.uuid4().hex}.xlsx")
     exported = export_valid_results_to_excel(records, output_path)
     return exported
 

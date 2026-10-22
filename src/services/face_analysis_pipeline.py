@@ -18,6 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from src.utils.face_score import normalize_dark_circle_score
+from src.utils.photo_identity import parse_photo_capture_time
 
 TREND_VIEW_LABELS = {
     "day": "最近24小时",
@@ -257,8 +258,7 @@ def scan_photos(search_paths, day=None):
                 if not (file.startswith(day_prefix) and file.endswith(".jpg")):
                     continue
                 try:
-                    ts_str = file.replace("photo_", "").replace(".jpg", "")
-                    observed_at = datetime.strptime(ts_str[:15], "%Y%m%d_%H%M%S")
+                    observed_at = parse_photo_capture_time(file)
                     photo_files.append(
                         {
                             "path": os.path.join(root, file),
@@ -611,10 +611,12 @@ def analyze_image_data(image_bgr, detector, parser, source_path="", observed_at=
 
 
 def analyze_photo_file(photo_path, detector, parser, config=None):
-    basename = os.path.basename(photo_path)
-    ts_str = basename.replace("photo_", "").replace(".jpg", "")
-    observed_at = datetime.strptime(ts_str[:15], "%Y%m%d_%H%M%S")
-    image = cv2.imdecode(np.fromfile(photo_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    observed_at = parse_photo_capture_time(photo_path)
+    try:
+        encoded = np.fromfile(photo_path, dtype=np.uint8)
+        image = cv2.imdecode(encoded, cv2.IMREAD_COLOR) if encoded.size else None
+    except (OSError, ValueError, cv2.error):
+        image = None
     return analyze_image_data(
         image,
         detector=detector,
@@ -835,7 +837,7 @@ def _aggregate_daily_scores(df):
         .agg(score=("score", "mean"))
         .rename(columns={"day": "date"})
     )
-    daily["timestamp"] = daily["date"].apply(lambda value: value.timestamp())
+    daily["timestamp"] = daily["date"].apply(lambda value: datetime.fromisoformat(value.isoformat()).timestamp())
     return daily[["date", "timestamp", "score"]]
 
 
@@ -846,7 +848,7 @@ def build_trend_views(results):
 
     df["date"] = pd.to_datetime(df.get("datetime"), errors="coerce")
     if "timestamp" not in df.columns:
-        df["timestamp"] = df["date"].apply(lambda value: value.timestamp() if pd.notna(value) else np.nan)
+        df["timestamp"] = df["date"].apply(lambda value: datetime.fromisoformat(value.isoformat()).timestamp() if pd.notna(value) else np.nan)
 
     df = df.dropna(subset=["date", "timestamp", "score"]).sort_values("date").copy()
     if df.empty:

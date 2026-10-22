@@ -167,6 +167,9 @@ def _migrate_scores_to_current_algorithm(conn):
 def initialize_face_analysis_storage(db_file=None, algorithm_version=CURRENT_ALGORITHM_VERSION):
     ensure_face_analysis_db(db_file)
     with _open_db(db_file) as conn:
+        # The version check and non-idempotent score conversion must share a
+        # cross-process write transaction, including report/export subprocesses.
+        conn.execute("BEGIN IMMEDIATE")
         existing_version = _get_meta(conn, "analysis_algorithm_version")
         if existing_version != algorithm_version and existing_version in MIGRATABLE_ALGORITHM_VERSIONS:
             _migrate_scores_to_current_algorithm(conn)
