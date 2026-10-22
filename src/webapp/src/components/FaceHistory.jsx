@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getFaceReportState } from '../utils/faceReportState';
+import { getFaceReportState, getFaceProgressOutcome } from '../utils/faceReportState';
 import {
   buildBackendUrl,
   fetchBackend,
@@ -337,6 +337,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
   const [liveData, setLiveData] = useState(initialLiveData);
   const [error, setError] = useState(null);
   const [reportStatus, setReportStatus] = useState('loading');
+  const [analysisInterrupted, setAnalysisInterrupted] = useState(false);
   const [privacyRevealed, setPrivacyRevealed] = useState(false);
   const [localAnalysis, setLocalAnalysis] = useState(null);
 
@@ -405,6 +406,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
       return undefined;
     }
 
+    let active = true;
     const interval = setInterval(async () => {
       try {
         const res = await fetchBackend('/api/v1/face/progress', {
@@ -416,16 +418,19 @@ export default function FaceHistory({ isVisible = true } = {}) {
         }
 
         const nextProgress = await res.json();
+        if (!active) return;
         setProgress(nextProgress);
 
-        if (nextProgress.status === 'error') {
+        const outcome = getFaceProgressOutcome(nextProgress);
+        if (outcome === 'error') {
           setLoading(false);
           setError(nextProgress.error || t('face_history.analysis_failed'));
           setReportStatus('error');
           return;
         }
 
-        if (nextProgress.percent >= 100) {
+        if (outcome === 'refresh') {
+          setAnalysisInterrupted(nextProgress.status === 'idle');
           setLoading(false);
           fetchReport();
         }
@@ -434,12 +439,13 @@ export default function FaceHistory({ isVisible = true } = {}) {
       }
     }, 1000);
 
-    return () => clearInterval(interval);
+    return () => { active = false; clearInterval(interval); };
   }, [loading, fetchReport, t]);
 
   const handleAnalyze = async () => {
     try {
       setLoading(true);
+      setAnalysisInterrupted(false);
       setError(null);
       setProgress({ percent: 0, status: 'starting', current_file: '' });
       await fetchBackend('/api/v1/face/analyze', {
@@ -636,6 +642,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
           >
             {loading ? t('face_history.analyzing') : t('face_history.analyze_now')}
           </button>
+          {analysisInterrupted && <span role="status">{t('face_history.analysis_interrupted')}</span>}
 
           <button
             onClick={() => setPrivacyRevealed((value) => !value)}
