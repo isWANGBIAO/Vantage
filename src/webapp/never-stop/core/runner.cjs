@@ -6,6 +6,8 @@ const net = require("node:net");
 const { EventEmitter } = require("node:events");
 const { adapterFactory: defaultAdapter, redact } = require("./adapters.cjs");
 const { launchOwned, terminateOwned } = require("./process-owner.cjs");
+const { readExecutionGoal } = require("./goal.cjs");
+const { atomicWrite } = require("./files.cjs");
 class Runner extends EventEmitter {
   constructor({
     dataDir,
@@ -35,6 +37,7 @@ class Runner extends EventEmitter {
     this.closed = false;
     this.locked = false;
     this.directoryQueue = Promise.resolve();
+    this.goalWrites = new Map();
   }
   async init() {
     await fs.mkdir(this.dataDir, { recursive: true });
@@ -93,6 +96,7 @@ class Runner extends EventEmitter {
       p.totalRunMs =
         Number.isFinite(p.totalRunMs) && p.totalRunMs >= 0 ? p.totalRunMs : 0;
       delete p.runTimerStartedAt;
+      p.adoptedGoalVersion = null;
       this._state(p);
       if (p.owner) {
         await this.terminateProcess(p.owner);
@@ -237,6 +241,7 @@ class Runner extends EventEmitter {
       publishedGoal: "",
       publishedRevision: 0,
       adoptedRevision: 0,
+      adoptedGoalVersion: null,
       error: null,
       resourceIds: [],
       owner: null,
@@ -295,12 +300,14 @@ class Runner extends EventEmitter {
               sessionId: p.sessionId,
               sessionUncertain: p.sessionUncertain,
               adoptedRevision: p.adoptedRevision,
+              adoptedGoalVersion: p.adoptedGoalVersion,
             };
             await prepare(oldRoot, real);
             p.root = real;
             p.sessionId = null;
             p.sessionUncertain = false;
             p.adoptedRevision = 0;
+            p.adoptedGoalVersion = null;
             s.resetEpoch++;
             s.reason =
               "用户切换了项目目录；从新会话开始。请先读取 goal.md 执行；如果 progress.md 有跑偏，按照 goal.md 来执行";
@@ -397,7 +404,7 @@ class Runner extends EventEmitter {
   async start(id) {
     if (this.closed) throw Error("Runner is shut down");
     const p = this._project(id);
-    if (!p.publishedGoal.trim()) throw Error("Publish a goal before starting");
+    await readExecutionGoal(p.root);
     if (p.desiredRunning) return;
     return this._control(p, (s) => {
       p.desiredRunning = true;
@@ -413,9 +420,16 @@ class Runner extends EventEmitter {
     });
   }
   async publish(id, text) {
-    if (typeof text !== "string" || Buffer.byteLength(text) > 1024 * 1024)
-      throw Error("Goal must be text under 1 MiB");
+    if (typeof text !== "string" || !text.trim() || Buffer.byteLength(text) > 1024 * 1024)
+      throw Error("Goal must be non-blank text under 1 MiB (goal.md)");
     const p = this._project(id);
+    // Compatibility entry point for older callers. The file, never this
+    // historical snapshot, remains the authority for every invocation.
+    const previous = this.goalWrites.get(id) || Promise.resolve();
+    const write = previous.catch(() => {}).then(() => atomicWrite(path.join(p.root, "goal.md"), text));
+    this.goalWrites.set(id, write);
+    try { await write; }
+    finally { if (this.goalWrites.get(id) === write) this.goalWrites.delete(id); }
     return this._control(p, (s) => {
       p.publishedGoal = text;
       p.publishedRevision++;
@@ -430,6 +444,7 @@ class Runner extends EventEmitter {
       (s) => {
         s.resetEpoch++;
         p.sessionId = null;
+        p.adoptedGoalVersion = null;
         p.sessionUncertain = false;
         s.reason = "请先读取 goal.md 执行；如果 progress.md 有跑偏，按照 goal.md 来执行";
         if (p.desiredRunning) p.status = "switching";
@@ -531,11 +546,13 @@ class Runner extends EventEmitter {
         spec.env = await this.executionEnv(structuredClone(p));
         spec.redactionSecrets = await this.outputSecrets(structuredClone(p));
         if (s.pending || generation !== s.generation) break;
+        const goal = await readExecutionGoal(p.root);
+        if (s.pending || generation !== s.generation) break;
         const prompt = [
           this.principles,
-          "# 当前已发布目标",
-          "以下为应用保存的目标快照。请读取项目 goal.md，以文件中的最新目标为准；文件缺失时使用以下快照。progress.md 仅作进展参考，跑偏时按 goal.md 纠正。",
-          p.publishedGoal,
+          "# 当前文件目标（goal.md）",
+          "以下为本轮开始时读取的 goal.md 内容。保存和外部修改将在下一次执行读取，不中断当前轮。progress.md 仅作进展参考，跑偏时按 goal.md 纠正。",
+          goal.text,
           "# 已选择资源",
           resources,
           "# 控制提示",
@@ -570,6 +587,7 @@ class Runner extends EventEmitter {
           await this.terminateProcess(h.record, { trusted: true });
         } else {
           p.adoptedRevision = p.publishedRevision;
+          p.adoptedGoalVersion = goal.version;
           p.status = "running";
           await this._save();
           h.send();
@@ -600,6 +618,15 @@ class Runner extends EventEmitter {
         p.owner = null;
         await this._save();
       } catch (e) {
+        if (e.code === "INVALID_GOAL") {
+          p.desiredRunning = false;
+          this._syncRunTimer(p);
+          p.status = "paused";
+          p.error = { message: e.message, count: 1, at: new Date().toISOString() };
+          await this._save();
+          this._changed();
+          return;
+        }
         result = { code: 1, error: e.message };
         if (s.handle) {
           await this.terminateProcess(s.handle.record, { trusted: true });

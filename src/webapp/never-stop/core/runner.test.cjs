@@ -89,7 +89,8 @@ test("publish coalesces latest, reset creates empty session; duplicate cwd rejec
   await runner.start(p.id);
   await until(async () => (await calls()).length === 1);
   const initialPrompt = (await calls())[0].prompt;
-  assert.ok(initialPrompt.includes("以文件中的最新目标为准；文件缺失时使用以下快照"));
+  assert.ok(initialPrompt.includes("以下为本轮开始时读取的 goal.md 内容"));
+  assert.ok(!initialPrompt.includes("文件缺失时使用以下快照"));
   assert.ok(
     initialPrompt.includes(
       "请先读取 goal.md 执行；如果 progress.md 有跑偏，按照 goal.md 来执行",

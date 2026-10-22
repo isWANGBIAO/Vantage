@@ -140,11 +140,7 @@ class Application extends EventEmitter {
           root,
           () =>
             this.runner.changeDirectory(id, root, async (oldRoot, newRoot) => {
-              preparation = await this.files.prepareDirectoryChange(
-                oldRoot,
-                newRoot,
-                { publishedGoal: project.publishedGoal },
-              );
+              preparation = await this.files.prepareDirectoryChange(oldRoot, newRoot);
               return preparation;
             }),
         );
@@ -175,12 +171,17 @@ class Application extends EventEmitter {
       }
       case "goal.read":
         return this.files.readGoal(this.project(id).root);
-      case "goal.save":
-        return this.files.saveGoal(
+      case "goal.save": {
+        const saved = await this.files.saveGoal(
           this.project(id).root,
           payload.text,
           payload.version,
         );
+        // The file is immediately authoritative. Do not route automatic saves
+        // through Runner.publish/_control, which interrupts the current CLI.
+        this.emit("change");
+        return saved;
+      }
       case "goal.publish": {
         const draft = await this.files.readGoal(this.project(id).root);
         if (draft.text !== payload.text)

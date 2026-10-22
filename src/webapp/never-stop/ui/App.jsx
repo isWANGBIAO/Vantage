@@ -163,11 +163,6 @@ export default function App({ isVisible = true, openRequest }) {
   );
   const toggle = useCallback(() => {
     if (!project || busy || pendingRequests.current) return;
-    if (!project.desiredRunning && !project.publishedGoal?.trim()) {
-      setPanel("目标");
-      setError("请先编辑并发布目标，再开始运行。");
-      return;
-    }
     run(project.desiredRunning ? "project.pause" : "project.start", {
       id: project.id,
     }).catch(() => {});
@@ -526,7 +521,6 @@ export default function App({ isVisible = true, openRequest }) {
               project={editorProject}
               visible={isVisible && visible}
               onDraftState={reportDraftState}
-              run={run}
               onError={setError}
             />
           </div>
@@ -690,7 +684,7 @@ function DrawerHead({ title, close }) {
     </div>
   );
 }
-function GoalEditor({ project, visible, run, onError, onDraftState }) {
+function GoalEditor({ project, visible, onError, onDraftState }) {
   const [text, setText] = useState(""),
     [ready, setReady] = useState(false),
     [preview, setPreview] = useState(false),
@@ -718,7 +712,7 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
       version: external.version,
     };
     setText(external.text);
-    setSaveState("草稿已保存");
+    setSaveState("目标已保存");
   }, []);
   useEffect(() => {
     let active = true;
@@ -769,7 +763,7 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
       local.current.version = result.version;
       if (mounted.current)
         setSaveState(
-          local.current.text === result.text ? "草稿已保存" : "待保存",
+          local.current.text === result.text ? "目标已保存" : "待保存",
         );
       return true;
     } catch (e) {
@@ -798,16 +792,6 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
     const timer = setTimeout(() => save(), 650);
     return () => clearTimeout(timer);
   }, [text, ready, conflict, save, saving, saveState]);
-  const publish = async () => {
-    const publishedText = local.current.text;
-    if (await save()) {
-      try {
-        await run("goal.publish", { id: project.id, text: publishedText });
-      } catch {
-        /* run() already reports the error in the application banner. */
-      }
-    }
-  };
   return (
     <>
       <div className="editor-tools">
@@ -828,7 +812,7 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
         <span>{saveState}</span>
         <button
           className="icon"
-          aria-label="保存草稿 Ctrl+S"
+          aria-label="保存目标 Ctrl+S"
           onClick={save}
           disabled={!ready || saving || !!conflict}
         >
@@ -901,16 +885,16 @@ function GoalEditor({ project, visible, run, onError, onDraftState }) {
       </div>
       <div className="editor-footer">
         <p>
-          <span className="pill">{publicationStatus(text, project)}</span>
-          <small>自动保存写入 goal.md，Agent 可读取；发布会同步应用的目标快照。撤销 / 重做使用系统快捷键。</small>
+          <span className="pill">{publicationStatus(local.current, project)}</span>
+          <small>自动保存写入 goal.md，保存后用于下一次执行；当前轮不会被自动保存中断。撤销 / 重做使用系统快捷键。</small>
         </p>
         <button
           className="primary"
           disabled={!ready || !text.trim() || !!conflict || saving}
-          onClick={publish}
+          onClick={save}
         >
-          发布目标
-          <ArrowUpRight size={16} />
+          保存目标
+          <Save size={16} />
         </button>
       </div>
     </>
@@ -1506,7 +1490,7 @@ function ChangeDirectory({ project, run, hasUnsaved, done }) {
         选择目录
       </button>
       <p className="hint directory-explanation">
-        保留累计运行时间、已发布目标、资源和项目记录。目标与进度文件会复制到新目录缺失的位置；同名文件内容不同会报错，不会覆盖。
+        保留累计运行时间、目标文件、资源和项目记录。目标与进度文件会复制到新目录缺失的位置；同名文件内容不同会报错，不会覆盖。
       </p>
       <p className="hint">
         更改后使用新会话。正在运行的项目自动继续，已暂停的项目保持暂停。
