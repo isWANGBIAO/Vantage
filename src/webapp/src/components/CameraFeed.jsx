@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { buildBackendUrl, fetchBackendJson } from '../utils/backendRequest';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
+import { createCameraPreviewLifecycle } from '../utils/cameraPreviewLifecycle.js';
 
 export default function CameraFeed({ isVisible = false, privacyRevealed = false }) {
     const { t } = useDisplayLanguage();
@@ -11,6 +12,23 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
     });
     const [toggling, setToggling] = useState(false);
     const statusErrorLoggedRef = useRef(false);
+    const previewRef = useRef(null);
+    const previewSessionRef = useRef(0);
+    const [preview, setPreview] = useState({ attempt: 0, phase: 'idle' });
+    const [retryGeneration, setRetryGeneration] = useState(0);
+    const previewEnabled = status.online && isVisible && privacyRevealed;
+    const previewLive = previewEnabled && preview.phase === 'live';
+
+    useLayoutEffect(() => {
+        if (!previewEnabled) return undefined;
+        const session = ++previewSessionRef.current;
+        const lifecycle = createCameraPreviewLifecycle({ onChange: state => setPreview({ ...state, session }) });
+        previewRef.current = { lifecycle, session };
+        return () => {
+            lifecycle.close();
+            if (previewRef.current?.session === session) previewRef.current = null;
+        };
+    }, [previewEnabled, retryGeneration]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -50,8 +68,15 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
         }}>
             {status.online && isVisible && privacyRevealed ? (
                 <img
-                    src={buildBackendUrl('/api/v1/camera/stream')}
+                    key={`${preview.session}:${preview.attempt}`}
+                    src={`${buildBackendUrl('/api/v1/camera/stream')}?retry=${preview.session}-${preview.attempt}`}
                     alt={t('camera_feed.live_stream_alt')}
+                    onLoad={() => {
+                        if (previewRef.current?.session === preview.session) previewRef.current.lifecycle.loaded(preview.attempt);
+                    }}
+                    onError={() => {
+                        if (previewRef.current?.session === preview.session) previewRef.current.lifecycle.failed(preview.attempt);
+                    }}
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
             ) : (
@@ -63,6 +88,15 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
                     {status.online && isVisible && !privacyRevealed
                         ? t('camera_feed.show_stream')
                         : (status.online ? t('camera_feed.ready') : t('camera_feed.disconnected'))}
+                </div>
+            )}
+
+            {previewEnabled && preview.phase !== 'live' && (
+                <div className="camera-preview-recovery" style={{ position: 'absolute', inset: '40% 0 auto', textAlign: 'center', color: '#ddd' }}>
+                    <span>{t(preview.phase === 'failed' ? 'camera_feed.stream_failed' : 'camera_feed.connecting')}</span>
+                    {preview.phase === 'failed' && (
+                        <button onClick={() => setRetryGeneration(value => value + 1)}>{t('camera_feed.retry')}</button>
+                    )}
                 </div>
             )}
 
@@ -143,7 +177,7 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
                     background: status.online ? 'var(--accent-color)' : '#999',
                     boxShadow: status.online ? '0 0 8px var(--accent-color)' : 'none'
                 }}></span>
-                {status.online ? (isVisible && privacyRevealed ? t('camera_feed.live') : t('camera_feed.ready_short')) : t('camera_feed.offline')}
+                {previewLive ? t('camera_feed.live') : (status.online ? t('camera_feed.ready_short') : t('camera_feed.offline'))}
             </div>
         </div>
     );
