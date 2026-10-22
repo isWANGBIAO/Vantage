@@ -49,7 +49,7 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
                 new_long_term.unlink()
                 self.assertEqual(DataLoader.resolve_data_path(new_long_term.name), legacy_long_term)
 
-    def test_construct_prompt_truncates_time_rows_by_explicit_token_budget(self):
+    def test_construct_prompt_rejects_budget_too_small_for_complete_payload(self):
         today = datetime.now().date()
         df = pd.DataFrame(
             [
@@ -75,17 +75,12 @@ class DataLoaderFuturePlansTests(unittest.TestCase):
                 "resolve_data_path",
                 side_effect=lambda filename, **_: temp_path / filename,
             ):
-                combined = DataLoader.construct_prompt(
-                    prompt_path,
-                    excel_path,
-                    days=90,
-                    prompt_token_budget=80,
-                )
-
-        payload = extract_json_block(combined, "Time Series Data (JSON)")
-        self.assertTrue(payload["truncated"])
-        self.assertLessEqual(payload["estimated_tokens"], 80)
-        self.assertGreater(payload["omitted_row_count"], 0)
+                # Row selection alone used to report <80 while unmeasured
+                # wrappers/current-day aggregates still made the request larger.
+                with self.assertRaisesRegex(ValueError, "budget"):
+                    DataLoader.construct_prompt(
+                        prompt_path, excel_path, days=90, prompt_token_budget=80,
+                    )
 
     def test_get_future_planned_rows_only_includes_future_non_empty_rows(self):
         today = datetime.now().date()

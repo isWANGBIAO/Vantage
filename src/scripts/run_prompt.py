@@ -398,6 +398,18 @@ def _build_action_plan_prompt_kwargs(prompt_budget_tokens):
     }
 
 
+def _validate_complete_action_plan_budget(client, messages, model, provider_route, *, reserve_tokens=0):
+    budget = _resolve_action_plan_prompt_budget(client, model, provider_route)
+    limit = int(budget["input_budget_tokens"])
+    estimated = estimate_tokens(json.dumps(messages, ensure_ascii=False, separators=(",", ":"))) + max(0, int(reserve_tokens))
+    if estimated > limit:
+        raise ValueError(
+            f"Complete action-plan messages exceed input budget ({estimated} estimated > {limit}); "
+            "shorten required prompts/recent records or configure a larger supported context. No request was sent."
+        )
+    return estimated
+
+
 def run_action_plan_round(
     *,
     client,
@@ -415,6 +427,7 @@ def run_action_plan_round(
     metadata=None,
     emit=print,
 ):
+    _validate_complete_action_plan_budget(client, messages, model_override, provider_route)
     total_attempts = max_empty_content_retries + 1
     total_usage = {
         "prompt_tokens": 0,
@@ -787,8 +800,10 @@ def main():
         # === PROMPT/ANALYSIS MODE ===
         else:
             logging.info("Mode: Analysis/Prompt")
+            input_calendar_date = datetime.now().date()
             
             # Construct Prompt
+            prompt_budget = _resolve_action_plan_prompt_budget(client, model_override, provider_route)
             if args.prompt_file:
                 prompt_path = Path(args.prompt_file)
                 prompt_text = prompt_path.read_text(encoding="utf-8")
@@ -848,6 +863,16 @@ def main():
             else:
                 action_plan_msg = f"{action_plan_msg}\n\n{future_planned_rows}"
             action_plan_msg = f"{action_plan_msg}{TODAY_PLAN_SCOPE}"
+
+            # Round two must retain round one's complete answer. Reserve its
+            # configured output allowance and all known round-two records now,
+            # then recheck actual messages again at each round's send boundary.
+            _validate_complete_action_plan_budget(
+                client,
+                analysis_messages + [{"role": "assistant", "content": ""}, {"role": "user", "content": action_plan_msg}],
+                model_override, provider_route,
+                reserve_tokens=prompt_budget.get("output_reserve_tokens", 0),
+            )
             
             print("正在生成长期行动计划，请稍候...")
             # === ROUND 1: Long-Term Action Plan ===
@@ -933,6 +958,11 @@ def main():
                 
                 if first_round_content and second_round_content:
                     generated_at = datetime.now()
+                    if generated_at.date() != input_calendar_date:
+                        raise ValueError(
+                            "The calendar day changed during action-plan generation; regenerate using today's records. "
+                            "The previous published plan and chat context were preserved."
+                        )
 
                     # --- CRITICAL FIX: Reset Context for Chat ---
                     # The user wants the Chat to start with ONLY the context of this Action Plan session.
