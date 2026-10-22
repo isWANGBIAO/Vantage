@@ -37,3 +37,16 @@ composition log; compare configuration hashes. Ask the user to compare scrolling
 in the installed window with Chrome. Do not report historical driver coexistence
 as resolved merely because the UI is smooth. Do not push remote changes without
 authorization.
+
+### Release prerequisite discovered during verification
+
+The fresh-configuration backend smoke exposed a pre-existing optional-model
+boundary: `face_live_loop` tried to start external face analysis without model
+configuration, while captured-photo analysis already skips that state. Add the
+same `configuration_status()['ready']` gate to
+`src/backend/camera.py:should_run_face_live_analysis`. First add tests in
+`tests/test_face_live_endpoint.py` proving that unconfigured models neither run
+nor initialize the runtime; keep loop timing tests independent of machine paths.
+Retain all packaging log blockers. Run the focused camera, packaging verifier and
+CPU-policy tests, independent review, then repeat the full build/install flow.
+This does not install optional dependencies or change user settings.

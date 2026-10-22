@@ -58,6 +58,11 @@ class _FlakyCopyFrame:
 
 class FaceLiveEndpointTests(unittest.TestCase):
     def setUp(self):
+        # Loop timing tests use a configured optional runtime, independent of
+        # whichever local model paths exist on the developer/test machine.
+        ready_status = patch.object(_backend_face, "configuration_status", return_value={"ready": True})
+        ready_status.start()
+        self.addCleanup(ready_status.stop)
         self.original_points = getattr(_backend_runtime.state, "live_face_points", None)
         self.original_camera = _backend_runtime.state.camera
         self.original_latest_frame = getattr(_backend_runtime.state, "latest_frame", None)
@@ -224,6 +229,26 @@ class FaceLiveEndpointTests(unittest.TestCase):
             create=True,
         ):
             self.assertTrue(_backend_camera.should_run_face_live_analysis(now_ts=100.0))
+
+    def test_face_live_analysis_waits_for_optional_model_configuration(self):
+        with patch.object(_backend_face, "configuration_status", return_value={"ready": False}):
+            self.assertFalse(_backend_camera.should_run_face_live_analysis())
+
+    def test_face_live_analysis_skips_runtime_start_when_optional_model_is_unconfigured(self):
+        _backend_runtime.state.is_running = True
+        _backend_runtime.state.latest_frame = _DummyFrame()
+
+        def stop_after_idle(_seconds):
+            _backend_runtime.state.is_running = False
+
+        with (
+            patch.object(_backend_face, "configuration_status", return_value={"ready": False}),
+            patch.object(_backend_face, "get_face_analysis_runtime") as get_runtime,
+            patch.object(_backend_camera.time, "sleep", side_effect=stop_after_idle),
+            patch("builtins.print"),
+        ):
+            _backend_camera.face_live_loop()
+        get_runtime.assert_not_called()
 
     def test_get_face_live_only_marks_viewer_active_when_requested(self):
         _backend_runtime.state.camera = _DummyCamera(True)

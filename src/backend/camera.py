@@ -341,7 +341,7 @@ def has_active_face_live_viewer(now_ts=None):
     return (now_ts - last_seen_at) <= FACE_LIVE_VIEWER_TTL_SECONDS
 
 def should_run_face_live_analysis(now_ts=None):
-    return not _face._face_analysis_job_running
+    return not _face._face_analysis_job_running and _face.configuration_status()["ready"]
 
 def register_video_stream_client():
     with _runtime.state.lock:
