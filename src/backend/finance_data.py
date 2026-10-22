@@ -61,11 +61,21 @@ def _coerce_number(value):
         s = value.strip()
         if not s or _looks_like_date(s):
             return None
-        cleaned = re.sub(r"[^\d\.\-]", "", s)
-        if cleaned in ("", "-", "."):
+        cleaned = s.replace("−", "-").replace("，", ",")
+        cleaned = re.sub(r"^(?:人民币|RMB|CNY|USD|[$¥￥€£])\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*(?:元|RMB|CNY|USD)$", "", cleaned, flags=re.IGNORECASE).strip()
+        accounting_negative = cleaned.startswith("(") and cleaned.endswith(")")
+        if accounting_negative:
+            cleaned = cleaned[1:-1].strip()
+        if not re.fullmatch(r"[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", cleaned):
             return None
         try:
-            return float(cleaned)
+            number = float(cleaned.replace(",", ""))
+            if accounting_negative:
+                if number < 0:
+                    return None
+                number = -number
+            return number if math.isfinite(number) else None
         except ValueError:
             return None
     return None
@@ -97,6 +107,8 @@ def _find_date_column(df):
     ]
 
     for col in preferred:
+        if _is_numeric_column(df[col]):
+            continue
         try:
             series = pd.to_datetime(df[col], errors="coerce")
         except Exception:
@@ -105,6 +117,8 @@ def _find_date_column(df):
             return col
 
     for col in df.columns:
+        if _is_numeric_column(df[col]):
+            continue
         try:
             series = pd.to_datetime(df[col], errors="coerce")
         except Exception:
@@ -114,9 +128,21 @@ def _find_date_column(df):
 
     return None
 
+
+def _is_numeric_column(series):
+    values = series.dropna()
+    return pd.api.types.is_numeric_dtype(series) or (
+        not values.empty and values.map(
+            lambda value: isinstance(value, (int, float)) or (
+                isinstance(value, str) and bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value.strip()))
+            )
+        ).all()
+    )
+
 def _find_metric_from_columns(df, keywords):
     if df is None or df.empty:
         return None
+    df = _sort_by_parsed_date(df, _find_date_column(df))
     for col in _find_matching_columns(df.columns, keywords):
         values = []
         for v in df[col].tolist():
@@ -130,7 +156,15 @@ def _find_metric_from_columns(df, keywords):
 def _find_metric_from_rows(df, keywords):
     if df is None or df.empty:
         return None
-    for _, row in df.iterrows():
+    # Match complete aggregate labels before any partial category label.
+    rows = list(df.iterrows())
+    rows.sort(key=lambda pair: min(
+        [(0 if cell.strip() == keyword else 1, index)
+         for cell in pair[1].tolist() if isinstance(cell, str)
+         for index, keyword in enumerate(keywords) if keyword in cell]
+        or [(2, len(keywords))]
+    ))
+    for _, row in rows:
         label_cell = None
         for cell in row.tolist():
             if isinstance(cell, str) and any(k in cell for k in keywords):
@@ -163,7 +197,9 @@ def _find_consumption_metric(sheets, preferred_field, legacy_keywords):
     # A present new column is authoritative even when its values are missing.
     for sheet_name, df in sheets.items():
         if preferred_field in df.columns:
-            result = _find_metric_from_columns(df[[preferred_field]], [preferred_field])
+            date_col = _find_date_column(df)
+            columns = list(dict.fromkeys([preferred_field] + ([date_col] if date_col is not None else [])))
+            result = _find_metric_from_columns(df[columns], [preferred_field])
             if result is not None:
                 result["sheet"] = sheet_name
             return result
@@ -194,7 +230,7 @@ def _parse_required_flag(value):
         return None
 
     lower_text = text.lower()
-    optional_tokens = ["非必须", "不必须", "不是", "否", "not required", "optional", "no", "n"]
+    optional_tokens = ["非必须", "不必须", "非必需", "不必需", "不是", "否", "not required", "optional", "no", "n"]
     required_tokens = ["必须", "必需", "是", "required", "yes", "y"]
 
     def matches(token):
@@ -362,6 +398,8 @@ def _build_budget_summary(sheets):
         "monthly_optional": monthly_optional if optional_count else None,
         "required_count": required_count,
         "optional_count": optional_count,
+        "days_in_month": days_in_month,
+        "period_start": today.strftime("%Y-%m-01"),
         "source_column": source_col
     }
 
@@ -453,13 +491,22 @@ def _sum_present_numbers(values):
         return None
     return sum(present_values)
 
+
+def _sort_by_parsed_date(df, date_col):
+    """Sort valid dates stably without interpreting unpadded strings lexically."""
+    if df is None or df.empty or date_col is None or date_col not in df.columns:
+        return df
+    dates = pd.to_datetime(df[date_col], errors="coerce", format="mixed")
+    # Undated rows cannot override a chronologically known latest observation.
+    return df.loc[dates.notna()].iloc[dates[dates.notna()].argsort(kind="stable")]
+
 def _latest_numeric_value(df, value_col, date_col=None):
     if df is None or df.empty or value_col is None:
         return None
 
     working_df = df.copy()
     if date_col is not None and date_col in working_df.columns:
-        working_df = working_df.sort_values(date_col)
+        working_df = _sort_by_parsed_date(working_df, date_col)
 
     values = []
     for value in working_df[value_col].tolist():
@@ -474,7 +521,7 @@ def _average_recent_numeric_values(df, value_col, date_col=None, count=6):
 
     working_df = df.copy()
     if date_col is not None and date_col in working_df.columns:
-        working_df = working_df.sort_values(date_col)
+        working_df = _sort_by_parsed_date(working_df, date_col)
 
     values = []
     for value in working_df[value_col].tolist():
@@ -501,7 +548,7 @@ def _build_balance_forecast_points(sheets, as_of=None):
     if forecast_df is None or forecast_df.empty:
         return []
 
-    forecast_df = forecast_df.sort_values(date_col)
+    forecast_df = _sort_by_parsed_date(forecast_df, date_col)
     balance_col = _find_first_column(
         actual_df,
         ["现金及现金等价物+股票", "实际/预测期末现金+股票", "现金及现金等价物", "现金", "股票"],
@@ -576,7 +623,7 @@ def _build_balance_summary(sheets):
     if expense_df is not None and not expense_df.empty:
         date_col = _find_date_column(expense_df)
         actual_expense_df = _filter_actual_expense_rows(expense_df, date_col=date_col)
-        if actual_expense_df is not None and not actual_expense_df.empty:
+        if actual_expense_df is not None:
             metric_sheets[expense_sheet_name] = actual_expense_df
 
     daily_avg = _find_consumption_metric(metric_sheets, "日均消费", ["日均支出", "日均开销", "日均成本"])

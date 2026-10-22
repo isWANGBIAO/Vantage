@@ -1130,6 +1130,13 @@ def _sum_row_numbers(row, columns):
     return sum(present_values)
 
 
+def _chronological_balance_rows(frame, date_col="日期"):
+    if date_col not in frame.columns or frame.empty:
+        return frame
+    dates = pd.to_datetime(frame[date_col], errors="coerce", format="mixed")
+    return frame.loc[dates.notna()].iloc[dates[dates.notna()].argsort(kind="stable")]
+
+
 def _latest_balance_anchor(actual_df, date_col="日期"):
     if actual_df is None or actual_df.empty:
         return None, None
@@ -1141,7 +1148,7 @@ def _latest_balance_anchor(actual_df, date_col="日期"):
     if balance_col is None:
         return None, None
 
-    working_df = actual_df.sort_values(date_col) if date_col in actual_df.columns else actual_df
+    working_df = _chronological_balance_rows(actual_df, date_col)
     for _, row in working_df.iloc[::-1].iterrows():
         balance = _row_number(row, balance_col)
         if balance is None:
@@ -1159,7 +1166,7 @@ def _average_recent_row_numbers(data_frame, value_col, date_col="日期", count=
     if data_frame is None or data_frame.empty or value_col is None:
         return None
 
-    working_df = data_frame.sort_values(date_col) if date_col in data_frame.columns else data_frame
+    working_df = _chronological_balance_rows(data_frame, date_col)
     values = []
     for _, row in working_df.iterrows():
         value = _row_number(row, value_col)
@@ -1177,8 +1184,8 @@ def build_balance_sheet_forecast_series(data_frame, as_of=None, include_anchor=F
     if data_frame is None or data_frame.empty:
         return pd.DataFrame(columns=columns)
 
-    actual_df = filter_balance_sheet_actuals(data_frame, as_of=as_of).sort_values("日期")
-    forecast_df = filter_balance_sheet_forecasts(data_frame, as_of=as_of).sort_values("日期")
+    actual_df = _chronological_balance_rows(filter_balance_sheet_actuals(data_frame, as_of=as_of))
+    forecast_df = _chronological_balance_rows(filter_balance_sheet_forecasts(data_frame, as_of=as_of))
     if forecast_df.empty:
         return pd.DataFrame(columns=columns)
 
