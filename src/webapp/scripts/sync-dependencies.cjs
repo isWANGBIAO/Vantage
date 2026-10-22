@@ -1299,6 +1299,62 @@ function scanInstalledPackages({ webappRoot, fileSystem = fs }) {
       );
     }
 
+    // npm ls only validates metadata. Check declared executable/runtime entry
+    // points as well, so a partially removed package cannot be reused forever.
+    const bins = typeof metadata.bin === 'string'
+      ? [metadata.bin]
+      : Object.values(metadata.bin || {});
+    for (const entry of bins) {
+      if (typeof entry !== 'string'
+        || !fileSystem.statSync(path.resolve(packageDirectory, entry)).isFile()) {
+        throw new Error(`Missing installed package executable: ${relativePackagePath}`);
+      }
+    }
+    if (Object.hasOwn(metadata, 'exports')) {
+      // exports takes precedence over main, including import-only packages.
+      // Inspect file targets without loading code or requiring CJS support.
+      const exports = metadata.exports;
+      const rootExport = exports && typeof exports === 'object' && !Array.isArray(exports)
+        && Object.keys(exports).some((key) => key.startsWith('.'))
+        ? exports['.'] : exports;
+      function selectExport(target, mode) {
+        if (typeof target === 'string' || target === null) return target;
+        if (Array.isArray(target)) {
+          return target.map((entry) => selectExport(entry, mode))
+            .find((entry) => entry !== undefined);
+        }
+        if (target && typeof target === 'object') {
+          for (const [condition, value] of Object.entries(target)) {
+            if (['node', 'node-addons', 'module-sync', 'default', mode].includes(condition)) {
+              const selected = selectExport(value, mode);
+              if (selected !== undefined) return selected;
+            }
+          }
+        }
+        return undefined;
+      }
+      try {
+        for (const mode of ['import', 'require']) {
+          const target = selectExport(rootExport, mode);
+          if (typeof target === 'string'
+            && !fileSystem.statSync(path.resolve(packageDirectory, target)).isFile()) {
+            throw new Error('Export entry is not a file');
+          }
+        }
+      } catch {
+        throw new Error(`Missing installed package entry: ${relativePackagePath}`);
+      }
+    } else if (typeof metadata.main === 'string' && metadata.main) {
+      try {
+        const entryPath = require.resolve(packageDirectory);
+        if (!fileSystem.statSync(entryPath).isFile()) {
+          throw new Error('Entry is not a file');
+        }
+      } catch {
+        throw new Error(`Missing installed package entry: ${relativePackagePath}`);
+      }
+    }
+
     installedPackages.push({
       path: relativePackagePath,
       name: metadata.name,
