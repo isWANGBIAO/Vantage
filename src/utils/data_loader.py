@@ -6,6 +6,7 @@ import pandas as pd
 import subprocess
 import tempfile
 import logging
+import math
 from datetime import datetime, timedelta
 from pathlib import Path
 from src.core.config import Config
@@ -26,12 +27,14 @@ class DataLoader:
         if value is None or pd.isna(value):
             return None
 
-        match = re.search(r"(?:(\d+)小时)?(?:(\d+)分)?", str(value).strip())
+        if isinstance(value, (int, float)):
+            return value if math.isfinite(value) and value >= 0 else None
+        match = re.fullmatch(r"(?:(\d+(?:\.\d+)?)小时)?(?:(\d+(?:\.\d+)?)分(?:钟)?)?", str(value).strip())
         if not match or (match.group(1) is None and match.group(2) is None):
-            return value
+            return None if re.search(r"小时|分", str(value)) else value
 
-        hours = int(match.group(1) or 0)
-        minutes = int(match.group(2) or 0)
+        hours = float(match.group(1) or 0)
+        minutes = float(match.group(2) or 0)
         return round(hours + minutes / 60.0, 2)
 
     @staticmethod
@@ -215,22 +218,34 @@ class DataLoader:
         if not excel_file_path.exists():
             raise FileNotFoundError(f"Excel file not found: {excel_file_path}")
 
-        temp_dir = Path(tempfile.gettempdir())
-        temp_excel_path = temp_dir / f"temp_read_{datetime.now().strftime('%f')}.xlsx"
-
-        if os.name == 'nt':
-            safe_source = str(excel_file_path).replace("'", "''")
-            safe_dest = str(temp_excel_path).replace("'", "''")
-            ps_cmd = [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                f"Copy-Item -Path '{safe_source}' -Destination '{safe_dest}' -Force"
-            ]
-            subprocess.run(ps_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            import shutil
-            shutil.copy2(excel_file_path, temp_excel_path)
+        descriptor, reserved_path = tempfile.mkstemp(prefix="temp_read_", suffix=".xlsx")
+        os.close(descriptor)
+        temp_excel_path = Path(reserved_path)
+        copying_path = None
+        try:
+            staging_descriptor, staging_path = tempfile.mkstemp(prefix="temp_read_", suffix=".copying")
+            os.close(staging_descriptor)
+            copying_path = Path(staging_path)
+            if os.name == 'nt':
+                safe_source = str(excel_file_path).replace("'", "''")
+                safe_dest = str(copying_path).replace("'", "''")
+                ps_cmd = [
+                    "powershell", "-NoProfile", "-Command",
+                    f"Copy-Item -LiteralPath '{safe_source}' -Destination '{safe_dest}' -Force"
+                ]
+                subprocess.run(ps_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                import shutil
+                shutil.copyfile(excel_file_path, copying_path)
+            # Copy-Item can inherit a years-old source mtime. Keep that staging
+            # file outside the janitor's *.xlsx namespace until it is fresh.
+            os.utime(copying_path, None)
+            os.replace(copying_path, temp_excel_path)
+        except BaseException:
+            if copying_path is not None:
+                copying_path.unlink(missing_ok=True)
+            temp_excel_path.unlink(missing_ok=True)
+            raise
 
         return temp_excel_path
 
@@ -254,7 +269,7 @@ class DataLoader:
         if "日期" not in df.columns:
             raise KeyError(f"Excel中缺少'日期'列: {excel_file_path}")
         
-        df["日期"] = pd.to_datetime(df["日期"])
+        df["日期"] = pd.to_datetime(df["日期"], format="mixed")
         return df
 
     @staticmethod
@@ -485,6 +500,9 @@ class DataLoader:
         if isinstance(value, pd.Timestamp):
             return value.strftime("%Y-%m-%d")
 
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+
         return value
 
     @staticmethod
@@ -666,6 +684,9 @@ class DataLoader:
 
             if isinstance(value, pd.Timestamp):
                 return value.strftime("%Y-%m-%d")
+
+            if isinstance(value, float) and not math.isfinite(value):
+                return None
 
             clean_name = clean_column_name(column_name)
 
@@ -872,13 +893,14 @@ class DataLoader:
         # day and its aggregates are emitted as their own trailing section.
         # This runs after the optional budget selection so both paths agree.
         stable_rows = payload_rows[:-1] if len(payload_rows) > 1 else []
-        current_day_row = payload_rows[-1] if len(payload_rows) > 1 else None
+        current_day_row = payload_rows[-1] if payload_rows else None
 
         data_payload["rows"] = stable_rows
         data_payload.update(
             {
                 "token_budget": selection_metadata["budget_tokens"],
                 "estimated_tokens": selection_metadata["estimated_tokens"],
+                "estimated_tokens_scope": "fixed_prompt_and_selected_rows_only",
                 "included_row_count": selection_metadata["included_row_count"],
                 "omitted_row_count": selection_metadata["omitted_row_count"],
                 "selection_strategy": selection_metadata["selection_strategy"],
@@ -918,6 +940,12 @@ class DataLoader:
             f"\n\n{current_day_summary}"
             f"\n\n{runtime_context_summary}"
         )
+
+        if prompt_token_budget is not None and estimate_tokens(combined_content, tokenizer) > int(prompt_token_budget):
+            raise ValueError(
+                "Complete action-plan prompt exceeds its input budget; shorten required prompts or workbook text, "
+                "or select a model with a larger configured context window. No request was sent."
+            )
 
         return combined_content
 
@@ -1072,8 +1100,6 @@ class DataLoader:
             (7, 15): "中元节",
             (8, 15): "中秋节",
             (9, 9): "重阳节",
-            (12, 30): "除夕",
-            (12, 29): "除夕(小月)",  # 腊月小月时除夕为廿九
         }
         
         results = []
@@ -1098,17 +1124,21 @@ class DataLoader:
             from zhdate import ZhDate
             for (lm, ld), name in lunar_festivals.items():
                 try:
-                    # 尝试今年的农历日期
-                    lunar_date = ZhDate(year, lm, ld)
-                    solar_date = lunar_date.to_datetime().date()
-                    if solar_date < today:
-                        lunar_date = ZhDate(year + 1, lm, ld)
-                        solar_date = lunar_date.to_datetime().date()
-                    if today <= solar_date <= end_date:
-                        delta = (solar_date - today).days
-                        results.append((name, solar_date, delta))
+                    for lunar_year in range(year - 1, end_date.year + 2):
+                        solar_date = ZhDate(lunar_year, lm, ld).to_datetime().date()
+                        if today <= solar_date <= end_date:
+                            results.append((name, solar_date, (solar_date - today).days))
                 except Exception:
                     pass
+            # Eve is the day before the next lunar New Year, not a guess between
+            # lunar December 29/30, and its lunar year may differ from today.year.
+            for lunar_year in range(year - 1, end_date.year + 2):
+                try:
+                    eve = ZhDate(lunar_year, 1, 1).to_datetime().date() - timedelta(days=1)
+                    if today <= eve <= end_date:
+                        results.append(("除夕", eve, (eve - today).days))
+                except Exception:
+                    continue
         except ImportError:
             pass
         
