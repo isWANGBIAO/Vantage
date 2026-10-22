@@ -67,6 +67,9 @@ jobs:
       - name: Run frontend tests
         run: npm test
         working-directory: src/webapp
+      - name: Verify dependency packaging smoke safety contracts
+        run: node --test scripts/smoke-dependency-packaging.test.cjs
+        working-directory: src/webapp
       - name: Verify the production Electron protocol
         run: npm run test:electron-protocol
         working-directory: src/webapp
