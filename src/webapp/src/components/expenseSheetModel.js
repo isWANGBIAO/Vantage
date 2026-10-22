@@ -260,7 +260,8 @@ function buildAssetSection(sheet) {
     .sort((left, right) => (right.totalPrice ?? 0) - (left.totalPrice ?? 0));
 
   const knownValues = items.map((item) => item.totalPrice).filter((value) => value !== null);
-  const totalValue = knownValues.length ? knownValues.reduce((sum, value) => sum + value, 0) : null;
+  const totalValue = knownValues.length && knownValues.length === items.length
+    ? knownValues.reduce((sum, value) => sum + value, 0) : null;
 
   return {
     totalValue: items.length ? totalValue : null,
@@ -296,7 +297,8 @@ function buildSocialEvents(sheet) {
     .sort((left, right) => right.sortValue - left.sortValue);
 
   const knownAmounts = items.map((item) => item.amount).filter((value) => value !== null);
-  const totalAmount = knownAmounts.length ? knownAmounts.reduce((sum, value) => sum + value, 0) : null;
+  const totalAmount = knownAmounts.length && knownAmounts.length === items.length
+    ? knownAmounts.reduce((sum, value) => sum + value, 0) : null;
 
   return {
     totalAmount: items.length ? totalAmount : null,

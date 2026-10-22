@@ -27,6 +27,15 @@ test('money text retains accounting and Unicode signs and scientific notation', 
   assert.deepEqual(amounts, { Exponent: 1000, Unicode: -1200.5, Accounting: -1200, Invalid: null });
 });
 
+test('mixed known and missing amounts cannot be presented as a complete total', () => {
+  const vm = buildExpenseSheetViewModel({ sheets: [
+    { name: 'Asset', columns: ['名称', '总价'], rows: [['Known', 100], ['Unknown', null]] },
+    { name: '人情', columns: ['内容', '金额'], rows: [['Known', 100], ['Unknown', null]] },
+  ] });
+  assert.equal(vm.assets.totalValue, null);
+  assert.equal(vm.socialEvents.totalAmount, null);
+});
+
 test('daily-only budget uses backend calendar period and optional variants', () => {
   for (const days of [28, 29, 30, 31]) {
     const vm = buildExpenseSheetViewModel({ summary: { budget: { days_in_month: days } }, sheets: [{

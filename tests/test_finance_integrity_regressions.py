@@ -38,6 +38,19 @@ class FinanceIntegrityTests(unittest.TestCase):
                 self.assertEqual(summary["time_cost"]["daily_average"], 20)
                 self.assertEqual(summary["assets"]["total_assets"]["value"], 2000)
 
+    def test_latest_value_reports_its_own_date_when_newer_values_are_missing(self):
+        frame = pd.DataFrame({"日期": ["2025-01-01", "2025-01-02"], "日均消费": [10, None]})
+        cost = finance._build_balance_summary({"开销": frame})["time_cost"]
+        self.assertEqual(cost["daily_average"], 10)
+        self.assertEqual(cost["latest_date"], "2025-01-01")
+        self.assertEqual(cost["source"]["daily_average"]["date"], "2025-01-01")
+
+    def test_named_compact_date_strings_are_dates_not_money(self):
+        frame = pd.DataFrame({"日期": ["20250102", "20250101"], "日均消费": [20, 10]})
+        cost = finance._build_balance_summary({"开销": frame})["time_cost"]
+        self.assertEqual(cost["daily_average"], 20)
+        self.assertEqual(cost["latest_date"], "2025-01-02")
+
     def test_forecasts_are_never_promoted_to_actual_summary(self):
         frame = pd.DataFrame({"日期": ["2099-01-01"], "记录类型": ["预测"], "实际消费": [300], "日均消费": [10], "现金及现金等价物+股票": [9000]})
         summary = finance._build_balance_summary({"开销": frame})

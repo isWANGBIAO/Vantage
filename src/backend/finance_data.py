@@ -107,7 +107,7 @@ def _find_date_column(df):
     ]
 
     for col in preferred:
-        if _is_numeric_column(df[col]):
+        if _is_numeric_column(df[col], allow_compact_dates=True):
             continue
         try:
             series = pd.to_datetime(df[col], errors="coerce")
@@ -129,8 +129,12 @@ def _find_date_column(df):
     return None
 
 
-def _is_numeric_column(series):
+def _is_numeric_column(series, allow_compact_dates=False):
     values = series.dropna()
+    if allow_compact_dates and not values.empty and values.map(
+        lambda value: isinstance(value, str) and bool(re.fullmatch(r"\d{8}", value.strip()))
+    ).all() and pd.to_datetime(values, format="%Y%m%d", errors="coerce").notna().all():
+        return False
     return pd.api.types.is_numeric_dtype(series) or (
         not values.empty and values.map(
             lambda value: isinstance(value, (int, float)) or (
@@ -142,15 +146,19 @@ def _is_numeric_column(series):
 def _find_metric_from_columns(df, keywords):
     if df is None or df.empty:
         return None
-    df = _sort_by_parsed_date(df, _find_date_column(df))
+    date_col = _find_date_column(df)
+    df = _sort_by_parsed_date(df, date_col)
     for col in _find_matching_columns(df.columns, keywords):
         values = []
-        for v in df[col].tolist():
-            num = _coerce_number(v)
+        for _, row in df.iterrows():
+            num = _coerce_number(row[col])
             if num is not None:
-                values.append(num)
+                item = {"value": num, "field": str(col)}
+                if date_col is not None:
+                    item["date"] = pd.to_datetime(row[date_col]).strftime("%Y-%m-%d")
+                values.append(item)
         if values:
-            return {"value": values[-1], "field": str(col)}
+            return values[-1]
     return None
 
 def _find_metric_from_rows(df, keywords):
@@ -634,11 +642,11 @@ def _build_balance_summary(sheets):
 
     latest_date = None
     if daily_avg and "sheet" in daily_avg:
-        latest_date = _find_latest_date_in_df(metric_sheets.get(daily_avg["sheet"]))
+        latest_date = date.fromisoformat(daily_avg["date"]) if daily_avg.get("date") else _find_latest_date_in_df(metric_sheets.get(daily_avg["sheet"]))
     if latest_date is None and monthly_total and "sheet" in monthly_total:
-        latest_date = _find_latest_date_in_df(metric_sheets.get(monthly_total["sheet"]))
+        latest_date = date.fromisoformat(monthly_total["date"]) if monthly_total.get("date") else _find_latest_date_in_df(metric_sheets.get(monthly_total["sheet"]))
     if latest_date is None and monthly_avg and "sheet" in monthly_avg:
-        latest_date = _find_latest_date_in_df(metric_sheets.get(monthly_avg["sheet"]))
+        latest_date = date.fromisoformat(monthly_avg["date"]) if monthly_avg.get("date") else _find_latest_date_in_df(metric_sheets.get(monthly_avg["sheet"]))
     if latest_date is None:
         for df in metric_sheets.values():
             latest_date = _find_latest_date_in_df(df)
