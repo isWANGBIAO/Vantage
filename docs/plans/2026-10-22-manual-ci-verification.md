@@ -27,4 +27,3 @@
 3. Verify both run head SHAs equal actual remote main and all required jobs succeed.
 4. Recheck the original issue inventory; attach individual repair commits, test paths/commands and final main run links before closure. Do not close newly discovered or unmapped issues without diagnosis.
 5. Publish the final per-issue report, verify fresh issue/PR state and a clean root main. No installation, deployment or security-setting changes.
-

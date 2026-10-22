@@ -13,4 +13,3 @@ An authorized maintainer dispatches each workflow with `--ref main`. Existing jo
 ## Verification
 
 Use focused contract tests for both manual triggers and retained event/permission boundaries, then the existing full CI and CodeQL. Create a draft PR, review it independently, wait for all necessary checks, ready/merge normally, fetch actual main, dispatch and verify that exact SHA. Close original issues only with their individual repair/test evidence.
-
