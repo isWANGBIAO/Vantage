@@ -135,73 +135,21 @@ def get_action_plan_round_content(result):
 
 
 def _usage_has_recorded_counts(usage):
-    if not isinstance(usage, dict):
-        return False
-
-    values = [
-        usage.get("prompt_tokens"),
-        usage.get("completion_tokens"),
-        usage.get("total_tokens"),
-        usage.get("prompt_cache_hit_tokens"),
-        usage.get("prompt_cache_miss_tokens"),
-        usage.get("completion_reasoning_tokens"),
-        usage.get("reasoning_tokens"),
-    ]
-    prompt_details = usage.get("prompt_tokens_details")
-    if isinstance(prompt_details, dict):
-        values.append(prompt_details.get("cached_tokens"))
-    completion_details = usage.get("completion_tokens_details")
-    if isinstance(completion_details, dict):
-        values.append(completion_details.get("reasoning_tokens"))
-
-    for value in values:
-        try:
-            if float(value or 0) > 0:
-                return True
-        except (TypeError, ValueError):
-            continue
-    return False
+    normalized = normalize_usage(usage)
+    counts = [normalized[key] for key in ("prompt_tokens", "completion_tokens", "total_tokens")]
+    # Action Plan deliberately treats an all-zero response as unavailable, but
+    # one positive partial field cannot establish complete request usage.
+    return all(value is not None for value in counts) and any(value > 0 for value in counts)
 
 
 def _sum_usage_totals(*usage_payloads):
-    totals = {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "total_tokens": 0,
-        "prompt_cache_hit_tokens": 0,
-        "prompt_cache_miss_tokens": 0,
-        "completion_reasoning_tokens": 0,
-    }
-    for usage in usage_payloads:
-        if not isinstance(usage, dict):
-            continue
-        normalized_cache_hit = usage.get("prompt_cache_hit_tokens")
-        if normalized_cache_hit is None:
-            prompt_details = usage.get("prompt_tokens_details")
-            if isinstance(prompt_details, dict):
-                normalized_cache_hit = prompt_details.get("cached_tokens")
-        normalized_cache_miss = usage.get("prompt_cache_miss_tokens")
-        if normalized_cache_miss is None and normalized_cache_hit is not None:
-            normalized_cache_miss = max(int(usage.get("prompt_tokens", 0) or 0) - int(normalized_cache_hit or 0), 0)
-        normalized_reasoning = usage.get("completion_reasoning_tokens")
-        if normalized_reasoning is None:
-            normalized_reasoning = usage.get("reasoning_tokens")
-        if normalized_reasoning is None:
-            completion_details = usage.get("completion_tokens_details")
-            if isinstance(completion_details, dict):
-                normalized_reasoning = completion_details.get("reasoning_tokens")
-
-        usage_with_normalized_fields = {
-            **usage,
-            "prompt_cache_hit_tokens": normalized_cache_hit,
-            "prompt_cache_miss_tokens": normalized_cache_miss,
-            "completion_reasoning_tokens": normalized_reasoning,
-        }
-        for key in totals:
-            value = usage_with_normalized_fields.get(key)
-            if value is None:
-                continue
-            totals[key] += int(value or 0)
+    normalized = [normalize_usage(usage) for usage in usage_payloads]
+    totals = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "completion_reasoning_tokens"):
+        values = [usage[key] for usage in normalized]
+        # An aggregate is known only when every actual contributing request
+        # reported that counter. Missingness must survive retry/round sums.
+        totals[key] = sum(values) if values and all(value is not None for value in values) else None
     return totals
 
 
@@ -273,35 +221,24 @@ def estimate_action_plan_prompt_tokens(prompt_text, system_text=""):
 
 def build_action_plan_request_stats(section, result):
     payload = dict(result or {})
-    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    usage = normalize_usage(payload.get("usage"))
     duration = float(payload.get("duration", 0) or 0)
     usage_recorded = _usage_has_recorded_counts(usage)
-    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0) if usage_recorded else None
-    completion_tokens = int(usage.get("completion_tokens", 0) or 0) if usage_recorded else None
-    total_tokens = int(usage.get("total_tokens", 0) or 0) if usage_recorded else None
+    prompt_tokens = usage["prompt_tokens"]
+    completion_tokens = usage["completion_tokens"]
+    total_tokens = usage["total_tokens"]
     prompt_cache_hit_tokens = usage.get("prompt_cache_hit_tokens")
-    if prompt_cache_hit_tokens is None:
-        prompt_details = usage.get("prompt_tokens_details")
-        if isinstance(prompt_details, dict):
-            prompt_cache_hit_tokens = prompt_details.get("cached_tokens")
     prompt_cache_miss_tokens = usage.get("prompt_cache_miss_tokens")
-    if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None:
-        prompt_cache_miss_tokens = max(int(prompt_tokens or 0) - int(prompt_cache_hit_tokens or 0), 0)
     completion_reasoning_tokens = usage.get("completion_reasoning_tokens")
-    if completion_reasoning_tokens is None:
-        completion_reasoning_tokens = usage.get("reasoning_tokens")
-    if completion_reasoning_tokens is None:
-        completion_details = usage.get("completion_tokens_details")
-        if isinstance(completion_details, dict):
-            completion_reasoning_tokens = completion_details.get("reasoning_tokens")
     cache_total = int(prompt_cache_hit_tokens or 0) + int(prompt_cache_miss_tokens or 0)
-    if not usage_recorded:
+    if not any(usage[key] is not None and usage[key] > 0 for key in ("prompt_tokens", "completion_tokens", "total_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "completion_reasoning_tokens")):
+        prompt_tokens = completion_tokens = total_tokens = None
         prompt_cache_hit_tokens = None
         prompt_cache_miss_tokens = None
         completion_reasoning_tokens = None
         cache_total = 0
-    completion_rate = int(completion_tokens or 0) / duration if usage_recorded and duration > 0 else None
-    total_rate = int(total_tokens or 0) / duration if usage_recorded and duration > 0 else None
+    completion_rate = completion_tokens / duration if completion_tokens is not None and duration > 0 else None
+    total_rate = total_tokens / duration if total_tokens is not None and duration > 0 else None
 
     stats = {
         "section": section,
@@ -309,6 +246,7 @@ def build_action_plan_request_stats(section, result):
         "completed_at": payload.get("completed_at"),
         "first_token_latency": _as_float_or_none(payload.get("first_token_latency")),
         "usage_recorded": usage_recorded,
+        "usage_complete": usage_recorded,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
@@ -429,12 +367,7 @@ def run_action_plan_round(
 ):
     _validate_complete_action_plan_budget(client, messages, model_override, provider_route)
     total_attempts = max_empty_content_retries + 1
-    total_usage = {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "total_tokens": 0,
-    }
-    usage_recorded = False
+    attempt_usages = []
     total_duration = 0.0
     last_result = {}
 
@@ -489,14 +422,14 @@ def run_action_plan_round(
             raise
         last_result = dict(result or {})
         attempt_usage = last_result.get("usage")
-        if _usage_has_recorded_counts(attempt_usage):
-            usage_recorded = True
-        total_usage = _sum_usage_totals(total_usage, attempt_usage)
+        attempt_usages.append(attempt_usage)
+        total_usage = _sum_usage_totals(*attempt_usages)
+        usage_available = any(value is not None and value > 0 for value in total_usage.values())
         total_duration += float(last_result.get("duration", 0) or 0)
 
         content = get_action_plan_round_content(last_result)
         if content:
-            last_result["usage"] = total_usage if usage_recorded else {}
+            last_result["usage"] = total_usage if usage_available else {}
             last_result["duration"] = total_duration
             last_result["attempts"] = attempt
             return last_result, content
@@ -509,7 +442,7 @@ def run_action_plan_round(
                 total_attempts,
             )
 
-    last_result["usage"] = total_usage if usage_recorded else {}
+    last_result["usage"] = total_usage if usage_available else {}
     last_result["duration"] = total_duration
     last_result["attempts"] = total_attempts
     logging.error(
@@ -1015,11 +948,11 @@ def main():
                     usage1 = result.get("usage", {})
                     usage2 = result_round_2.get("usage", {})
                     
-                    total_prompt_tokens = usage1.get("prompt_tokens", 0) + usage2.get("prompt_tokens", 0)
-                    total_completion_tokens = usage1.get("completion_tokens", 0) + usage2.get("completion_tokens", 0)
-                    total_total_tokens = usage1.get("total_tokens", 0) + usage2.get("total_tokens", 0)
-                    total_duration = result.get("duration", 0) + result_round_2.get("duration", 0)
                     total_cache_usage = _sum_usage_totals(usage1, usage2)
+                    total_prompt_tokens = total_cache_usage["prompt_tokens"]
+                    total_completion_tokens = total_cache_usage["completion_tokens"]
+                    total_total_tokens = total_cache_usage["total_tokens"]
+                    total_duration = result.get("duration", 0) + result_round_2.get("duration", 0)
                     session_summary = _load_session_usage_summary(history_dir, action_plan_session_id)
 
                     summary_prompt_tokens = (

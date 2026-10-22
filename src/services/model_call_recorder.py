@@ -235,21 +235,21 @@ def normalize_usage(usage):
     completion_tokens = _token_count_or_none(raw_usage.get("completion_tokens"))
     total_tokens = _token_count_or_none(raw_usage.get("total_tokens"))
 
-    prompt_cache_hit_tokens = _as_int_or_none(raw_usage.get("prompt_cache_hit_tokens"))
+    prompt_cache_hit_tokens = _token_count_or_none(raw_usage.get("prompt_cache_hit_tokens"))
     if prompt_cache_hit_tokens is None:
-        prompt_cache_hit_tokens = _as_int_or_none(
+        prompt_cache_hit_tokens = _token_count_or_none(
             _nested_value(raw_usage, "prompt_tokens_details", "cached_tokens")
         )
 
-    prompt_cache_miss_tokens = _as_int_or_none(raw_usage.get("prompt_cache_miss_tokens"))
+    prompt_cache_miss_tokens = _token_count_or_none(raw_usage.get("prompt_cache_miss_tokens"))
     if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None and prompt_tokens is not None:
         prompt_cache_miss_tokens = max(prompt_tokens - prompt_cache_hit_tokens, 0)
 
-    completion_reasoning_tokens = _as_int_or_none(raw_usage.get("completion_reasoning_tokens"))
+    completion_reasoning_tokens = _token_count_or_none(raw_usage.get("completion_reasoning_tokens"))
     if completion_reasoning_tokens is None:
-        completion_reasoning_tokens = _as_int_or_none(raw_usage.get("reasoning_tokens"))
+        completion_reasoning_tokens = _token_count_or_none(raw_usage.get("reasoning_tokens"))
     if completion_reasoning_tokens is None:
-        completion_reasoning_tokens = _as_int_or_none(
+        completion_reasoning_tokens = _token_count_or_none(
             _nested_value(raw_usage, "completion_tokens_details", "reasoning_tokens")
         )
 
@@ -669,7 +669,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                     ON s.session_id = mc.session_id
                 WHERE mc.status = 'completed'
                     AND COALESCE(mc.duration, 0) > 0
-                    AND COALESCE(mc.total_tokens, 0) > 0
+                    AND (COALESCE(mc.total_tokens, 0) > 0 OR COALESCE(mc.completion_tokens, 0) > 0)
                 ORDER BY mc.created_at DESC, mc.call_id DESC
                 LIMIT ?
             ) AS recent_speed_calls

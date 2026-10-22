@@ -72,6 +72,9 @@ def test_partial_usage_preserves_known_fields_and_field_specific_speed(recorder)
     assert payload["summary"]["average_tokens_per_second"] is None
     assert payload["summary"]["usage_missing_call_count"] == 1
     assert payload["recent_calls"][0]["completion_tokens"] == 100
+    assert len(payload["speed_series"]) == 1
+    assert payload["speed_series"][0]["output_tokens_per_second"] == 10
+    assert payload["speed_series"][0]["average_tokens_per_second"] is None
 
 
 def test_missing_usage_stays_null_in_database_and_rollout(recorder):
@@ -129,7 +132,15 @@ def test_chat_cli_does_not_publish_unknown_usage_as_zero(tmp_path, monkeypatch, 
     assert stats["speed"] == ("0.00 tokens/s" if known else None)
 
 
-@pytest.mark.parametrize("usage,known", [({}, False), ({"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}, True)])
+@pytest.mark.parametrize("usage,known", [
+    ({}, False),
+    (None, False),
+    ({"completion_tokens": 5}, False),
+    ({"prompt_tokens": None, "completion_tokens": 5, "total_tokens": None}, False),
+    *[({"prompt_tokens": value, "completion_tokens": 5, "total_tokens": 10}, False)
+      for value in (True, -1, 2.5, float("inf"), "not a count")],
+    ({"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}, True),
+])
 def test_two_round_cli_accepts_nullable_ledger_summary(tmp_path, monkeypatch, capsys, usage, known):
     from src.scripts import run_prompt
     monkeypatch.setattr(run_prompt.Config, "load_env", lambda: None)
@@ -155,6 +166,9 @@ def test_two_round_cli_accepts_nullable_ledger_summary(tmp_path, monkeypatch, ca
     stats = [json.loads(line.removeprefix("STATS_JSON:")) for line in capsys.readouterr().out.splitlines() if line.startswith("STATS_JSON:")][-1]
     assert stats["usage_complete"] is known
     assert stats["total_tokens"] == (30 if known else None)
+    summary = ledger.get_session_usage_summary(calls[0]["session_id"], tmp_path / "state.db")
+    assert summary["usage_complete"] is known
+    assert (tmp_path / "latest_action_plan.json").exists() or list(tmp_path.glob("action_plan_*.json"))
 
 
 @pytest.mark.parametrize("now_text,fresh_text,old_text", [
