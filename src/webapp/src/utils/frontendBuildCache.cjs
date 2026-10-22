@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 
 const STATE_NAME = '.vantage-build-state.json';
 const INPUTS = [
-  'src', 'public', 'never-stop/ui', 'index.html', 'package.json',
+  'src', 'assets', 'public', 'never-stop/ui', 'index.html', 'package.json',
   'package-lock.json', 'vite.config.js', 'scripts/vite-build.mjs',
   '.env', '.env.local', '.env.production', '.env.production.local',
 ];

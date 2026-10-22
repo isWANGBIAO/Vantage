@@ -114,7 +114,7 @@ def _main_without_backend_runtime_lock() -> int:
         distribution_closure=distribution_closure,
     )
 
-    if args.reuse_if_unchanged and backend_runtime_fingerprint_matches(
+    if not args.skip_build and args.reuse_if_unchanged and backend_runtime_fingerprint_matches(
         layout,
         runtime_fingerprint,
         static_resources,
@@ -144,7 +144,7 @@ def _main_without_backend_runtime_lock() -> int:
             print("Forbidden runtime packages present: none")
         return 0
 
-    if not args.keep_build_root:
+    if not args.skip_build and not args.keep_build_root:
         _clean_existing_build(layout)
 
     _prepare_build_directories(layout)
@@ -170,12 +170,14 @@ def _main_without_backend_runtime_lock() -> int:
     removed_runtime_dlls = remove_conflicting_runtime_libraries(layout["runtime_dir"])
     manifest = write_backend_runtime_manifest(layout=layout, resources=resources)
     size_report = write_backend_runtime_size_report(layout)
-    write_backend_runtime_fingerprint(layout, runtime_fingerprint)
     errors = validate_backend_runtime_bundle(layout, resources)
     if errors:
         for error in errors:
             print(error)
         return 1
+
+    if not args.skip_build:
+        write_backend_runtime_fingerprint(layout, runtime_fingerprint)
 
     print(f"Built backend runtime: {layout['executable_path']}")
     print(f"Runtime manifest: {layout['manifest_path']}")
