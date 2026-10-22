@@ -56,6 +56,14 @@ let backendConnection;
 let smokeSession;
 let todayReadFailures = 0;
 let todayReadFailuresObserved = 0;
+const cameraResponses = [];
+let cameraAttempts = 0;
+let faceProgress = { status: 'queued', percent: 0 };
+let faceProgressReads = 0;
+let faceProgressDrops = 0;
+let faceProgressDropsObserved = 0;
+// A 4x4 solid-color synthetic JPEG, generated solely for transport tests.
+const cameraJpeg = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDlqKKK9s8M/9k=', 'base64');
 
 const chart = (id, title) => ({
     id, title, summary: [],
@@ -134,6 +142,23 @@ async function serveFixture(req, res) {
     for await (const chunk of req) body.push(chunk);
     const payload = body.length ? JSON.parse(Buffer.concat(body).toString()) : undefined;
     calls.push({ method: req.method, pathname, ...(payload ? { payload } : {}) });
+    if (req.method === 'GET' && pathname === '/api/v1/camera/stream' && runsRecoveryCase('camera-preview')) {
+        cameraAttempts++;
+        res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame', 'Cache-Control': 'no-store' });
+        res.flushHeaders();
+        cameraResponses.push(res);
+        if (cameraAttempts === 1) res.socket.destroy();
+        return; // Intentionally controlled TCP multipart stream, not a mocked DOM event.
+    }
+    if (req.method === 'GET' && pathname === '/api/v1/face/progress' && runsRecoveryCase('face-progress')) {
+        faceProgressReads++;
+        if (faceProgressDrops > 0) {
+            faceProgressDrops--;
+            faceProgressDropsObserved++;
+            req.socket.destroy();
+        } else res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(faceProgress));
+        return;
+    }
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Cache-Control', 'no-store');
     if (req.method === 'GET' && pathname === '/api/v1/action-plan/today' && todayReadFailures > 0) {
@@ -170,7 +195,8 @@ async function serveFixture(req, res) {
             settings: { display_language: settings.display_language, theme: settings.theme, theme_mode: settings.theme_mode, launch_at_login: false },
             provider: { selected_provider: null, providers: [] },
         };
-    } else if (req.method === 'POST' && pathname === '/api/v1/plots/refresh') result = { ok: true };
+    } else if (req.method === 'POST' && pathname === '/api/v1/face/analyze' && runsRecoveryCase('face-progress')) result = { status: 'started' };
+    else if (req.method === 'POST' && pathname === '/api/v1/plots/refresh') result = { ok: true };
     else if (req.method === 'POST' && pathname === '/api/v1/finance/purchase-recommendations/dismiss') {
         const item = { ...payload.item, id: 1, group_key: payload.group_key, cache_key: payload.cache_key };
         readFixtures['/api/v1/finance/purchase-recommendations/dismissed'] = { items: [item], count: 1 };
@@ -195,6 +221,23 @@ async function checkErrors() {
     assert.deepEqual(errors, [], 'Renderer errors');
     assert.deepEqual(unexpectedRequests, [], 'Unexpected backend requests');
     assert.deepEqual(forbiddenNetwork, [], 'Unexpected non-local renderer requests');
+}
+
+async function waitForFixture(label, predicate) {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+        await checkErrors();
+        if (predicate()) return;
+        await delay(25);
+    }
+    throw new Error(`Timed out waiting for synthetic backend: ${label}`);
+}
+
+function sendCameraFrame(response) {
+    assert.ok(response && !response.destroyed, 'A current multipart transport must be open');
+    response.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${cameraJpeg.length}\r\n\r\n`);
+    response.write(cameraJpeg);
+    response.write('\r\n--frame\r\n');
 }
 
 async function evaluate(fn, ...args) {
@@ -240,7 +283,9 @@ async function createWindow() {
     contents.on('console-message', details => {
         // JavaScript console errors are classified below with their original
         // exception objects. This event also catches resource/security errors.
-        if (!shuttingDown && details.level === 'error' && !details.message.startsWith('Failed to load model list:')) {
+        const expectedCameraFailure = runsRecoveryCase('camera-preview') && details.sourceId.includes('/api/v1/camera/stream')
+            && details.message.startsWith('Failed to load resource:');
+        if (!shuttingDown && details.level === 'error' && !details.message.startsWith('Failed to load model list:') && !expectedCameraFailure) {
             errors.push(`${details.message} (${details.sourceId}:${details.lineNumber})`);
         }
     });
@@ -471,6 +516,34 @@ async function exerciseUi() {
         const screenshot = await window.webContents.debugger.sendCommand('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
         fs.writeFileSync(process.env.VANTAGE_UI_SMOKE_SCREENSHOT, Buffer.from(screenshot.data, 'base64'));
     }
+    if (runsRecoveryCase('camera-preview')) {
+        readFixtures['/api/v1/system/status'].camera_online = true;
+        await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
+        await navigate('dashboard', '.dashboard-page', 'System Dashboard');
+        await waitFor('camera device ready but preview hidden', () => document.querySelector('.dashboard-page')?.innerText.includes('Camera hidden for privacy'));
+        await click('.dashboard-media-privacy', 'Show media');
+        await waitForFixture('first broken TCP camera transport', () => cameraAttempts >= 1);
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.dashboard-page div')].some(node => node.textContent.trim() === 'Live')), false,
+            'A failed or undecoded transport must not claim Live.');
+        await waitForFixture('automatic camera transport retry', () => cameraAttempts >= 2);
+        sendCameraFrame(cameraResponses.at(-1));
+        await waitFor('decoded multipart image becomes Live', () => document.querySelector('img[alt="Live camera stream"]')?.naturalWidth === 4
+            && [...document.querySelectorAll('.dashboard-page div')].some(node => node.textContent.trim() === 'Live'));
+        cameraResponses.at(-1).socket.destroy();
+        await waitForFixture('live multipart TCP interruption reconnects', () => cameraAttempts >= 3);
+        await click('.dashboard-media-privacy', 'Hide media');
+        const hiddenAttempts = cameraAttempts;
+        await delay(1500);
+        assert.equal(cameraAttempts, hiddenAttempts, 'Hidden media must stop automatic transport work.');
+        await click('.dashboard-media-privacy', 'Show media');
+        await waitForFixture('showing media starts a new transport session', () => cameraAttempts > hiddenAttempts);
+        sendCameraFrame(cameraResponses.at(-1));
+        await waitFor('reshown preview decodes before Live', () => document.querySelector('img[alt="Live camera stream"]')?.naturalWidth === 4
+            && [...document.querySelectorAll('.dashboard-page div')].some(node => node.textContent.trim() === 'Live'));
+        await click('.dashboard-media-privacy', 'Hide media');
+        readFixtures['/api/v1/system/status'].camera_online = false;
+        console.log('PASS actual broken multipart TCP reconnects, hides, and resumes without false Live (#132)');
+    }
     await navigate('project-progress', '.project-progress-container', 'Verify the unified workspace');
     await navigate('expense-sheet', '.expense-sheet', 'Expense Sheet');
     if (runsRecoveryCase('finance-unavailable')) {
@@ -511,6 +584,29 @@ async function exerciseUi() {
     await waitFor('dark-circles report response', () => [...document.querySelectorAll('.app-main strong')]
         .some(node => node.getClientRects().length > 0 && node.textContent.trim() === 'No analysis report yet.'));
     assert.ok(calls.some(call => call.method === 'GET' && call.pathname === '/api/v1/face/report'), 'The dark-circles subpage must load its report.');
+    if (runsRecoveryCase('face-progress')) {
+        await click('.app-main button', 'Analyze Now');
+        await waitForFixture('queued face job progress', () => faceProgressReads >= 1);
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.app-main button')].find(button => button.textContent.trim() === 'Analyzing...')?.disabled), true);
+        faceProgressDrops = 1;
+        await waitForFixture('face progress connection interruption', () => faceProgressDropsObserved === 1);
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.app-main button')].find(button => button.textContent.trim() === 'Analyzing...')?.disabled), true,
+            'A transport failure must not imply that a queued job has stopped.');
+        faceProgress = { status: 'running', percent: 40 };
+        const reads = faceProgressReads;
+        await waitForFixture('healthy running face job progress', () => faceProgressReads > reads);
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.app-main button')].find(button => button.textContent.trim() === 'Analyzing...')?.disabled), true,
+            'Authoritative running progress must remain active.');
+        const reportReads = calls.filter(call => call.pathname === '/api/v1/face/report').length;
+        readFixtures['/api/v1/face/report'] = { trend_views: {}, local_analysis: { method: 'onnx', algorithm_version: 'synthetic-recovered', latest_datetime: 'Synthetic recovered report' } };
+        faceProgress = { status: 'idle', percent: 0 };
+        await waitFor('idle after restart unlocks analysis with explanation', () => [...document.querySelectorAll('.app-main button')]
+            .some(button => button.textContent.trim() === 'Analyze Now' && !button.disabled)
+            && document.querySelector('.app-main [role="status"]')?.textContent.includes('no longer running')
+            && document.querySelector('.app-main')?.textContent.includes('Synthetic recovered report'));
+        assert.ok(calls.filter(call => call.pathname === '/api/v1/face/report').length > reportReads);
+        console.log('PASS queued/transport-failed/running face job stays active, idle unlocks and refreshes report (#134)');
+    }
     await click('.app-nav a[href="#never-stop"]');
     await waitFor('Never Stop embedded page', () => location.hash === '#never-stop'
         && document.querySelector('.never-stop-page-host')?.shadowRoot?.querySelector('.brand')?.textContent.includes('Never Stop'));
@@ -572,7 +668,7 @@ async function exerciseUi() {
     for (const pathname of Object.keys(readFixtures).filter(name => name !== '/api/v1/usage')) {
         assert.ok(calls.some(call => call.pathname === pathname), `UI did not request ${pathname}`);
     }
-    assert.equal(calls.some(call => call.pathname.includes('/camera/stream')), false);
+    assert.equal(calls.some(call => call.pathname.includes('/camera/stream')), runsRecoveryCase('camera-preview'));
     console.log('PASS settings cancel/reopen, repeated entry, Back/Forward, sections, save/reopen');
     console.log('PASS crash notice, local-only privacy copy, narrow folder action and clean startup');
     await evaluate(() => {
