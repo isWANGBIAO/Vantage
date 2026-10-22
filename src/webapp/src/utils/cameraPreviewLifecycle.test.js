@@ -56,3 +56,24 @@ test('hide/unmount cancels scheduled retries and ignores late image callbacks', 
   assert.equal(f.states.length, count);
   assert.equal(f.timers.size, 0);
 });
+
+test('decoded multipart pixels can establish live without a load event, and completed transport retries', () => {
+  const f = fixture();
+  f.lifecycle.observe(0, { naturalWidth: 0, naturalHeight: 0, complete: false });
+  assert.equal(f.states.at(-1).phase, 'connecting');
+  f.lifecycle.observe(0, { naturalWidth: 4, naturalHeight: 0, complete: false });
+  f.lifecycle.observe(0, { naturalWidth: NaN, naturalHeight: 4, complete: false });
+  assert.equal(f.states.at(-1).phase, 'connecting');
+  f.lifecycle.observe(0, { naturalWidth: 4, naturalHeight: 4, complete: false });
+  assert.equal(f.states.at(-1).phase, 'live');
+  f.lifecycle.observe(0, { naturalWidth: 0, naturalHeight: 0, complete: true });
+  assert.equal(f.states.at(-1).phase, 'waiting');
+  f.advance();
+  f.lifecycle.observe(0, { naturalWidth: 4, naturalHeight: 4, complete: false });
+  assert.equal(f.states.at(-1).phase, 'connecting');
+  f.lifecycle.observe(1, { naturalWidth: 4, naturalHeight: 4, complete: true });
+  assert.equal(f.states.at(-1).phase, 'waiting');
+  f.lifecycle.close();
+  f.lifecycle.observe(1, { naturalWidth: 4, naturalHeight: 4, complete: false });
+  assert.equal(f.states.at(-1).phase, 'waiting');
+});

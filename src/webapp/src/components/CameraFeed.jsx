@@ -13,6 +13,7 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
     const [toggling, setToggling] = useState(false);
     const statusErrorLoggedRef = useRef(false);
     const previewRef = useRef(null);
+    const imageRef = useRef(null);
     const previewSessionRef = useRef(0);
     const [preview, setPreview] = useState({ attempt: 0, phase: 'idle' });
     const [retryGeneration, setRetryGeneration] = useState(0);
@@ -20,7 +21,10 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
     const previewLive = previewEnabled && preview.phase === 'live';
 
     useLayoutEffect(() => {
-        if (!previewEnabled) return undefined;
+        if (!previewEnabled) {
+            setPreview({ attempt: 0, phase: 'idle' });
+            return undefined;
+        }
         const session = ++previewSessionRef.current;
         const lifecycle = createCameraPreviewLifecycle({ onChange: state => setPreview({ ...state, session }) });
         previewRef.current = { lifecycle, session };
@@ -29,6 +33,21 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
             if (previewRef.current?.session === session) previewRef.current = null;
         };
     }, [previewEnabled, retryGeneration]);
+
+    useEffect(() => {
+        if (!previewEnabled || previewRef.current?.session !== preview.session) return undefined;
+        const { lifecycle, session } = previewRef.current;
+        const image = imageRef.current;
+        const timer = setInterval(() => {
+            if (previewRef.current?.session === session && imageRef.current) {
+                lifecycle.observe(preview.attempt, imageRef.current);
+            }
+        }, 500);
+        return () => {
+            clearInterval(timer);
+            image?.removeAttribute('src');
+        };
+    }, [previewEnabled, preview.session, preview.attempt]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -66,8 +85,9 @@ export default function CameraFeed({ isVisible = false, privacyRevealed = false 
             overflow: 'hidden',
             borderRadius: '8px'
         }}>
-            {status.online && isVisible && privacyRevealed ? (
+            {previewEnabled && preview.phase !== 'idle' ? (
                 <img
+                    ref={imageRef}
                     key={`${preview.session}:${preview.attempt}`}
                     src={`${buildBackendUrl('/api/v1/camera/stream')}?retry=${preview.session}-${preview.attempt}`}
                     alt={t('camera_feed.live_stream_alt')}

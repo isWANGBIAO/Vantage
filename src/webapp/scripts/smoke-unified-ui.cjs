@@ -147,7 +147,7 @@ async function serveFixture(req, res) {
         res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame', 'Cache-Control': 'no-store' });
         res.flushHeaders();
         cameraResponses.push(res);
-        if (cameraAttempts === 1) res.socket.destroy();
+        if (cameraAttempts <= 2) res.socket.destroy();
         return; // Intentionally controlled TCP multipart stream, not a mocked DOM event.
     }
     if (req.method === 'GET' && pathname === '/api/v1/face/progress' && runsRecoveryCase('face-progress')) {
@@ -235,9 +235,15 @@ async function waitForFixture(label, predicate) {
 
 function sendCameraFrame(response) {
     assert.ok(response && !response.destroyed, 'A current multipart transport must be open');
-    response.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${cameraJpeg.length}\r\n\r\n`);
-    response.write(cameraJpeg);
-    response.write('\r\n--frame\r\n');
+    const write = () => {
+        if (response.destroyed) return;
+        response.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${cameraJpeg.length}\r\n\r\n`);
+        response.write(cameraJpeg);
+        response.write('\r\n');
+    };
+    write();
+    const timer = setInterval(write, 100);
+    response.once('close', () => clearInterval(timer));
 }
 
 async function evaluate(fn, ...args) {
@@ -252,7 +258,8 @@ async function waitFor(label, fn, ...args) {
         await delay(50);
     }
     const text = await evaluate(() => document.body.innerText.slice(0, 2500));
-    throw new Error(`Timed out waiting for ${label}\n${text}`);
+    const imageState = await evaluate(() => [...document.querySelectorAll('img')].map(image => ({ src: image.src, width: image.naturalWidth, complete: image.complete })));
+    throw new Error(`Timed out waiting for ${label}\n${text}\nImages: ${JSON.stringify(imageState)}; camera attempts: ${cameraAttempts}`);
 }
 
 async function click(selector, text = null) {
@@ -525,12 +532,14 @@ async function exerciseUi() {
         await waitForFixture('first broken TCP camera transport', () => cameraAttempts >= 1);
         assert.equal(await evaluate(() => [...document.querySelectorAll('.dashboard-page div')].some(node => node.textContent.trim() === 'Live')), false,
             'A failed or undecoded transport must not claim Live.');
-        await waitForFixture('automatic camera transport retry', () => cameraAttempts >= 2);
+        await waitForFixture('automatic camera transport retry', () => cameraAttempts >= 3);
+        await delay(100); // Let cancelled initial image requests retire before delivering pixels.
         sendCameraFrame(cameraResponses.at(-1));
         await waitFor('decoded multipart image becomes Live', () => document.querySelector('img[alt="Live camera stream"]')?.naturalWidth === 4
             && [...document.querySelectorAll('.dashboard-page div')].some(node => node.textContent.trim() === 'Live'));
+        const liveAttempts = cameraAttempts;
         cameraResponses.at(-1).socket.destroy();
-        await waitForFixture('live multipart TCP interruption reconnects', () => cameraAttempts >= 3);
+        await waitForFixture('live multipart TCP interruption reconnects', () => cameraAttempts > liveAttempts);
         await click('.dashboard-media-privacy', 'Hide media');
         const hiddenAttempts = cameraAttempts;
         await delay(1500);
@@ -542,6 +551,7 @@ async function exerciseUi() {
             && [...document.querySelectorAll('.dashboard-page div')].some(node => node.textContent.trim() === 'Live'));
         await click('.dashboard-media-privacy', 'Hide media');
         readFixtures['/api/v1/system/status'].camera_online = false;
+        await waitForFixture('all hidden camera TCP responses are closed', () => cameraResponses.every(response => response.destroyed));
         console.log('PASS actual broken multipart TCP reconnects, hides, and resumes without false Live (#132)');
     }
     await navigate('project-progress', '.project-progress-container', 'Verify the unified workspace');
@@ -602,7 +612,7 @@ async function exerciseUi() {
         faceProgress = { status: 'idle', percent: 0 };
         await waitFor('idle after restart unlocks analysis with explanation', () => [...document.querySelectorAll('.app-main button')]
             .some(button => button.textContent.trim() === 'Analyze Now' && !button.disabled)
-            && document.querySelector('.app-main [role="status"]')?.textContent.includes('no longer running')
+            && [...document.querySelectorAll('.app-main [role="status"]')].some(node => node.textContent.includes('no longer running'))
             && document.querySelector('.app-main')?.textContent.includes('Synthetic recovered report'));
         assert.ok(calls.filter(call => call.pathname === '/api/v1/face/report').length > reportReads);
         console.log('PASS queued/transport-failed/running face job stays active, idle unlocks and refreshes report (#134)');

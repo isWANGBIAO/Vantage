@@ -6,7 +6,15 @@ export function createCameraPreviewLifecycle({ onChange, schedule = setTimeout, 
   let timer = null;
   const emit = (next) => { state = next; onChange({ ...state }); };
   emit(state);
-  return {
+  const lifecycle = {
+    observe(attempt, image) {
+      if (closed || attempt !== state.attempt) return;
+      // An img can lose a multipart connection without firing onError. For
+      // this continuous stream endpoint, complete means the transport ended.
+      if (image?.complete === true) lifecycle.failed(attempt);
+      else if (Number.isFinite(image?.naturalWidth) && image.naturalWidth > 0
+        && Number.isFinite(image?.naturalHeight) && image.naturalHeight > 0) lifecycle.loaded(attempt);
+    },
     loaded(attempt) {
       if (!closed && attempt === state.attempt && state.phase === 'connecting') {
         emit({ ...state, phase: 'live' });
@@ -30,4 +38,5 @@ export function createCameraPreviewLifecycle({ onChange, schedule = setTimeout, 
       timer = null;
     },
   };
+  return lifecycle;
 }

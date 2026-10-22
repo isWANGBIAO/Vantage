@@ -414,6 +414,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
           allowHttpError: true,
         });
         if (!res.ok) {
+          await res.body?.cancel();
           return;
         }
 
@@ -448,7 +449,7 @@ export default function FaceHistory({ isVisible = true } = {}) {
       setAnalysisInterrupted(false);
       setError(null);
       setProgress({ percent: 0, status: 'starting', current_file: '' });
-      await fetchBackend('/api/v1/face/analyze', {
+      await fetchBackendJson('/api/v1/face/analyze', {
         method: 'POST',
         retryPolicy: 'mutation',
       });
