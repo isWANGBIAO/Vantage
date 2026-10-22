@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 API_VERSION = "1.0"
 
@@ -223,6 +223,13 @@ class ChatRequest(BaseModel):
     reasoning_effort: str | None = None
     service_tier: str | None = None
     client_sent_at: str | None = None
+
+    @field_validator("message")
+    @classmethod
+    def message_must_have_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Chat message must not be blank")
+        return value
 
 
 class VisibleChatMessage(BaseModel):

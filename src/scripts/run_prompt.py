@@ -429,11 +429,22 @@ def run_action_plan_round(
         if emit_start_before_first_attempt or attempt > 1:
             emit_action_plan_stream_event(section, "start", "", emit=emit)
 
+        # LLMClient reports errors per attempt. Do not publish a terminal round
+        # error until the retry policy is exhausted: downstream jobs latch it.
+        attempt_errors = []
+        stream_printer = build_action_plan_stream_printer(section, emit=emit)
+
+        def attempt_callback(tag, content, *, errors=attempt_errors, printer=stream_printer):
+            if tag == "error":
+                errors.append(content)
+            else:
+                printer(tag, content)
+
         try:
             result = client.chat(
                 messages,
                 stream=True,
-                print_callback=build_action_plan_stream_printer(section, emit=emit),
+                print_callback=attempt_callback,
                 model=model_override,
                 provider_route=provider_route,
                 service_tier=service_tier,
@@ -443,7 +454,7 @@ def run_action_plan_round(
                 context_file=context_file,
                 metadata=metadata,
             )
-        except StreamIncompleteError:
+        except StreamIncompleteError as error:
             if attempt < total_attempts:
                 logging.warning(
                     "Action plan %s round stream ended incomplete on attempt %s/%s; retrying same round",
@@ -457,6 +468,11 @@ def run_action_plan_round(
                 section,
                 total_attempts,
             )
+            stream_printer("error", attempt_errors[-1] if attempt_errors else str(error))
+            raise
+        except Exception:
+            for error_message in attempt_errors:
+                stream_printer("error", error_message)
             raise
         last_result = dict(result or {})
         attempt_usage = last_result.get("usage")
@@ -603,6 +619,8 @@ def main():
     parser.add_argument("--client_sent_at", help="Client-side timestamp for the current chat message")
     
     args = parser.parse_args()
+    if args.chat_message is not None and not args.chat_message.strip():
+        parser.error("Chat message must not be blank")
     model_override = args.model.strip() if args.model else None
     provider_route = args.provider_route.strip() if args.provider_route else None
     service_tier = args.service_tier.strip() if args.service_tier else None
@@ -634,7 +652,7 @@ def main():
         # Backend-managed plan jobs isolate only their output/context files.
         # Config/history_dir (and therefore usage databases) remain unchanged.
         staging_value = os.environ.get("VANTAGE_ACTION_PLAN_STAGING_DIR")
-        plan_staging_dir = Path(staging_value) if staging_value and not args.chat_message else None
+        plan_staging_dir = Path(staging_value) if staging_value and args.chat_message is None else None
         context_file = (
             plan_staging_dir / "latest_context.json"
             if plan_staging_dir is not None else args.context_file
@@ -643,7 +661,7 @@ def main():
         client = LLMClient()
         
         # === CHAT MODE ===
-        if args.chat_message:
+        if args.chat_message is not None:
             logging.info("Mode: Chat")
             
             # Ensure System Prompt is present if context is empty
@@ -716,11 +734,13 @@ def main():
             
             # Handle Result
             content = result["content"]
-            if content:
+            if isinstance(content, str) and content.strip():
                 context_mgr.add_message("assistant", content)
                 context_mgr.save()
             else:
                 logging.error("No content returned from API")
+                print(f"STREAM_ERROR:{json.dumps('Model returned no chat content; please retry.')}", flush=True)
+                raise SystemExit(1)
 
             # Print Stats for GUI
             usage = result.get("usage", {})

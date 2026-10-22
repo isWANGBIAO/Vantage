@@ -760,12 +760,16 @@ export default function ChatInterface({ embedded = false } = {}) {
 
 
 
-            await processStreamResponse(res, nextStats);
+            const completed = await processStreamResponse(res, nextStats);
+            if (!completed) {
+                setInput(current => current || userMsg);
+            }
 
 
 
         } catch (err) {
             if (err.name === 'AbortError') return;
+            setInput(current => current || userMsg);
             setChatError(String(err.message || err));
             setMessages(prev => [...prev, {
                 role: 'assistant',

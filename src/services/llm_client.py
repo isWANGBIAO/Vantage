@@ -1448,6 +1448,15 @@ class LLMClient:
                             call_id=call_id,
                             chunk=data,
                         )
+                        if isinstance(data, dict) and data.get("error") is not None:
+                            provider_error = data["error"]
+                            if isinstance(provider_error, dict):
+                                detail = provider_error.get("message") or provider_error.get("code") or "Unknown provider error"
+                            else:
+                                detail = str(provider_error)
+                            # Raise the sanitized message itself: callers also
+                            # log exceptions and must never receive API keys.
+                            raise RuntimeError("Provider stream error: " + self._redact_secrets(str(detail)))
                         if isinstance(data.get("usage"), dict):
                             usage_data = data["usage"]
 
