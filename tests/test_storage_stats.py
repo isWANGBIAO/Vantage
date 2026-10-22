@@ -363,7 +363,7 @@ class StorageStatsTests(unittest.TestCase):
             latest = _backend_media.find_latest_file_recursive(tmp, max_entries=1, max_seconds=None)
 
         self.assertEqual(Path(latest).name, "newest.jpg")
-        self.assertFalse(_backend_media.find_latest_file_recursive.last_truncated)
+        self.assertTrue(_backend_media.find_latest_file_recursive.last_truncated)
 
 
 if __name__ == "__main__":

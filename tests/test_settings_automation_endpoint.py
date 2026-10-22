@@ -5,7 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from src.backend import providers as _backend_providers
 from src.backend import security as _backend_security
@@ -609,6 +610,257 @@ def test_onboarding_state_and_completion_import_only_into_configured_history(tmp
     assert user_config.load_migration_state()["source_path"] == str(legacy_root.resolve())
     assert _backend_settings.get_automation_onboarding_state()["migrationCompleted"] is True
     assert "onboarding-secret" not in json.dumps(_backend_settings.get_automation_settings())
+
+
+def test_onboarding_rejected_provider_does_not_import_and_changed_source_retry_is_correct(tmp_path, monkeypatch):
+    paths = _use_runtime_dirs(monkeypatch, tmp_path)
+    roots = [tmp_path / "source-a", tmp_path / "source-b"]
+    for root in roots:
+        (root / "history").mkdir(parents=True)
+        (root / "history" / "plan.json").write_text(root.name, encoding="utf-8")
+    user_config.save_settings({"onboarding_completed": False})
+    user_config.save_provider_config({"providers": {}})
+    user_config.save_migration_state({"completed": False})
+    originals = _backend_settings._snapshot_automation_config_files()
+    app = FastAPI()
+    app.include_router(_backend_settings.router)
+    with TestClient(app) as http:
+        rejected = http.post("/api/v1/onboarding/complete", json={
+            "skip_chat_setup": False, "selected_provider": "openai",
+            "import_legacy_data": True, "legacy_root": str(roots[0]),
+        })
+        assert rejected.status_code == 422
+        assert not (paths["history"] / "plan.json").exists()
+        assert _backend_settings._snapshot_automation_config_files() == originals
+        retry = http.post("/api/v1/onboarding/complete", json={
+            "skip_chat_setup": True, "import_legacy_data": True, "legacy_root": str(roots[1]),
+        })
+        assert retry.status_code == 200
+        assert retry.json()["migration"]["sourcePath"] == str(roots[1].resolve())
+    assert (paths["history"] / "plan.json").read_text(encoding="utf-8") == "source-b"
+
+
+@pytest.mark.parametrize("failure", ["copy", "migration-state", "migration-final", "settings", "walk-root", "walk-child"])
+def test_onboarding_import_failure_rolls_back_only_new_files_and_retry_can_finish(tmp_path, monkeypatch, failure):
+    paths = _use_runtime_dirs(monkeypatch, tmp_path)
+    source = tmp_path / "legacy"
+    (source / "history" / "nested").mkdir(parents=True)
+    (source / "history" / "new.json").write_text("new", encoding="utf-8")
+    (source / "history" / "nested" / "later.json").write_text("later", encoding="utf-8")
+    (source / "history" / "keep.json").write_bytes(b"older-source-copy")
+    paths["history"].mkdir(parents=True)
+    (paths["history"] / "keep.json").write_bytes(b"original-user-history")
+    user_config.save_settings({"onboarding_completed": False})
+    user_config.save_provider_config({"providers": {}})
+    user_config.save_migration_state({"completed": False})
+    original_files = _backend_settings._snapshot_automation_config_files()
+    migration_file = user_config.get_migration_state_file()
+    migration_bytes = migration_file.read_bytes()
+    payload = {"skip_chat_setup": True, "import_legacy_data": True, "legacy_root": str(source)}
+    with monkeypatch.context() as failing:
+        if failure == "copy":
+            copy = _backend_settings.shutil.copyfileobj
+            copies = [0]
+            def interrupted(source_file, destination):
+                copy(source_file, destination)
+                copies[0] += 1
+                if copies[0] == 2:
+                    raise OSError("synthetic interrupted copy")
+            failing.setattr(_backend_settings.shutil, "copyfileobj", interrupted)
+        elif failure in {"migration-state", "migration-final", "settings"}:
+            save_marker = _backend_settings.save_migration_state
+            def cannot_save(*args, **kwargs):
+                if failure == "migration-final" and args[0]["completed"] is False:
+                    return save_marker(*args, **kwargs)
+                raise OSError("synthetic configuration publication failure")
+            failing.setattr(_backend_settings, "save_settings" if failure == "settings" else "save_migration_state", cannot_save)
+        else:
+            walk = _backend_settings.os.walk
+            def unreadable(root, **kwargs):
+                if failure == "walk-child":
+                    yield next(walk(root, **kwargs))
+                error = PermissionError("synthetic directory read denied")
+                if kwargs.get("onerror"):
+                    kwargs["onerror"](error)
+            failing.setattr(_backend_settings.os, "walk", unreadable)
+        with pytest.raises((OSError, HTTPException)):
+            _backend_settings.complete_automation_onboarding(payload)
+    assert _backend_settings._snapshot_automation_config_files() == original_files
+    if failure in {"settings", "migration-final"}:
+        assert user_config.load_migration_state()["completed"] is False
+        assert user_config.load_migration_state()["source_path"] == str(source.resolve())
+        assert (paths["history"] / "new.json").exists()
+    else:
+        assert migration_file.read_bytes() == migration_bytes
+        assert sorted(path.relative_to(paths["history"]).as_posix() for path in paths["history"].rglob("*")) == ["keep.json"]
+    assert (paths["history"] / "keep.json").read_bytes() == b"original-user-history"
+    result = _backend_settings.complete_automation_onboarding(payload)
+    assert result["migration"]["completed"] is True
+    assert (paths["history"] / "new.json").read_text(encoding="utf-8") == "new"
+    assert (paths["history"] / "nested" / "later.json").read_text(encoding="utf-8") == "later"
+
+
+def test_import_rollback_never_unlinks_published_files_even_after_an_identity_check(tmp_path, monkeypatch):
+    path = tmp_path / "published.json"
+    path.write_bytes(b"owned-import")
+    changes = _backend_settings._LegacyHistoryChanges()
+    changes.record_file(path)
+    unlink = Path.unlink
+
+    def concurrent_change_before_unlink(self, *args, **kwargs):
+        if self == path:
+            self.write_bytes(b"concurrent-user-edit")
+        return unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", concurrent_change_before_unlink)
+    assert changes.rollback() is True
+    assert path.read_bytes() == b"owned-import"
+
+
+def test_import_persists_incomplete_marker_before_publishing_any_file(tmp_path, monkeypatch):
+    _use_runtime_dirs(monkeypatch, tmp_path)
+    source = tmp_path / "legacy"
+    (source / "history").mkdir(parents=True)
+    (source / "history" / "plan.json").write_bytes(b"source-history")
+    link = _backend_settings.os.link
+    publications = []
+
+    def checked_publish(staged, destination):
+        marker = user_config.load_migration_state()
+        assert marker["completed"] is False
+        assert marker["source_path"] == str(source.resolve())
+        assert user_config.load_settings()["onboarding_completed"] is False
+        publications.append(destination)
+        return link(staged, destination)
+
+    monkeypatch.setattr(_backend_settings.os, "link", checked_publish)
+    _backend_settings.complete_automation_onboarding({
+        "skip_chat_setup": True, "import_legacy_data": True, "legacy_root": str(source),
+    })
+    assert publications
+    assert user_config.load_migration_state()["completed"] is True
+
+
+def test_onboarding_get_recovers_settings_complete_but_import_journal_incomplete_crash_window(tmp_path, monkeypatch):
+    _use_runtime_dirs(monkeypatch, tmp_path)
+    source = tmp_path / "legacy"
+    (source / "history").mkdir(parents=True)
+    (source / "history" / "plan.json").write_bytes(b"source-history")
+    user_config.save_settings({"onboarding_completed": True})
+    user_config.save_migration_state({"completed": False, "source_path": str(source.resolve())})
+    before = user_config.get_settings_file().read_bytes()
+    app = FastAPI()
+    app.include_router(_backend_settings.router)
+    with TestClient(app) as http:
+        state = http.get("/api/v1/onboarding").json()
+        assert state["completed"] is False
+        assert state["migrationCompleted"] is False
+        assert state["legacyRoot"] == str(source.resolve())
+        assert user_config.get_settings_file().read_bytes() == before
+        retry = http.post("/api/v1/onboarding/complete", json={
+            "skip_chat_setup": True, "import_legacy_data": True, "legacy_root": str(source),
+        })
+        assert retry.status_code == 200
+        assert http.get("/api/v1/onboarding").json()["completed"] is True
+
+
+def test_onboarding_initial_journal_failure_never_publishes_staged_history(tmp_path, monkeypatch):
+    paths = _use_runtime_dirs(monkeypatch, tmp_path)
+    source = tmp_path / "legacy"
+    (source / "history").mkdir(parents=True)
+    (source / "history" / "plan.json").write_bytes(b"source-history")
+    user_config.save_settings({"onboarding_completed": False})
+    user_config.save_provider_config({"providers": {}})
+    original_files = _backend_settings._snapshot_automation_config_files()
+
+    def configuration_failure(*_, **__):
+        assert not (paths["history"] / "plan.json").exists()
+        raise OSError("synthetic settings failure")
+
+    monkeypatch.setattr(_backend_settings, "save_migration_state", configuration_failure)
+    with pytest.raises(OSError, match="synthetic settings failure"):
+        _backend_settings.complete_automation_onboarding({
+            "skip_chat_setup": True, "import_legacy_data": True, "legacy_root": str(source),
+        })
+    assert not (paths["history"] / "plan.json").exists()
+    assert _backend_settings._snapshot_automation_config_files() == original_files
+    assert user_config.load_migration_state()["completed"] is False
+
+
+def test_partial_publication_preserves_concurrent_edits_blocks_changed_source_and_allows_same_source_retry(tmp_path, monkeypatch):
+    paths = _use_runtime_dirs(monkeypatch, tmp_path)
+    source = tmp_path / "source-a"
+    alternate = tmp_path / "source-b"
+    for root in (source, alternate):
+        (root / "history").mkdir(parents=True)
+        for name in ("one.json", "two.json"):
+            (root / "history" / name).write_bytes(root.name.encode())
+    user_config.save_settings({"onboarding_completed": False})
+    user_config.save_provider_config({"providers": {}})
+    original_files = _backend_settings._snapshot_automation_config_files()
+    link = _backend_settings.os.link
+    published = []
+
+    def fail_second_publication(staged, target):
+        if published:
+            raise OSError("synthetic publication failure")
+        link(staged, target)
+        published.append(Path(target))
+        Path(target).write_bytes(b"concurrent-user-edit")
+
+    payload = {"skip_chat_setup": True, "import_legacy_data": True, "legacy_root": str(source)}
+    with monkeypatch.context() as failing:
+        failing.setattr(_backend_settings.os, "link", fail_second_publication)
+        with pytest.raises(HTTPException, match="preserved for safety"):
+            _backend_settings.complete_automation_onboarding(payload)
+    assert published[0].read_bytes() == b"concurrent-user-edit"
+    assert _backend_settings._snapshot_automation_config_files() == original_files
+    partial = user_config.load_migration_state()
+    assert partial["completed"] is False
+    assert partial["source_path"] == str(source.resolve())
+    with pytest.raises(HTTPException) as blocked:
+        _backend_settings.complete_automation_onboarding({**payload, "legacy_root": str(alternate)})
+    assert blocked.value.status_code == 409
+    result = _backend_settings.complete_automation_onboarding(payload)
+    assert result["migration"]["completed"] is True
+    assert published[0].read_bytes() == b"concurrent-user-edit"
+    assert len(list(paths["history"].glob("*.json"))) == 2
+    assert not list(paths["history"].glob(".vantage-import-*"))
+
+
+def test_unsupported_publication_fails_actionably_without_formal_files_or_completion(tmp_path, monkeypatch):
+    paths = _use_runtime_dirs(monkeypatch, tmp_path)
+    source = tmp_path / "legacy"
+    (source / "history").mkdir(parents=True)
+    (source / "history" / "plan.json").write_bytes(b"source-history")
+
+    def unsupported(*_, **__):
+        raise OSError("synthetic filesystem without hardlinks")
+
+    monkeypatch.setattr(_backend_settings.os, "link", unsupported)
+    with pytest.raises(HTTPException, match="filesystem") as error:
+        _backend_settings.complete_automation_onboarding({
+            "skip_chat_setup": True, "import_legacy_data": True, "legacy_root": str(source),
+        })
+    assert error.value.status_code == 500
+    assert not (paths["history"] / "plan.json").exists()
+    assert user_config.load_settings()["onboarding_completed"] is False
+    assert user_config.load_migration_state()["completed"] is False
+
+
+def test_import_destination_without_an_existing_ancestor_fails_without_looping(tmp_path, monkeypatch):
+    probes = [0]
+
+    def unavailable(_):
+        probes[0] += 1
+        if probes[0] > 100:
+            raise RuntimeError("unbounded ancestor lookup")
+        return False
+
+    with pytest.raises(OSError, match="ancestor"):
+        with monkeypatch.context() as missing:
+            missing.setattr(Path, "exists", unavailable)
+            _backend_settings._LegacyHistoryChanges().mkdir(tmp_path / "offline-destination")
 
 
 def test_onboarding_rejects_missing_history_before_changing_configuration(tmp_path, monkeypatch):
