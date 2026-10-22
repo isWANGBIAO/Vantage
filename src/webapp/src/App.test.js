@@ -114,6 +114,12 @@ test('production UI smoke navigates only to current primary page entries', () =>
   assert.ok(smokeEntries.includes('body-analysis'), 'The integrated Body Analysis page must be exercised.');
 });
 
+test('production UI smoke waits for the face report response rather than only the heading', () => {
+  const smokeSource = readFileSync(new URL('../scripts/smoke-unified-ui.cjs', import.meta.url), 'utf8');
+  assert.match(smokeSource, /await waitFor\('dark-circles report response'/);
+  assert.match(smokeSource, /No analysis report yet\./);
+});
+
 test('FaceHistory is not prewarmed invisibly after moving inside Body Analysis', () => {
   const preloadedTabs = appSource.match(/const BACKGROUND_TAB_COMPONENTS = \[([\s\S]*?)\];/)[1];
   assert.equal(preloadedTabs.includes('FaceHistory'), false);

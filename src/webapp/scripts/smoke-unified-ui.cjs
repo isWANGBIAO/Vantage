@@ -371,6 +371,8 @@ async function exerciseUi() {
             && [...document.querySelectorAll('.app-main h2')].some(heading =>
                 heading.getClientRects().length > 0 && heading.textContent.trim() === 'Face Dark Circles History');
     });
+    await waitFor('dark-circles report response', () => [...document.querySelectorAll('.app-main strong')]
+        .some(node => node.getClientRects().length > 0 && node.textContent.trim() === 'No analysis report yet.'));
     assert.ok(calls.some(call => call.method === 'GET' && call.pathname === '/api/v1/face/report'), 'The dark-circles subpage must load its report.');
     await click('.app-nav a[href="#never-stop"]');
     await waitFor('Never Stop embedded page', () => location.hash === '#never-stop'
