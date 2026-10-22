@@ -87,15 +87,21 @@ function requestBackendStatus({
   url,
   env = process.env,
   timeoutMs = 5000,
+  signal,
 } = {}) {
   const connection = resolveBackendConnection({ env });
   const targetUrl = url || buildConnectionUrl(connection, '/api/v1/system/status');
   const target = new URL(targetUrl);
   resolveBackendConnection({ baseUrl: target.origin });
   return new Promise((resolve, reject) => {
-    const request = (target.protocol === 'https:' ? https : http).get(targetUrl, { timeout: timeoutMs }, (response) => {
+    const request = (target.protocol === 'https:' ? https : http).get(targetUrl, { timeout: timeoutMs, signal }, (response) => {
       let body = '';
       response.setEncoding('utf8');
+      response.on('error', reject);
+      response.on('aborted', () => reject(new Error('Backend status response was aborted')));
+      response.on('close', () => {
+        if (!response.complete) reject(new Error('Backend status response ended prematurely'));
+      });
       response.on('data', (chunk) => {
         body += chunk;
       });
@@ -125,16 +131,19 @@ async function waitForBackendStatus({
   intervalMs = 1000,
   requestStatus = requestBackendStatus,
   env = process.env,
+  signal,
 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastError = new Error('Backend status is unavailable');
 
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     try {
-      return await requestStatus({ env });
+      return await requestStatus({ env, signal });
     } catch (error) {
+      signal?.throwIfAborted();
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      await require('node:timers/promises').setTimeout(intervalMs, undefined, { signal });
     }
   }
 
@@ -149,7 +158,7 @@ function terminateBundledBackendProcess(
     killTree,
   } = {},
 ) {
-  if (!childProcess || !childProcess.pid || childProcess.exitCode !== null) {
+  if (!childProcess || !childProcess.pid || childProcess.exitCode !== null || childProcess.signalCode) {
     return;
   }
 
@@ -231,14 +240,25 @@ async function ensureBundledBackendReady({
     stdio: 'ignore',
     windowsHide: true,
   });
-  onSpawned(childProcess);
-
-  if (typeof childProcess.unref === 'function') {
-    childProcess.unref();
-  }
-
+  const readiness = new AbortController();
+  let onError;
+  let onExit;
+  const childFailure = new Promise((_, reject) => {
+    onError = (error) => reject(error);
+    onExit = (code, signal) => reject(new Error(`Bundled backend exited before readiness (${signal || code})`));
+    childProcess.once?.('error', onError);
+    childProcess.once?.('exit', onExit);
+  });
   try {
-    const status = await waitForStatusFn({ timeoutMs: 300000, env });
+    onSpawned(childProcess);
+    if (typeof childProcess.unref === 'function') childProcess.unref();
+    if (childProcess.exitCode !== undefined && childProcess.exitCode !== null) {
+      onExit(childProcess.exitCode, childProcess.signalCode);
+    }
+    const status = await Promise.race([
+      childFailure,
+      waitForStatusFn({ timeoutMs: 300000, env, signal: readiness.signal }),
+    ]);
     return {
       started: true,
       reason: 'launched',
@@ -249,6 +269,10 @@ async function ensureBundledBackendReady({
   } catch (error) {
     terminateBundledBackendProcess(childProcess, { platform, logger });
     throw new Error(`Failed to start bundled backend: ${error.message}`);
+  } finally {
+    readiness.abort();
+    childProcess.removeListener?.('error', onError);
+    childProcess.removeListener?.('exit', onExit);
   }
 }
 
