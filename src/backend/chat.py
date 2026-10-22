@@ -274,7 +274,7 @@ async def chat_endpoint(request: ChatRequest):
         return JSONResponse(status_code=400, content={"error": str(exc)})
 
     run_prompt_args = [
-        "--chat_message", request.message,
+        f"--chat_message={request.message}",
         "--context_file", context_file
     ]
     if request.model:

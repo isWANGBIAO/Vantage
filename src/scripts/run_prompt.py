@@ -603,6 +603,8 @@ def main():
     parser.add_argument("--client_sent_at", help="Client-side timestamp for the current chat message")
     
     args = parser.parse_args()
+    if args.chat_message is not None and not args.chat_message.strip():
+        parser.error("Chat message must not be blank")
     model_override = args.model.strip() if args.model else None
     provider_route = args.provider_route.strip() if args.provider_route else None
     service_tier = args.service_tier.strip() if args.service_tier else None
@@ -634,7 +636,7 @@ def main():
         # Backend-managed plan jobs isolate only their output/context files.
         # Config/history_dir (and therefore usage databases) remain unchanged.
         staging_value = os.environ.get("VANTAGE_ACTION_PLAN_STAGING_DIR")
-        plan_staging_dir = Path(staging_value) if staging_value and not args.chat_message else None
+        plan_staging_dir = Path(staging_value) if staging_value and args.chat_message is None else None
         context_file = (
             plan_staging_dir / "latest_context.json"
             if plan_staging_dir is not None else args.context_file
@@ -643,7 +645,7 @@ def main():
         client = LLMClient()
         
         # === CHAT MODE ===
-        if args.chat_message:
+        if args.chat_message is not None:
             logging.info("Mode: Chat")
             
             # Ensure System Prompt is present if context is empty
