@@ -3,6 +3,7 @@
 import logging
 import os
 import shutil
+import tempfile
 from contextlib import suppress, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -340,7 +341,9 @@ def get_automation_onboarding_state():
         provider_configured = bool(get_provider_chain_config())
         migration = load_migration_state()
         return {
-            "completed": settings["onboarding_completed"],
+            "completed": settings["onboarding_completed"] and not (
+                migration["source_path"] and not migration["completed"]
+            ),
             "launchAtLogin": settings["launch_at_login"],
             "displayLanguage": settings["display_language"],
             "providerConfigured": provider_configured,
@@ -378,16 +381,22 @@ def _validate_legacy_history_source(legacy_root):
     return source_root, source_history, target_history, False
 
 class _LegacyHistoryChanges:
-    """Undo only this request's new files/directories, never pre-existing data."""
+    """Stage imports; never unlink published files that another writer can edit."""
 
     def __init__(self):
         self.files = []
         self.directories = []
+        self.staged = []
+        self.staging = None
+        self.target_root = None
+        self.source_root = None
 
     def mkdir(self, directory):
         missing = []
         parent = directory
         while not parent.exists():
+            if parent == parent.parent:
+                raise OSError("History destination has no available ancestor directory.")
             missing.append(parent)
             parent = parent.parent
         for path in reversed(missing):
@@ -399,26 +408,47 @@ class _LegacyHistoryChanges:
             else:
                 self.directories.append(path)
 
-    @staticmethod
-    def _identity(stat):
-        return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+    def record_file(self, path):
+        self.files.append(path)
 
-    def record_file(self, path, stat):
-        self.files.append((path, self._identity(stat)))
+    def stage_file(self, source_file, destination_file):
+        if self.staging is None:
+            # Same filesystem as the destination: hard-link publication can
+            # expose a complete file atomically without overwriting anything.
+            self.staging = tempfile.TemporaryDirectory(prefix=".vantage-import-", dir=self.target_root)
+        staged_file = Path(self.staging.name) / str(len(self.staged))
+        with source_file.open("rb") as source, staged_file.open("xb") as destination:
+            shutil.copyfileobj(source, destination)
+        self.staged.append((staged_file, destination_file))
+
+    def publish(self):
+        for staged_file, destination_file in self.staged:
+            if destination_file.is_symlink() or not destination_file.resolve().is_relative_to(self.target_root):
+                raise HTTPException(status_code=400, detail="Legacy history destination changed during import.")
+            try:
+                os.link(staged_file, destination_file)
+            except FileExistsError:
+                continue
+            except OSError as error:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Unable to publish the history import. Check destination permissions and filesystem hard-link support, then retry; existing files were not overwritten.",
+                ) from error
+            self.record_file(destination_file)
+
+    def cleanup_staging(self):
+        if self.staging is not None:
+            self.staging.cleanup()
+            self.staging = None
 
     def rollback(self):
-        failed = False
-        for path, identity in reversed(self.files):
-            try:
-                if path.is_symlink() or self._identity(path.stat()) != identity:
-                    # A concurrent writer replaced/changed it; do not delete it.
-                    failed = True
-                    continue
-                path.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError:
-                failed = True
+        # stat-then-unlink is not atomic: even an unchanged inode can be edited
+        # between those calls. Published imports are deliberately retained.
+        failed = bool(self.files)
+        try:
+            self.cleanup_staging()
+        except OSError:
+            failed = True
         for path in reversed(self.directories):
             try:
                 path.rmdir()  # Never recursively remove a directory.
@@ -439,6 +469,8 @@ def _legacy_history_walk_error(error):
 def _copy_missing_legacy_history(source_history: Path, target_history: Path, changes):
     changes.mkdir(target_history)
     target_root = target_history.resolve()
+    changes.target_root = target_root
+    changes.source_root = source_history.parent
     for current_dir, dir_names, file_names in os.walk(
         source_history, followlinks=False, onerror=_legacy_history_walk_error,
     ):
@@ -459,14 +491,7 @@ def _copy_missing_legacy_history(source_history: Path, target_history: Path, cha
             if destination_file.exists():
                 continue
             try:
-                with source_file.open("rb") as source, destination_file.open("xb") as destination:
-                    try:
-                        shutil.copyfileobj(source, destination)
-                    finally:
-                        try:
-                            destination.flush()
-                        finally:
-                            changes.record_file(destination_file, os.fstat(destination.fileno()))
+                changes.stage_file(source_file, destination_file)
             except FileExistsError:
                 continue
             except OSError as error:
@@ -483,13 +508,25 @@ def complete_automation_onboarding(payload: dict):
             return _complete_onboarding(payload, history_changes)
         except Exception as error:
             rollback_failed = history_changes.rollback()
-            _restore_config_files(originals, error)
+            # Publication is preceded by a durable incomplete/source marker.
+            # Keep it intact after any files were published, even if the disk
+            # now rejects every write: replacing it with the original marker
+            # would reopen the wrong-source retry window.
+            restore_files = dict(originals)
+            if history_changes.files:
+                restore_files.pop(get_migration_state_file(), None)
+            _restore_config_files(restore_files, error)
             if rollback_failed:
                 raise HTTPException(
                     status_code=500,
-                    detail="History import failed and some new files could not be rolled back safely. Review the history destination before retrying.",
+                    detail="History import publication failed. Published files were preserved for safety; retry the same source or review the history destination before selecting another source.",
                 ) from error
             raise
+        finally:
+            try:
+                history_changes.cleanup_staging()
+            except OSError:
+                logging.exception("Unable to clean temporary history import staging")
 
 
 def _complete_onboarding(payload: dict, history_changes):
@@ -528,6 +565,13 @@ def _complete_onboarding(payload: dict, history_changes):
         "completed": existing_migration["completed"],
         "sourcePath": existing_migration["source_path"],
     }
+    migration_completion = None
+    if existing_migration["source_path"] and not existing_migration["completed"]:
+        if not should_import or str(validated_source[0]) != existing_migration["source_path"]:
+            raise HTTPException(
+                status_code=409,
+                detail="A previous history import is incomplete. Retry the same source before changing or skipping the source.",
+            )
 
     with _automation_config_lock:
         saved_provider = load_provider_config()
@@ -579,17 +623,16 @@ def _complete_onboarding(payload: dict, history_changes):
             if not same_root and not (existing_migration["completed"] and existing_migration["source_path"] == str(source_root)):
                 _copy_missing_legacy_history(source_history, target_history, history_changes)
                 imported = True
+                save_migration_state({
+                    "completed": False, "source_path": str(source_root), "imported_at": None,
+                })
+                history_changes.publish()
             migration_state = load_migration_state()
             imported_at = migration_state["imported_at"] or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            saved_migration = save_migration_state({
+            migration_completion = {
                 "completed": True,
                 "source_path": str(source_root),
                 "imported_at": imported_at,
-            })
-            migration = {
-                "imported": imported,
-                "completed": saved_migration["completed"],
-                "sourcePath": saved_migration["source_path"],
             }
 
         current_settings = load_settings()
@@ -599,6 +642,15 @@ def _complete_onboarding(payload: dict, history_changes):
             "launch_at_login": payload.get("launch_at_login", current_settings["launch_at_login"]),
             "display_language": payload.get("display_language", current_settings["display_language"]),
         })
+        if migration_completion is not None:
+            # Last persistent operation: a crash or configuration failure before
+            # this point leaves the durable incomplete/source journal intact.
+            saved_migration = save_migration_state(migration_completion)
+            migration = {
+                "imported": imported,
+                "completed": saved_migration["completed"],
+                "sourcePath": saved_migration["source_path"],
+            }
         return {
             "completed": True,
             "launchAtLogin": saved_settings["launch_at_login"],
