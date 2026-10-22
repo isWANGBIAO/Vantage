@@ -461,7 +461,7 @@ class TakePhotoTests(unittest.TestCase):
         self.assertEqual(duplicate_path, first_path)
         mock_save.assert_called_once()
         self.assertIs(mock_save.call_args.args[1], frame)
-        self.assertIn("photo_20260726_142507.jpg", first_path)
+        self.assertIn("photo_20260726_142507_", first_path)
 
     def test_presence_photo_gate_does_not_duplicate_after_out_of_order_minute(self):
         frame = np.zeros((4, 4, 3), dtype=np.uint8)

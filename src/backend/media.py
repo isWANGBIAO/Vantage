@@ -23,6 +23,7 @@ from src.services.person_detection import (
     detect_presence_count,
 )
 from src.utils.desktop_folders import open_directory
+from src.utils.photo_identity import parse_photo_capture_time
 
 from . import camera as _camera
 from . import observability as _observability
@@ -50,19 +51,8 @@ _presence_photo_save_coordinator = PresencePhotoSaveCoordinator()
 
 def _photo_capture_time_from_path(photo_path):
     try:
-        photo_name = os.path.basename(os.fspath(photo_path))
+        return parse_photo_capture_time(photo_path)
     except (TypeError, ValueError):
-        return None
-    match = re.fullmatch(
-        r"photo_(\d{8}_\d{6})\.jpg",
-        photo_name,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    try:
-        return datetime.strptime(match.group(1), "%Y%m%d_%H%M%S")
-    except ValueError:
         return None
 
 def _publish_presence_photo_path(photo_path):
@@ -74,7 +64,7 @@ def _publish_presence_photo_path(photo_path):
         if candidate_time is None:
             return False
         current_time = _photo_capture_time_from_path(current_path)
-        if current_time is not None and candidate_time < current_time:
+        if current_time is not None and candidate_time.timestamp() < current_time.timestamp():
             return False
         _runtime.state.paths["photo"] = photo_path
         return True
