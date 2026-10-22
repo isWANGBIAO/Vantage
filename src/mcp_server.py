@@ -243,6 +243,10 @@ class _MCPCallState:
         with self._lock:
             return self._cancelled
 
+    def mark_cancelled(self) -> None:
+        with self._lock:
+            self._cancelled = True
+
     def attach_client(self, client: VantageClient) -> bool:
         with self._lock:
             cancelled = self._cancelled
@@ -371,7 +375,15 @@ def create_mcp_server(
         try:
             return await asyncio.shield(worker)
         except asyncio.CancelledError:
-            call_state.close_resources(cancelled=True)
+            call_state.mark_cancelled()
+            # requests/urllib3 close() can wait for a read-buffer lock held by
+            # the operation worker. Never take that socket lock on this loop,
+            # or await it before returning cancellation to the MCP caller.
+            cleanup = asyncio.create_task(
+                asyncio.to_thread(call_state.close_resources),
+                name=f"vantage-mcp-cleanup-{operation.name}",
+            )
+            cleanup.add_done_callback(lambda task: None if task.cancelled() else task.exception())
             worker.add_done_callback(_consume_worker_result)
             raise
         except OperationUnavailableError as error:
@@ -408,9 +420,6 @@ def create_mcp_server(
                 "Vantage could not complete this operation due to an internal error. "
                 "Check the Vantage logs and retry."
             )
-        finally:
-            call_state.close_resources()
-
     async def list_resources(
         _context: ServerRequestContext,
         _params: types.PaginatedRequestParams | None,
