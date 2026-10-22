@@ -245,7 +245,10 @@ def update_storage_stats(
 
                     snapshot = scanners[key].step()
                     sizes[key] = snapshot.total_size
-                    scan_truncated = scan_truncated or not snapshot.complete
+                    scan_truncated = (
+                        scan_truncated or not snapshot.complete
+                        or bool(getattr(snapshot, "skipped_entries", 0))
+                    )
 
                 _runtime.state.photos_size = sizes["photos"]
                 _runtime.state.screenshots_size = sizes["screenshots"]
@@ -302,14 +305,14 @@ def find_latest_file_recursive(
         )
 
     while pending_dirs:
+        if (max_entries and visited_count >= max_entries) or (deadline and time.monotonic() > deadline):
+            mark_truncated(f"Latest media scan budget reached under {directory}; returning best match so far")
+            break
         pending_dirs.sort(key=lambda item: item[0], reverse=True)
-        directory_mtime, current_dir = pending_dirs.pop(0)
+        _, current_dir = pending_dirs.pop(0)
         if current_dir in visited_dirs:
             continue
         visited_dirs.add(current_dir)
-
-        if latest_file and directory_mtime <= latest_time:
-            continue
 
         file_candidates = []
         directory_candidates = []
@@ -326,8 +329,10 @@ def find_latest_file_recursive(
                             stat_result = entry.stat(follow_symlinks=False)
                             file_candidates.append((stat_result.st_mtime, entry.path))
                     except OSError:
+                        truncated = True
                         continue
         except OSError:
+            truncated = True
             continue
 
         file_candidates.sort(key=lambda item: item[0], reverse=True)
@@ -351,8 +356,8 @@ def find_latest_file_recursive(
                 latest_file = full_path
 
         for mtime, subdir in directory_candidates:
-            if latest_file and mtime <= latest_time:
-                continue
+            # Directory mtime orders exploration only: modifying a descendant
+            # does not update its ancestors, so it cannot bound file mtimes.
             pending_dirs.append((mtime, subdir))
     find_latest_file_recursive.last_truncated = truncated
     return latest_file
