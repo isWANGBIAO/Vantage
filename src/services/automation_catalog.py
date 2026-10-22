@@ -147,6 +147,10 @@ def _provider_entry_schema() -> dict[str, Any]:
             "last_refreshed_at": _nullable_string("Timestamp of the last model catalog refresh, or null if it has not been refreshed."),
             "context_window_tokens": _integer("Optional provider context-window capacity in tokens.", minimum=1),
             "max_output_tokens": _integer("Optional provider maximum output-token limit.", minimum=1),
+            "model_capabilities": {
+                "type": "object", "description": "Discovered supported parameters by model; null means unknown, [] means none.",
+                "additionalProperties": {"type": ["array", "null"], "items": {"type": "string"}},
+            },
         },
     }
 

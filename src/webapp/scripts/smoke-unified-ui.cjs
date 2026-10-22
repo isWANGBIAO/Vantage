@@ -409,6 +409,15 @@ async function exerciseProviderSettings() {
         if (edit === 'rename') assert.equal(await evaluate(() => document.querySelector('input[aria-label="Provider Route"]')?.value), 'alpha-renamed');
     }
     console.log('PASS late model discovery cannot recreate deleted or overwrite edited providers');
+    await resetProviderSettings();
+    await click('.settings-icon-button[title="Refresh Models"]');
+    const respond = await takePendingDiscovery();
+    respond({ models: ['alpha-refreshed'], model_capabilities: { 'alpha-refreshed': ['temperature', 'top_p'] } });
+    await waitFor('current provider discovered', () => document.querySelector('.settings-provider-model-select')?.value === 'alpha-refreshed');
+    await click('.settings-save-button');
+    await waitForNetworkIdle();
+    assert.deepEqual(providerConfig.providers.alpha.model_capabilities, { 'alpha-refreshed': ['temperature', 'top_p'] });
+    console.log('PASS discovered model capabilities are submitted and survive the saved state');
     await click('.settings-sidebar button', 'General');
 }
 

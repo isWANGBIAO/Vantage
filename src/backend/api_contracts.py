@@ -108,6 +108,7 @@ class MaskedProvider(ExtensibleModel):
     last_refreshed_at: str | None = None
     context_window_tokens: int | None = None
     max_output_tokens: int | None = None
+    model_capabilities: dict[str, list[str] | None] | None = None
 
 
 class ModelProfile(ExtensibleModel):

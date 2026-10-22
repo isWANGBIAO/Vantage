@@ -1536,6 +1536,31 @@
               ],
               "default": null,
               "title": "Max Output Tokens"
+            },
+            "model_capabilities": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Capabilities"
             }
           },
           "required": [
@@ -2911,6 +2936,19 @@
                     "type": "integer",
                     "description": "Optional provider maximum output-token limit.",
                     "minimum": 1
+                  },
+                  "model_capabilities": {
+                    "type": "object",
+                    "description": "Discovered supported parameters by model; null means unknown, [] means none.",
+                    "additionalProperties": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    }
                   }
                 }
               }

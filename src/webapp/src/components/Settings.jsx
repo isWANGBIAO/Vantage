@@ -354,6 +354,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       if (key === 'model') {
         nextProvider.models = normalizeProviderModels(nextProvider);
       }
+      if (key === 'base_url' || key === 'api_key') nextProvider.model_capabilities = {};
       return {
         ...providerConfig,
         providers: {
@@ -507,6 +508,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
               ...provider,
               model: nextSelection.model,
               models: nextSelection.models,
+              model_capabilities: payload?.model_capabilities || {},
               last_refreshed_at: new Date().toISOString(),
             }),
           },

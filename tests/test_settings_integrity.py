@@ -1,6 +1,7 @@
 """Strict, non-destructive settings HTTP contracts using synthetic configuration."""
 
 import pytest
+import requests
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -8,6 +9,7 @@ from src.backend import settings
 from src.core.config import Config
 from src.services.automation_catalog import get_operation
 from src.services.vantage_client import ArgumentValidationError, _validate_schema
+from src.services.llm_client import LLMClient
 
 
 @pytest.fixture
@@ -89,3 +91,51 @@ def test_route_rename_allows_explicit_new_or_explicitly_cleared_credentials(sett
     saved = json.loads((root / "providers.json").read_text(encoding="utf-8"))
     assert set(saved["providers"]) == {"renamed"}
     assert saved["providers"]["renamed"]["api_key"] == key
+
+
+@pytest.mark.parametrize("capabilities", [["temperature", "top_p"], [], None])
+def test_persisted_model_capabilities_survive_http_and_control_reasoning(settings_http, monkeypatch, capabilities):
+    http, _root = settings_http
+    monkeypatch.setattr(Config, "load_env", lambda: None)
+    updated = http.put("/api/v1/settings", json={"provider_config": {
+        "selected_provider": "primary", "providers": {"primary": {
+            "enabled": True, "api_key": "********", "base_url": "https://example.invalid/v1",
+            "model": "synthetic-model", "models": ["synthetic-model"],
+            "model_capabilities": {"synthetic-model": capabilities},
+        }},
+    }})
+    assert updated.status_code == 200, updated.text
+    assert http.get("/api/v1/settings").json()["provider"]["providers"]["primary"]["model_capabilities"] == {
+        "synthetic-model": capabilities,
+    }
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: pytest.fail("Configured capabilities must not need discovery"))
+    client = LLMClient()
+    assert client.get_model_catalog()[0]["model_capabilities"]["synthetic-model"] == capabilities
+    sent = []
+
+    def post(_url, **kwargs):
+        sent.append(kwargs["json"])
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b'{"choices":[{"message":{"content":"synthetic answer"}}]}'
+        return response
+
+    monkeypatch.setattr(requests, "post", post)
+    client._post_with_failover(
+        {"model": "synthetic-model", "reasoning_effort": "high", "messages": [{"role": "user", "content": "synthetic"}]},
+        stream=False, timeout=1, requested_model="synthetic-model", requested_provider_route="primary",
+    )
+    assert ("reasoning_effort" in sent[0]) is (capabilities is None)
+
+
+def test_changing_provider_destination_does_not_inherit_cached_capabilities(settings_http):
+    http, _root = settings_http
+    first = http.put("/api/v1/settings", json={"provider_config": {"providers": {"primary": {
+        "model_capabilities": {"synthetic-model": ["temperature"]},
+    }}}})
+    assert first.status_code == 200, first.text
+    moved = http.put("/api/v1/settings", json={"provider_config": {"providers": {"primary": {
+        "api_key": "synthetic-other-key", "base_url": "https://other.invalid/v1",
+    }}}})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["provider"]["providers"]["primary"]["model_capabilities"] == {}

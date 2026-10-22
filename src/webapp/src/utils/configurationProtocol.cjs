@@ -83,6 +83,7 @@ function toBackendSettingsPayload(payload) {
             'route', 'name', 'type', 'enabled', 'api_key', 'base_url', 'model', 'models', 'last_refreshed_at',
             'context_window_tokens',
             'max_output_tokens',
+            'model_capabilities',
         ];
         const normalizedProviderConfig = { ...providerConfig };
         if (Object.prototype.hasOwnProperty.call(providerConfig, 'providers')) {

@@ -9,6 +9,7 @@ import { Buffer } from 'node:buffer';
 const require = createRequire(import.meta.url);
 const { loadProviderConfig, sanitizeProviderConfig, saveProviderConfig } = require('./onboardingConfig.cjs');
 const { ensureBundledBackendReady } = require('./backendRuntime.cjs');
+const { toBackendSettingsPayload } = require('./configurationProtocol.cjs');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(tmpdir(), 'vantage-provider-safety-'));
@@ -136,4 +137,13 @@ test('provider load/save preserves selected and backup capacities and supports e
   assert.equal(Object.hasOwn(removed.providers.primary, 'context_window_tokens'), false);
   assert.equal(Object.hasOwn(removed.providers.primary, 'max_output_tokens'), false);
   assert.equal(removed.providers.backup.context_window_tokens, 32768);
+});
+
+test('provider capabilities retain known empty and unknown states through bootstrap and submission', t => {
+  const { runtimePaths } = fixture(t);
+  const modelCapabilities = { known: ['temperature', 'top_p'], empty: [], unknown: null };
+  saveProviderConfig(runtimePaths, { providers: { primary: { model_capabilities: modelCapabilities } } });
+  const providerConfig = loadProviderConfig(runtimePaths);
+  assert.deepEqual(providerConfig.providers.primary.model_capabilities, modelCapabilities);
+  assert.deepEqual(toBackendSettingsPayload({ providerConfig }).provider_config.providers.primary.model_capabilities, modelCapabilities);
 });

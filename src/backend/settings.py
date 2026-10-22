@@ -135,6 +135,7 @@ def _masked_settings_payload():
                 "last_refreshed_at",
                 "context_window_tokens",
                 "max_output_tokens",
+                "model_capabilities",
             )
             if key in entry
         }
@@ -190,6 +191,10 @@ def _prepare_provider_configuration(payload, current_provider):
         for route, submitted_entry in submitted_providers.items():
             old_entry = current_provider.get("providers", {}).get(route, {})
             entry = {**old_entry, **submitted_entry}
+            if ("model_capabilities" not in submitted_entry
+                    and _provider_destination(entry.get("base_url", ""))
+                    != _provider_destination(old_entry.get("base_url", ""))):
+                entry["model_capabilities"] = {}
             entry["api_key"] = _configuration_api_key(
                 submitted_entry.get("api_key"), entry.get("base_url", ""),
                 old_entry.get("api_key", ""), old_entry.get("base_url", ""),
