@@ -33,6 +33,10 @@ class _FakeClock:
 
     def sleep(self, seconds):
         self.current += max(0.0, seconds)
+        # A running synthetic camera publishes a new frame while inference is
+        # throttled. Reusing one unchanged timestamp is now intentionally stale.
+        if _backend_runtime.state.latest_frame is not None:
+            _backend_runtime.state.latest_frame_published_at = self.current
 
 
 class _TimestampedFrame:
@@ -80,6 +84,15 @@ class FaceLiveEndpointTests(unittest.TestCase):
         self.original_paths = dict(_backend_runtime.state.paths)
         self.original_photos_path = _backend_runtime.state.photos_path
         self.original_is_running = _backend_runtime.state.is_running
+        self.original_latest_frame_observed_at = _backend_runtime.state.latest_frame_observed_at
+        _backend_runtime.state.latest_frame_observed_at = None
+        _backend_runtime.state.latest_frame_published_at = 0.0
+        capture_clock = patch.object(
+            _backend_camera.time, "monotonic",
+            side_effect=lambda: _backend_runtime.state.latest_frame_published_at or 0.0,
+        )
+        capture_clock.start()
+        self.addCleanup(capture_clock.stop)
 
     def _restore_paths_in_place(self):
         self.assertIs(_backend_runtime.state.paths, self.original_paths_object)
@@ -91,6 +104,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
         _backend_runtime.state.camera = self.original_camera
         _backend_runtime.state.latest_frame = self.original_latest_frame
         _backend_runtime.state.latest_frame_published_at = self.original_latest_frame_published_at
+        _backend_runtime.state.latest_frame_observed_at = self.original_latest_frame_observed_at
         _backend_runtime.state.latest_live_face_score = self.original_latest_live_face_score
         _backend_runtime.state.face_live_last_seen_at = self.original_face_live_last_seen_at
         _backend_runtime.state.show_person_box = self.original_show_person_box
@@ -185,6 +199,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
 
     def test_get_face_live_returns_latest_realtime_score_payload(self):
         _backend_runtime.state.camera = _DummyCamera(True)
+        _backend_runtime.state.latest_frame = _DummyFrame()
         _backend_runtime.state.live_face_points = [
             {"timestamp": 171.0, "datetime": "2026-03-14 21:01:11", "score": 29.8},
             {"timestamp": 172.0, "datetime": "2026-03-14 21:01:12", "score": 30.2},
@@ -669,10 +684,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
             patch.object(
                 _backend_media._presence_photo_save_coordinator,
                 "submit",
-                side_effect=lambda *_args, **kwargs: (
-                    kwargs["on_success"](saved_path),
-                    True,
-                )[1],
+                return_value=True,
             ) as submit_photo,
             patch.object(_backend_camera, "get_location", create=True) as get_location,
             patch.object(_backend_face.time, "monotonic", return_value=10.0),
@@ -681,6 +693,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
             _backend_camera.face_detection_loop()
 
         self.assertIs(submit_photo.call_args.args[0], frame)
+        submit_photo.call_args.kwargs["on_success"](saved_path)
         self.assertEqual(submit_photo.call_args.args[1], "photos")
         self.assertIs(
             submit_photo.call_args.kwargs["location_provider"],
@@ -755,10 +768,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
             patch.object(
                 _backend_media._presence_photo_save_coordinator,
                 "submit",
-                side_effect=lambda *_args, **kwargs: (
-                    kwargs["on_success"]("photo_20260726_142500.jpg"),
-                    True,
-                )[1],
+                return_value=True,
             ) as submit_photo,
             patch.object(_backend_camera, "get_location", create=True),
             patch("builtins.print"),
@@ -766,6 +776,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
             _backend_camera.face_detection_loop()
 
         self.assertEqual(sample_count, 60)
+        submit_photo.call_args.kwargs["on_success"]("photo_20260726_142500.jpg")
         submit_photo.assert_called_once()
         self.assertEqual(
             _backend_runtime.state.paths["photo"],
@@ -1002,8 +1013,6 @@ class FaceLiveEndpointTests(unittest.TestCase):
             submit_attempts += 1
             if submit_attempts == 1:
                 kwargs["on_failure"](OSError("disk unavailable"))
-            else:
-                kwargs["on_success"]("photo_20260726_142501.jpg")
             return True
 
         with (
@@ -1028,6 +1037,7 @@ class FaceLiveEndpointTests(unittest.TestCase):
             _backend_camera.face_detection_loop()
 
         self.assertEqual(boxes_seen_before_retry, [(5, 6, 7, 8)])
+        submit_photo_mock.call_args.kwargs["on_success"]("photo_20260726_142501.jpg")
         self.assertEqual(submit_photo_mock.call_count, 2)
         self.assertEqual(
             _backend_runtime.state.paths["photo"],

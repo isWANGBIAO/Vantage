@@ -1021,6 +1021,7 @@ class TakePhotoTests(unittest.TestCase):
                     side_effect=detect_live_presence,
                 ),
                 patch.object(_backend_camera.time, "sleep"),
+                patch.object(_backend_camera.time, "monotonic", return_value=0.0),
                 patch("builtins.print"),
             ):
                 _backend_camera.face_detection_loop()

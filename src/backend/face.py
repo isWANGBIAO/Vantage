@@ -256,7 +256,7 @@ async def get_face_live(active: bool = False):
     if active:
         _camera.mark_face_live_viewer_active()
 
-    camera_online = _camera._camera_online()
+    camera_online = _camera._camera_online() and _camera.has_fresh_camera_frame()
     if not camera_online:
         return {
             "camera_online": False,
