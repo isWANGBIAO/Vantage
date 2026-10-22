@@ -47,6 +47,13 @@
     "vite": "^7.3.7",
     "wait-on": "^8.0.0"
   },
+  "overrides": {
+    "@electron/get@3.1.0": {
+      "global-agent@3.0.0": {
+        "roarr": "3.3.0"
+      }
+    }
+  },
   "build": {
     "appId": "com.vantage.app",
     "productName": "Vantage",
