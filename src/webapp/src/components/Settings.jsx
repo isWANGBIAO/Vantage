@@ -81,6 +81,7 @@ function ModelSelectControl({
   value,
   models = [],
   placeholder,
+  label,
   onChange,
 }) {
   const hasDiscoveredModels = models.length > 0;
@@ -89,6 +90,7 @@ function ModelSelectControl({
   if (hasDiscoveredModels && options.length > 0) {
     return (
       <select
+        aria-label={label}
         className="settings-input settings-provider-model-select"
         value={value || options[0]}
         onChange={(event) => onChange(event.target.value)}
@@ -104,6 +106,7 @@ function ModelSelectControl({
 
   return (
     <input
+      aria-label={label}
       className="settings-input settings-provider-model-select"
       value={value}
       placeholder={placeholder}
@@ -366,6 +369,11 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
 
     const providers = { ...form.providerConfig.providers };
     const current = createProviderEntry(currentProviderRoute, providers[currentProviderRoute]);
+    if (current.api_key === '********') {
+      setProviderRouteDraft(currentProviderRoute);
+      setSaveStatus(t('settings.provider.rename_requires_key'));
+      return;
+    }
     delete providers[currentProviderRoute];
     const safeRoute = buildProviderRoute(normalizedRoute, providers);
     providers[safeRoute] = createProviderEntry(safeRoute, {
@@ -666,6 +674,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     <section className="settings-section">
       <SettingsRow label={t('settings.general.language')}>
         <select
+          aria-label={t('settings.general.language')}
           className="settings-input"
           value={form.displayLanguage}
           onChange={(event) => setForm((prev) => ({ ...prev, displayLanguage: event.target.value }))}
@@ -766,6 +775,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           </div>
           <SettingsRow label={t('settings.provider.name')}>
             <input
+              aria-label={t('settings.provider.name')}
               className="settings-input"
               value={currentProvider.name}
               onChange={(event) => updateProvider('name', event.target.value)}
@@ -773,6 +783,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           </SettingsRow>
           <SettingsRow label={t('settings.provider.route')}>
             <input
+              aria-label={t('settings.provider.route')}
               className="settings-input"
               value={providerRouteDraft}
               onChange={(event) => setProviderRouteDraft(event.target.value)}
@@ -786,6 +797,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           </SettingsRow>
           <SettingsRow label={t('settings.provider.base_url')}>
             <input
+              aria-label={t('settings.provider.base_url')}
               className="settings-input"
               value={currentProvider.base_url}
               onChange={(event) => updateProvider('base_url', event.target.value)}
@@ -794,6 +806,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           <SettingsRow label={t('settings.provider.api_key')}>
             <span className="settings-secret-input">
               <input
+                aria-label={t('settings.provider.api_key')}
                 className="settings-input"
                 type={showApiKey ? 'text' : 'password'}
                 value={currentProvider.api_key}
@@ -812,6 +825,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           <SettingsRow label={t('settings.provider.model')}>
             <span className="settings-secret-input">
               <ModelSelectControl
+                label={t('settings.provider.model')}
                 value={currentProvider.model}
                 models={currentProvider.models}
                 placeholder="gpt-5.5"
@@ -877,6 +891,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         ) : null}
         <SettingsRow label={t('settings.voice_provider.base_url')}>
           <input
+            aria-label={t('settings.voice_provider.base_url')}
             className="settings-input"
             value={effectiveBaseUrl}
             disabled={inheritAi}
@@ -887,6 +902,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         <SettingsRow label={t('settings.voice_provider.api_key')}>
           <span className="settings-secret-input">
             <input
+              aria-label={t('settings.voice_provider.api_key')}
               className="settings-input"
               type={showVoiceApiKey ? 'text' : 'password'}
               value={effectiveApiKey}
@@ -910,6 +926,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         <SettingsRow label={t('settings.voice_provider.model')}>
           <span className="settings-secret-input">
             <ModelSelectControl
+              label={t('settings.voice_provider.model')}
               value={form.voiceModel}
               models={form.voiceModels}
               placeholder={DEFAULT_VOICE_MODEL}

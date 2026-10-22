@@ -61,3 +61,31 @@ def test_display_language_http_uses_its_catalog_contract_before_writing(settings
     response = http.put("/api/v1/settings/display-language", json={"display_language": value})
     assert response.status_code == 422, response.text
     assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+
+
+def test_route_rename_cannot_save_a_mask_as_if_it_were_a_new_routes_credential(settings_http):
+    http, root = settings_http
+    before = {path.name: path.read_bytes() for path in root.iterdir()}
+    response = http.put("/api/v1/settings", json={"provider_config": {
+        "selected_provider": "renamed", "providers": {"renamed": {
+            "api_key": "********", "base_url": "https://example.invalid/v1", "enabled": True,
+        }},
+    }})
+    assert response.status_code == 422, response.text
+    assert "explicit API key" in response.json()["detail"]
+    assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+
+
+@pytest.mark.parametrize("key", ["synthetic-new-key", ""])
+def test_route_rename_allows_explicit_new_or_explicitly_cleared_credentials(settings_http, key):
+    http, root = settings_http
+    response = http.put("/api/v1/settings", json={"provider_config": {
+        "selected_provider": "renamed", "providers": {"renamed": {
+            "api_key": key, "base_url": "https://example.invalid/v1", "enabled": True,
+        }},
+    }})
+    assert response.status_code == 200, response.text
+    import json
+    saved = json.loads((root / "providers.json").read_text(encoding="utf-8"))
+    assert set(saved["providers"]) == {"renamed"}
+    assert saved["providers"]["renamed"]["api_key"] == key

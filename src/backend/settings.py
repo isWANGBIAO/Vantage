@@ -161,6 +161,11 @@ def _configuration_api_key(submitted_key, base_url, saved_key, saved_base_url):
     submitted_key = None if submitted_key is None else str(submitted_key).strip()
     if submitted_key == "":
         return ""
+    if submitted_key == "********" and not saved_key:
+        raise HTTPException(
+            status_code=422,
+            detail="This provider has no saved credential. Enter an explicit API key, or an explicit empty key to clear it.",
+        )
     destination = _provider_destination(base_url)
     if (saved_key and submitted_key in (None, "********")
             and (destination is None or destination != _provider_destination(saved_base_url))):
