@@ -2,6 +2,48 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
+
+@pytest.mark.parametrize("workflow_name", ["ci.yml", "codeql.yml"])
+def test_verification_workflows_allow_manual_runs_without_bypass_inputs(workflow_name):
+    workflow = Path(".github/workflows", workflow_name).read_text(encoding="utf-8")
+    events = workflow.split("\non:\n", maxsplit=1)[1].split(
+        "\npermissions:\n", maxsplit=1
+    )[0]
+
+    assert events.startswith("  workflow_dispatch:\n")
+    assert events.count("  workflow_dispatch:\n") == 1
+    dispatch = events.split("  workflow_dispatch:\n", maxsplit=1)[1]
+    assert not dispatch.startswith("    "), "Manual runs must not accept bypass inputs"
+
+
+@pytest.mark.parametrize(
+    ("workflow_name", "existing_events", "permissions"),
+    [
+        (
+            "ci.yml",
+            "  push:\n    branches: [main]\n  pull_request:\n",
+            "  contents: read\n",
+        ),
+        (
+            "codeql.yml",
+            '  push:\n    branches: [main]\n  pull_request:\n'
+            '  schedule:\n    - cron: "29 2 * * 1"\n',
+            "  actions: read\n  contents: read\n  security-events: write\n",
+        ),
+    ],
+)
+def test_manual_verification_preserves_existing_events_and_permissions(
+    workflow_name, existing_events, permissions
+):
+    workflow = Path(".github/workflows", workflow_name).read_text(encoding="utf-8")
+    events, remainder = workflow.split("\non:\n", maxsplit=1)[1].split(
+        "\npermissions:\n", maxsplit=1
+    )
+    assert events.replace("  workflow_dispatch:\n", "") == existing_events
+    assert remainder.split("\njobs:\n", maxsplit=1)[0] == permissions
+
 
 def test_python_ci_step_isolates_vantage_runtime_dirs():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
