@@ -434,11 +434,11 @@ def run_action_plan_round(
         attempt_errors = []
         stream_printer = build_action_plan_stream_printer(section, emit=emit)
 
-        def attempt_callback(tag, content):
+        def attempt_callback(tag, content, *, errors=attempt_errors, printer=stream_printer):
             if tag == "error":
-                attempt_errors.append(content)
+                errors.append(content)
             else:
-                stream_printer(tag, content)
+                printer(tag, content)
 
         try:
             result = client.chat(
