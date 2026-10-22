@@ -431,17 +431,9 @@ def _format_time_error_location(row_index, column_name):
 def time_to_hour(time_value, row_index=None, column_name=None):
     if pd.isna(time_value):
         return None
-    pattern = r"(?:(\d+)小时)(?:(\d+)分)?"
-    match = re.search(pattern, str(time_value))
-    if match:
-        hours = int(match.group(1)) if match.group(1) else 0
-        minutes = int(match.group(2)) if match.group(2) else 0
-        total_hours = hours + minutes / 60.0
-        if total_hours > 24 or total_hours < 0:
-            location = _format_time_error_location(row_index, column_name)
-            print("时间格式错误：", time_value, location)
-            return None
-        return total_hours
+    total_hours = DataLoader._duration_text_to_hours(time_value)
+    if isinstance(total_hours, (int, float)) and math.isfinite(total_hours) and 0 <= total_hours <= 24:
+        return float(total_hours)
     location = _format_time_error_location(row_index, column_name)
     print("时间格式错误：", time_value, location)
     return None
@@ -454,6 +446,7 @@ def load_time_data(path=None):
 
 
 def plot_weight_and_body_fat_rate(data_frame, recent_days=30, output_dir=None):
+    data_frame = valid_dated_measurements(data_frame)
     fig, ax1 = plt.subplots(figsize=get_figsize("weight", recent_days))
 
     filtered_df_weight = data_frame.dropna(subset=["体重"])
@@ -555,8 +548,16 @@ def plot_weight_and_body_fat_rate(data_frame, recent_days=30, output_dir=None):
     save_figure(fig, output_dir, f"weight_bodyfat_{recent_days}d")
 
 
+def valid_dated_measurements(data_frame):
+    frame = data_frame.copy()
+    frame["日期"] = pd.to_datetime(frame["日期"], errors="coerce", format="mixed")
+    return frame.dropna(subset=["日期"]).sort_values("日期", kind="stable")
+
+
 def compute_time_allocation_with_warnings(data_frame):
     filtered_df = data_frame.dropna(subset=["睡眠时间", "手机屏幕\n使用时间"]).copy()
+    if "日期" in filtered_df.columns:
+        filtered_df = filtered_df.sort_values("日期", kind="stable", key=lambda values: pd.to_datetime(values, errors="coerce", format="mixed"))
     if filtered_df.empty:
         raise ValueError("时间数据为空，无法绘图")
 
@@ -566,6 +567,9 @@ def compute_time_allocation_with_warnings(data_frame):
     skipped_rows = []
 
     for index, row in filtered_df.iterrows():
+        if "日期" in filtered_df.columns and pd.isna(pd.to_datetime(row["日期"], errors="coerce")):
+            skipped_rows.append({"日期": row["日期"], "睡眠时间": row["睡眠时间"], "手机屏幕使用时间": row["手机屏幕\n使用时间"], "原因": "日期无效"})
+            continue
         sleep_hours = time_to_hour(row["睡眠时间"], row_index=index, column_name="睡眠时间")
         screen_hours = time_to_hour(
             row["手机屏幕\n使用时间"],
@@ -608,6 +612,8 @@ def compute_time_allocation_with_warnings(data_frame):
         raise ValueError("有效时间数据为空，无法绘图")
 
     filtered_df = filtered_df.loc[valid_indices].copy()
+    if "日期" in filtered_df.columns:
+        filtered_df["日期"] = pd.to_datetime(filtered_df["日期"], format="mixed")
     valid_sleep_hours = np.array(valid_sleep_hours, dtype=float)
     valid_screen_hours = np.array(valid_screen_hours, dtype=float)
     remaining_hours = 24 - (valid_sleep_hours + valid_screen_hours)
@@ -1538,17 +1544,28 @@ def _build_running_export_text(
     return "，".join(parts)
 
 
+def _read_running_exports(directory, pattern, required_columns):
+    frames = []
+    for csv_path in sorted(directory.glob(pattern)):
+        try:
+            frame = pd.read_csv(csv_path, encoding="utf-8-sig")
+        except (OSError, ValueError, UnicodeError) as error:
+            print(f"Skipping unreadable running export {csv_path.name}: {type(error).__name__}")
+            continue
+        if not frame.empty and set(required_columns).issubset(frame.columns):
+            frame["_export_file"] = csv_path.name
+            frame["_export_row"] = range(2, len(frame) + 2)
+            frames.append(frame)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=required_columns)
+
+
 def load_mi_fitness_running_log_frame(data_dir=None, date_col="日期", source_col="运动"):
     columns = [date_col, source_col]
-    csv_path = (
+    export_directory = (
         _resolve_running_data_root(data_dir, required_dir="mi_fiteness_data")
         / "mi_fiteness_data"
-        / "20260416_881116692_MiFitness_hlth_center_sport_record.csv"
     )
-    if not csv_path.exists():
-        return pd.DataFrame(columns=columns)
-
-    raw = pd.read_csv(csv_path, encoding="utf-8-sig")
+    raw = _read_running_exports(export_directory, "*hlth_center_sport_record*.csv", ["Category", "Value"])
     if raw.empty or "Category" not in raw.columns or "Value" not in raw.columns:
         return pd.DataFrame(columns=columns)
 
@@ -1558,7 +1575,11 @@ def load_mi_fitness_running_log_frame(data_dir=None, date_col="日期", source_c
         try:
             payload = json.loads(row["Value"]) if pd.notna(row["Value"]) else {}
         except (TypeError, ValueError, json.JSONDecodeError):
-            payload = {}
+            print(f"Skipping running export {row.get('_export_file')}:{row.get('_export_row')}: invalid JSON")
+            continue
+        if not isinstance(payload, dict):
+            print(f"Skipping running export {row.get('_export_file')}:{row.get('_export_row')}: expected JSON object")
+            continue
 
         started_at = _unix_seconds_to_local_datetime(payload.get("start_time") or row.get("Time"))
         if pd.isna(started_at):
@@ -1597,14 +1618,13 @@ def load_mi_fitness_running_log_frame(data_dir=None, date_col="日期", source_c
     if result.empty:
         return result
     result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
-    return result.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
+    return result.dropna(subset=[date_col]).drop_duplicates(subset=[date_col], keep="last").sort_values(by=date_col).reset_index(drop=True)
 
 
 def load_zepp_running_log_frame(data_dir=None, date_col="日期", source_col="运动"):
     columns = [date_col, source_col]
     sport_dir = _resolve_running_data_root(data_dir, required_dir="zepplift_data") / "zepplift_data" / "SPORT"
     master_path = sport_dir / "SPORT_running_master.csv"
-    csv_path = sport_dir / "SPORT_1776331608562.csv"
 
     if master_path.exists():
         raw = pd.read_csv(master_path, encoding="utf-8-sig")
@@ -1647,10 +1667,7 @@ def load_zepp_running_log_frame(data_dir=None, date_col="日期", source_col="�
         result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
         return result.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
 
-    if not csv_path.exists():
-        return pd.DataFrame(columns=columns)
-
-    raw = pd.read_csv(csv_path, encoding="utf-8-sig")
+    raw = _read_running_exports(sport_dir, "SPORT_*.csv", ["type"])
     if raw.empty or "type" not in raw.columns:
         return pd.DataFrame(columns=columns)
 
@@ -1685,7 +1702,7 @@ def load_zepp_running_log_frame(data_dir=None, date_col="日期", source_col="�
     if result.empty:
         return result
     result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
-    return result.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
+    return result.dropna(subset=[date_col]).drop_duplicates(subset=[date_col], keep="last").sort_values(by=date_col).reset_index(drop=True)
 
 
 def load_app_running_log_frame(data_dir=None, date_col="日期", source_col="运动"):
@@ -1800,7 +1817,7 @@ def _build_running_dashboard_frames(running_metrics, date_col="日期"):
             excluded_rows.append(_build_running_excluded_row(row, reasons, date_col=date_col))
 
     primary_df = base.loc[keep_primary_mask].copy().reset_index(drop=True)
-    heart_df = primary_df.dropna(subset=["heart_rate_bpm"]).copy().reset_index(drop=True)
+    heart_df = primary_df.copy().reset_index(drop=True)
     form_df = primary_df.dropna(subset=["duration_min", "cadence_spm", "stride_m"]).copy().reset_index(drop=True)
     hrc_df = primary_df.dropna(subset=["heart_rate_bpm", "HRC_m_per_beat"]).copy().reset_index(drop=True)
     return (

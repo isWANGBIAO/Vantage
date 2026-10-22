@@ -73,7 +73,8 @@ def _to_chart_number(value, digits=2):
 def _to_chart_date(value):
     if value is None or pd.isna(value):
         return None
-    return pd.to_datetime(value).strftime('%Y-%m-%d')
+    parsed = pd.to_datetime(value, errors='coerce')
+    return None if pd.isna(parsed) else parsed.strftime('%Y-%m-%d')
 
 
 def _format_total_minutes(value):
@@ -470,6 +471,7 @@ def _calculate_date_interval_points(date_series):
 
 
 def _build_weight_bodyfat_dashboard_chart(data_frame):
+    data_frame = plot_module.valid_dated_measurements(data_frame)
     filtered_df_weight = data_frame.dropna(subset=['体重']).copy().sort_values('日期')
     if filtered_df_weight.empty:
         raise ValueError('体重数据为空')
@@ -1275,9 +1277,9 @@ def _build_running_dashboard_chart(running_df):
     pace_df = running_df.dropna(subset=['pace_min_per_km']).copy()
     heart_df = dashboard_frames.get('running-heart')
     if heart_df is None:
-        heart_df = running_df.dropna(subset=['heart_rate_bpm']).copy()
+        heart_df = running_df.copy()
     else:
-        heart_df = heart_df.copy().dropna(subset=['heart_rate_bpm']).sort_values('日期')
+        heart_df = heart_df.copy().sort_values('日期')
     distance_df = running_df.dropna(subset=['distance_km']).copy()
     series = []
 
@@ -1297,6 +1299,7 @@ def _build_running_dashboard_chart(running_df):
         series.append(
             {
                 'name': '心率 Heart Rate (bpm)',
+                'connectNulls': False,
                 'type': 'line',
                 'showSymbol': False,
                 'smooth': True,
@@ -1530,6 +1533,18 @@ def build_plot_dashboard_data():
         warnings.append(_build_source_unavailable_warning('Time.xlsx', exc, TIME_SOURCE_CHART_IDS))
 
     if data_frame_error is None:
+        measurement_columns = [column for column in ['体重', '体脂率'] if column in data_frame.columns]
+        if measurement_columns:
+            invalid_dates = pd.to_datetime(data_frame['日期'], errors='coerce', format='mixed').isna()
+            skipped_count = int((invalid_dates & data_frame[measurement_columns].notna().any(axis=1)).sum())
+            if skipped_count:
+                warnings.append({
+                    'id': 'undated-body-measurements',
+                    'title': '体重 / 体脂率日期缺失',
+                    'message': f'{skipped_count} 条测量没有有效日期，已跳过，不计入最新值、均值或趋势。',
+                    'chart_ids': ['weight-bodyfat'],
+                    'details': ['请在 Time.xlsx 中补齐测量日期后刷新。'],
+                })
         try:
             time_trend_payload = _compute_time_trend_payload(data_frame)
             time_warning = _build_time_data_warning(time_trend_payload.get('warnings'))
