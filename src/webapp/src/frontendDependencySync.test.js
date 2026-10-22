@@ -1601,3 +1601,33 @@ test('transient dependency lock artifacts cannot dirty the public worktree', () 
 
   assert.ok(ignoreRules.includes(`${DEPENDENCY_SYNC_LOCK_FILE_NAME}*`));
 });
+
+for (const entryKind of ['bin', 'main']) {
+  test(`missing declared ${entryKind} entry triggers reinstall and validates repaired package`, () => {
+    withFixture((webappRoot) => {
+      const directory = writePackage(webappRoot, 'toy', 'toy', '1.0.0');
+      writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+        name: 'toy', version: '1.0.0', [entryKind]: entryKind === 'bin' ? { toy: 'entry.cjs' } : 'entry.cjs',
+      }));
+      const entry = path.join(directory, 'entry.cjs');
+      writeFileSync(entry, 'module.exports = 1;');
+      writeDesiredState(webappRoot);
+      rmSync(entry);
+      let installs = 0;
+      const options = {
+        webappRoot, runtime: TEST_RUNTIME, env: {}, logger: SILENT_LOGGER,
+        runCommand(_command, args) {
+          if (args[0] === 'ci') {
+            installs += 1;
+            writeFileSync(entry, 'module.exports = 1;');
+          }
+        },
+      };
+      assert.equal(synchronizeDependencies(options).synchronized, true);
+      assert.equal(installs, 1);
+      assert.equal(existsSync(entry), true);
+      assert.equal(synchronizeDependencies(options).synchronized, false);
+      assert.equal(installs, 1);
+    });
+  });
+}

@@ -740,6 +740,9 @@ def _synchronize_backend_runtime_environment_locked(
         opencv_check=opencv_check,
     )
     if reuse_error is None and reusable_state is not None:
+        if compute_requirements_sha256(resolved_core, resolved_requirements) != requirements_sha256:
+            (safe_venv / BACKEND_ENVIRONMENT_STATE_NAME).unlink(missing_ok=True)
+            raise RuntimeError("backend requirements changed during validation; retry synchronization")
         return BackendEnvironmentSyncOutcome(
             reused=True,
             reason="validated environment state and installed closure match",
@@ -817,6 +820,11 @@ def _synchronize_backend_runtime_environment_locked(
             distributions=probe.get("distributions", []),
             venv=safe_venv,
         )
+        if state["requirements_sha256"] != requirements_sha256:
+            raise RuntimeError("backend requirements changed during installation; retry synchronization")
+        # Keep the original identity even if a later edit races publication.
+        # Such an edit must invalidate reuse on the next synchronization.
+        state["requirements_sha256"] = requirements_sha256
         write_backend_environment_state(safe_venv, state)
     except BaseException:
         (safe_venv / BACKEND_ENVIRONMENT_STATE_NAME).unlink(missing_ok=True)

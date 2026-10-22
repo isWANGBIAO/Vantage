@@ -1299,6 +1299,28 @@ function scanInstalledPackages({ webappRoot, fileSystem = fs }) {
       );
     }
 
+    // npm ls only validates metadata. Check declared executable/runtime entry
+    // points as well, so a partially removed package cannot be reused forever.
+    const bins = typeof metadata.bin === 'string'
+      ? [metadata.bin]
+      : Object.values(metadata.bin || {});
+    for (const entry of bins) {
+      if (typeof entry !== 'string'
+        || !fileSystem.statSync(path.resolve(packageDirectory, entry)).isFile()) {
+        throw new Error(`Missing installed package executable: ${relativePackagePath}`);
+      }
+    }
+    if (typeof metadata.main === 'string' && metadata.main) {
+      try {
+        const entryPath = require.resolve(packageDirectory);
+        if (!fileSystem.statSync(entryPath).isFile()) {
+          throw new Error('Entry is not a file');
+        }
+      } catch {
+        throw new Error(`Missing installed package entry: ${relativePackagePath}`);
+      }
+    }
+
     installedPackages.push({
       path: relativePackagePath,
       name: metadata.name,
