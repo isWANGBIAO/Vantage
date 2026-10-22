@@ -48,6 +48,9 @@ class RendererCameraFrameTests(unittest.TestCase):
             None,
         )
         self.original_is_running = _backend_runtime.state.is_running
+        self.original_latest_frame_observed_at = _backend_runtime.state.latest_frame_observed_at
+        self.original_person_boxes = list(_backend_runtime.state.person_boxes)
+        self.original_live_score = _backend_runtime.state.latest_live_face_score
         self.original_release_queue = list(_backend_runtime.state.camera_release_queue)
         self.original_release_ids = set(_backend_runtime.state.camera_release_ids)
 
@@ -59,6 +62,9 @@ class RendererCameraFrameTests(unittest.TestCase):
         _backend_runtime.state.latest_frame = self.original_latest_frame
         _backend_runtime.state.latest_frame_published_at = self.original_latest_frame_published_at
         _backend_runtime.state.is_running = self.original_is_running
+        _backend_runtime.state.latest_frame_observed_at = self.original_latest_frame_observed_at
+        _backend_runtime.state.person_boxes = self.original_person_boxes
+        _backend_runtime.state.latest_live_face_score = self.original_live_score
         _backend_runtime.state.camera_release_queue = self.original_release_queue
         _backend_runtime.state.camera_release_ids = self.original_release_ids
 

@@ -5,7 +5,7 @@ import os
 import sys
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.core.cpu_runtime_policy import configure_cpu_runtime
 
@@ -156,6 +156,7 @@ def _clear_latest_frame_if_camera_is(expected_camera):
             return False
         _runtime.state.latest_frame = None
         _runtime.state.latest_frame_published_at = None
+        _runtime.state.latest_frame_observed_at = None
         return True
 
 def _install_camera_capture(camera):
@@ -165,6 +166,7 @@ def _install_camera_capture(camera):
         _runtime.state.camera = camera
         _runtime.state.latest_frame = None
         _runtime.state.latest_frame_published_at = None
+        _runtime.state.latest_frame_observed_at = None
         return True
 
 def _publish_camera_frame(camera, frame, published_at=None):
@@ -177,6 +179,7 @@ def _publish_camera_frame(camera, frame, published_at=None):
         _runtime.state.latest_frame_published_at = (
             time.monotonic() if published_at is None else float(published_at)
         )
+        _runtime.state.latest_frame_observed_at = datetime.now()
         return True
 
 def _queue_camera_release_locked(camera):
@@ -219,6 +222,7 @@ def _retire_camera_capture(camera):
                 _runtime.state.camera = None
                 _runtime.state.latest_frame = None
                 _runtime.state.latest_frame_published_at = None
+                _runtime.state.latest_frame_observed_at = None
                 retired = True
         if not preserve_active_renderer:
             _queue_camera_release_locked(camera)
@@ -482,6 +486,39 @@ def _monitor_frame_timestamp_is_fresh(published_at, now_monotonic):
         and now_monotonic - published_at <= MONITOR_FRAME_TTL_SECONDS
     )
 
+def _frame_observation_is_current_locked(source_camera, published_at, now_monotonic):
+    current_published_at = _runtime.state.latest_frame_published_at
+    return (
+        _runtime.state.camera is source_camera
+        and _runtime.state.latest_frame is not None
+        and _monitor_frame_timestamp_is_fresh(published_at, now_monotonic)
+        and _monitor_frame_timestamp_is_fresh(current_published_at, now_monotonic)
+        and current_published_at >= published_at
+    )
+
+def has_fresh_camera_frame():
+    with _runtime.state.lock:
+        return _runtime.state.latest_frame is not None and _monitor_frame_timestamp_is_fresh(
+            _runtime.state.latest_frame_published_at, time.monotonic(),
+        )
+
+def _publish_live_observation(result, source_camera, published_at):
+    with _runtime.state.lock:
+        if not _frame_observation_is_current_locked(source_camera, published_at, time.monotonic()):
+            return False
+        _runtime.state.latest_live_face_score = (
+            float(result["score"]) if result.get("passed") and result.get("score") is not None else None
+        )
+        if result.get("passed") and result.get("score") is not None:
+            _ensure_live_face_points_deque()
+            _runtime.state.live_face_points.append({
+                "timestamp": float(result["timestamp"]), "datetime": result["datetime"],
+                "score": float(result["score"]),
+                **({"profile_id": result["profile_id"]} if result.get("profile_id") else {}),
+            })
+            _prune_live_face_points(result["timestamp"])
+        return True
+
 def run_monitor_capture_cycle():
     with _runtime.state.lock:
         monitor = _runtime.state.monitor
@@ -666,6 +703,7 @@ def camera_loop():
 def face_live_loop():
     print("Starting live face analysis loop...")
     last_inference_started_at = None
+    last_observation = None
     while _runtime.state.is_running:
         if not should_run_face_live_analysis():
             time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
@@ -676,7 +714,7 @@ def face_live_loop():
 
         if frame_available:
             try:
-                _runtime.wait_for_next_inference_start(
+                inference_started_at = _runtime.wait_for_next_inference_start(
                     last_inference_started_at,
                     FACE_LIVE_SAMPLE_INTERVAL_SECONDS,
                 )
@@ -684,13 +722,23 @@ def face_live_loop():
                     break
 
                 with _runtime.state.lock:
+                    source_camera = _runtime.state.camera
+                    published_at = _runtime.state.latest_frame_published_at
+                    observation = (source_camera, published_at)
+                    fresh = _monitor_frame_timestamp_is_fresh(published_at, inference_started_at)
+                    observed_at = _runtime.state.latest_frame_observed_at
+                    if not fresh:
+                        _runtime.state.latest_live_face_score = None
                     frame_copy = (
                         _runtime.state.latest_frame.copy()
-                        if _runtime.state.latest_frame is not None
+                        if _runtime.state.latest_frame is not None and fresh and observation != last_observation
                         else None
                     )
                 if frame_copy is None:
+                    time.sleep(FACE_LIVE_IDLE_INTERVAL_SECONDS)
                     continue
+                if observed_at is None:
+                    observed_at = datetime.now() - timedelta(seconds=max(0.0, inference_started_at - published_at))
 
                 with _face._face_execution_lock:
                     if not should_run_face_live_analysis():
@@ -698,17 +746,21 @@ def face_live_loop():
                     detector, parser, config = _face.get_face_analysis_runtime()
                     pipeline = _face.get_face_analysis_pipeline_module()
                     last_inference_started_at = time.monotonic()
+                    with _runtime.state.lock:
+                        if not _frame_observation_is_current_locked(source_camera, published_at, last_inference_started_at):
+                            continue
                     result = pipeline.analyze_image_data(
                         frame_copy,
                         detector=detector,
                         parser=parser,
                         config=config,
+                        observed_at=observed_at,
                     )
+                    last_observation = observation
                     if (result.get("profile_id") and
                             result["profile_id"] != _face.profile_paths()["profile_id"]):
                         continue
-                update_live_face_overlay_state(result)
-                store_live_face_result(result)
+                _publish_live_observation(result, source_camera, published_at)
             except Exception as exc:
                 print(f"Live face analysis error: {exc}")
                 if _runtime.state.is_running:
@@ -720,7 +772,7 @@ def face_detection_loop():
     print("Starting foreground face detection background thread...")
     detector = None
     last_inference_started_at = None
-    last_submitted_frame_published_at = None
+    last_submitted_observation = None
     while _runtime.state.is_running:
         if detector is None:
             try:
@@ -746,6 +798,8 @@ def face_detection_loop():
             frame_copy_error = None
             with _runtime.state.lock:
                 published_at = _runtime.state.latest_frame_published_at
+                source_camera = _runtime.state.camera
+                observed_at = _runtime.state.latest_frame_observed_at
                 frame_is_fresh = _monitor_frame_timestamp_is_fresh(
                     published_at,
                     inference_started_at,
@@ -768,6 +822,7 @@ def face_detection_loop():
                 continue
 
             last_inference_started_at = inference_started_at
+            observed_at = observed_at or (datetime.now() - timedelta(seconds=max(0.0, inference_started_at - published_at)))
             try:
                 boxes = detect_foreground_presence_face_boxes(
                     frame_copy,
@@ -776,31 +831,40 @@ def face_detection_loop():
                 )
             except Exception as e:
                 with _runtime.state.lock:
-                    _runtime.state.person_boxes = []
+                    if _runtime.state.camera is source_camera:
+                        _runtime.state.person_boxes = []
                 print(f"Camera face detection error: {e}")
                 continue
 
             with _runtime.state.lock:
+                if not _frame_observation_is_current_locked(source_camera, published_at, time.monotonic()):
+                    if _runtime.state.camera is source_camera:
+                        _runtime.state.person_boxes = []
+                    continue
                 _runtime.state.person_boxes = boxes if _runtime.state.show_person_box else []
 
-            if (
-                boxes
-                and photos_path
-                and published_at != last_submitted_frame_published_at
-            ):
-                try:
-                    _media._presence_photo_save_coordinator.submit(
-                        frame_copy,
-                        photos_path,
-                        captured_at=datetime.now(),
-                        location_provider=get_location,
-                        on_success=_media._publish_presence_photo_path,
-                        on_failure=_media._log_presence_photo_save_failure,
-                    )
-                except Exception as e:
-                    _media._log_presence_photo_save_failure(e)
-                else:
-                    last_submitted_frame_published_at = published_at
+                if (
+                    boxes
+                    and photos_path
+                    and (source_camera, published_at) != last_submitted_observation
+                ):
+                    # submit is non-blocking queue admission. Keeping it in the
+                    # observation lock closes the source-switch/check/save race;
+                    # GPS, JPEG I/O and callbacks remain on the separate worker.
+                    try:
+                        accepted = _media._presence_photo_save_coordinator.submit(
+                            frame_copy,
+                            photos_path,
+                            captured_at=observed_at,
+                            location_provider=get_location,
+                            on_success=_media._publish_presence_photo_path,
+                            on_failure=_media._log_presence_photo_save_failure,
+                        )
+                    except Exception as e:
+                        _media._log_presence_photo_save_failure(e)
+                    else:
+                        if accepted:
+                            last_submitted_observation = (source_camera, published_at)
 
         else:
             with _runtime.state.lock:
@@ -913,8 +977,11 @@ async def receive_renderer_camera_frame(request: Request):
         _runtime.state.renderer_camera_last_seen_at = published_at
         _runtime.state.latest_frame = frame.copy()
         _runtime.state.latest_frame_published_at = published_at
+        _runtime.state.latest_frame_observed_at = datetime.now()
         _runtime.state.camera = _runtime.state.renderer_camera
         if displaced_camera is not _runtime.state.renderer_camera:
+            _runtime.state.person_boxes = []
+            _runtime.state.latest_live_face_score = None
             _queue_camera_release_locked(displaced_camera)
 
     return {
