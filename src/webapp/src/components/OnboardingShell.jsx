@@ -118,6 +118,7 @@ export default function OnboardingShell({
 
   const handleBack = () => {
     setSaveError('');
+    if (currentStep === 'migration') setChatSetupSkipped(false);
     setStepIndex((current) => Math.max(current - 1, 0));
   };
 

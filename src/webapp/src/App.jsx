@@ -145,11 +145,9 @@ function AppShell() {
 
   useEffect(() => {
     const syncActiveTabFromHash = () => {
-      const nextTab = getTabKeyFromHash(window.location.hash);
-      if (nextTab) {
-        setActiveTab(nextTab);
-        if (nextTab === 'never-stop') setNeverStopVisited(true);
-      }
+      const nextTab = getTabKeyFromHash(window.location.hash) || 'action plan';
+      setActiveTab(nextTab);
+      if (nextTab === 'never-stop') setNeverStopVisited(true);
     };
 
     syncActiveTabFromHash();

@@ -46,6 +46,9 @@ const settings = {
     action_plan_check_interval_minutes: 0,
 };
 let onboardingCompleted = false;
+const recoveryCase = process.env.VANTAGE_UI_RECOVERY_CASE || 'all';
+const runsRecoveryCase = name => recoveryCase === 'all' || recoveryCase === name;
+let expectedOnboardingSkip = true;
 let window;
 let server;
 let shuttingDown = false;
@@ -125,10 +128,10 @@ async function serveFixture(req, res) {
         settings.display_language = payload.display_language;
         result = { display_language: settings.display_language };
     } else if (req.method === 'POST' && pathname === '/api/v1/onboarding/complete') {
-        assert.equal(payload.skip_chat_setup, true, 'Onboarding must explicitly skip the provider.');
+        assert.equal(payload.skip_chat_setup, expectedOnboardingSkip, 'Onboarding must submit the current provider setup choice.');
         assert.equal(payload.import_legacy_data, false, 'The smoke must not import user data.');
         assert.equal(payload.launch_at_login, false);
-        assert.equal(payload.api_key, '');
+        assert.equal(payload.api_key, expectedOnboardingSkip ? '' : 'synthetic-provider-key');
         assert.equal(payload.legacy_root, '');
         onboardingCompleted = true;
         result = {
@@ -333,6 +336,29 @@ async function exerciseUi() {
     await click('.onboarding-actions button', 'Continue');
     await click('.onboarding-actions button', 'Skip Chat Setup');
     await expectStep(3);
+    if (runsRecoveryCase('onboarding-back')) {
+        await click('.onboarding-actions button', 'Back');
+        await expectStep(2);
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.onboarding-input')].some(node => node.disabled)), false,
+            'Returning to provider setup after Skip must re-enable its controls.');
+        await evaluate(() => {
+            for (const [index, value] of [[1, 'https://synthetic.invalid/v1'], [2, 'synthetic-provider-key'], [3, 'synthetic-model']]) {
+                const input = document.querySelectorAll('.onboarding-input')[index];
+                Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value);
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
+        await click('.onboarding-actions button', 'Skip Chat Setup');
+        await expectStep(3);
+        await click('.onboarding-actions button', 'Back');
+        await expectStep(2);
+        assert.deepEqual(await evaluate(() => [...document.querySelectorAll('.onboarding-input')].slice(1).map(node => node.value)),
+            ['https://synthetic.invalid/v1', 'synthetic-provider-key', 'synthetic-model']);
+        await click('.onboarding-actions button', 'Continue');
+        await expectStep(3);
+        expectedOnboardingSkip = false;
+        console.log('PASS skipped provider setup can be resumed without losing fields (#51)');
+    }
     await click('.onboarding-inline-actions button', 'Choose Folder');
     await waitFor('cancelled folder picker', () => document.querySelector('.onboarding-inline-note')?.textContent.includes('No folder selected yet.')
         && document.querySelector('.onboarding-checkbox input')?.checked === false);
@@ -349,6 +375,18 @@ async function exerciseUi() {
     assert.equal(calls.filter(call => call.pathname === '/api/v1/onboarding/complete').length, 1);
     assert.ok(nativeCalls.preferences >= 1, 'Saved onboarding preferences must reach the native bridge.');
     console.log('PASS onboarding interruption, Back, cancelled picker, skip, and finish');
+
+    if (runsRecoveryCase('empty-hash')) {
+        await navigate('dashboard', '.dashboard-page', 'System Dashboard');
+        await evaluate(() => history.back());
+        await waitFor('Back restores initial empty-hash page', () => location.hash === ''
+            && document.querySelector('.app-nav a[href="#action-plan"]')?.getAttribute('aria-current') === 'page'
+            && document.querySelector('.app-main')?.innerText.includes('Synthetic smoke action plan'));
+        await evaluate(() => history.forward());
+        await waitFor('Forward restores dashboard', () => location.hash === '#dashboard'
+            && document.querySelector('.app-nav a[href="#dashboard"]')?.getAttribute('aria-current') === 'page');
+        console.log('PASS Back/Forward restores the initial no-hash page (#52)');
+    }
 
     await navigate('dashboard', '.dashboard-page', 'System Dashboard');
     await waitFor('synthetic dashboard data', () => document.querySelector('.dashboard-page')?.innerText.includes('12%'));
