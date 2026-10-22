@@ -24,6 +24,7 @@ from src.services.automation_catalog import OPERATIONS, Operation, get_operation
 from src.services.vantage_client import (
     ArgumentValidationError,
     BackendHTTPError,
+    BackendStreamError,
     BackendUnavailableError,
     FileDownload,
     OperationUnavailableError,
@@ -130,6 +131,9 @@ def _consume_stream(stream: Any) -> list[Any]:
     events: list[Any] = []
     try:
         events.extend(stream)
+    except BackendStreamError as error:
+        error.events = events
+        raise
     finally:
         close = getattr(stream, "close", None)
         if callable(close):
@@ -382,6 +386,12 @@ def create_mcp_server(
             )
         except BackendHTTPError as error:
             return _error_result(_backend_http_message(error))
+        except BackendStreamError as error:
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=str(error))],
+                structured_content={"events": error.events},
+                is_error=True,
+            )
         except requests.exceptions.RequestException:
             return _error_result(
                 "The Vantage connection was interrupted. Confirm the backend is healthy and retry."
