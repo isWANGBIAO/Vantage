@@ -3,7 +3,10 @@ import json
 
 _VALID_SECTIONS = {"ANALYSIS", "PLAN"}
 _VALID_EVENT_TYPES = {"start", "thinking", "content", "error", "prompt", "system", "metadata"}
-_MAX_STREAM_CHUNK_CHARS = 12000
+# JSON's ASCII encoding can expand one non-BMP character to 12 bytes. Keep
+# payloads below 49,152 bytes plus the short prefix/newline, safely under the
+# default asyncio StreamReader 65,536-byte line limit on every platform.
+_MAX_STREAM_CHUNK_CHARS = 4096
 
 
 def emit_action_plan_stream_event(section: str, event_type: str, content: str, emit=print):
