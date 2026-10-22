@@ -2,7 +2,7 @@ import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.core.config import Config
@@ -196,8 +196,17 @@ def _as_int_or_none(value):
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _token_count_or_none(value):
+    if isinstance(value, bool):
+        return None
+    number = _as_int_or_none(value)
+    if number is None or number < 0 or (isinstance(value, float) and value != number):
+        return None
+    return number
 
 
 def _nested_value(payload, *keys):
@@ -217,14 +226,14 @@ def _without_raw_usage(normalized_usage):
     }
 
 
-def _normalize_usage(usage):
+def normalize_usage(usage):
     raw_usage = _json_safe(usage) or {}
     if not isinstance(raw_usage, dict):
         raw_usage = {}
 
-    prompt_tokens = _as_int_or_zero(raw_usage.get("prompt_tokens"))
-    completion_tokens = _as_int_or_zero(raw_usage.get("completion_tokens"))
-    total_tokens = _as_int_or_zero(raw_usage.get("total_tokens"))
+    prompt_tokens = _token_count_or_none(raw_usage.get("prompt_tokens"))
+    completion_tokens = _token_count_or_none(raw_usage.get("completion_tokens"))
+    total_tokens = _token_count_or_none(raw_usage.get("total_tokens"))
 
     prompt_cache_hit_tokens = _as_int_or_none(raw_usage.get("prompt_cache_hit_tokens"))
     if prompt_cache_hit_tokens is None:
@@ -233,7 +242,7 @@ def _normalize_usage(usage):
         )
 
     prompt_cache_miss_tokens = _as_int_or_none(raw_usage.get("prompt_cache_miss_tokens"))
-    if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None:
+    if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None and prompt_tokens is not None:
         prompt_cache_miss_tokens = max(prompt_tokens - prompt_cache_hit_tokens, 0)
 
     completion_reasoning_tokens = _as_int_or_none(raw_usage.get("completion_reasoning_tokens"))
@@ -255,30 +264,91 @@ def _normalize_usage(usage):
     }
 
 
+@contextmanager
+def _open_usage_db(db_file):
+    """Read legacy zero-filled rows using their preserved provider usage.
+
+    The temporary view does not mutate historical rows or require a migration.
+    Older rows without raw usage retain their original counters; rows whose raw
+    usage explicitly omits a counter cannot claim that counter was a true zero.
+    """
+    def recorded_token(raw, key, legacy):
+        if raw is None:
+            return legacy
+        usage = _json_loads_or_none(raw)
+        return _token_count_or_none(usage.get(key)) if isinstance(usage, dict) else None
+
+    with _open_db(db_file) as conn:
+        conn.create_function("recorded_token", 3, recorded_token, deterministic=True)
+        fields = []
+        for row in conn.execute("PRAGMA table_info(model_calls)"):
+            column = row[1]
+            quoted = '"' + column.replace('"', '""') + '"'
+            if column in {"prompt_tokens", "completion_tokens", "total_tokens"}:
+                fields.append(f"recorded_token(usage_json, '{column}', {quoted}) AS {quoted}")
+            else:
+                fields.append(quoted)
+        conn.execute("CREATE TEMP VIEW usage_calls AS SELECT " + ", ".join(fields) + " FROM model_calls")
+        yield conn
+
+
+def _usage_aggregate_sql(alias=""):
+    prefix = f"{alias}." if alias else ""
+    complete = " AND ".join(f"{prefix}{key} IS NOT NULL" for key in ("prompt_tokens", "completion_tokens", "total_tokens"))
+    fields = [f"SUM(CASE WHEN {prefix}status='completed' AND {complete} THEN 1 ELSE 0 END) AS usage_recorded_call_count"]
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        fields.append(f"SUM(CASE WHEN {prefix}status='completed' AND {prefix}{key} IS NOT NULL THEN 1 ELSE 0 END) AS {key}_recorded_call_count")
+    for key in ("completion_tokens", "total_tokens"):
+        condition = f"{prefix}status='completed' AND {prefix}{key} IS NOT NULL AND {prefix}duration > 0"
+        fields.append(f"SUM(CASE WHEN {condition} THEN {prefix}duration ELSE 0 END) AS {key}_duration")
+        fields.append(f"SUM(CASE WHEN {condition} THEN {prefix}{key} ELSE 0 END) AS {key}_rate_sum")
+    return ",\n".join(fields)
+
+
+def _apply_usage_completeness(payload):
+    completed = int(payload.get("completed_call_count", payload.get("call_count", 0)) or 0)
+    recorded = int(payload.get("usage_recorded_call_count") or 0)
+    payload["usage_recorded_call_count"] = recorded
+    payload["usage_missing_call_count"] = max(0, completed - recorded)
+    payload["usage_complete"] = recorded == completed
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        count = int(payload.get(f"{key}_recorded_call_count") or 0)
+        payload[key] = int(payload.get(key) or 0) if count or not completed else None
+    total_count = int(payload.get("total_tokens_recorded_call_count") or 0)
+    payload["average_tokens_per_call"] = (payload["total_tokens"] / total_count) if total_count else (None if completed else 0.0)
+    for key, metric in (("completion_tokens", "output_tokens_per_second"), ("total_tokens", "average_tokens_per_second")):
+        duration = float(payload.pop(f"{key}_duration", 0) or 0)
+        tokens = int(payload.pop(f"{key}_rate_sum", 0) or 0)
+        payload[metric] = tokens / duration if duration else (None if completed else 0.0)
+    return payload
+
+
 def get_session_usage_summary(session_id, db_file=None):
     resolved_db_file = Path(db_file) if db_file else _db_path(Config.get_history_dir())
     _ensure_db(resolved_db_file)
 
-    with _open_db(resolved_db_file) as conn:
+    with _open_usage_db(resolved_db_file) as conn:
+        conn.row_factory = sqlite3.Row
         row = conn.execute(
-            """
+            f"""
             SELECT
+                {_usage_aggregate_sql('mc')},
                 s.session_id,
                 s.source,
                 s.entrypoint,
                 s.default_model,
                 s.provider_route,
                 s.base_url,
-                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.prompt_tokens, 0) ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.completion_tokens, 0) ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.total_tokens, 0) ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.prompt_cache_hit_tokens, 0) ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.prompt_cache_miss_tokens, 0) ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.completion_reasoning_tokens, 0) ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.duration, 0) ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN 1 ELSE 0 END), 0)
+                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.prompt_tokens, 0) ELSE 0 END), 0) AS prompt_tokens,
+                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.completion_tokens, 0) ELSE 0 END), 0) AS completion_tokens,
+                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.total_tokens, 0) ELSE 0 END), 0) AS total_tokens,
+                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.prompt_cache_hit_tokens, 0) ELSE 0 END), 0) AS prompt_cache_hit_tokens,
+                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.prompt_cache_miss_tokens, 0) ELSE 0 END), 0) AS prompt_cache_miss_tokens,
+                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.completion_reasoning_tokens, 0) ELSE 0 END), 0) AS completion_reasoning_tokens,
+                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.duration, 0) ELSE 0 END), 0) AS total_duration,
+                COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN 1 ELSE 0 END), 0) AS call_count
             FROM sessions s
-            LEFT JOIN model_calls mc
+            LEFT JOIN usage_calls mc
                 ON s.session_id = mc.session_id
             WHERE s.session_id = ?
             GROUP BY
@@ -295,43 +365,12 @@ def get_session_usage_summary(session_id, db_file=None):
     if row is None:
         return None
 
-    (
-        session_id_value,
-        source,
-        entrypoint,
-        default_model,
-        provider_route,
-        base_url,
-        prompt_tokens,
-        completion_tokens,
-        total_tokens,
-        prompt_cache_hit_tokens,
-        prompt_cache_miss_tokens,
-        completion_reasoning_tokens,
-        total_duration,
-        call_count,
-    ) = row
-
-    average_duration = float(total_duration) / int(call_count) if call_count else 0.0
-    cache_denominator = int(prompt_cache_hit_tokens) + int(prompt_cache_miss_tokens)
-    return {
-        "session_id": session_id_value,
-        "source": source,
-        "entrypoint": entrypoint,
-        "default_model": default_model,
-        "provider_route": provider_route,
-        "base_url": base_url,
-        "call_count": int(call_count),
-        "prompt_tokens": int(prompt_tokens),
-        "completion_tokens": int(completion_tokens),
-        "total_tokens": int(total_tokens),
-        "prompt_cache_hit_tokens": int(prompt_cache_hit_tokens),
-        "prompt_cache_miss_tokens": int(prompt_cache_miss_tokens),
-        "prompt_cache_hit_rate": (int(prompt_cache_hit_tokens) / cache_denominator * 100) if cache_denominator else None,
-        "completion_reasoning_tokens": int(completion_reasoning_tokens),
-        "total_duration": float(total_duration),
-        "average_duration": average_duration,
-    }
+    payload = _apply_usage_completeness(dict(row))
+    calls = int(payload["call_count"] or 0)
+    payload["average_duration"] = float(payload["total_duration"]) / calls if calls else 0.0
+    cache_denominator = payload["prompt_cache_hit_tokens"] + payload["prompt_cache_miss_tokens"]
+    payload["prompt_cache_hit_rate"] = payload["prompt_cache_hit_tokens"] / cache_denominator * 100 if cache_denominator else None
+    return payload
 
 
 def repair_abandoned_calls(db_file=None, *, older_than_seconds=ABANDONED_CALL_AGE_SECONDS):
@@ -347,10 +386,10 @@ def repair_abandoned_calls(db_file=None, *, older_than_seconds=ABANDONED_CALL_AG
     """
     resolved_db_file = Path(db_file) if db_file else _db_path(Config.get_history_dir())
     _ensure_db(resolved_db_file)
-    cutoff = _isoformat(_now() - timedelta(seconds=max(0, int(older_than_seconds))))
+    cutoff = _isoformat(_now().astimezone(timezone.utc) - timedelta(seconds=max(0, int(older_than_seconds))))
     with _open_db(resolved_db_file) as conn:
         removed = conn.execute(
-            "DELETE FROM model_calls WHERE status = 'started' AND created_at < ?",
+            "DELETE FROM model_calls WHERE status = 'started' AND julianday(created_at) < julianday(?)",
             (cutoff,),
         ).rowcount
     return int(removed or 0)
@@ -414,18 +453,30 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
         payload["average_tokens_per_call"] = (total_tokens / completed) if completed else 0.0
         payload["average_tokens_per_second"] = (total_tokens / total_duration) if total_duration else 0.0
         payload["output_tokens_per_second"] = (completion_tokens / total_duration) if total_duration else 0.0
+        if "usage_recorded_call_count" in keys:
+            _apply_usage_completeness(payload)
+        elif completed:
+            for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                payload[field] = _optional_int({field: row[field]}, field)
+            payload["usage_complete"] = all(payload[field] is not None for field in ("prompt_tokens", "completion_tokens", "total_tokens"))
+            payload["usage_recorded_call_count"] = int(payload["usage_complete"])
+            payload["usage_missing_call_count"] = int(not payload["usage_complete"])
+            payload["average_tokens_per_call"] = payload["total_tokens"]
+            payload["average_tokens_per_second"] = payload["total_tokens"] / total_duration if payload["total_tokens"] is not None and total_duration > 0 else None
+            payload["output_tokens_per_second"] = payload["completion_tokens"] / total_duration if payload["completion_tokens"] is not None and total_duration > 0 else None
         if "stream" in payload:
             payload["stream"] = bool(payload["stream"]) if payload["stream"] is not None else None
         for raw_key in ("usage_json", "response_json", "request_metadata_json", "request_metadata"):
             payload.pop(raw_key, None)
         return payload
 
-    with _open_db(resolved_db_file) as conn:
+    with _open_usage_db(resolved_db_file) as conn:
         conn.row_factory = sqlite3.Row
 
         summary_row = conn.execute(
-            """
+            f"""
             SELECT
+                {_usage_aggregate_sql()},
                 (SELECT COUNT(*) FROM sessions) AS session_count,
                 COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_call_count,
                 COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_call_count,
@@ -440,13 +491,14 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                 COALESCE(SUM(CASE WHEN status = 'completed' THEN COALESCE(duration, 0) ELSE 0 END), 0) AS total_duration,
                 MIN(created_at) AS earliest_call_at,
                 MAX(COALESCE(completed_at, created_at)) AS latest_call_at
-            FROM model_calls
+            FROM usage_calls
             """
         ).fetchone()
 
         source_rows = conn.execute(
-            """
+            f"""
             SELECT
+                {_usage_aggregate_sql('mc')},
                 s.source,
                 COUNT(DISTINCT s.session_id) AS session_count,
                 COUNT(mc.call_id) AS call_count,
@@ -463,7 +515,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                 COALESCE(SUM(CASE WHEN mc.status = 'completed' THEN COALESCE(mc.duration, 0) ELSE 0 END), 0) AS total_duration,
                 MAX(COALESCE(mc.completed_at, mc.created_at)) AS latest_call_at
             FROM sessions s
-            LEFT JOIN model_calls mc
+            LEFT JOIN usage_calls mc
                 ON mc.session_id = s.session_id
             GROUP BY s.source
             ORDER BY total_tokens DESC, latest_call_at DESC, s.source ASC
@@ -471,8 +523,9 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
         ).fetchall()
 
         day_rows = conn.execute(
-            """
+            f"""
             SELECT
+                {_usage_aggregate_sql()},
                 substr(created_at, 1, 10) AS date,
                 COUNT(call_id) AS call_count,
                 COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_call_count,
@@ -486,7 +539,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                 COALESCE(SUM(CASE WHEN status = 'completed' AND (prompt_cache_hit_tokens IS NOT NULL OR prompt_cache_miss_tokens IS NOT NULL) THEN 1 ELSE 0 END), 0) AS cache_recorded_call_count,
                 COALESCE(SUM(CASE WHEN status = 'completed' AND completion_reasoning_tokens IS NOT NULL THEN 1 ELSE 0 END), 0) AS reasoning_recorded_call_count,
                 COALESCE(SUM(CASE WHEN status = 'completed' THEN COALESCE(duration, 0) ELSE 0 END), 0) AS total_duration
-            FROM model_calls
+            FROM usage_calls
             GROUP BY substr(created_at, 1, 10)
             ORDER BY date DESC
             LIMIT ?
@@ -495,8 +548,9 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
         ).fetchall()
 
         session_rows = conn.execute(
-            """
+            f"""
             SELECT
+                {_usage_aggregate_sql('mc')},
                 s.session_id,
                 s.source,
                 s.entrypoint,
@@ -525,7 +579,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                 ) AS last_status,
                 s.updated_at
             FROM sessions s
-            LEFT JOIN model_calls mc
+            LEFT JOIN usage_calls mc
                 ON mc.session_id = s.session_id
             GROUP BY
                 s.session_id,
@@ -574,7 +628,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                 mc.error_message,
                 mc.created_at,
                 mc.completed_at
-            FROM model_calls mc
+            FROM usage_calls mc
             JOIN sessions s
                 ON s.session_id = mc.session_id
             ORDER BY mc.created_at DESC, mc.call_id DESC
@@ -610,7 +664,7 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
                     mc.usage_json,
                     mc.created_at,
                     mc.completed_at
-                FROM model_calls mc
+                FROM usage_calls mc
                 JOIN sessions s
                     ON s.session_id = mc.session_id
                 WHERE mc.status = 'completed'
@@ -625,8 +679,6 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
         ).fetchall()
 
     completed_call_count = _as_int(summary_row["completed_call_count"] if summary_row else 0)
-    completion_tokens = _as_int(summary_row["completion_tokens"] if summary_row else 0)
-    total_tokens = _as_int(summary_row["total_tokens"] if summary_row else 0)
     total_duration = _as_float(summary_row["total_duration"] if summary_row else 0.0)
     summary_payload = _build_usage_row(summary_row) if summary_row else {
         "session_count": 0,
@@ -647,18 +699,21 @@ def get_usage_dashboard_snapshot(db_file=None, *, day_limit=14, session_limit=10
             "session_count": _as_int(summary_row["session_count"] if summary_row else 0),
             "completed_call_count": completed_call_count,
             "failed_call_count": _as_int(summary_row["failed_call_count"] if summary_row else 0),
-            "prompt_tokens": _as_int(summary_row["prompt_tokens"] if summary_row else 0),
-            "completion_tokens": _as_int(summary_row["completion_tokens"] if summary_row else 0),
-            "total_tokens": total_tokens,
+            "prompt_tokens": summary_payload["prompt_tokens"],
+            "completion_tokens": summary_payload["completion_tokens"],
+            "total_tokens": summary_payload["total_tokens"],
+            "usage_complete": summary_payload["usage_complete"],
+            "usage_recorded_call_count": summary_payload["usage_recorded_call_count"],
+            "usage_missing_call_count": summary_payload["usage_missing_call_count"],
             "prompt_cache_hit_tokens": summary_payload["prompt_cache_hit_tokens"],
             "prompt_cache_miss_tokens": summary_payload["prompt_cache_miss_tokens"],
             "prompt_cache_hit_rate": summary_payload["prompt_cache_hit_rate"],
             "completion_reasoning_tokens": summary_payload["completion_reasoning_tokens"],
             "total_duration": total_duration,
             "average_duration": (total_duration / completed_call_count) if completed_call_count else 0.0,
-            "average_tokens_per_call": (total_tokens / completed_call_count) if completed_call_count else 0.0,
-            "average_tokens_per_second": (total_tokens / total_duration) if total_duration else 0.0,
-            "output_tokens_per_second": (completion_tokens / total_duration) if total_duration else 0.0,
+            "average_tokens_per_call": summary_payload["average_tokens_per_call"],
+            "average_tokens_per_second": summary_payload["average_tokens_per_second"],
+            "output_tokens_per_second": summary_payload["output_tokens_per_second"],
             "earliest_call_at": summary_row["earliest_call_at"] if summary_row else None,
             "latest_call_at": summary_row["latest_call_at"] if summary_row else None,
         },
@@ -931,7 +986,7 @@ class SessionRecorder:
         first_token_latency=None,
         response=None,
     ):
-        normalized_usage = _normalize_usage(usage)
+        normalized_usage = normalize_usage(usage)
         usage_payload = _without_raw_usage(normalized_usage)
         usage_raw = normalized_usage["usage_raw"]
         response_raw = _json_safe(response)
@@ -995,8 +1050,8 @@ class SessionRecorder:
         self._upsert_session_row()
 
     def record_token_count(self, *, call_id, last_token_usage, total_token_usage=None):
-        last_usage = _normalize_usage(last_token_usage)
-        total_usage = _normalize_usage(total_token_usage or last_token_usage)
+        last_usage = normalize_usage(last_token_usage)
+        total_usage = normalize_usage(total_token_usage or last_token_usage)
         self._append_event(
             "token_count",
             {

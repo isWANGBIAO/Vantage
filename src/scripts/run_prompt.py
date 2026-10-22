@@ -21,7 +21,7 @@ if __name__ == "__main__":
 from src.core.context import ContextManager, atomic_write_json, context_transaction, write_context_messages
 from src.services.llm_client import LLMClient, StreamIncompleteError
 from src.services.audio_service import AudioService, AudioTranscriptionError
-from src.services.model_call_recorder import get_session_usage_summary
+from src.services.model_call_recorder import get_session_usage_summary, normalize_usage
 from src.utils.data_loader import DataLoader
 from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
 from src.utils.action_plan_stream import (
@@ -661,15 +661,16 @@ def main():
             # Emit initial stats (Historical only)
             initial_stats = {
                 "turns": len(context_mgr.messages),
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+                "usage_complete": False,
                 "prompt_cache_hit_tokens": None,
                 "prompt_cache_miss_tokens": None,
                 "prompt_cache_hit_rate": None,
                 "completion_reasoning_tokens": None,
                 "total_duration": 0,
-                "speed": "0.00 tokens/s",
+                "speed": None,
                 "first_token_latency": None,
                 "cache_scope": "request",
             }
@@ -723,17 +724,17 @@ def main():
                 logging.error("No content returned from API")
 
             # Print Stats for GUI
-            usage = result.get("usage", {})
-            prompt_tokens = usage.get("prompt_tokens", 0)
-            completion_tokens = usage.get("completion_tokens", 0)
-            total_tokens = usage.get("total_tokens", 0)
+            usage = normalize_usage(result.get("usage"))
+            prompt_tokens = usage["prompt_tokens"]
+            completion_tokens = usage["completion_tokens"]
+            total_tokens = usage["total_tokens"]
             prompt_cache_hit_tokens = usage.get("prompt_cache_hit_tokens")
             if prompt_cache_hit_tokens is None:
                 prompt_details = usage.get("prompt_tokens_details")
                 if isinstance(prompt_details, dict):
                     prompt_cache_hit_tokens = prompt_details.get("cached_tokens")
             prompt_cache_miss_tokens = usage.get("prompt_cache_miss_tokens")
-            if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None:
+            if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None and prompt_tokens is not None:
                 prompt_cache_miss_tokens = max(int(prompt_tokens or 0) - int(prompt_cache_hit_tokens or 0), 0)
             completion_reasoning_tokens = usage.get("completion_reasoning_tokens")
             if completion_reasoning_tokens is None:
@@ -748,6 +749,7 @@ def main():
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
+                "usage_complete": all(value is not None for value in (prompt_tokens, completion_tokens, total_tokens)),
                 "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
                 "prompt_cache_miss_tokens": prompt_cache_miss_tokens,
                 "prompt_cache_hit_rate": (
@@ -757,7 +759,7 @@ def main():
                 ),
                 "completion_reasoning_tokens": completion_reasoning_tokens,
                 "total_duration": duration,
-                "speed": f"{completion_tokens / duration:.2f} tokens/s" if duration > 0 else "0.00 tokens/s",
+                "speed": f"{completion_tokens / duration:.2f} tokens/s" if completion_tokens is not None and duration > 0 else None,
                 "first_token_latency": _as_float_or_none(result.get("first_token_latency")),
                 "cache_scope": "request",
             }
@@ -1039,8 +1041,8 @@ def main():
                         "cache_scope": "session",
                         "speed": (
                             f"{summary_completion_tokens / summary_total_duration:.2f} tokens/s"
-                            if summary_total_duration > 0
-                            else "0.00 tokens/s"
+                            if summary_completion_tokens is not None and summary_total_duration > 0
+                            else None
                         ),
                         "first_token_latency": _first_non_null(
                             request_stats[0].get("first_token_latency"),
