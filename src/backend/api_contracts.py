@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 API_VERSION = "1.0"
 
@@ -108,6 +108,7 @@ class MaskedProvider(ExtensibleModel):
     last_refreshed_at: str | None = None
     context_window_tokens: int | None = None
     max_output_tokens: int | None = None
+    model_capabilities: dict[str, list[str] | None] | None = None
 
 
 class ModelProfile(ExtensibleModel):
@@ -167,9 +168,18 @@ class MigrationState(ExtensibleModel):
     imported_at: str | None
 
 
+class InheritedAiProvider(BaseModel):
+    route: str
+    name: str
+    type: str
+    base_url: str
+    has_api_key: bool
+
+
 class SettingsState(ExtensibleModel):
     settings: SettingsValues
     provider: ProviderState
+    inherited_ai_provider: InheritedAiProvider | None = None
     migration: MigrationState
     runtime_paths: dict[str, str]
 
@@ -223,6 +233,13 @@ class ChatRequest(BaseModel):
     reasoning_effort: str | None = None
     service_tier: str | None = None
     client_sent_at: str | None = None
+
+    @field_validator("message")
+    @classmethod
+    def message_must_have_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Chat message must not be blank")
+        return value
 
 
 class VisibleChatMessage(BaseModel):

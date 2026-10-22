@@ -673,10 +673,25 @@ def _build_purchase_context_prompt(prompt_payload):
         )
 
 def _build_purchase_context_metadata(context_prompt):
+    prompt = str(context_prompt or "")
+    stable_prompt = prompt
+    prefix, marker, runtime_text = prompt.rpartition("## Runtime Context\n\n")
+    if marker:
+        try:
+            runtime = json.loads(runtime_text)
+            current_time = runtime.get("current_time") if isinstance(runtime, dict) else None
+            if isinstance(current_time, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", current_time):
+                # Recommendation results are daily, while the full prompt sent
+                # to the model still retains the precise runtime clock.
+                runtime["current_time"] = current_time[:10]
+                stable_prompt = prefix + marker + json.dumps(runtime, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError):
+            pass  # Unknown runtime formats remain part of the cache identity.
     return {
         "time_xlsx_included": "Time Series Data (JSON)" in str(context_prompt or ""),
         "balance_sheet_included": "Balance Sheet Data (JSON)" in str(context_prompt or ""),
-        "prompt_hash": hashlib.sha256(str(context_prompt or "").encode("utf-8")).hexdigest(),
+        "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "cache_context_hash": hashlib.sha256(stable_prompt.encode("utf-8")).hexdigest(),
     }
 
 def _dedupe_purchase_recommendation_groups(groups):
@@ -792,13 +807,13 @@ def _build_purchase_recommendations_payload(force_regenerate=False, request_conf
     cache_key = _purchase_recommendation_cache_key(
         prompt_payload,
         request_config=request_config,
-        context_hash=context_metadata["prompt_hash"],
+        context_hash=context_metadata["cache_context_hash"],
         dismissed_hash=dismissed_hash,
     )
     if not force_regenerate:
         cached = _load_purchase_recommendation_cache(cache_key)
         if cached:
-            filtered_cached = _with_dismissed_purchase_filter(cached, dismissed_items)
+            filtered_cached = _with_dismissed_purchase_filter(cached)
             if not filtered_cached.get("recommendation_count_underfilled"):
                 return filtered_cached
 
@@ -877,7 +892,7 @@ def _build_purchase_recommendations_payload(force_regenerate=False, request_conf
         },
     }
     _save_purchase_recommendation_cache(payload)
-    return _with_dismissed_purchase_filter(payload, dismissed_items)
+    return _with_dismissed_purchase_filter(payload)
 
 @router.get("/api/v1/finance/purchase-recommendations")
 async def get_balance_sheet_purchase_recommendations(

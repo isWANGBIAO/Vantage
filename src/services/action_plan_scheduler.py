@@ -325,11 +325,12 @@ class ActionPlanScheduler:
                 if not await self._persist(reconciled):
                     return {"outcome": "metadata_unavailable"}
         baseline = self._state["baseline_revision"]
+        if startup_enabled and self._startup_handled and not has_plan:
+            # An input baseline is not a completed startup. This also covers
+            # auto-generation enabled at runtime after polling recorded a
+            # baseline while no plan existed. Retry only on a due check.
+            return await self._start_job("startup", now, interval)
         if baseline is None:
-            if startup_enabled and self._startup_handled and not has_plan:
-                # Retry a failed startup on the configured interval. Never record
-                # its unconsumed revision as a successful baseline.
-                return await self._start_job("startup", now, interval)
             if has_plan:
                 return await self._start_job("source_changed", now, interval)
             saved = await self._persist({**self._state, "baseline_revision": digest})

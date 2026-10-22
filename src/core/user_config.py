@@ -405,6 +405,19 @@ def _coerce_theme_mode(payload: dict | None, key: str = "theme_mode") -> str:
     return _coerce_theme(payload)
 
 
+def _coerce_model_capabilities(payload):
+    raw = payload.get("model_capabilities") if isinstance(payload, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    return {
+        model.strip(): None if parameters is None else sorted({item.strip() for item in parameters if item.strip()})
+        for model, parameters in raw.items()
+        if isinstance(model, str) and model.strip() and (
+            parameters is None or isinstance(parameters, list) and all(isinstance(item, str) for item in parameters)
+        )
+    }
+
+
 def _sanitize_provider_entry(route: str, entry: dict | None) -> dict:
     raw_model = _coerce_optional_str(entry, "model") or ""
     model = "" if _contains_removed_provider(raw_model) else raw_model
@@ -428,6 +441,9 @@ def _sanitize_provider_entry(route: str, entry: dict | None) -> dict:
         value = _coerce_optional_positive_int(entry, key)
         if value is not None:
             sanitized[key] = value
+    capabilities = _coerce_model_capabilities(entry)
+    if capabilities is not None:
+        sanitized["model_capabilities"] = capabilities
     return sanitized
 
 
@@ -620,6 +636,9 @@ def _build_complete_provider(route: str | None, provider: dict | None) -> dict |
         value = _coerce_optional_positive_int(provider, key)
         if value is not None:
             complete_provider[key] = value
+    capabilities = _coerce_model_capabilities(provider)
+    if capabilities is not None:
+        complete_provider["model_capabilities"] = capabilities
     return complete_provider
 
 

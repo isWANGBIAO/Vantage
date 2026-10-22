@@ -303,6 +303,29 @@ test('a backend restart that removes an active job releases UI activity without 
   assert.equal(missing[0].id, runningJob.id);
   assert.equal(f.cancelledReaders(), 1);
   assert.equal(f.snapshots.length, 1);
+
+  f.monitor.stop();
+});
+
+test('missing-job saved-view recovery retries after a transient first read failure', async () => {
+  let listed = { active: runningJob, jobs: [runningJob] };
+  let recoveries = 0;
+  const f = fixture({
+    fetchJson: async () => listed,
+    onMissingJob: async () => {
+      recoveries += 1;
+      if (recoveries === 1) throw new Error('synthetic temporary saved-plan read failure');
+    },
+  });
+  await f.monitor.start();
+  listed = { active: null, jobs: [] };
+  await f.timers.shift().callback();
+  assert.equal(f.errors.length, 1);
+  await f.timers.shift().callback();
+  assert.equal(recoveries, 2);
+  await f.timers.shift().callback();
+  assert.equal(recoveries, 2);
+  f.monitor.stop();
   assert.equal(await f.monitor.cancelActive(), null);
   f.monitor.stop();
 });

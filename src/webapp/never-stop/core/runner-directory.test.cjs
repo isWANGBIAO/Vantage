@@ -67,6 +67,9 @@ test("running directory change stops old tree before prepare and resumes a fresh
     assert.equal(a, old);
     assert.equal(b, next);
     assert.throws(() => process.kill(before.pid, 0));
+    // Application normally prepares goal.md before switching the runner. A
+    // direct Runner test must provide that file too; snapshots are not fallback.
+    await fs.copyFile(path.join(a, "goal.md"), path.join(b, "goal.md"));
     prepared = true;
   });
   await until(() => read(next));

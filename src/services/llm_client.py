@@ -416,14 +416,15 @@ class LLMClient:
     def _model_parameter_profile(self, model):
         normalized_model = self._normalize_model_alias(model)
         profiles = self.model_parameter_config.get("model_profiles", {})
+        wildcard_matches = []
         for pattern, profile in profiles.items():
             normalized_pattern = str(pattern).strip().lower()
             if normalized_pattern.endswith("*"):
                 if normalized_model.startswith(normalized_pattern[:-1]):
-                    return profile
+                    wildcard_matches.append((len(normalized_pattern), profile))
             elif normalized_model == normalized_pattern:
                 return profile
-        return {}
+        return max(wildcard_matches, key=lambda item: item[0])[1] if wildcard_matches else {}
 
     @staticmethod
     def _merge_payload_extra(payload, extra):
@@ -482,10 +483,10 @@ class LLMClient:
             logging.info(
                 "Adapted GLM-5.3-Flash payload on route %s: temperature=%s top_p=%s reasoning_effort=%s max_tokens=%s",
                 provider.get("route"),
-                adapted_payload["temperature"],
-                adapted_payload["top_p"],
+                adapted_payload.get("temperature"),
+                adapted_payload.get("top_p"),
                 adapted_payload.get("reasoning_effort"),
-                adapted_payload["max_tokens"],
+                adapted_payload.get("max_tokens"),
             )
             return adapted_payload
 
@@ -510,9 +511,9 @@ class LLMClient:
             logging.info(
                 "Adapted Qwen3.8 payload from JSON profile on route %s: temperature=%s top_p=%s top_k=%s",
                 provider.get("route"),
-                adapted_payload["temperature"],
-                adapted_payload["top_p"],
-                adapted_payload["top_k"],
+                adapted_payload.get("temperature"),
+                adapted_payload.get("top_p"),
+                adapted_payload.get("top_k"),
             )
             return adapted_payload
 
@@ -548,6 +549,10 @@ class LLMClient:
                 provider["base_url"],
                 str(error),
             )
+            return []
+
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            logging.warning("Invalid model discovery response for LLM provider %s", provider["route"])
             return []
 
         candidates = []
@@ -632,7 +637,11 @@ class LLMClient:
             "model": model,
             "models": models,
             "headers": self._build_headers(user_provider["api_key"]),
-            "model_capabilities": {model_id: None for model_id in models},
+            "model_capabilities": {
+                model_id: self._normalize_supported_parameters(
+                    (user_provider.get("model_capabilities") or {}).get(model_id)
+                ) for model_id in models
+            },
             "context_window_tokens": user_provider.get("context_window_tokens"),
             "max_output_tokens": user_provider.get("max_output_tokens"),
         }
@@ -670,7 +679,16 @@ class LLMClient:
     def _build_provider_chain(self):
         user_providers = user_config.get_provider_chain_config()
         if user_providers:
-            providers = [self._provider_from_user_config(provider) for provider in user_providers]
+            providers = []
+            self.provider_errors = {}
+            for configured in user_providers:
+                try:
+                    providers.append(self._provider_from_user_config(configured))
+                except ValueError as error:
+                    self.provider_errors[configured["route"]] = str(error)
+                    logging.warning("Skipping unavailable LLM provider %s: %s", configured["route"], error)
+            if not providers:
+                raise ValueError("No usable configured LLM providers: " + "; ".join(self.provider_errors.values()))
             logging.info(
                 "Configured user LLM provider chain: %s",
                 " -> ".join(f"{provider['route']}({provider['model']})" for provider in providers),
@@ -1107,7 +1125,11 @@ class LLMClient:
         request_metadata["stable_prefix_hash"] = _hash_json_payload(stable_prefix_messages)
         request_metadata["full_prompt_hash"] = _hash_json_payload(messages)
 
-        requested_provider = self._resolve_requested_provider(provider_route)
+        if model and not provider_route:
+            ordered = self._ordered_providers(model)
+            requested_provider = ordered[0] if ordered else None
+        else:
+            requested_provider = self._resolve_requested_provider(provider_route)
         requested_model = model or (requested_provider["model"] if requested_provider else None)
         requested_route = requested_provider["route"] if requested_provider else None
         requested_base_url = requested_provider["base_url"] if requested_provider else None
@@ -1448,6 +1470,15 @@ class LLMClient:
                             call_id=call_id,
                             chunk=data,
                         )
+                        if isinstance(data, dict) and data.get("error") is not None:
+                            provider_error = data["error"]
+                            if isinstance(provider_error, dict):
+                                detail = provider_error.get("message") or provider_error.get("code") or "Unknown provider error"
+                            else:
+                                detail = str(provider_error)
+                            # Raise the sanitized message itself: callers also
+                            # log exceptions and must never receive API keys.
+                            raise RuntimeError("Provider stream error: " + self._redact_secrets(str(detail)))
                         if isinstance(data.get("usage"), dict):
                             usage_data = data["usage"]
 

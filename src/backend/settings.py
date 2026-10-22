@@ -3,6 +3,7 @@
 import logging
 import os
 import shutil
+import tempfile
 from contextlib import suppress, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,7 @@ from .api_contracts import (
     SettingsState, DisplayLanguageState, OnboardingState, OnboardingCompletion, ConfigurationErrorResponse,
 )
 from src.services.automation_catalog import get_operation
+from src.services.vantage_client import ArgumentValidationError, _validate_schema
 
 
 def _request_contract(name):
@@ -73,6 +75,13 @@ _AUTOMATION_SETTINGS_FIELDS = frozenset({
     "image_models",
     "image_last_refreshed_at",
 })
+
+def _validate_operation_payload(payload, operation_name):
+    """Use the same strict input contract as CLI/MCP before any file is read or written."""
+    try:
+        _validate_schema(payload, get_operation(operation_name).input_schema)
+    except ArgumentValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
 
 def _validate_automation_payload(payload, allowed_fields):
     if not isinstance(payload, dict):
@@ -127,6 +136,7 @@ def _masked_settings_payload():
                 "last_refreshed_at",
                 "context_window_tokens",
                 "max_output_tokens",
+                "model_capabilities",
             )
             if key in entry
         }
@@ -134,11 +144,17 @@ def _masked_settings_payload():
         masked_entry["api_key"] = "********" if has_key else ""
         masked_providers[route] = masked_entry
     provider_payload = {**provider, "providers": masked_providers}
+    chain = get_provider_chain_config()
+    inherited = chain[0] if chain else None
     migration = load_migration_state()
     runtime_paths = Config.get_runtime_paths()
     return {
         "settings": settings_payload,
         "provider": provider_payload,
+        "inherited_ai_provider": {
+            "route": inherited["route"], "name": inherited["name"], "type": inherited["type"],
+            "base_url": inherited["base_url"], "has_api_key": bool(inherited.get("api_key")),
+        } if inherited else None,
         "migration": {
             "completed": migration["completed"],
             "source_path": migration["source_path"],
@@ -153,6 +169,11 @@ def _configuration_api_key(submitted_key, base_url, saved_key, saved_base_url):
     submitted_key = None if submitted_key is None else str(submitted_key).strip()
     if submitted_key == "":
         return ""
+    if submitted_key == "********" and not saved_key:
+        raise HTTPException(
+            status_code=422,
+            detail="This provider has no saved credential. Enter an explicit API key, or an explicit empty key to clear it.",
+        )
     destination = _provider_destination(base_url)
     if (saved_key and submitted_key in (None, "********")
             and (destination is None or destination != _provider_destination(saved_base_url))):
@@ -177,6 +198,10 @@ def _prepare_provider_configuration(payload, current_provider):
         for route, submitted_entry in submitted_providers.items():
             old_entry = current_provider.get("providers", {}).get(route, {})
             entry = {**old_entry, **submitted_entry}
+            if ("model_capabilities" not in submitted_entry
+                    and _provider_destination(entry.get("base_url", ""))
+                    != _provider_destination(old_entry.get("base_url", ""))):
+                entry["model_capabilities"] = {}
             entry["api_key"] = _configuration_api_key(
                 submitted_entry.get("api_key"), entry.get("base_url", ""),
                 old_entry.get("api_key", ""), old_entry.get("base_url", ""),
@@ -239,6 +264,7 @@ def get_automation_settings():
 @router.put("/api/v1/settings", response_model=SettingsState, response_model_exclude_unset=True,
             openapi_extra=_request_contract("settings.update"))
 def update_automation_settings(payload: dict):
+    _validate_operation_payload(payload, "settings.update")
     from . import face
     changing_face = isinstance(payload, dict) and bool(set(payload).intersection({"face_analysis_method", *FACE_ANALYSIS_PATH_FIELDS}))
     with _automation_config_lock, (face._face_analysis_job_lock if changing_face else nullcontext()):
@@ -318,6 +344,7 @@ def get_automation_display_language():
 @router.put("/api/v1/settings/display-language", response_model=DisplayLanguageState, response_model_exclude_unset=True,
             openapi_extra=_request_contract("settings.display_language.update"))
 def update_automation_display_language(payload: dict):
+    _validate_operation_payload(payload, "settings.display_language.update")
     _validate_automation_payload(payload, {"display_language"})
     if "display_language" not in payload:
         raise HTTPException(status_code=422, detail="display_language is required.")
@@ -340,7 +367,9 @@ def get_automation_onboarding_state():
         provider_configured = bool(get_provider_chain_config())
         migration = load_migration_state()
         return {
-            "completed": settings["onboarding_completed"],
+            "completed": settings["onboarding_completed"] and not (
+                migration["source_path"] and not migration["completed"]
+            ),
             "launchAtLogin": settings["launch_at_login"],
             "displayLanguage": settings["display_language"],
             "providerConfigured": provider_configured,
@@ -377,16 +406,106 @@ def _validate_legacy_history_source(legacy_root):
         raise HTTPException(status_code=400, detail="Legacy history source overlaps the configured destination.")
     return source_root, source_history, target_history, False
 
-def _copy_missing_legacy_history(source_history: Path, target_history: Path):
-    target_history.mkdir(parents=True, exist_ok=True)
+class _LegacyHistoryChanges:
+    """Stage imports; never unlink published files that another writer can edit."""
+
+    def __init__(self):
+        self.files = []
+        self.directories = []
+        self.staged = []
+        self.staging = None
+        self.target_root = None
+        self.source_root = None
+
+    def mkdir(self, directory):
+        missing = []
+        parent = directory
+        while not parent.exists():
+            if parent == parent.parent:
+                raise OSError("History destination has no available ancestor directory.")
+            missing.append(parent)
+            parent = parent.parent
+        for path in reversed(missing):
+            try:
+                path.mkdir()
+            except FileExistsError:
+                if not path.is_dir() or path.is_symlink():
+                    raise
+            else:
+                self.directories.append(path)
+
+    def record_file(self, path):
+        self.files.append(path)
+
+    def stage_file(self, source_file, destination_file):
+        if self.staging is None:
+            # Same filesystem as the destination: hard-link publication can
+            # expose a complete file atomically without overwriting anything.
+            self.staging = tempfile.TemporaryDirectory(prefix=".vantage-import-", dir=self.target_root)
+        staged_file = Path(self.staging.name) / str(len(self.staged))
+        with source_file.open("rb") as source, staged_file.open("xb") as destination:
+            shutil.copyfileobj(source, destination)
+        self.staged.append((staged_file, destination_file))
+
+    def publish(self):
+        for staged_file, destination_file in self.staged:
+            if destination_file.is_symlink() or not destination_file.resolve().is_relative_to(self.target_root):
+                raise HTTPException(status_code=400, detail="Legacy history destination changed during import.")
+            try:
+                os.link(staged_file, destination_file)
+            except FileExistsError:
+                continue
+            except OSError as error:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Unable to publish the history import. Check destination permissions and filesystem hard-link support, then retry; existing files were not overwritten.",
+                ) from error
+            self.record_file(destination_file)
+
+    def cleanup_staging(self):
+        if self.staging is not None:
+            self.staging.cleanup()
+            self.staging = None
+
+    def rollback(self):
+        # stat-then-unlink is not atomic: even an unchanged inode can be edited
+        # between those calls. Published imports are deliberately retained.
+        failed = bool(self.files)
+        try:
+            self.cleanup_staging()
+        except OSError:
+            failed = True
+        for path in reversed(self.directories):
+            try:
+                path.rmdir()  # Never recursively remove a directory.
+            except FileNotFoundError:
+                pass
+            except OSError:
+                failed = True
+        return failed
+
+
+def _legacy_history_walk_error(error):
+    raise HTTPException(
+        status_code=500,
+        detail="Unable to read all legacy history folders. Check read permissions and retry the import.",
+    ) from error
+
+
+def _copy_missing_legacy_history(source_history: Path, target_history: Path, changes):
+    changes.mkdir(target_history)
     target_root = target_history.resolve()
-    for current_dir, dir_names, file_names in os.walk(source_history, followlinks=False):
+    changes.target_root = target_root
+    changes.source_root = source_history.parent
+    for current_dir, dir_names, file_names in os.walk(
+        source_history, followlinks=False, onerror=_legacy_history_walk_error,
+    ):
         current_path = Path(current_dir)
         relative_dir = current_path.relative_to(source_history)
         destination_dir = target_history / relative_dir
         if destination_dir.is_symlink() or not destination_dir.resolve().is_relative_to(target_root):
             raise HTTPException(status_code=400, detail="Legacy history destination escapes the configured history directory.")
-        destination_dir.mkdir(parents=True, exist_ok=True)
+        changes.mkdir(destination_dir)
         dir_names[:] = [name for name in dir_names if not (current_path / name).is_symlink()]
         for name in file_names:
             source_file = current_path / name
@@ -398,13 +517,10 @@ def _copy_missing_legacy_history(source_history: Path, target_history: Path):
             if destination_file.exists():
                 continue
             try:
-                with source_file.open("rb") as source, destination_file.open("xb") as destination:
-                    shutil.copyfileobj(source, destination)
+                changes.stage_file(source_file, destination_file)
             except FileExistsError:
                 continue
             except OSError as error:
-                with suppress(OSError):
-                    destination_file.unlink()
                 raise HTTPException(status_code=500, detail="Failed to copy a legacy history file.") from error
 
 @router.post("/api/v1/onboarding/complete", response_model=OnboardingCompletion,
@@ -413,14 +529,33 @@ def complete_automation_onboarding(payload: dict):
     with _automation_config_lock:
         originals = _snapshot_automation_config_files()
         originals[get_migration_state_file()] = _snapshot_config_file(get_migration_state_file())
+        history_changes = _LegacyHistoryChanges()
         try:
-            return _complete_onboarding(payload)
+            return _complete_onboarding(payload, history_changes)
         except Exception as error:
-            _restore_config_files(originals, error)
+            rollback_failed = history_changes.rollback()
+            # Publication is preceded by a durable incomplete/source marker.
+            # Keep it intact after any files were published, even if the disk
+            # now rejects every write: replacing it with the original marker
+            # would reopen the wrong-source retry window.
+            restore_files = dict(originals)
+            if history_changes.files:
+                restore_files.pop(get_migration_state_file(), None)
+            _restore_config_files(restore_files, error)
+            if rollback_failed:
+                raise HTTPException(
+                    status_code=500,
+                    detail="History import publication failed. Published files were preserved for safety; retry the same source or review the history destination before selecting another source.",
+                ) from error
             raise
+        finally:
+            try:
+                history_changes.cleanup_staging()
+            except OSError:
+                logging.exception("Unable to clean temporary history import staging")
 
 
-def _complete_onboarding(payload: dict):
+def _complete_onboarding(payload: dict, history_changes):
     allowed_fields = {
         "display_language",
         "launch_at_login",
@@ -456,14 +591,13 @@ def _complete_onboarding(payload: dict):
         "completed": existing_migration["completed"],
         "sourcePath": existing_migration["source_path"],
     }
-
-    if should_import and validated_source:
-        source_root, source_history, target_history, same_root = validated_source
-        if not same_root and not (existing_migration["completed"] and existing_migration["source_path"] == str(source_root)):
-            _copy_missing_legacy_history(source_history, target_history)
-            imported = True
-        else:
-            imported = False
+    migration_completion = None
+    if existing_migration["source_path"] and not existing_migration["completed"]:
+        if not should_import or str(validated_source[0]) != existing_migration["source_path"]:
+            raise HTTPException(
+                status_code=409,
+                detail="A previous history import is incomplete. Retry the same source before changing or skipping the source.",
+            )
 
     with _automation_config_lock:
         saved_provider = load_provider_config()
@@ -503,26 +637,30 @@ def _complete_onboarding(payload: dict):
                 "providers": providers,
             }
 
-        if should_import and validated_source:
-            source_root = validated_source[0]
-            migration_state = load_migration_state()
-            imported_at = migration_state["imported_at"] or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            saved_migration = save_migration_state({
-                "completed": True,
-                "source_path": str(source_root),
-                "imported_at": imported_at,
-            })
-            migration = {
-                "imported": imported,
-                "completed": saved_migration["completed"],
-                "sourcePath": saved_migration["source_path"],
-            }
-
         if payload["skip_chat_setup"] is False:
             saved_provider = save_provider_config(provider_config)
         provider_configured = bool(get_provider_chain_config())
         if payload["skip_chat_setup"] is False and not provider_configured:
             raise HTTPException(status_code=422, detail="Complete provider credentials are required unless chat setup is skipped.")
+
+        if should_import and validated_source:
+            source_root, source_history, target_history, same_root = validated_source
+            imported = False
+            if not same_root and not (existing_migration["completed"] and existing_migration["source_path"] == str(source_root)):
+                _copy_missing_legacy_history(source_history, target_history, history_changes)
+                imported = True
+                save_migration_state({
+                    "completed": False, "source_path": str(source_root), "imported_at": None,
+                })
+                history_changes.publish()
+            migration_state = load_migration_state()
+            imported_at = migration_state["imported_at"] or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            migration_completion = {
+                "completed": True,
+                "source_path": str(source_root),
+                "imported_at": imported_at,
+            }
+
         current_settings = load_settings()
         saved_settings = save_settings({
             **current_settings,
@@ -530,6 +668,15 @@ def _complete_onboarding(payload: dict):
             "launch_at_login": payload.get("launch_at_login", current_settings["launch_at_login"]),
             "display_language": payload.get("display_language", current_settings["display_language"]),
         })
+        if migration_completion is not None:
+            # Last persistent operation: a crash or configuration failure before
+            # this point leaves the durable incomplete/source journal intact.
+            saved_migration = save_migration_state(migration_completion)
+            migration = {
+                "imported": imported,
+                "completed": saved_migration["completed"],
+                "sourcePath": saved_migration["source_path"],
+            }
         return {
             "completed": True,
             "launchAtLogin": saved_settings["launch_at_login"],

@@ -21,7 +21,7 @@ if __name__ == "__main__":
 from src.core.context import ContextManager, atomic_write_json, context_transaction, write_context_messages
 from src.services.llm_client import LLMClient, StreamIncompleteError
 from src.services.audio_service import AudioService, AudioTranscriptionError
-from src.services.model_call_recorder import get_session_usage_summary
+from src.services.model_call_recorder import get_session_usage_summary, normalize_usage
 from src.utils.data_loader import DataLoader
 from src.utils.action_plan_sanitizer import sanitize_action_plan_markdown
 from src.utils.action_plan_stream import (
@@ -135,73 +135,21 @@ def get_action_plan_round_content(result):
 
 
 def _usage_has_recorded_counts(usage):
-    if not isinstance(usage, dict):
-        return False
-
-    values = [
-        usage.get("prompt_tokens"),
-        usage.get("completion_tokens"),
-        usage.get("total_tokens"),
-        usage.get("prompt_cache_hit_tokens"),
-        usage.get("prompt_cache_miss_tokens"),
-        usage.get("completion_reasoning_tokens"),
-        usage.get("reasoning_tokens"),
-    ]
-    prompt_details = usage.get("prompt_tokens_details")
-    if isinstance(prompt_details, dict):
-        values.append(prompt_details.get("cached_tokens"))
-    completion_details = usage.get("completion_tokens_details")
-    if isinstance(completion_details, dict):
-        values.append(completion_details.get("reasoning_tokens"))
-
-    for value in values:
-        try:
-            if float(value or 0) > 0:
-                return True
-        except (TypeError, ValueError):
-            continue
-    return False
+    normalized = normalize_usage(usage)
+    counts = [normalized[key] for key in ("prompt_tokens", "completion_tokens", "total_tokens")]
+    # Action Plan deliberately treats an all-zero response as unavailable, but
+    # one positive partial field cannot establish complete request usage.
+    return all(value is not None for value in counts) and any(value > 0 for value in counts)
 
 
 def _sum_usage_totals(*usage_payloads):
-    totals = {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "total_tokens": 0,
-        "prompt_cache_hit_tokens": 0,
-        "prompt_cache_miss_tokens": 0,
-        "completion_reasoning_tokens": 0,
-    }
-    for usage in usage_payloads:
-        if not isinstance(usage, dict):
-            continue
-        normalized_cache_hit = usage.get("prompt_cache_hit_tokens")
-        if normalized_cache_hit is None:
-            prompt_details = usage.get("prompt_tokens_details")
-            if isinstance(prompt_details, dict):
-                normalized_cache_hit = prompt_details.get("cached_tokens")
-        normalized_cache_miss = usage.get("prompt_cache_miss_tokens")
-        if normalized_cache_miss is None and normalized_cache_hit is not None:
-            normalized_cache_miss = max(int(usage.get("prompt_tokens", 0) or 0) - int(normalized_cache_hit or 0), 0)
-        normalized_reasoning = usage.get("completion_reasoning_tokens")
-        if normalized_reasoning is None:
-            normalized_reasoning = usage.get("reasoning_tokens")
-        if normalized_reasoning is None:
-            completion_details = usage.get("completion_tokens_details")
-            if isinstance(completion_details, dict):
-                normalized_reasoning = completion_details.get("reasoning_tokens")
-
-        usage_with_normalized_fields = {
-            **usage,
-            "prompt_cache_hit_tokens": normalized_cache_hit,
-            "prompt_cache_miss_tokens": normalized_cache_miss,
-            "completion_reasoning_tokens": normalized_reasoning,
-        }
-        for key in totals:
-            value = usage_with_normalized_fields.get(key)
-            if value is None:
-                continue
-            totals[key] += int(value or 0)
+    normalized = [normalize_usage(usage) for usage in usage_payloads]
+    totals = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "completion_reasoning_tokens"):
+        values = [usage[key] for usage in normalized]
+        # An aggregate is known only when every actual contributing request
+        # reported that counter. Missingness must survive retry/round sums.
+        totals[key] = sum(values) if values and all(value is not None for value in values) else None
     return totals
 
 
@@ -273,35 +221,24 @@ def estimate_action_plan_prompt_tokens(prompt_text, system_text=""):
 
 def build_action_plan_request_stats(section, result):
     payload = dict(result or {})
-    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    usage = normalize_usage(payload.get("usage"))
     duration = float(payload.get("duration", 0) or 0)
     usage_recorded = _usage_has_recorded_counts(usage)
-    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0) if usage_recorded else None
-    completion_tokens = int(usage.get("completion_tokens", 0) or 0) if usage_recorded else None
-    total_tokens = int(usage.get("total_tokens", 0) or 0) if usage_recorded else None
+    prompt_tokens = usage["prompt_tokens"]
+    completion_tokens = usage["completion_tokens"]
+    total_tokens = usage["total_tokens"]
     prompt_cache_hit_tokens = usage.get("prompt_cache_hit_tokens")
-    if prompt_cache_hit_tokens is None:
-        prompt_details = usage.get("prompt_tokens_details")
-        if isinstance(prompt_details, dict):
-            prompt_cache_hit_tokens = prompt_details.get("cached_tokens")
     prompt_cache_miss_tokens = usage.get("prompt_cache_miss_tokens")
-    if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None:
-        prompt_cache_miss_tokens = max(int(prompt_tokens or 0) - int(prompt_cache_hit_tokens or 0), 0)
     completion_reasoning_tokens = usage.get("completion_reasoning_tokens")
-    if completion_reasoning_tokens is None:
-        completion_reasoning_tokens = usage.get("reasoning_tokens")
-    if completion_reasoning_tokens is None:
-        completion_details = usage.get("completion_tokens_details")
-        if isinstance(completion_details, dict):
-            completion_reasoning_tokens = completion_details.get("reasoning_tokens")
     cache_total = int(prompt_cache_hit_tokens or 0) + int(prompt_cache_miss_tokens or 0)
-    if not usage_recorded:
+    if not any(usage[key] is not None and usage[key] > 0 for key in ("prompt_tokens", "completion_tokens", "total_tokens", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "completion_reasoning_tokens")):
+        prompt_tokens = completion_tokens = total_tokens = None
         prompt_cache_hit_tokens = None
         prompt_cache_miss_tokens = None
         completion_reasoning_tokens = None
         cache_total = 0
-    completion_rate = int(completion_tokens or 0) / duration if usage_recorded and duration > 0 else None
-    total_rate = int(total_tokens or 0) / duration if usage_recorded and duration > 0 else None
+    completion_rate = completion_tokens / duration if completion_tokens is not None and duration > 0 else None
+    total_rate = total_tokens / duration if total_tokens is not None and duration > 0 else None
 
     stats = {
         "section": section,
@@ -309,6 +246,7 @@ def build_action_plan_request_stats(section, result):
         "completed_at": payload.get("completed_at"),
         "first_token_latency": _as_float_or_none(payload.get("first_token_latency")),
         "usage_recorded": usage_recorded,
+        "usage_complete": usage_recorded,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
@@ -398,6 +336,18 @@ def _build_action_plan_prompt_kwargs(prompt_budget_tokens):
     }
 
 
+def _validate_complete_action_plan_budget(client, messages, model, provider_route, *, reserve_tokens=0):
+    budget = _resolve_action_plan_prompt_budget(client, model, provider_route)
+    limit = int(budget["input_budget_tokens"])
+    estimated = estimate_tokens(json.dumps(messages, ensure_ascii=False, separators=(",", ":"))) + max(0, int(reserve_tokens))
+    if estimated > limit:
+        raise ValueError(
+            f"Complete action-plan messages exceed input budget ({estimated} estimated > {limit}); "
+            "shorten required prompts/recent records or configure a larger supported context. No request was sent."
+        )
+    return estimated
+
+
 def run_action_plan_round(
     *,
     client,
@@ -415,13 +365,9 @@ def run_action_plan_round(
     metadata=None,
     emit=print,
 ):
+    _validate_complete_action_plan_budget(client, messages, model_override, provider_route)
     total_attempts = max_empty_content_retries + 1
-    total_usage = {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "total_tokens": 0,
-    }
-    usage_recorded = False
+    attempt_usages = []
     total_duration = 0.0
     last_result = {}
 
@@ -429,11 +375,22 @@ def run_action_plan_round(
         if emit_start_before_first_attempt or attempt > 1:
             emit_action_plan_stream_event(section, "start", "", emit=emit)
 
+        # LLMClient reports errors per attempt. Do not publish a terminal round
+        # error until the retry policy is exhausted: downstream jobs latch it.
+        attempt_errors = []
+        stream_printer = build_action_plan_stream_printer(section, emit=emit)
+
+        def attempt_callback(tag, content, *, errors=attempt_errors, printer=stream_printer):
+            if tag == "error":
+                errors.append(content)
+            else:
+                printer(tag, content)
+
         try:
             result = client.chat(
                 messages,
                 stream=True,
-                print_callback=build_action_plan_stream_printer(section, emit=emit),
+                print_callback=attempt_callback,
                 model=model_override,
                 provider_route=provider_route,
                 service_tier=service_tier,
@@ -443,7 +400,7 @@ def run_action_plan_round(
                 context_file=context_file,
                 metadata=metadata,
             )
-        except StreamIncompleteError:
+        except StreamIncompleteError as error:
             if attempt < total_attempts:
                 logging.warning(
                     "Action plan %s round stream ended incomplete on attempt %s/%s; retrying same round",
@@ -457,17 +414,22 @@ def run_action_plan_round(
                 section,
                 total_attempts,
             )
+            stream_printer("error", attempt_errors[-1] if attempt_errors else str(error))
+            raise
+        except Exception:
+            for error_message in attempt_errors:
+                stream_printer("error", error_message)
             raise
         last_result = dict(result or {})
         attempt_usage = last_result.get("usage")
-        if _usage_has_recorded_counts(attempt_usage):
-            usage_recorded = True
-        total_usage = _sum_usage_totals(total_usage, attempt_usage)
+        attempt_usages.append(attempt_usage)
+        total_usage = _sum_usage_totals(*attempt_usages)
+        usage_available = any(value is not None and value > 0 for value in total_usage.values())
         total_duration += float(last_result.get("duration", 0) or 0)
 
         content = get_action_plan_round_content(last_result)
         if content:
-            last_result["usage"] = total_usage if usage_recorded else {}
+            last_result["usage"] = total_usage if usage_available else {}
             last_result["duration"] = total_duration
             last_result["attempts"] = attempt
             return last_result, content
@@ -480,7 +442,7 @@ def run_action_plan_round(
                 total_attempts,
             )
 
-    last_result["usage"] = total_usage if usage_recorded else {}
+    last_result["usage"] = total_usage if usage_available else {}
     last_result["duration"] = total_duration
     last_result["attempts"] = total_attempts
     logging.error(
@@ -603,6 +565,8 @@ def main():
     parser.add_argument("--client_sent_at", help="Client-side timestamp for the current chat message")
     
     args = parser.parse_args()
+    if args.chat_message is not None and not args.chat_message.strip():
+        parser.error("Chat message must not be blank")
     model_override = args.model.strip() if args.model else None
     provider_route = args.provider_route.strip() if args.provider_route else None
     service_tier = args.service_tier.strip() if args.service_tier else None
@@ -628,13 +592,13 @@ def main():
             if text is None:
                 print("TRANSCRIPTION_ERROR:Audio transcription failed")
                 raise SystemExit(1)
-            print(f"TRANSCRIPTION_RESULT:{text}")
+            print(f"TRANSCRIPTION_RESULT_JSON:{json.dumps(text)}")
             return
 
         # Backend-managed plan jobs isolate only their output/context files.
         # Config/history_dir (and therefore usage databases) remain unchanged.
         staging_value = os.environ.get("VANTAGE_ACTION_PLAN_STAGING_DIR")
-        plan_staging_dir = Path(staging_value) if staging_value and not args.chat_message else None
+        plan_staging_dir = Path(staging_value) if staging_value and args.chat_message is None else None
         context_file = (
             plan_staging_dir / "latest_context.json"
             if plan_staging_dir is not None else args.context_file
@@ -643,7 +607,7 @@ def main():
         client = LLMClient()
         
         # === CHAT MODE ===
-        if args.chat_message:
+        if args.chat_message is not None:
             logging.info("Mode: Chat")
             
             # Ensure System Prompt is present if context is empty
@@ -661,15 +625,16 @@ def main():
             # Emit initial stats (Historical only)
             initial_stats = {
                 "turns": len(context_mgr.messages),
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+                "usage_complete": False,
                 "prompt_cache_hit_tokens": None,
                 "prompt_cache_miss_tokens": None,
                 "prompt_cache_hit_rate": None,
                 "completion_reasoning_tokens": None,
                 "total_duration": 0,
-                "speed": "0.00 tokens/s",
+                "speed": None,
                 "first_token_latency": None,
                 "cache_scope": "request",
             }
@@ -716,24 +681,26 @@ def main():
             
             # Handle Result
             content = result["content"]
-            if content:
+            if isinstance(content, str) and content.strip():
                 context_mgr.add_message("assistant", content)
                 context_mgr.save()
             else:
                 logging.error("No content returned from API")
+                print(f"STREAM_ERROR:{json.dumps('Model returned no chat content; please retry.')}", flush=True)
+                raise SystemExit(1)
 
             # Print Stats for GUI
-            usage = result.get("usage", {})
-            prompt_tokens = usage.get("prompt_tokens", 0)
-            completion_tokens = usage.get("completion_tokens", 0)
-            total_tokens = usage.get("total_tokens", 0)
+            usage = normalize_usage(result.get("usage"))
+            prompt_tokens = usage["prompt_tokens"]
+            completion_tokens = usage["completion_tokens"]
+            total_tokens = usage["total_tokens"]
             prompt_cache_hit_tokens = usage.get("prompt_cache_hit_tokens")
             if prompt_cache_hit_tokens is None:
                 prompt_details = usage.get("prompt_tokens_details")
                 if isinstance(prompt_details, dict):
                     prompt_cache_hit_tokens = prompt_details.get("cached_tokens")
             prompt_cache_miss_tokens = usage.get("prompt_cache_miss_tokens")
-            if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None:
+            if prompt_cache_miss_tokens is None and prompt_cache_hit_tokens is not None and prompt_tokens is not None:
                 prompt_cache_miss_tokens = max(int(prompt_tokens or 0) - int(prompt_cache_hit_tokens or 0), 0)
             completion_reasoning_tokens = usage.get("completion_reasoning_tokens")
             if completion_reasoning_tokens is None:
@@ -748,6 +715,7 @@ def main():
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
+                "usage_complete": all(value is not None for value in (prompt_tokens, completion_tokens, total_tokens)),
                 "prompt_cache_hit_tokens": prompt_cache_hit_tokens,
                 "prompt_cache_miss_tokens": prompt_cache_miss_tokens,
                 "prompt_cache_hit_rate": (
@@ -757,7 +725,7 @@ def main():
                 ),
                 "completion_reasoning_tokens": completion_reasoning_tokens,
                 "total_duration": duration,
-                "speed": f"{completion_tokens / duration:.2f} tokens/s" if duration > 0 else "0.00 tokens/s",
+                "speed": f"{completion_tokens / duration:.2f} tokens/s" if completion_tokens is not None and duration > 0 else None,
                 "first_token_latency": _as_float_or_none(result.get("first_token_latency")),
                 "cache_scope": "request",
             }
@@ -767,8 +735,10 @@ def main():
         # === PROMPT/ANALYSIS MODE ===
         else:
             logging.info("Mode: Analysis/Prompt")
+            input_calendar_date = datetime.now().date()
             
             # Construct Prompt
+            prompt_budget = _resolve_action_plan_prompt_budget(client, model_override, provider_route)
             if args.prompt_file:
                 prompt_path = Path(args.prompt_file)
                 prompt_text = prompt_path.read_text(encoding="utf-8")
@@ -828,6 +798,16 @@ def main():
             else:
                 action_plan_msg = f"{action_plan_msg}\n\n{future_planned_rows}"
             action_plan_msg = f"{action_plan_msg}{TODAY_PLAN_SCOPE}"
+
+            # Round two must retain round one's complete answer. Reserve its
+            # configured output allowance and all known round-two records now,
+            # then recheck actual messages again at each round's send boundary.
+            _validate_complete_action_plan_budget(
+                client,
+                analysis_messages + [{"role": "assistant", "content": ""}, {"role": "user", "content": action_plan_msg}],
+                model_override, provider_route,
+                reserve_tokens=prompt_budget.get("output_reserve_tokens", 0),
+            )
             
             print("正在生成长期行动计划，请稍候...")
             # === ROUND 1: Long-Term Action Plan ===
@@ -913,6 +893,11 @@ def main():
                 
                 if first_round_content and second_round_content:
                     generated_at = datetime.now()
+                    if generated_at.date() != input_calendar_date:
+                        raise ValueError(
+                            "The calendar day changed during action-plan generation; regenerate using today's records. "
+                            "The previous published plan and chat context were preserved."
+                        )
 
                     # --- CRITICAL FIX: Reset Context for Chat ---
                     # The user wants the Chat to start with ONLY the context of this Action Plan session.
@@ -963,11 +948,11 @@ def main():
                     usage1 = result.get("usage", {})
                     usage2 = result_round_2.get("usage", {})
                     
-                    total_prompt_tokens = usage1.get("prompt_tokens", 0) + usage2.get("prompt_tokens", 0)
-                    total_completion_tokens = usage1.get("completion_tokens", 0) + usage2.get("completion_tokens", 0)
-                    total_total_tokens = usage1.get("total_tokens", 0) + usage2.get("total_tokens", 0)
-                    total_duration = result.get("duration", 0) + result_round_2.get("duration", 0)
                     total_cache_usage = _sum_usage_totals(usage1, usage2)
+                    total_prompt_tokens = total_cache_usage["prompt_tokens"]
+                    total_completion_tokens = total_cache_usage["completion_tokens"]
+                    total_total_tokens = total_cache_usage["total_tokens"]
+                    total_duration = result.get("duration", 0) + result_round_2.get("duration", 0)
                     session_summary = _load_session_usage_summary(history_dir, action_plan_session_id)
 
                     summary_prompt_tokens = (
@@ -1039,8 +1024,8 @@ def main():
                         "cache_scope": "session",
                         "speed": (
                             f"{summary_completion_tokens / summary_total_duration:.2f} tokens/s"
-                            if summary_total_duration > 0
-                            else "0.00 tokens/s"
+                            if summary_completion_tokens is not None and summary_total_duration > 0
+                            else None
                         ),
                         "first_token_latency": _first_non_null(
                             request_stats[0].get("first_token_latency"),

@@ -4,7 +4,7 @@ const ASSET_SHEET_NAMES = ['asset', '资产'];
 const SOCIAL_SHEET_NAMES = ['人情'];
 
 const REQUIRED_TOKENS = ['必须', '必需', '是', 'required', 'yes', 'y'];
-const OPTIONAL_TOKENS = ['非必须', '不必须', '不是', '否', 'not required', 'optional', 'no', 'n'];
+const OPTIONAL_TOKENS = ['非必须', '不必须', '非必需', '不必需', '不是', '否', 'not required', 'optional', 'no', 'n'];
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function normalizeText(value) {
@@ -31,10 +31,17 @@ function toNumber(value) {
   const text = normalizeText(value);
   if (!text) return null;
 
-  const cleaned = text.replace(/[^\d.-]/g, '');
-  if (!cleaned || cleaned === '-' || cleaned === '.') return null;
-
-  const number = Number(cleaned);
+  let cleaned = text.replaceAll('−', '-').replaceAll('，', ',')
+    .replace(/^(?:人民币|RMB|CNY|USD|[$¥￥€£])\s*/i, '')
+    .replace(/\s*(?:元|RMB|CNY|USD)$/i, '').trim();
+  const accountingNegative = cleaned.startsWith('(') && cleaned.endsWith(')');
+  if (accountingNegative) cleaned = cleaned.slice(1, -1).trim();
+  if (!/^[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(cleaned)) return null;
+  let number = Number(cleaned.replaceAll(',', ''));
+  if (accountingNegative) {
+    if (number < 0) return null;
+    number = -number;
+  }
   return Number.isFinite(number) ? number : null;
 }
 
@@ -121,7 +128,7 @@ function parseRequiredFlag(value) {
   return null;
 }
 
-function getMonthlyBudgetValue(sheet, row) {
+function getMonthlyBudgetValue(sheet, row, daysInMonth) {
   const monthlyValue = toNumber(getCell(sheet, row, ['每月', '月消费', 'monthly']));
   if (monthlyValue !== null) return monthlyValue;
 
@@ -129,7 +136,7 @@ function getMonthlyBudgetValue(sheet, row) {
   if (yearlyValue !== null) return yearlyValue / 12;
 
   const dailyValue = toNumber(getCell(sheet, row, ['每日', '日消费', 'daily']));
-  if (dailyValue !== null) return dailyValue * 30;
+  if (dailyValue !== null) return dailyValue * daysInMonth;
 
   return null;
 }
@@ -166,6 +173,9 @@ function buildRecentSpending(sheet, anchorTimestamp) {
 }
 
 function buildBudgetSection(sheet, summaryBudget = {}) {
+  summaryBudget ??= {};
+  const periodDays = Number(summaryBudget.days_in_month);
+  const daysInMonth = Number.isInteger(periodDays) && periodDays >= 28 && periodDays <= 31 ? periodDays : 30;
   if (!sheet) {
     return {
       monthlyRequired: summaryBudget.monthly_required ?? null,
@@ -182,7 +192,7 @@ function buildBudgetSection(sheet, summaryBudget = {}) {
 
       const category = normalizeText(getCell(sheet, row, ['项目类型', '分类', 'category'])) || '未分类';
       const required = parseRequiredFlag(getCell(sheet, row, ['是否必须', '必需', 'required']));
-      const monthlyValue = getMonthlyBudgetValue(sheet, row);
+      const monthlyValue = getMonthlyBudgetValue(sheet, row, daysInMonth);
       const dailyValue = toNumber(getCell(sheet, row, ['每日', '日消费', 'daily']));
 
       if (monthlyValue === null && dailyValue === null) return null;
@@ -249,7 +259,9 @@ function buildAssetSection(sheet) {
     .filter(Boolean)
     .sort((left, right) => (right.totalPrice ?? 0) - (left.totalPrice ?? 0));
 
-  const totalValue = items.reduce((sum, item) => sum + (item.totalPrice ?? 0), 0);
+  const knownValues = items.map((item) => item.totalPrice).filter((value) => value !== null);
+  const totalValue = knownValues.length && knownValues.length === items.length
+    ? knownValues.reduce((sum, value) => sum + value, 0) : null;
 
   return {
     totalValue: items.length ? totalValue : null,
@@ -284,7 +296,9 @@ function buildSocialEvents(sheet) {
     .filter(Boolean)
     .sort((left, right) => right.sortValue - left.sortValue);
 
-  const totalAmount = items.reduce((sum, item) => sum + (item.amount ?? 0), 0);
+  const knownAmounts = items.map((item) => item.amount).filter((value) => value !== null);
+  const totalAmount = knownAmounts.length && knownAmounts.length === items.length
+    ? knownAmounts.reduce((sum, value) => sum + value, 0) : null;
 
   return {
     totalAmount: items.length ? totalAmount : null,

@@ -235,7 +235,7 @@ export default function PlotChartCard({
         >
           <div style={{ display: 'grid', gap: 10 }}>
             <AlertTriangle size={24} style={{ justifySelf: 'center' }} />
-            <strong>{localizedChart?.message || t('plots.empty_chart')}</strong>
+            <strong>{localizedChart?.message || localizedChart?.error || t('plots.empty_chart')}</strong>
           </div>
         </div>
       ) : (

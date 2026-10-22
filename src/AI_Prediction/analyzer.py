@@ -212,22 +212,20 @@ def analyze_food_and_restaurant(df):
 
 
 def statistical_analysis(df):
+    df = df.copy()
     # 确保拉稀次数为整数类型
     if '拉稀次数' in df.columns:
         df['拉稀次数'] = pd.to_numeric(df['拉稀次数'], errors='coerce').fillna(0).astype(int)
 
-    # 计算“次日拉稀次数”列，保证日期是相邻的
-    df = df.sort_values('日期').reset_index(drop=True)
-    # 计算日期差（天数）
-    df['日期_diff'] = pd.to_datetime(df['日期']).shift(-1) - pd.to_datetime(df['日期'])
-    # 仅当日期差为1天时才赋值，否则为0
-    next_diarrhea = df['拉稀次数'].shift(-1)
-    df['次日拉稀次数'] = 0
-    mask = df['日期_diff'].dt.days == 1
-    df.loc[mask, '次日拉稀次数'] = pd.Series(next_diarrhea)[mask].fillna(0).astype(int)
+    # Exploded food rows repeat the same daily health count. Build one daily
+    # observation before joining date+1; physical adjacency is not tomorrow.
+    df['日期'] = pd.to_datetime(df['日期'], errors='coerce', format='mixed').dt.normalize()
+    df = df.dropna(subset=['日期']).sort_values('日期').reset_index(drop=True)
+    daily_counts = df.groupby('日期')['拉稀次数'].max()
+    next_dates = df['日期'] + pd.Timedelta(days=1)
+    df['次日拉稀次数'] = next_dates.map(daily_counts).fillna(0).astype(int)
     # 计算“当日及次日拉稀次数”
     df['当日及次日拉稀次数'] = df['拉稀次数'] + df['次日拉稀次数']
-    df = df.drop(columns=['日期_diff'])
     stats = df.groupby('食物餐厅').agg(
         总出现次数=('食物餐厅', 'size'),
         拉稀次数=('拉稀次数', 'sum'),

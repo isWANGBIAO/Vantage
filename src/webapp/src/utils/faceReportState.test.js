@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getFaceReportState } from './faceReportState.js';
+import { getFaceReportState, getFaceProgressOutcome } from './faceReportState.js';
+
+test('idle after a backend restart is terminal, but queued and running remain active', () => {
+  assert.equal(getFaceProgressOutcome({ status: 'idle', percent: 0 }), 'refresh');
+  assert.equal(getFaceProgressOutcome({ status: 'complete', percent: 100 }), 'refresh');
+  assert.equal(getFaceProgressOutcome({ status: 'error', percent: 0 }), 'error');
+  assert.equal(getFaceProgressOutcome({ status: 'queued', percent: 0 }), 'active');
+  assert.equal(getFaceProgressOutcome({ status: 'running', percent: 50 }), 'active');
+});
 
 test('getFaceReportState returns empty when backend has no cached report', () => {
   const state = getFaceReportState({ error: 'No report generated' });

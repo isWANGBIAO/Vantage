@@ -46,11 +46,34 @@ const settings = {
     action_plan_check_interval_minutes: 0,
 };
 let onboardingCompleted = false;
+const recoveryCase = process.env.VANTAGE_UI_RECOVERY_CASE || 'all';
+const runsRecoveryCase = name => recoveryCase === 'all' || recoveryCase === name;
+let expectedOnboardingSkip = true;
 let window;
 let server;
 let shuttingDown = false;
 let backendConnection;
 let smokeSession;
+let providerConfig = { version: 2, selected_provider: null, providers: {} };
+let inheritedProviderRouteOverride = null;
+const pendingDiscoveries = [];
+
+function syntheticProviders() {
+    return { version: 2, selected_provider: 'alpha', providers: Object.fromEntries(['alpha', 'beta'].map(route => [route, {
+        route, name: `${route === 'alpha' ? 'Alpha' : 'Beta'} Provider`, type: 'openai-compatible', enabled: true,
+        api_key: '********', base_url: `https://${route}.invalid/v1`, model: `${route}-model`, models: [`${route}-model`],
+    }])) };
+}
+let todayReadFailures = 0;
+let todayReadFailuresObserved = 0;
+const cameraResponses = [];
+let cameraAttempts = 0;
+let faceProgress = { status: 'queued', percent: 0 };
+let faceProgressReads = 0;
+let faceProgressDrops = 0;
+let faceProgressDropsObserved = 0;
+// A 4x4 solid-color synthetic JPEG, generated solely for transport tests.
+const cameraJpeg = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDlqKKK9s8M/9k=', 'base64');
 
 const chart = (id, title) => ({
     id, title, summary: [],
@@ -94,6 +117,23 @@ const readFixtures = {
     '/api/v1/body-analysis/status': { status: 'disabled', last_report_available: false },
     '/api/v1/usage': { summary: {}, sources: [], sessions: [] },
 };
+const fixtureStatus = {};
+if (runsRecoveryCase('aqi')) {
+    readFixtures['/api/v1/system/air-quality'] = { aqi: 62, city: 'Synthetic city', level: 'Moderate', color: '#aaa', status: 'ready' };
+}
+if (runsRecoveryCase('purchase-restore')) {
+    readFixtures['/api/v1/finance/purchase-recommendations'] = {
+        status: 'ready', cache_key: 'synthetic-cache', dismissed_count: 0,
+        recommendation_groups: [{ key: 'practical', title: 'Synthetic practical', items: [{ name: 'Synthetic desk lamp', reason: 'Synthetic recommendation' }] }],
+    };
+}
+if (runsRecoveryCase('finance-unavailable')) {
+    readFixtures['/api/v1/finance/balance-sheet'] = {
+        status: 'unavailable', source: { available: false, path: '/synthetic/private/Balance Sheet.xlsx' },
+        error: 'File not found: /synthetic/private/Balance Sheet.xlsx',
+    };
+    readFixtures['/api/v1/plots/data'].charts[1] = { id: 'balance', title: 'Synthetic balance chart', empty: true, error: 'Synthetic balance validation failed', summary: [] };
+}
 
 function onboardingState() {
     return {
@@ -103,7 +143,12 @@ function onboardingState() {
 }
 
 function settingsState() {
-    return { settings: { ...settings }, provider: { version: 2, selected_provider: null, providers: {} }, runtime_paths: {}, migration: {} };
+    const route = inheritedProviderRouteOverride || [providerConfig.selected_provider, ...Object.keys(providerConfig.providers)]
+        .find(route => providerConfig.providers[route]?.enabled !== false && providerConfig.providers[route]?.api_key && providerConfig.providers[route]?.base_url);
+    const inherited = providerConfig.providers[route];
+    return { settings: { ...settings }, provider: providerConfig, inherited_ai_provider: inherited ? {
+        route, name: inherited.name || route, type: inherited.type || 'openai-compatible', base_url: inherited.base_url, has_api_key: true,
+    } : null, runtime_paths: {}, migration: {} };
 }
 
 async function serveFixture(req, res) {
@@ -112,23 +157,56 @@ async function serveFixture(req, res) {
     for await (const chunk of req) body.push(chunk);
     const payload = body.length ? JSON.parse(Buffer.concat(body).toString()) : undefined;
     calls.push({ method: req.method, pathname, ...(payload ? { payload } : {}) });
+    if (req.method === 'GET' && pathname === '/api/v1/camera/stream' && runsRecoveryCase('camera-preview')) {
+        cameraAttempts++;
+        res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame', 'Cache-Control': 'no-store' });
+        res.flushHeaders();
+        cameraResponses.push(res);
+        if (cameraAttempts <= 2) res.socket.destroy();
+        return; // Intentionally controlled TCP multipart stream, not a mocked DOM event.
+    }
+    if (req.method === 'GET' && pathname === '/api/v1/face/progress' && runsRecoveryCase('face-progress')) {
+        faceProgressReads++;
+        if (faceProgressDrops > 0) {
+            faceProgressDrops--;
+            faceProgressDropsObserved++;
+            req.socket.destroy();
+        } else res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(faceProgress));
+        return;
+    }
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Cache-Control', 'no-store');
+    if (req.method === 'GET' && pathname === '/api/v1/action-plan/today' && todayReadFailures > 0) {
+        todayReadFailures--;
+        todayReadFailuresObserved++;
+        res.end('{'); // A transient, fully consumed invalid backend response.
+        return;
+    }
+    if (req.method === 'GET' && pathname === '/api/v1/action-plan/jobs/synthetic-recovery/events') {
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.end(`${JSON.stringify({ sequence: 1, log: 'STREAM_ANALYSIS_CONTENT:"Synthetic incomplete progress"' })}\n`);
+        return;
+    }
     let result;
     if (req.method === 'GET' && pathname === '/api/v1/settings') result = settingsState();
     else if (req.method === 'GET' && pathname === '/api/v1/settings/display-language') result = { display_language: settings.display_language };
     else if (req.method === 'GET' && pathname === '/api/v1/onboarding') result = onboardingState();
     else if (req.method === 'PUT' && pathname === '/api/v1/settings') {
         Object.assign(settings, payload);
+        if (payload.provider_config) providerConfig = payload.provider_config;
         result = settingsState();
+    } else if (req.method === 'POST' && pathname === '/api/v1/models/discover') {
+        result = await new Promise(resolve => pendingDiscoveries.push(resolve));
+    } else if (req.method === 'POST' && pathname === '/api/v1/providers/models/discover') {
+        result = { models: ['synthetic-voice'] };
     } else if (req.method === 'PUT' && pathname === '/api/v1/settings/display-language') {
         settings.display_language = payload.display_language;
         result = { display_language: settings.display_language };
     } else if (req.method === 'POST' && pathname === '/api/v1/onboarding/complete') {
-        assert.equal(payload.skip_chat_setup, true, 'Onboarding must explicitly skip the provider.');
+        assert.equal(payload.skip_chat_setup, expectedOnboardingSkip, 'Onboarding must submit the current provider setup choice.');
         assert.equal(payload.import_legacy_data, false, 'The smoke must not import user data.');
         assert.equal(payload.launch_at_login, false);
-        assert.equal(payload.api_key, '');
+        assert.equal(payload.api_key, expectedOnboardingSkip ? '' : 'synthetic-provider-key');
         assert.equal(payload.legacy_root, '');
         onboardingCompleted = true;
         result = {
@@ -137,7 +215,19 @@ async function serveFixture(req, res) {
             settings: { display_language: settings.display_language, theme: settings.theme, theme_mode: settings.theme_mode, launch_at_login: false },
             provider: { selected_provider: null, providers: [] },
         };
-    } else if (req.method === 'GET' && Object.hasOwn(readFixtures, pathname)) result = readFixtures[pathname];
+    } else if (req.method === 'POST' && pathname === '/api/v1/face/analyze' && runsRecoveryCase('face-progress')) result = { status: 'started' };
+    else if (req.method === 'POST' && pathname === '/api/v1/plots/refresh') result = { ok: true };
+    else if (req.method === 'POST' && pathname === '/api/v1/finance/purchase-recommendations/dismiss') {
+        const item = { ...payload.item, id: 1, group_key: payload.group_key, cache_key: payload.cache_key };
+        readFixtures['/api/v1/finance/purchase-recommendations/dismissed'] = { items: [item], count: 1 };
+        result = { ok: true, item, count: 1 };
+    } else if (req.method === 'DELETE' && pathname === '/api/v1/finance/purchase-recommendations/dismissed/1') {
+        readFixtures['/api/v1/finance/purchase-recommendations/dismissed'] = { items: [], count: 0 };
+        result = { ok: true, count: 0 };
+    } else if (req.method === 'GET' && Object.hasOwn(readFixtures, pathname)) {
+        res.statusCode = fixtureStatus[pathname] || 200;
+        result = readFixtures[pathname];
+    }
     else {
         unexpectedRequests.push(`${req.method} ${pathname}`);
         res.statusCode = 404;
@@ -153,6 +243,29 @@ async function checkErrors() {
     assert.deepEqual(forbiddenNetwork, [], 'Unexpected non-local renderer requests');
 }
 
+async function waitForFixture(label, predicate) {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+        await checkErrors();
+        if (predicate()) return;
+        await delay(25);
+    }
+    throw new Error(`Timed out waiting for synthetic backend: ${label}`);
+}
+
+function sendCameraFrame(response) {
+    assert.ok(response && !response.destroyed, 'A current multipart transport must be open');
+    const write = () => {
+        if (response.destroyed) return;
+        response.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${cameraJpeg.length}\r\n\r\n`);
+        response.write(cameraJpeg);
+        response.write('\r\n');
+    };
+    write();
+    const timer = setInterval(write, 100);
+    response.once('close', () => clearInterval(timer));
+}
+
 async function evaluate(fn, ...args) {
     return window.webContents.executeJavaScript(`(${fn.toString()})(...${JSON.stringify(args)})`);
 }
@@ -165,7 +278,8 @@ async function waitFor(label, fn, ...args) {
         await delay(50);
     }
     const text = await evaluate(() => document.body.innerText.slice(0, 2500));
-    throw new Error(`Timed out waiting for ${label}\n${text}`);
+    const imageState = await evaluate(() => [...document.querySelectorAll('img')].map(image => ({ src: image.src, width: image.naturalWidth, complete: image.complete })));
+    throw new Error(`Timed out waiting for ${label}\n${text}\nImages: ${JSON.stringify(imageState)}; camera attempts: ${cameraAttempts}`);
 }
 
 async function click(selector, text = null) {
@@ -196,7 +310,9 @@ async function createWindow() {
     contents.on('console-message', details => {
         // JavaScript console errors are classified below with their original
         // exception objects. This event also catches resource/security errors.
-        if (!shuttingDown && details.level === 'error' && !details.message.startsWith('Failed to load model list:')) {
+        const expectedCameraFailure = runsRecoveryCase('camera-preview') && details.sourceId.includes('/api/v1/camera/stream')
+            && details.message.startsWith('Failed to load resource:');
+        if (!shuttingDown && details.level === 'error' && !details.message.startsWith('Failed to load model list:') && !expectedCameraFailure) {
             errors.push(`${details.message} (${details.sourceId}:${details.lineNumber})`);
         }
     });
@@ -300,6 +416,124 @@ async function openSettings() {
     await waitForNetworkIdle();
 }
 
+async function editSettingsInput(label, value) {
+    await evaluate((label, value) => {
+        const row = [...document.querySelectorAll('.settings-row')].find(node => node.querySelector('.settings-row-label')?.textContent === label);
+        const input = row?.querySelector('input');
+        if (!input) throw new Error(`Missing settings input ${label}`);
+        input.focus();
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }, label, value);
+    await delay(50);
+    await evaluate(label => {
+        const input = [...document.querySelectorAll('.settings-row')].find(node => node.querySelector('.settings-row-label')?.textContent === label)?.querySelector('input');
+        input?.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    }, label);
+    await delay(50);
+}
+
+async function resetProviderSettings(config = syntheticProviders(), inheritedRoute = null) {
+    providerConfig = config;
+    inheritedProviderRouteOverride = inheritedRoute;
+    await navigate('dashboard', '.dashboard-page', 'System Dashboard');
+    await openSettings();
+    await click('.settings-sidebar button', 'AI Provider');
+}
+
+async function takePendingDiscovery() {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+        if (pendingDiscoveries.length) return pendingDiscoveries.shift();
+        await checkErrors();
+        await delay(25);
+    }
+    throw new Error('The synthetic provider discovery request did not arrive');
+}
+
+async function exerciseProviderSettings() {
+    await resetProviderSettings();
+    await editSettingsInput('Provider Route', 'alpha-renamed');
+    assert.equal(await evaluate(() => document.querySelector('.settings-provider-item.is-active .settings-provider-name')?.textContent), 'Alpha Provider');
+    assert.equal(await evaluate(() => [...document.querySelectorAll('.settings-row')].find(row => row.querySelector('.settings-row-label')?.textContent === 'Provider Route')?.querySelector('input')?.value), 'alpha');
+    assert.match(await evaluate(() => document.querySelector('.settings-page')?.innerText), /API key/i);
+    await editSettingsInput('API Key', 'synthetic-new-alpha');
+    await editSettingsInput('Provider Route', 'alpha-renamed');
+    await click('.settings-save-button');
+    await waitFor('explicit-key route rename saved', () => document.querySelector('.settings-save-status')?.textContent?.includes('Saved') || !document.querySelector('.settings-save-button')?.disabled);
+    assert.equal(providerConfig.selected_provider, 'alpha-renamed');
+    assert.equal(providerConfig.providers['alpha-renamed'].api_key, 'synthetic-new-alpha');
+    assert.equal(Object.hasOwn(providerConfig.providers, 'alpha'), false);
+    console.log('PASS provider rename refuses masked credentials and accepts an explicit new key');
+    await resetProviderSettings();
+    const tree = await window.webContents.debugger.sendCommand('Accessibility.getFullAXTree');
+    const controls = tree.nodes.filter(node => ['textbox', 'combobox'].includes(node.role?.value) && !node.ignored);
+    for (const name of ['Name', 'Provider Route', 'Base URL', 'API Key', 'Model']) {
+        assert(controls.some(node => node.name?.value === name), `Missing accessible settings control ${name}`);
+    }
+    await click('.settings-icon-button[title="Show API key"]');
+    const revealed = await window.webContents.debugger.sendCommand('Accessibility.getFullAXTree');
+    assert(revealed.nodes.some(node => node.role?.value === 'textbox' && node.name?.value === 'API Key'));
+    console.log('PASS provider controls retain accessible labels, including revealed credentials');
+    await evaluate(() => [...document.querySelectorAll('.settings-provider-item')].find(node => node.textContent.includes('Beta Provider')).click());
+    await click('.settings-sidebar button', 'Voice Provider');
+    assert.match(await evaluate(() => document.querySelector('.settings-section')?.innerText), /Alpha Provider/);
+    assert.equal(await evaluate(() => document.querySelector('.settings-section input')?.value), 'https://alpha.invalid/v1');
+    await click('.settings-icon-button[title="Refresh Models"]');
+    await waitFor('voice discovery completed', () => document.querySelector('.settings-provider-model-select')?.value === 'synthetic-voice');
+    await waitForNetworkIdle();
+    assert.equal(calls.filter(call => call.pathname === '/api/v1/providers/models/discover').at(-1)?.payload.route, 'alpha');
+    for (const incomplete of ['disabled', 'keyless']) {
+        const config = syntheticProviders();
+        if (incomplete === 'disabled') config.providers.alpha.enabled = false;
+        else config.providers.alpha.api_key = '';
+        await resetProviderSettings(config);
+        await click('.settings-sidebar button', 'Voice Provider');
+        assert.match(await evaluate(() => document.querySelector('.settings-section')?.innerText), /Beta Provider/);
+        assert.equal(await evaluate(() => document.querySelector('.settings-section input')?.value), 'https://beta.invalid/v1');
+    }
+    console.log('PASS voice inheritance follows the persisted active provider, not the browsed editor');
+    await resetProviderSettings({ version: 2, selected_provider: 'disabled', providers: {
+        disabled: { enabled: false },
+        10: { name: 'Numeric Ten', api_key: '********', base_url: 'https://ten.invalid/v1', model: 'ten' },
+        2: { name: 'Numeric Two', api_key: '********', base_url: 'https://two.invalid/v1', model: 'two' },
+    } }, '10');
+    await evaluate(() => [...document.querySelectorAll('.settings-provider-item')].find(node => node.textContent.includes('Numeric Two')).click());
+    await click('.settings-sidebar button', 'Voice Provider');
+    assert.match(await evaluate(() => document.querySelector('.settings-section')?.innerText), /Numeric Ten/);
+    assert.equal(await evaluate(() => document.querySelector('.settings-section input')?.value), 'https://ten.invalid/v1');
+    console.log('PASS numeric route inheritance uses backend priority despite JavaScript object ordering');
+    for (const edit of ['delete', 'endpoint', 'rename']) {
+        await resetProviderSettings();
+        if (edit === 'rename') await editSettingsInput('API Key', 'synthetic-reentered-key');
+        await click('.settings-icon-button[title="Refresh Models"]');
+        const respond = await takePendingDiscovery();
+        if (edit === 'delete') {
+            // Only the native confirmation boundary is replaced; real React deletion runs.
+            await evaluate(() => { window.confirm = () => true; });
+            await click('.settings-provider-editor-actions button', 'Delete');
+        } else if (edit === 'endpoint') await editSettingsInput('Base URL', 'https://changed.invalid/v1');
+        else await editSettingsInput('Provider Route', 'alpha-renamed');
+        respond({ models: ['late-model'], model_capabilities: { 'late-model': [] } });
+        await waitFor('stale discovery settled', () => document.querySelector('.settings-icon-button[title="Refresh Models"]')?.disabled === false);
+        await waitForNetworkIdle();
+        assert.equal(await evaluate(() => document.querySelector('.settings-provider-model-select')?.value), edit === 'delete' ? 'beta-model' : 'alpha-model');
+        if (edit === 'delete') assert.deepEqual(await evaluate(() => [...document.querySelectorAll('.settings-provider-name')].map(node => node.textContent)), ['Beta Provider']);
+        if (edit === 'rename') assert.equal(await evaluate(() => document.querySelector('input[aria-label="Provider Route"]')?.value), 'alpha-renamed');
+    }
+    console.log('PASS late model discovery cannot recreate deleted or overwrite edited providers');
+    await resetProviderSettings();
+    await click('.settings-icon-button[title="Refresh Models"]');
+    const respond = await takePendingDiscovery();
+    respond({ models: ['alpha-refreshed'], model_capabilities: { 'alpha-refreshed': ['temperature', 'top_p'] } });
+    await waitFor('current provider discovered', () => document.querySelector('.settings-provider-model-select')?.value === 'alpha-refreshed');
+    await click('.settings-save-button');
+    await waitForNetworkIdle();
+    assert.deepEqual(providerConfig.providers.alpha.model_capabilities, { 'alpha-refreshed': ['temperature', 'top_p'] });
+    console.log('PASS discovered model capabilities are submitted and survive the saved state');
+    await click('.settings-sidebar button', 'General');
+}
+
 async function exerciseUi() {
     await createWindow();
     await expectStep(1);
@@ -333,6 +567,29 @@ async function exerciseUi() {
     await click('.onboarding-actions button', 'Continue');
     await click('.onboarding-actions button', 'Skip Chat Setup');
     await expectStep(3);
+    if (runsRecoveryCase('onboarding-back')) {
+        await click('.onboarding-actions button', 'Back');
+        await expectStep(2);
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.onboarding-input')].some(node => node.disabled)), false,
+            'Returning to provider setup after Skip must re-enable its controls.');
+        await evaluate(() => {
+            for (const [index, value] of [[1, 'https://synthetic.invalid/v1'], [2, 'synthetic-provider-key'], [3, 'synthetic-model']]) {
+                const input = document.querySelectorAll('.onboarding-input')[index];
+                Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value);
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
+        await click('.onboarding-actions button', 'Skip Chat Setup');
+        await expectStep(3);
+        await click('.onboarding-actions button', 'Back');
+        await expectStep(2);
+        assert.deepEqual(await evaluate(() => [...document.querySelectorAll('.onboarding-input')].slice(1).map(node => node.value)),
+            ['https://synthetic.invalid/v1', 'synthetic-provider-key', 'synthetic-model']);
+        await click('.onboarding-actions button', 'Continue');
+        await expectStep(3);
+        expectedOnboardingSkip = false;
+        console.log('PASS skipped provider setup can be resumed without losing fields (#51)');
+    }
     await click('.onboarding-inline-actions button', 'Choose Folder');
     await waitFor('cancelled folder picker', () => document.querySelector('.onboarding-inline-note')?.textContent.includes('No folder selected yet.')
         && document.querySelector('.onboarding-checkbox input')?.checked === false);
@@ -350,15 +607,116 @@ async function exerciseUi() {
     assert.ok(nativeCalls.preferences >= 1, 'Saved onboarding preferences must reach the native bridge.');
     console.log('PASS onboarding interruption, Back, cancelled picker, skip, and finish');
 
+    if (runsRecoveryCase('missing-job')) {
+        const job = { id: 'synthetic-recovery', status: 'running', trigger: 'manual', event_cursor: 1 };
+        readFixtures['/api/v1/action-plan/jobs/synthetic-recovery'] = job;
+        readFixtures['/api/v1/action-plan/jobs'] = { jobs: [job], active: job };
+        await waitFor('running job replaces saved view', () => document.querySelector('.app-main')?.innerText.includes('Synthetic incomplete progress'));
+        todayReadFailures = 1;
+        readFixtures['/api/v1/action-plan/jobs'] = { jobs: [], active: null };
+        await waitFor('missing job reports transient saved-view failure', () => document.querySelector('.app-main')?.innerText.includes('Reconnecting to backend status'));
+        await waitFor('next healthy poll recovers complete saved plan', () => document.querySelector('.app-main')?.innerText.includes('Synthetic smoke action plan')
+            && !document.querySelector('.app-main')?.innerText.includes('Synthetic incomplete progress')
+            && !document.querySelector('.app-main')?.innerText.includes('partial output is incomplete')
+            && !document.querySelector('.app-main')?.innerText.includes('Reconnecting to backend status'));
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.action-plan-copy-button')]
+            .filter(button => button.textContent.trim() === 'Copy Reply' && !button.disabled).length), 2,
+            'Both restored complete replies must become available for copying.');
+        assert.equal(todayReadFailuresObserved, 1);
+        assert.equal(calls.some(call => call.method === 'POST' && call.pathname.startsWith('/api/v1/action-plan/jobs')), false,
+            'Recovery observes existing work and must not generate or cancel.');
+        console.log('PASS missing active job retries a failed saved-plan read (#133)');
+    }
+
+    if (runsRecoveryCase('empty-hash')) {
+        await navigate('dashboard', '.dashboard-page', 'System Dashboard');
+        await evaluate(() => history.back());
+        await waitFor('Back restores initial empty-hash page', () => location.hash === ''
+            && document.querySelector('.app-nav a[href="#action-plan"]')?.getAttribute('aria-current') === 'page'
+            && document.querySelector('.app-main')?.innerText.includes('Synthetic smoke action plan'));
+        await evaluate(() => history.forward());
+        await waitFor('Forward restores dashboard', () => location.hash === '#dashboard'
+            && document.querySelector('.app-nav a[href="#dashboard"]')?.getAttribute('aria-current') === 'page');
+        console.log('PASS Back/Forward restores the initial no-hash page (#52)');
+    }
+
     await navigate('dashboard', '.dashboard-page', 'System Dashboard');
     await waitFor('synthetic dashboard data', () => document.querySelector('.dashboard-page')?.innerText.includes('12%'));
+    if (runsRecoveryCase('aqi')) {
+        await waitFor('initial valid AQI', () => document.querySelector('.dashboard-page')?.innerText.includes('Synthetic city - Moderate'));
+        fixtureStatus['/api/v1/system/air-quality'] = 503;
+        await click('.app-nav a[href="#action-plan"]');
+        await click('.app-nav a[href="#dashboard"]');
+        await waitFor('AQI failure invalidates old current value', () => !document.querySelector('.dashboard-page')?.innerText.includes('Synthetic city - Moderate')
+            && document.querySelector('.dashboard-page')?.innerText.includes('Measurement unavailable'));
+        fixtureStatus['/api/v1/system/air-quality'] = 200;
+        readFixtures['/api/v1/system/air-quality'] = { aqi: 84, city: 'Recovered city', level: 'Moderate', status: 'ready' };
+        await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
+        await navigate('dashboard', '.dashboard-page', 'System Dashboard');
+        await waitFor('AQI automatically recovers', () => document.querySelector('.dashboard-page')?.innerText.includes('Recovered city - Moderate'));
+        console.log('PASS failed AQI is unavailable, then recovers (#85)');
+    }
     if (process.env.VANTAGE_UI_SMOKE_SCREENSHOT) {
         await delay(200);
         const screenshot = await window.webContents.debugger.sendCommand('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
         fs.writeFileSync(process.env.VANTAGE_UI_SMOKE_SCREENSHOT, Buffer.from(screenshot.data, 'base64'));
     }
+    if (runsRecoveryCase('camera-preview')) {
+        readFixtures['/api/v1/system/status'].camera_online = true;
+        await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
+        await navigate('dashboard', '.dashboard-page', 'System Dashboard');
+        await waitFor('camera device ready but preview hidden', () => document.querySelector('.dashboard-page')?.innerText.includes('Camera hidden for privacy'));
+        await click('.dashboard-media-privacy', 'Show media');
+        await waitForFixture('first broken TCP camera transport', () => cameraAttempts >= 1);
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.dashboard-page div')].some(node => node.textContent.trim() === 'Live')), false,
+            'A failed or undecoded transport must not claim Live.');
+        await waitForFixture('automatic camera transport retry', () => cameraAttempts >= 3);
+        await delay(100); // Let cancelled initial image requests retire before delivering pixels.
+        sendCameraFrame(cameraResponses.at(-1));
+        await waitFor('decoded multipart image becomes Live', () => document.querySelector('img[alt="Live camera stream"]')?.naturalWidth === 4
+            && [...document.querySelectorAll('.dashboard-page div')].some(node => node.textContent.trim() === 'Live'));
+        const liveAttempts = cameraAttempts;
+        cameraResponses.at(-1).socket.destroy();
+        await waitForFixture('live multipart TCP interruption reconnects', () => cameraAttempts > liveAttempts);
+        await click('.dashboard-media-privacy', 'Hide media');
+        const hiddenAttempts = cameraAttempts;
+        await delay(1500);
+        assert.equal(cameraAttempts, hiddenAttempts, 'Hidden media must stop automatic transport work.');
+        await click('.dashboard-media-privacy', 'Show media');
+        await waitForFixture('showing media starts a new transport session', () => cameraAttempts > hiddenAttempts);
+        sendCameraFrame(cameraResponses.at(-1));
+        await waitFor('reshown preview decodes before Live', () => document.querySelector('img[alt="Live camera stream"]')?.naturalWidth === 4
+            && [...document.querySelectorAll('.dashboard-page div')].some(node => node.textContent.trim() === 'Live'));
+        await click('.dashboard-media-privacy', 'Hide media');
+        readFixtures['/api/v1/system/status'].camera_online = false;
+        await waitForFixture('all hidden camera TCP responses are closed', () => cameraResponses.every(response => response.destroyed));
+        console.log('PASS actual broken multipart TCP reconnects, hides, and resumes without false Live (#132)');
+    }
     await navigate('project-progress', '.project-progress-container', 'Verify the unified workspace');
     await navigate('expense-sheet', '.expense-sheet', 'Expense Sheet');
+    if (runsRecoveryCase('finance-unavailable')) {
+        await waitFor('HTTP 200 finance unavailable is visible', () => document.querySelector('.expense-state-panel.expense-error-panel')?.textContent.includes('File not found: Balance Sheet.xlsx'));
+        assert.equal(await evaluate(() => document.querySelector('.expense-state-panel.expense-error-panel')?.textContent.includes('/synthetic/private')), false,
+            'The error notice must retain the reason without expanding the private source path.');
+        readFixtures['/api/v1/finance/balance-sheet'] = { status: 'ready', sheets: [], summary: {}, source: { available: true } };
+        await click('.expense-toolbar .expense-refresh-button');
+        await waitFor('finance retry clears error', () => !document.querySelector('.expense-state-panel.expense-error-panel')
+            && document.querySelector('.expense-sheet')?.innerText.includes('Synthetic balance validation failed'));
+        console.log('PASS unavailable finance HTTP 200 is shown and retry recovers (#110)');
+    }
+    if (runsRecoveryCase('purchase-restore')) {
+        await waitFor('synthetic purchase card', () => document.querySelector('.expense-purchase-item')?.textContent.includes('Synthetic desk lamp'));
+        await click('.expense-purchase-item .expense-purchase-dismiss-button');
+        await waitFor('purchase card dismissed', () => !document.querySelector('.expense-purchase-item'));
+        await click('.expense-purchase-show-dismissed');
+        await waitFor('dismissed card listed', () => document.querySelector('.expense-purchase-dismissed-item')?.textContent.includes('Synthetic desk lamp'));
+        const generationCalls = calls.filter(call => call.pathname.endsWith('/regenerate')).length;
+        await click('.expense-purchase-dismissed-item .expense-purchase-dismiss-button');
+        await waitFor('single restored purchase card visible again', () => document.querySelector('.expense-purchase-item')?.textContent.includes('Synthetic desk lamp')
+            && !document.querySelector('.expense-purchase-dismissed-item'));
+        assert.equal(calls.filter(call => call.pathname.endsWith('/regenerate')).length, generationCalls, 'Restore must not invoke the model.');
+        console.log('PASS restoring one dismissed purchase item returns its card without generation (#84)');
+    }
     await navigate('plots', '.app-main', 'Synthetic sleep chart');
     await waitFor('production chart rendering', () => [...document.querySelectorAll('.app-main canvas')].some(canvas => canvas.getClientRects().length && canvas.width > 0));
     await navigate('system-logs', '.app-main', 'Synthetic unified UI smoke is ready');
@@ -374,6 +732,29 @@ async function exerciseUi() {
     await waitFor('dark-circles report response', () => [...document.querySelectorAll('.app-main strong')]
         .some(node => node.getClientRects().length > 0 && node.textContent.trim() === 'No analysis report yet.'));
     assert.ok(calls.some(call => call.method === 'GET' && call.pathname === '/api/v1/face/report'), 'The dark-circles subpage must load its report.');
+    if (runsRecoveryCase('face-progress')) {
+        await click('.app-main button', 'Analyze Now');
+        await waitForFixture('queued face job progress', () => faceProgressReads >= 1);
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.app-main button')].find(button => button.textContent.trim() === 'Analyzing...')?.disabled), true);
+        faceProgressDrops = 1;
+        await waitForFixture('face progress connection interruption', () => faceProgressDropsObserved === 1);
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.app-main button')].find(button => button.textContent.trim() === 'Analyzing...')?.disabled), true,
+            'A transport failure must not imply that a queued job has stopped.');
+        faceProgress = { status: 'running', percent: 40 };
+        const reads = faceProgressReads;
+        await waitForFixture('healthy running face job progress', () => faceProgressReads > reads);
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.app-main button')].find(button => button.textContent.trim() === 'Analyzing...')?.disabled), true,
+            'Authoritative running progress must remain active.');
+        const reportReads = calls.filter(call => call.pathname === '/api/v1/face/report').length;
+        readFixtures['/api/v1/face/report'] = { trend_views: {}, local_analysis: { method: 'onnx', algorithm_version: 'synthetic-recovered', latest_datetime: 'Synthetic recovered report' } };
+        faceProgress = { status: 'idle', percent: 0 };
+        await waitFor('idle after restart unlocks analysis with explanation', () => [...document.querySelectorAll('.app-main button')]
+            .some(button => button.textContent.trim() === 'Analyze Now' && !button.disabled)
+            && [...document.querySelectorAll('.app-main [role="status"]')].some(node => node.textContent.includes('no longer running'))
+            && document.querySelector('.app-main')?.textContent.includes('Synthetic recovered report'));
+        assert.ok(calls.filter(call => call.pathname === '/api/v1/face/report').length > reportReads);
+        console.log('PASS queued/transport-failed/running face job stays active, idle unlocks and refreshes report (#134)');
+    }
     await click('.app-nav a[href="#never-stop"]');
     await waitFor('Never Stop embedded page', () => location.hash === '#never-stop'
         && document.querySelector('.never-stop-page-host')?.shadowRoot?.querySelector('.brand')?.textContent.includes('Never Stop'));
@@ -417,10 +798,17 @@ async function exerciseUi() {
             assert.equal(diagnosticsOpenCalls, 3);
         }
     }
+    await click('.settings-checkbox-row input');
     await click('.settings-segmented button', 'Light');
+    await delay(600); // Theme preview must not reload the form after React settles.
+    assert.deepEqual(await evaluate(() => ({
+        theme: document.querySelector('.settings-segmented .is-active')?.textContent,
+        login: document.querySelector('.settings-checkbox-row input')?.checked,
+    })), { theme: 'Light', login: true }, 'Preview must preserve theme and other unsaved edits');
     await click('.settings-save-button');
     await waitFor('saved light theme', () => document.documentElement.dataset.theme === 'light');
     assert.equal(settings.theme_mode, 'light');
+    assert.equal(settings.launch_at_login, true);
     assert.equal(calls.filter(call => call.method === 'PUT' && call.pathname === '/api/v1/settings').length, 1);
     await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
     await closeWindow();
@@ -435,9 +823,10 @@ async function exerciseUi() {
     for (const pathname of Object.keys(readFixtures).filter(name => name !== '/api/v1/usage')) {
         assert.ok(calls.some(call => call.pathname === pathname), `UI did not request ${pathname}`);
     }
-    assert.equal(calls.some(call => call.pathname.includes('/camera/stream')), false);
+    assert.equal(calls.some(call => call.pathname.includes('/camera/stream')), runsRecoveryCase('camera-preview'));
     console.log('PASS settings cancel/reopen, repeated entry, Back/Forward, sections, save/reopen');
     console.log('PASS crash notice, local-only privacy copy, narrow folder action and clean startup');
+    await exerciseProviderSettings();
     await evaluate(() => {
         const select = document.querySelector('.settings-section select');
         select.value = 'zh-CN';

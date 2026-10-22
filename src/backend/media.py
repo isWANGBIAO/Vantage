@@ -23,6 +23,7 @@ from src.services.person_detection import (
     detect_presence_count,
 )
 from src.utils.desktop_folders import open_directory
+from src.utils.photo_identity import parse_photo_capture_time
 
 from . import camera as _camera
 from . import observability as _observability
@@ -50,19 +51,8 @@ _presence_photo_save_coordinator = PresencePhotoSaveCoordinator()
 
 def _photo_capture_time_from_path(photo_path):
     try:
-        photo_name = os.path.basename(os.fspath(photo_path))
+        return parse_photo_capture_time(photo_path)
     except (TypeError, ValueError):
-        return None
-    match = re.fullmatch(
-        r"photo_(\d{8}_\d{6})\.jpg",
-        photo_name,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    try:
-        return datetime.strptime(match.group(1), "%Y%m%d_%H%M%S")
-    except ValueError:
         return None
 
 def _publish_presence_photo_path(photo_path):
@@ -74,7 +64,7 @@ def _publish_presence_photo_path(photo_path):
         if candidate_time is None:
             return False
         current_time = _photo_capture_time_from_path(current_path)
-        if current_time is not None and candidate_time < current_time:
+        if current_time is not None and candidate_time.timestamp() < current_time.timestamp():
             return False
         _runtime.state.paths["photo"] = photo_path
         return True
@@ -245,7 +235,10 @@ def update_storage_stats(
 
                     snapshot = scanners[key].step()
                     sizes[key] = snapshot.total_size
-                    scan_truncated = scan_truncated or not snapshot.complete
+                    scan_truncated = (
+                        scan_truncated or not snapshot.complete
+                        or bool(getattr(snapshot, "skipped_entries", 0))
+                    )
 
                 _runtime.state.photos_size = sizes["photos"]
                 _runtime.state.screenshots_size = sizes["screenshots"]
@@ -302,14 +295,14 @@ def find_latest_file_recursive(
         )
 
     while pending_dirs:
+        if (max_entries and visited_count >= max_entries) or (deadline and time.monotonic() > deadline):
+            mark_truncated(f"Latest media scan budget reached under {directory}; returning best match so far")
+            break
         pending_dirs.sort(key=lambda item: item[0], reverse=True)
-        directory_mtime, current_dir = pending_dirs.pop(0)
+        _, current_dir = pending_dirs.pop(0)
         if current_dir in visited_dirs:
             continue
         visited_dirs.add(current_dir)
-
-        if latest_file and directory_mtime <= latest_time:
-            continue
 
         file_candidates = []
         directory_candidates = []
@@ -326,8 +319,10 @@ def find_latest_file_recursive(
                             stat_result = entry.stat(follow_symlinks=False)
                             file_candidates.append((stat_result.st_mtime, entry.path))
                     except OSError:
+                        truncated = True
                         continue
         except OSError:
+            truncated = True
             continue
 
         file_candidates.sort(key=lambda item: item[0], reverse=True)
@@ -351,8 +346,8 @@ def find_latest_file_recursive(
                 latest_file = full_path
 
         for mtime, subdir in directory_candidates:
-            if latest_file and mtime <= latest_time:
-                continue
+            # Directory mtime orders exploration only: modifying a descendant
+            # does not update its ancestors, so it cannot bound file mtimes.
             pending_dirs.append((mtime, subdir))
     find_latest_file_recursive.last_truncated = truncated
     return latest_file

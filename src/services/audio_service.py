@@ -123,15 +123,10 @@ class AudioService:
         headers = {"Authorization": f"Bearer {config['api_key']}"}
 
         try:
-            mime_type = "audio/wav"
-            if actual_file.endswith(".mp3"):
-                mime_type = "audio/mpeg"
-            elif actual_file.endswith(".flac"):
-                mime_type = "audio/flac"
-            elif actual_file.endswith(".m4a"):
-                mime_type = "audio/mp4"
-            elif actual_file.endswith(".webm"):
-                mime_type = "audio/webm"
+            mime_type = {
+                ".mp3": "audio/mpeg", ".flac": "audio/flac",
+                ".m4a": "audio/mp4", ".webm": "audio/webm",
+            }.get(os.path.splitext(actual_file)[1].lower(), "audio/wav")
 
             logging.info("Sending audio to voice provider: %s (MIME: %s)", actual_file, mime_type)
 

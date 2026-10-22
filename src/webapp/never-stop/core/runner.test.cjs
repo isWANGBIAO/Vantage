@@ -75,9 +75,26 @@ test("normal success including 100% continues, real cwd and explicit resume, pau
 });
 test("failure retries beyond five and succeeds on tenth", async (t) => {
   const { runner, p, calls } = await fixture(t, "fail");
+  const failures = [];
+  let recovered = false;
+  runner.on("change", (projects) => {
+    const state = projects.find((project) => project.id === p.id);
+    if (state.status === "retrying" && failures.at(-1) !== state.error.count)
+      failures.push(state.error.count);
+    if (failures.length === 9 && state.status === "running" && !state.error)
+      recovered = true;
+  });
   await runner.start(p.id);
+  // Assert each real transition separately. A single total deadline otherwise
+  // measures ten OS process-tree cleanups, whose latency rises under load.
+  for (let failure = 1; failure <= 9; failure++) {
+    await until(() => failures.includes(failure));
+  }
+  await until(() => recovered);
   await until(async () => (await calls()).length >= 11);
   await runner.pause(p.id);
+  assert.deepEqual(failures, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.equal(recovered, true);
   assert.ok((await calls()).length >= 11);
 });
 test("publish coalesces latest, reset creates empty session; duplicate cwd rejected", async (t) => {
@@ -89,7 +106,8 @@ test("publish coalesces latest, reset creates empty session; duplicate cwd rejec
   await runner.start(p.id);
   await until(async () => (await calls()).length === 1);
   const initialPrompt = (await calls())[0].prompt;
-  assert.ok(initialPrompt.includes("以文件中的最新目标为准；文件缺失时使用以下快照"));
+  assert.ok(initialPrompt.includes("以下为本轮开始时读取的 goal.md 内容"));
+  assert.ok(!initialPrompt.includes("文件缺失时使用以下快照"));
   assert.ok(
     initialPrompt.includes(
       "请先读取 goal.md 执行；如果 progress.md 有跑偏，按照 goal.md 来执行",

@@ -3,8 +3,10 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -648,22 +650,42 @@ def write_backend_runtime_fingerprint(
     fingerprint: dict[str, object],
 ) -> dict[str, object]:
     fingerprint_path = backend_runtime_fingerprint_path(layout)
-    fingerprint_path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(fingerprint, indent=2, ensure_ascii=True) + "\n"
-    fingerprint_path.write_text(payload, encoding="utf-8")
     # Keep the cache record at the build root, and carry the same platform /
     # architecture provenance with a runtime moved into a desktop package.
     bundled_fingerprint = layout["runtime_dir"] / BACKEND_RUNTIME_FINGERPRINT_NAME
-    bundled_fingerprint.parent.mkdir(parents=True, exist_ok=True)
-    bundled_fingerprint.write_text(payload, encoding="utf-8")
+    # Publish the cache-authorizing record last. An interrupted write must not
+    # truncate the previous record or certify a partially published bundle.
+    for target in (bundled_fingerprint, fingerprint_path):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=target.parent,
+                prefix=f".{target.name}.", suffix=".tmp", delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, target)
+            temporary_path = None
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
     return fingerprint
 
 
 def load_backend_runtime_fingerprint(layout: dict[str, Path]) -> dict[str, object] | None:
-    fingerprint_path = backend_runtime_fingerprint_path(layout)
-    if not fingerprint_path.exists():
+    return _read_backend_runtime_fingerprint(backend_runtime_fingerprint_path(layout))
+
+
+def _read_backend_runtime_fingerprint(fingerprint_path: Path) -> dict[str, object] | None:
+    try:
+        payload = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
-    return json.loads(fingerprint_path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else None
 
 
 def build_pyinstaller_arguments(
@@ -917,6 +939,14 @@ def backend_runtime_fingerprint_matches(
 ) -> bool:
     stored_fingerprint = load_backend_runtime_fingerprint(layout)
     if not stored_fingerprint:
+        return False
+    # Publication spans two atomic files. If the second replace failed, the
+    # old root record cannot authorize the newly rebuilt bundle, even if the
+    # source tree was subsequently restored to its previous fingerprint.
+    bundled_fingerprint = _read_backend_runtime_fingerprint(
+        layout["runtime_dir"] / BACKEND_RUNTIME_FINGERPRINT_NAME
+    )
+    if bundled_fingerprint != stored_fingerprint:
         return False
     if stored_fingerprint.get("digest") != expected_fingerprint.get("digest"):
         return False

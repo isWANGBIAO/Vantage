@@ -83,6 +83,7 @@ function toBackendSettingsPayload(payload) {
             'route', 'name', 'type', 'enabled', 'api_key', 'base_url', 'model', 'models', 'last_refreshed_at',
             'context_window_tokens',
             'max_output_tokens',
+            'model_capabilities',
         ];
         const normalizedProviderConfig = { ...providerConfig };
         if (Object.prototype.hasOwnProperty.call(providerConfig, 'providers')) {
@@ -142,6 +143,7 @@ function fromBackendSettings(payload, { mode = 'browser', app = {}, systemLocale
             imageModels: settings.image_models,
             imageLastRefreshedAt: settings.image_last_refreshed_at,
         },
+        inheritedAiProvider: payload.inherited_ai_provider || null,
         provider: {
             ...provider,
             providers: Object.fromEntries(Object.entries(provider.providers || {}).map(([route, entry]) => [

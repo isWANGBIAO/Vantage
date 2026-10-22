@@ -22,12 +22,12 @@ export function reconcileDraft(local, external) {
     return { conflict: true, text: local.text, external };
   return { conflict: false, text: external.text, version: external.version };
 }
-export function publicationStatus(text, project) {
-  if (text !== project.publishedGoal) return "草稿未发布";
-  return project.publishedRevision &&
-    project.publishedRevision === project.adoptedRevision
+export function publicationStatus(local, project) {
+  if (local.text !== local.base) return "未保存";
+  if (!local.text.trim()) return "目标为空，无法运行";
+  return local.version && local.version === project.adoptedGoalVersion
     ? "当前执行已采用"
-    : "已发布，等待采用";
+    : "已保存，下次执行采用";
 }
 export function projectScopeKey(project) {
   return project ? JSON.stringify([project.id, project.root]) : null;

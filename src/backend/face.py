@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.background import BackgroundTask
 
 from src.core.config import Config
 from src.core.user_config import load_settings
@@ -255,7 +256,7 @@ async def get_face_live(active: bool = False):
     if active:
         _camera.mark_face_live_viewer_active()
 
-    camera_online = _camera._camera_online()
+    camera_online = _camera._camera_online() and _camera.has_fresh_camera_frame()
     if not camera_online:
         return {
             "camera_online": False,
@@ -397,7 +398,12 @@ async def export_face_excel():
                 break
 
         if excel_path and os.path.exists(excel_path):
-            return FileResponse(excel_path, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename="Face_Analysis_History.xlsx")
+            export_file = Path(excel_path).resolve()
+            export_root = (Path(Config.get_runtime_dir()) / "exports").resolve()
+            cleanup = BackgroundTask(export_file.unlink, missing_ok=True) if (
+                export_file.parent == export_root and export_file.name.startswith("Face_Analysis_History_")
+            ) else None
+            return FileResponse(excel_path, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename="Face_Analysis_History.xlsx", background=cleanup)
         else:
              return JSONResponse(status_code=500, content={"error": "Export failed", "details": stdout_text or stderr_text})
 

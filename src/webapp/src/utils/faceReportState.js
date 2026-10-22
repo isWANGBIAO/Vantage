@@ -5,6 +5,12 @@ const TREND_VIEW_LABELS = {
   all: '全部历史',
 };
 
+export function getFaceProgressOutcome(progress) {
+  if (progress?.status === 'error') return 'error';
+  if (progress?.status === 'idle' || Number(progress?.percent) >= 100) return 'refresh';
+  return 'active';
+}
+
 function normalizeTrendViews(trendViews) {
   const normalized = {};
 

@@ -42,6 +42,19 @@ test('content changes invalidate cache even when source mtime is restored', (t) 
   assert.equal(isBuildCurrent(root), false);
 });
 
+test('imported root assets invalidate cache when changed or removed', (t) => {
+  const root = fixture(t);
+  const asset = path.join(root, 'assets', 'icon.png');
+  fs.mkdirSync(path.dirname(asset), { recursive: true });
+  fs.writeFileSync(asset, 'original icon');
+  recordBuild(root, inputFingerprint(root));
+  fs.writeFileSync(asset, 'updated icon');
+  assert.equal(isBuildCurrent(root), false);
+  recordBuild(root, inputFingerprint(root));
+  fs.unlinkSync(asset);
+  assert.equal(isBuildCurrent(root), false);
+});
+
 test('lockfile changes and source removal invalidate cache', (t) => {
   const root = fixture(t);
   fs.writeFileSync(path.join(root, 'package-lock.json'), '{"version":2}');

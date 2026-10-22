@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   canToggleWithSpace,
   reconcileDraft,
@@ -50,25 +51,24 @@ test("external changes cannot overwrite locally unsaved edits", () => {
     null,
   );
 });
-test("published goal only reports adoption after matching execution revision", () => {
+test("saved file versions, not legacy publication, determine adoption status", () => {
   assert.equal(
-    publicationStatus("draft", { publishedGoal: "published" }),
-    "草稿未发布",
+    publicationStatus({ text: "unsaved", base: "old", version: "v1" }, {}),
+    "未保存",
   );
   assert.equal(
-    publicationStatus("goal", {
-      publishedGoal: "goal",
-      publishedRevision: 2,
-      adoptedRevision: 1,
-    }),
-    "已发布，等待采用",
+    publicationStatus({ text: "goal", base: "goal", version: "v2" }, { adoptedGoalVersion: "v1" }),
+    "已保存，下次执行采用",
   );
   assert.equal(
-    publicationStatus("goal", {
-      publishedGoal: "goal",
-      publishedRevision: 2,
-      adoptedRevision: 2,
-    }),
+    publicationStatus({ text: "goal", base: "goal", version: "v2" }, { adoptedGoalVersion: "v2" }),
     "当前执行已采用",
   );
+  assert.equal(publicationStatus({ text: " ", base: " ", version: "v3" }, {}), "目标为空，无法运行");
+});
+test("goal editor saves without a publication gate and explains the next-invocation contract", () => {
+  const source = readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /发布目标|请先编辑并发布|!project\.publishedGoal/);
+  assert.match(source, /保存后用于下一次执行/);
+  assert.match(source, /当前轮不会被自动保存中断/);
 });

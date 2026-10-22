@@ -8,6 +8,7 @@ import queue
 import threading
 from collections import OrderedDict
 from datetime import datetime
+from src.utils.photo_identity import capture_minute_key, photo_filename
 
 from .get_best_photo import capture_best_photo
 from ..get_location import save_image_with_gps
@@ -46,7 +47,7 @@ class PresencePhotoMinuteGate:
     def _minute_identity(photos_path, captured_at):
         absolute_root = os.path.abspath(os.fspath(photos_path))
         normalized_root = os.path.normcase(absolute_root)
-        minute_key = captured_at.strftime("%Y%m%d%H%M")
+        minute_key = capture_minute_key(captured_at)
         return absolute_root, normalized_root, minute_key
 
     def cached_path(self, photos_path, *, captured_at):
@@ -200,7 +201,7 @@ class PresencePhotoMinuteGate:
                 capture_time.strftime("%H"),
             )
             os.makedirs(daily_folder, exist_ok=True)
-            photo_name = f"photo_{capture_time.strftime('%Y%m%d_%H%M%S')}.jpg"
+            photo_name = photo_filename(capture_time)
             photo_path = os.path.join(daily_folder, photo_name)
             save_image_with_gps(
                 photo_path,
@@ -270,7 +271,7 @@ class PresencePhotoSaveCoordinator:
     def _minute_identity(photos_path, captured_at):
         absolute_root = os.path.abspath(os.fspath(photos_path))
         normalized_root = os.path.normcase(absolute_root)
-        minute_key = captured_at.strftime("%Y%m%d%H%M")
+        minute_key = capture_minute_key(captured_at)
         return normalized_root, minute_key
 
     def submit(

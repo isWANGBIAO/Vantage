@@ -26,6 +26,7 @@ from src.core.backend_connection import DEFAULT_BACKEND_BASE_URL, normalize_back
 
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
+OPERATION_TIMEOUT_SECONDS = {"face.export": 90.0}
 _PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _UNSAFE_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WINDOWS_RESERVED_FILENAMES = {
@@ -58,6 +59,10 @@ class BackendUnavailableError(VantageClientError):
     """Raised when the local Vantage backend cannot be reached."""
 
 
+class BackendTimeoutError(VantageClientError):
+    """A reachable backend did not finish within the finite request budget."""
+
+
 class BackendHTTPError(VantageClientError):
     """Raised for non-success responses without exposing server/request data."""
 
@@ -81,6 +86,14 @@ class BackendProtocolError(VantageClientError):
     """Raised when a successful response does not match its catalog format."""
 
 
+class BackendStreamError(BackendProtocolError):
+    """A well-formed event stream reported failure or lacked completion."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.events: list[Any] = []
+
+
 @dataclass(frozen=True, slots=True)
 class FileDownload:
     """Downloaded bytes with a basename safe to write inside a chosen folder."""
@@ -93,10 +106,13 @@ class FileDownload:
 class NDJSONStream(Iterator[Any]):
     """Lazy decoded NDJSON response iterator that closes its HTTP response."""
 
-    def __init__(self, response):
+    def __init__(self, response, *, require_completion=False):
         self._response = response
         self._lines = iter(response.iter_lines(decode_unicode=True))
         self._closed = False
+        self._require_completion = require_completion
+        self._saw_done = False
+        self._failed = False
 
     def __iter__(self) -> "NDJSONStream":
         return self
@@ -105,19 +121,29 @@ class NDJSONStream(Iterator[Any]):
         if self._closed:
             raise StopIteration
         try:
+            if self._failed:
+                raise BackendStreamError("Vantage stream reported an operation failure. Inspect received events and retry.")
             for line in self._lines:
                 if isinstance(line, bytes):
                     line = line.decode("utf-8")
                 if not line or not line.strip():
                     continue
                 try:
-                    return json.loads(line)
+                    event = json.loads(line)
+                    if isinstance(event, dict):
+                        self._saw_done = self._saw_done or event.get("done") is True
+                        self._failed = "error" in event or str(event.get("log", "")).startswith(
+                            ("STREAM_ERROR:", "STREAM_ANALYSIS_ERROR:", "STREAM_PLAN_ERROR:")
+                        )
+                    return event
                 except (TypeError, ValueError):
                     self.close()
                     raise BackendProtocolError(
                         "Vantage backend returned an invalid NDJSON stream."
                     ) from None
             self.close()
+            if self._require_completion and not self._saw_done:
+                raise BackendStreamError("Vantage chat stream ended before a successful completion event. Please retry.")
             raise StopIteration
         except UnicodeDecodeError:
             self.close()
@@ -331,11 +357,12 @@ class VantageClient:
         base_url: str | None = None,
         *,
         session=None,
-        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        timeout: float | None = None,
     ):
         self.base_url = resolve_backend_url(base_url)
         self.session = session if session is not None else requests.Session()
-        self.timeout = timeout
+        self.timeout = DEFAULT_TIMEOUT_SECONDS if timeout is None else timeout
+        self._explicit_timeout = timeout is not None
 
     @staticmethod
     def _normalize_base_url(value: str) -> str:
@@ -371,7 +398,8 @@ class VantageClient:
         headers = dict(descriptor.required_headers)
 
         with ExitStack() as stack:
-            request_kwargs: dict[str, Any] = {"timeout": self.timeout}
+            timeout = self.timeout if self._explicit_timeout else OPERATION_TIMEOUT_SECONDS.get(descriptor.name, self.timeout)
+            request_kwargs: dict[str, Any] = {"timeout": timeout}
             if headers:
                 request_kwargs["headers"] = headers
             if descriptor.stream or descriptor.download:
@@ -403,7 +431,7 @@ class VantageClient:
             response = self._send(descriptor, url, request_kwargs)
 
         if descriptor.stream:
-            return NDJSONStream(response)
+            return NDJSONStream(response, require_completion=descriptor.name == "chat.send")
         if descriptor.download:
             try:
                 return FileDownload(
@@ -460,6 +488,10 @@ class VantageClient:
                 allow_redirects=False,
                 **request_kwargs,
             )
+        except requests.exceptions.Timeout:
+            raise BackendTimeoutError(
+                "Vantage operation timed out while waiting for the backend. The backend may still be running; check its status before retrying."
+            ) from None
         except requests.exceptions.RequestException:
             raise BackendUnavailableError(
                 "Vantage backend is unavailable. Start Vantage and try again."

@@ -221,11 +221,18 @@ function formatChatSpeed(currentStats) {
     if (typeof currentStats?.speed === 'string' && currentStats.speed.trim()) {
         return currentStats.speed;
     }
-    const outputRate = Number(currentStats?.output_tokens_per_second);
-    if (Number.isFinite(outputRate) && outputRate > 0) {
+    const outputRate = currentStats?.output_tokens_per_second;
+    if (typeof outputRate === 'number' && Number.isFinite(outputRate) && outputRate >= 0) {
         return `${outputRate.toFixed(2)} tokens/s`;
     }
     return '-';
+}
+
+function formatChatTokenValue(currentStats) {
+    const totalTokens = currentStats?.total_tokens;
+    return typeof totalTokens === 'number' && Number.isFinite(totalTokens) && totalTokens >= 0
+        ? `${(totalTokens / 1000).toFixed(1)}k`
+        : '-';
 }
 
 function formatOptionalSeconds(value) {
@@ -707,9 +714,10 @@ export default function ChatInterface({ embedded = false } = {}) {
         try {
             const nextStats = {
                 ...(stats ?? {}),
-                speed: '0.00 tokens/s',
+                speed: null,
+                output_tokens_per_second: null,
                 total_duration: 0,
-                total_tokens: 0,
+                total_tokens: null,
                 startTime: Date.now(),
             };
             setStats(nextStats);
@@ -760,12 +768,16 @@ export default function ChatInterface({ embedded = false } = {}) {
 
 
 
-            await processStreamResponse(res, nextStats);
+            const completed = await processStreamResponse(res, nextStats);
+            if (!completed) {
+                setInput(current => current || userMsg);
+            }
 
 
 
         } catch (err) {
             if (err.name === 'AbortError') return;
+            setInput(current => current || userMsg);
             setChatError(String(err.message || err));
             setMessages(prev => [...prev, {
                 role: 'assistant',
@@ -922,9 +934,10 @@ export default function ChatInterface({ embedded = false } = {}) {
                         try {
                             const nextStats = {
                                 ...(stats ?? {}),
-                                speed: '0.00 tokens/s',
+                                speed: null,
+                                output_tokens_per_second: null,
                                 total_duration: 0,
-                                total_tokens: 0,
+                                total_tokens: null,
                                 startTime: Date.now(),
                             };
                             setStats(nextStats);
@@ -1072,7 +1085,7 @@ export default function ChatInterface({ embedded = false } = {}) {
         <div className="action-plan-stats">
             <span>{t('common.first_token', { value: formatOptionalSeconds(stats.first_token_latency) })}</span>
             <span>{t('common.time', { value: displayedDurationSeconds.toFixed(1) })}</span>
-            <span>{t('common.tokens', { value: ((stats.total_tokens || 0) / 1000).toFixed(1) })}</span>
+            <span>{t('common.tokens_detail', { value: formatChatTokenValue(stats) })}</span>
             <span>{t('common.speed', { value: formatChatSpeed(stats) })}</span>
             {chatCacheBreakdown ? (
                 <span>{t(stats.cache_scope === 'request' ? 'common.cache_request' : 'common.cache_session', { value: chatCacheBreakdown })}</span>

@@ -22,6 +22,7 @@ _plot_dashboard_cache_lock = threading.Lock()
 _plot_dashboard_cache_key = None
 
 _plot_dashboard_cache_payload = None
+_plot_dashboard_cache_generation = 0
 
 def _get_plot_dir():
     if FACE_REPORT_PLOT_OUTPUT_DIR:
@@ -49,8 +50,9 @@ def _get_plot_dashboard_cache_key():
     return tuple(_file_signature(path) for path in source_paths)
 
 def _clear_plot_dashboard_cache():
-    global _plot_dashboard_cache_key, _plot_dashboard_cache_payload
+    global _plot_dashboard_cache_key, _plot_dashboard_cache_payload, _plot_dashboard_cache_generation
     with _plot_dashboard_cache_lock:
+        _plot_dashboard_cache_generation += 1
         _plot_dashboard_cache_key = None
         _plot_dashboard_cache_payload = None
 
@@ -83,11 +85,13 @@ async def get_plot_dashboard_data():
         with _plot_dashboard_cache_lock:
             if _plot_dashboard_cache_key == cache_key and _plot_dashboard_cache_payload is not None:
                 return copy.deepcopy(_plot_dashboard_cache_payload)
+            generation = _plot_dashboard_cache_generation
 
         payload = await asyncio.to_thread(build_plot_dashboard_data)
         with _plot_dashboard_cache_lock:
-            _plot_dashboard_cache_key = cache_key
-            _plot_dashboard_cache_payload = copy.deepcopy(payload)
+            if generation == _plot_dashboard_cache_generation:
+                _plot_dashboard_cache_key = cache_key
+                _plot_dashboard_cache_payload = copy.deepcopy(payload)
         return payload
     except Exception as e:
         print(f"Error building plot dashboard data: {e}")

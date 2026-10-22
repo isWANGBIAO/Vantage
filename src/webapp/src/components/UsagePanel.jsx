@@ -32,6 +32,7 @@ const EMPTY_DASHBOARD = {
 };
 
 function formatCompactNumber(value) {
+  if (value === null || value === undefined) return '—';
   const number = Number(value || 0);
   if (number >= 1000000) {
     return `${(number / 1000000).toFixed(2)}M`;
@@ -69,6 +70,7 @@ function formatPercent(value) {
 }
 
 function formatRatio(value) {
+  if (value === null || value === undefined) return '—';
   return `${Number(value || 0).toFixed(2)} tok/s`;
 }
 
@@ -154,8 +156,9 @@ function escapeTooltipValue(value) {
 }
 
 function getSpeedValue(row, metricKey) {
-  const value = Number(row?.[metricKey] || 0);
-  return Number.isFinite(value) ? value : 0;
+  if (row?.[metricKey] === null || row?.[metricKey] === undefined) return null;
+  const value = Number(row[metricKey]);
+  return Number.isFinite(value) ? value : null;
 }
 
 function detectHighSpeedModels(rowsByModel) {
@@ -663,6 +666,11 @@ export default function UsagePanel({ isVisible = true } = {}) {
       </div>
 
       <div className="usage-panel-content">
+        {summary.usage_missing_call_count > 0 ? (
+          <div className="usage-panel-error" role="status">
+            {t('usage.label.incomplete_usage', { count: summary.usage_missing_call_count })}
+          </div>
+        ) : null}
         {loading && !dashboard ? <div className="usage-empty">{t('usage.loading')}</div> : null}
         {!loading && !hasUsage ? <div className="usage-empty">{t('usage.empty')}</div> : null}
 

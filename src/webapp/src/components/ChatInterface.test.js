@@ -7,6 +7,31 @@ import { normalizeBackendChatContext } from '../utils/chatContextState.js';
 const chatSource = readFileSync(new URL('./ChatInterface.jsx', import.meta.url), 'utf8');
 const displayCopySource = readFileSync(new URL('../utils/displayCopy.js', import.meta.url), 'utf8');
 
+test('failed chat restores the submitted text for retry without overwriting a new draft', async () => {
+  const start = chatSource.indexOf('    const sendMessage = async () => {');
+  const end = chatSource.indexOf('    const handleKeyDown =', start);
+  assert.ok(start >= 0 && end > start);
+  for (const nextDraft of ['', 'new draft']) {
+    let draft = 'submitted question';
+    const noop = () => {};
+    const sandbox = {
+      input: draft, isLoading: false, contextReady: true,
+      chatAbortControllerRef: { current: null }, contextRequestVersionRef: { current: 0 },
+      syncChatContextRef: { current: noop }, stats: {}, availableModels: [], selectedModel: '',
+      fastModeEnabled: false, AbortController, Date, console,
+      setInput: (value) => { draft = typeof value === 'function' ? value(draft) : value; },
+      setChatError: noop, setMessages: noop, setIsLoading: noop, setStats: noop,
+      buildClientSentAt: () => 'synthetic', findModelOption: () => null,
+      loadStoredActionPlanReasoningEffort: () => 'high', normalizeReasoningEffortForModel: () => 'high',
+      resolveFastServiceTier: () => null, fetchBackend: async () => ({}),
+      processStreamResponse: async () => { draft = nextDraft; return false; }, t: (key) => key,
+    };
+    vm.runInNewContext(`${chatSource.slice(start, end)}; globalThis.send = sendMessage;`, sandbox);
+    await sandbox.send();
+    assert.equal(draft, nextDraft || 'submitted question');
+  }
+});
+
 function loadChatHelpers() {
   const start = chatSource.indexOf('function consumeChatStreamChunk');
   const end = chatSource.indexOf('export default function ChatInterface');
@@ -20,15 +45,54 @@ function loadChatHelpers() {
   vm.runInNewContext(
     `${helperSource.replace(/^export /, '')}
 globalThis.consumeChatStreamChunk = consumeChatStreamChunk;
-globalThis.getVisibleMessages = getVisibleMessages;`,
+globalThis.getVisibleMessages = getVisibleMessages;
+globalThis.formatChatSpeed = formatChatSpeed;
+globalThis.formatChatTokenValue = typeof formatChatTokenValue === 'function' ? formatChatTokenValue : null;`,
     sandbox,
   );
 
   return {
     consumeChatStreamChunk: sandbox.globalThis.consumeChatStreamChunk,
     getVisibleMessages: sandbox.globalThis.getVisibleMessages,
+    formatChatSpeed: sandbox.globalThis.formatChatSpeed,
+    formatChatTokenValue: sandbox.globalThis.formatChatTokenValue,
   };
 }
+
+test('chat token label distinguishes missing usage, actual zero, and known totals without a dangling unit', () => {
+  const expression = chatSource.match(/t\('common\.tokens(?:_detail)?', \{ value: (.+) \}\)/)?.[1];
+  assert.ok(expression, 'expected the real chat stats token formatter');
+  const evaluate = (stats) => vm.runInNewContext(expression, { stats, ...loadChatHelpers() });
+  for (const value of [null, undefined, NaN, Infinity, -1, false, '']) {
+    assert.equal(evaluate({ total_tokens: value }), '-', `unknown/invalid usage ${String(value)}`);
+  }
+  assert.equal(evaluate({ total_tokens: 0 }), '0.0k');
+  assert.equal(evaluate({ total_tokens: 1250 }), '1.3k');
+  assert.ok(chatSource.includes("t('common.tokens_detail'"), 'unit belongs to a known value, not the label template');
+});
+
+test('chat speed keeps known zero and known rates but never coerces missing usage to zero', () => {
+  const { formatChatSpeed } = loadChatHelpers();
+  assert.equal(formatChatSpeed({ speed: null, output_tokens_per_second: null }), '-');
+  assert.equal(formatChatSpeed({}), '-');
+  assert.equal(formatChatSpeed({ output_tokens_per_second: 0 }), '0.00 tokens/s');
+  assert.equal(formatChatSpeed({ output_tokens_per_second: 12.5 }), '12.50 tokens/s');
+  assert.equal(formatChatSpeed({ speed: '3.50 tokens/s', output_tokens_per_second: null }), '3.50 tokens/s');
+});
+
+test('text and voice chat seeds keep live timing without inventing usage or reusing an old rate', () => {
+  const seeds = [...chatSource.matchAll(/const nextStats = (\{[\s\S]*?\});/g)];
+  assert.equal(seeds.length, 2);
+  for (const [, expression] of seeds) {
+    const next = vm.runInNewContext(`(${expression})`, {
+      stats: { total_tokens: 1250, speed: '12.50 tokens/s', output_tokens_per_second: 12.5 }, Date,
+    });
+    assert.equal(next.total_tokens, null);
+    assert.equal(next.speed, null);
+    assert.equal(next.output_tokens_per_second, null);
+    assert.ok(Number.isFinite(next.startTime));
+  }
+});
 
 test('ChatInterface copy uses readable labels for model and voice flow', () => {
   assert.ok(chatSource.includes("t('common.model')"));
@@ -213,7 +277,7 @@ test('ChatInterface renders chat token stats and hydrates them from backend cont
   assert.ok(chatSource.includes('data?.stats'));
   assert.ok(chatSource.includes("t('common.speed'"));
   assert.ok(chatSource.includes('computeDisplayedDurationSeconds'));
-  assert.ok(chatSource.includes("t('common.tokens'"));
+  assert.ok(chatSource.includes("t('common.tokens_detail'"));
   assert.equal(chatSource.includes("t('common.history'"), false);
   assert.equal(chatSource.includes('historical_total_tokens'), false);
 });

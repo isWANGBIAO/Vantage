@@ -1,4 +1,7 @@
+import asyncio
 import json
+import os
+import sys
 import unittest
 
 from src.utils.action_plan_stream import (
@@ -8,6 +11,40 @@ from src.utils.action_plan_stream import (
 
 
 class ActionPlanStreamPrinterTests(unittest.TestCase):
+    def test_unicode_and_escaped_text_survives_real_default_limit_pipe(self):
+        for text in ("中" * 12000, "🙂" * 12000, ('中文🙂\\\"\n\t' * 12000)):
+            with self.subTest(sample=text[:8]):
+                async def read_pipe(text=text):
+                    proc = await asyncio.create_subprocess_exec(
+                        sys.executable, "-c",
+                        "import sys; from src.utils.action_plan_stream import emit_action_plan_stream_event; "
+                        "emit_action_plan_stream_event('analysis', 'prompt', sys.stdin.read())",
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                    )
+                    proc.stdin.write(text.encode("utf-8"))
+                    await proc.stdin.drain()
+                    proc.stdin.close()
+                    try:
+                        lines = []
+                        while line := await proc.stdout.readline():
+                            self.assertLess(len(line), 65536)
+                            lines.append(line)
+                        self.assertEqual(await proc.wait(), 0)
+                        return lines
+                    finally:
+                        if proc.returncode is None:
+                            proc.kill()
+                            await proc.wait()
+
+                lines = asyncio.run(read_pipe())
+                self.assertEqual(
+                    "".join(json.loads(line.decode("utf-8").split(":", 1)[1]) for line in lines),
+                    text,
+                )
+
     def test_chunks_large_prompt_events_to_multiple_lines(self):
         emitted = []
         long_prompt = "A" * 40000

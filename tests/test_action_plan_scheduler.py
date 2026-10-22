@@ -155,6 +155,31 @@ class ActionPlanSchedulerTests(unittest.IsolatedAsyncioTestCase):
         retry = await self.run_tick()
         self.assertEqual(retry["job"]["status"], "succeeded")
 
+    async def test_runtime_enable_retries_missing_plan_with_existing_baseline(self):
+        self.settings.update(action_plan_auto_generate=False, action_plan_check_interval_minutes=1)
+        self.assertEqual((await self.run_tick())["outcome"], "baseline_recorded")
+        baseline = self.scheduler.status()["baseline_revision"]
+        self.settings["action_plan_auto_generate"] = True
+        self.fail = True
+        first = await self.run_tick()
+        self.assertEqual(first["job"]["status"], "failed")
+        self.assertEqual(self.scheduler.status()["baseline_revision"], baseline)
+        self.assertIsNone(self.scheduler.status()["generated_revision"])
+        self.assertEqual((await self.run_tick())["outcome"], "idle")
+        self.fail = False
+        self.clock += 60
+        retry = await self.run_tick()
+        self.assertEqual(retry["job"]["status"], "succeeded")
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual((await self.run_tick(force_check=True))["outcome"], "unchanged")
+
+    async def test_disabled_auto_generation_does_not_retry_missing_plan_baseline(self):
+        self.settings.update(action_plan_auto_generate=False, action_plan_check_interval_minutes=1)
+        self.assertEqual((await self.run_tick())["outcome"], "baseline_recorded")
+        self.clock += 60
+        self.assertEqual((await self.run_tick())["outcome"], "unchanged")
+        self.assertEqual(self.calls, [])
+
     async def test_restart_uses_persisted_generated_revision(self):
         await self.run_tick()
         await self.scheduler.close()

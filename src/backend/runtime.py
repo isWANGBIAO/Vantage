@@ -41,6 +41,7 @@ class SystemState:
         self.monitor = None
         self.latest_frame = None
         self.latest_frame_published_at = None
+        self.latest_frame_observed_at = None
         self.is_running = True
         self.camera_iteration_lock = threading.Lock()
         self.background_thread_status = {
