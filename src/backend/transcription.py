@@ -1,6 +1,7 @@
 """Audio transcription subprocess lifecycle and HTTP adapter."""
 
 import asyncio
+import json
 import os
 import tempfile
 from contextlib import suppress
@@ -122,6 +123,13 @@ async def _transcribe_in_workspace(file, voice_config, request_directory):
         transcription = ""
         transcription_error = ""
         for line in output.splitlines():
+            if line.startswith("TRANSCRIPTION_RESULT_JSON:"):
+                try:
+                    value = json.loads(line.split(":", 1)[1])
+                    transcription = value.strip() if isinstance(value, str) else ""
+                except (ValueError, TypeError):
+                    transcription_error = "Invalid transcription result encoding"
+                break
             if line.startswith("TRANSCRIPTION_RESULT:"):
                 transcription = line.replace("TRANSCRIPTION_RESULT:", "").strip()
                 break
