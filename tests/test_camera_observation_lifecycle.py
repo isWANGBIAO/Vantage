@@ -1,7 +1,9 @@
 """Real loop boundaries driven by synthetic frames; no hardware or model startup."""
 
 import asyncio
+import threading
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -12,6 +14,8 @@ import pytest
 from fastapi import FastAPI
 
 from src.backend import camera, face, media, runtime
+from src.manager.take_photo.take_a_photo import PresencePhotoMinuteGate, PresencePhotoSaveCoordinator
+from src.utils.photo_identity import photo_filename
 
 
 @pytest.fixture
@@ -145,3 +149,34 @@ def test_presence_completion_revalidates_frame_and_camera_owner(observation, mon
     else:
         submitted.assert_not_called()
         assert state.person_boxes == []
+
+
+def test_valid_presence_save_uses_real_async_worker_without_holding_observation_lock(observation, monkeypatch):
+    state, _ = observation
+    captured = datetime(2025, 2, 3, 4, 5, 6)
+    state.latest_frame_observed_at = captured
+    coordinator = PresencePhotoSaveCoordinator(gate=PresencePhotoMinuteGate())
+    saved = threading.Event()
+    publish = media._publish_presence_photo_path
+
+    def on_success(path):
+        publish(path)
+        saved.set()
+
+    def detect(*_, **kwargs):
+        state.is_running = False
+        return [(1, 1, 4, 4)]
+
+    monkeypatch.setattr(media, "_presence_photo_save_coordinator", coordinator)
+    monkeypatch.setattr(media, "_publish_presence_photo_path", on_success)
+    monkeypatch.setattr(camera, "get_location", lambda: (None, None))
+    monkeypatch.setattr(camera, "detect_foreground_presence_face_boxes", detect)
+    try:
+        camera.face_detection_loop()
+        assert saved.wait(3), "The actual async save callback must acquire and release the observation lock"
+        path = Path(state.paths["photo"])
+        assert path.name == photo_filename(captured)
+        assert path.is_file()
+        assert float(cv2.imread(str(path)).mean()) == 30.0
+    finally:
+        coordinator.close(timeout=3)
