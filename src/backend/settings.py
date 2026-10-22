@@ -37,6 +37,7 @@ from .api_contracts import (
     SettingsState, DisplayLanguageState, OnboardingState, OnboardingCompletion, ConfigurationErrorResponse,
 )
 from src.services.automation_catalog import get_operation
+from src.services.vantage_client import ArgumentValidationError, _validate_schema
 
 
 def _request_contract(name):
@@ -73,6 +74,13 @@ _AUTOMATION_SETTINGS_FIELDS = frozenset({
     "image_models",
     "image_last_refreshed_at",
 })
+
+def _validate_operation_payload(payload, operation_name):
+    """Use the same strict input contract as CLI/MCP before any file is read or written."""
+    try:
+        _validate_schema(payload, get_operation(operation_name).input_schema)
+    except ArgumentValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
 
 def _validate_automation_payload(payload, allowed_fields):
     if not isinstance(payload, dict):
@@ -239,6 +247,7 @@ def get_automation_settings():
 @router.put("/api/v1/settings", response_model=SettingsState, response_model_exclude_unset=True,
             openapi_extra=_request_contract("settings.update"))
 def update_automation_settings(payload: dict):
+    _validate_operation_payload(payload, "settings.update")
     from . import face
     changing_face = isinstance(payload, dict) and bool(set(payload).intersection({"face_analysis_method", *FACE_ANALYSIS_PATH_FIELDS}))
     with _automation_config_lock, (face._face_analysis_job_lock if changing_face else nullcontext()):
@@ -318,6 +327,7 @@ def get_automation_display_language():
 @router.put("/api/v1/settings/display-language", response_model=DisplayLanguageState, response_model_exclude_unset=True,
             openapi_extra=_request_contract("settings.display_language.update"))
 def update_automation_display_language(payload: dict):
+    _validate_operation_payload(payload, "settings.display_language.update")
     _validate_automation_payload(payload, {"display_language"})
     if "display_language" not in payload:
         raise HTTPException(status_code=422, detail="display_language is required.")

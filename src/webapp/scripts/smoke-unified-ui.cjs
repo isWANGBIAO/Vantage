@@ -417,10 +417,17 @@ async function exerciseUi() {
             assert.equal(diagnosticsOpenCalls, 3);
         }
     }
+    await click('.settings-checkbox-row input');
     await click('.settings-segmented button', 'Light');
+    await delay(600); // Theme preview must not reload the form after React settles.
+    assert.deepEqual(await evaluate(() => ({
+        theme: document.querySelector('.settings-segmented .is-active')?.textContent,
+        login: document.querySelector('.settings-checkbox-row input')?.checked,
+    })), { theme: 'Light', login: true }, 'Preview must preserve theme and other unsaved edits');
     await click('.settings-save-button');
     await waitFor('saved light theme', () => document.documentElement.dataset.theme === 'light');
     assert.equal(settings.theme_mode, 'light');
+    assert.equal(settings.launch_at_login, true);
     assert.equal(calls.filter(call => call.method === 'PUT' && call.pathname === '/api/v1/settings').length, 1);
     await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
     await closeWindow();
