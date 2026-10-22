@@ -203,11 +203,14 @@ export function createActionPlanJobMonitor({
         applySnapshot(snapshot);
       } else if (isActiveActionPlanJob(current)) {
         const missing = current;
-        current = null;
         selectionVersion += 1;
+        const recoveryVersion = selectionVersion;
         eventObservation?.controller.abort();
         eventObservation = null;
         await onMissingJob(missing);
+        // A failed saved-view read remains retryable on the next healthy poll.
+        // Do not clear a newer job submitted while this recovery was in flight.
+        if (selectionVersion === recoveryVersion && current?.id === missing.id) current = null;
       }
     } catch (error) {
       reportError(error);

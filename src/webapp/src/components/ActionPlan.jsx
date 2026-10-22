@@ -730,6 +730,7 @@ export default function ActionPlan({ isVisible = true, layoutMode = 'split' }) {
         if (saved.exists && saved.analysis?.body?.trim() && saved.plan?.body?.trim()) {
           planDateRef.current = saved.date || planDateRef.current;
           applyLoadedActionPlan(saved);
+          setAutoRefreshStatus('');
         }
       },
       onObservationError: (error) => {
