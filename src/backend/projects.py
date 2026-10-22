@@ -3,6 +3,7 @@
 import json
 import os
 import re
+from src.utils.markdown_structure import markdown_lines
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -109,8 +110,9 @@ async def get_project_progress():
 
         if md_file.exists():
             with open(md_file, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-                for line in lines:
+                for line, literal in markdown_lines(f.read()):
+                    if literal:
+                        continue
                     line = line.strip()
                     # Detect Headers as project groups
                     if line.startswith("## ") or line.startswith("### ") or line.startswith("#### "):
@@ -119,14 +121,12 @@ async def get_project_progress():
                              current_project = cleaned_header
 
                     # Detect completed tasks
-                    elif line.startswith("- [X]") or line.startswith("- [x]"):
-                        task_desc = line[5:].strip()
-                        completed_tasks.append({"project": current_project, "task": task_desc, "status": "completed"})
-
-                    # Detect pending tasks
-                    elif line.startswith("- [ ]"):
-                         task_desc = line[5:].strip()
-                         pending_tasks.append({"project": current_project, "task": task_desc, "status": "pending"})
+                    else:
+                        task = re.match(r"^(?:[-+*]|\d{1,9}[.)])[ \t]+\[([ xX])\](?:[ \t]+(.*)|$)", line)
+                        if task:
+                            completed = task[1].lower() == "x"
+                            target = completed_tasks if completed else pending_tasks
+                            target.append({"project": current_project, "task": (task[2] or "").strip(), "status": "completed" if completed else "pending"})
 
         # Calculate stats
         total_tasks = len(completed_tasks) + len(pending_tasks)
