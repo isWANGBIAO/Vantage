@@ -39,6 +39,29 @@ def test_fingerprint_publication_preserves_old_bytes_until_atomic_replace(tmp_pa
     assert not list(layout["build_root"].rglob("*.tmp"))
 
 
+def test_failed_second_publication_cannot_authorize_an_inconsistent_bundle(tmp_path, monkeypatch):
+    layout = packaging.resolve_backend_runtime_layout(tmp_path)
+    old = {"digest": "old-source"}
+    packaging.write_backend_runtime_fingerprint(layout, old)
+    replace = os.replace
+    publications = 0
+
+    def fail_root_publication(source, target):
+        nonlocal publications
+        publications += 1
+        if publications == 2:
+            raise OSError("synthetic second replace failure")
+        return replace(source, target)
+
+    monkeypatch.setattr(os, "replace", fail_root_publication)
+    monkeypatch.setattr(packaging, "validate_backend_runtime_bundle", lambda *_: [])
+    with pytest.raises(OSError, match="second replace"):
+        packaging.write_backend_runtime_fingerprint(layout, {"digest": "new-source"})
+    assert packaging.load_backend_runtime_fingerprint(layout) == old
+    assert not packaging.backend_runtime_fingerprint_matches(layout, old, [])
+    assert not list(layout["build_root"].rglob("*.tmp"))
+
+
 @pytest.mark.parametrize("keep_root", [False, True])
 def test_skip_build_preserves_existing_binary_and_never_certifies_changed_sources(tmp_path, monkeypatch, keep_root):
     layout = packaging.resolve_backend_runtime_layout(tmp_path)

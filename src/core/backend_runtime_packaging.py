@@ -677,7 +677,10 @@ def write_backend_runtime_fingerprint(
 
 
 def load_backend_runtime_fingerprint(layout: dict[str, Path]) -> dict[str, object] | None:
-    fingerprint_path = backend_runtime_fingerprint_path(layout)
+    return _read_backend_runtime_fingerprint(backend_runtime_fingerprint_path(layout))
+
+
+def _read_backend_runtime_fingerprint(fingerprint_path: Path) -> dict[str, object] | None:
     try:
         payload = json.loads(fingerprint_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
@@ -936,6 +939,14 @@ def backend_runtime_fingerprint_matches(
 ) -> bool:
     stored_fingerprint = load_backend_runtime_fingerprint(layout)
     if not stored_fingerprint:
+        return False
+    # Publication spans two atomic files. If the second replace failed, the
+    # old root record cannot authorize the newly rebuilt bundle, even if the
+    # source tree was subsequently restored to its previous fingerprint.
+    bundled_fingerprint = _read_backend_runtime_fingerprint(
+        layout["runtime_dir"] / BACKEND_RUNTIME_FINGERPRINT_NAME
+    )
+    if bundled_fingerprint != stored_fingerprint:
         return False
     if stored_fingerprint.get("digest") != expected_fingerprint.get("digest"):
         return False
