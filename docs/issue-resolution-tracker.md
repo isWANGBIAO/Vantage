@@ -1,5 +1,7 @@
 # 开放 Issue 修复与验证台账
 
+> 历史快照说明：本文件保存集成 PR [#158](https://github.com/isWANGBIAO/Vantage/pull/158) 提交时的修复和测试映射。下方 9/86 计数及“待最终CI”状态不是实时结案状态；最终实际 main 提交、CI 与逐项结案证据以该 PR 的最终验收评论和对应 issue 为准。后续测试收尾修复见 [#159](https://github.com/isWANGBIAO/Vantage/pull/159)，手动核验入口设计见 `docs/plans/2026-10-22-manual-ci-design.md`。
+
 更新时间：2026-10-22。范围以GitHub实际开放项为准：初始95项，已凭精确main提交及专项证据关闭9项，目前86项仍开放。已合并#140/#141/#146；其余按根因完成修复后统一集成。草稿、合成测试通过和PR CI均不替代最终main提交核验。
 
 ## 执行约定
