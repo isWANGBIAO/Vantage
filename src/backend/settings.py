@@ -377,16 +377,77 @@ def _validate_legacy_history_source(legacy_root):
         raise HTTPException(status_code=400, detail="Legacy history source overlaps the configured destination.")
     return source_root, source_history, target_history, False
 
-def _copy_missing_legacy_history(source_history: Path, target_history: Path):
-    target_history.mkdir(parents=True, exist_ok=True)
+class _LegacyHistoryChanges:
+    """Undo only this request's new files/directories, never pre-existing data."""
+
+    def __init__(self):
+        self.files = []
+        self.directories = []
+
+    def mkdir(self, directory):
+        missing = []
+        parent = directory
+        while not parent.exists():
+            missing.append(parent)
+            parent = parent.parent
+        for path in reversed(missing):
+            try:
+                path.mkdir()
+            except FileExistsError:
+                if not path.is_dir() or path.is_symlink():
+                    raise
+            else:
+                self.directories.append(path)
+
+    @staticmethod
+    def _identity(stat):
+        return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+    def record_file(self, path, stat):
+        self.files.append((path, self._identity(stat)))
+
+    def rollback(self):
+        failed = False
+        for path, identity in reversed(self.files):
+            try:
+                if path.is_symlink() or self._identity(path.stat()) != identity:
+                    # A concurrent writer replaced/changed it; do not delete it.
+                    failed = True
+                    continue
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                failed = True
+        for path in reversed(self.directories):
+            try:
+                path.rmdir()  # Never recursively remove a directory.
+            except FileNotFoundError:
+                pass
+            except OSError:
+                failed = True
+        return failed
+
+
+def _legacy_history_walk_error(error):
+    raise HTTPException(
+        status_code=500,
+        detail="Unable to read all legacy history folders. Check read permissions and retry the import.",
+    ) from error
+
+
+def _copy_missing_legacy_history(source_history: Path, target_history: Path, changes):
+    changes.mkdir(target_history)
     target_root = target_history.resolve()
-    for current_dir, dir_names, file_names in os.walk(source_history, followlinks=False):
+    for current_dir, dir_names, file_names in os.walk(
+        source_history, followlinks=False, onerror=_legacy_history_walk_error,
+    ):
         current_path = Path(current_dir)
         relative_dir = current_path.relative_to(source_history)
         destination_dir = target_history / relative_dir
         if destination_dir.is_symlink() or not destination_dir.resolve().is_relative_to(target_root):
             raise HTTPException(status_code=400, detail="Legacy history destination escapes the configured history directory.")
-        destination_dir.mkdir(parents=True, exist_ok=True)
+        changes.mkdir(destination_dir)
         dir_names[:] = [name for name in dir_names if not (current_path / name).is_symlink()]
         for name in file_names:
             source_file = current_path / name
@@ -399,12 +460,16 @@ def _copy_missing_legacy_history(source_history: Path, target_history: Path):
                 continue
             try:
                 with source_file.open("rb") as source, destination_file.open("xb") as destination:
-                    shutil.copyfileobj(source, destination)
+                    try:
+                        shutil.copyfileobj(source, destination)
+                    finally:
+                        try:
+                            destination.flush()
+                        finally:
+                            changes.record_file(destination_file, os.fstat(destination.fileno()))
             except FileExistsError:
                 continue
             except OSError as error:
-                with suppress(OSError):
-                    destination_file.unlink()
                 raise HTTPException(status_code=500, detail="Failed to copy a legacy history file.") from error
 
 @router.post("/api/v1/onboarding/complete", response_model=OnboardingCompletion,
@@ -413,14 +478,21 @@ def complete_automation_onboarding(payload: dict):
     with _automation_config_lock:
         originals = _snapshot_automation_config_files()
         originals[get_migration_state_file()] = _snapshot_config_file(get_migration_state_file())
+        history_changes = _LegacyHistoryChanges()
         try:
-            return _complete_onboarding(payload)
+            return _complete_onboarding(payload, history_changes)
         except Exception as error:
+            rollback_failed = history_changes.rollback()
             _restore_config_files(originals, error)
+            if rollback_failed:
+                raise HTTPException(
+                    status_code=500,
+                    detail="History import failed and some new files could not be rolled back safely. Review the history destination before retrying.",
+                ) from error
             raise
 
 
-def _complete_onboarding(payload: dict):
+def _complete_onboarding(payload: dict, history_changes):
     allowed_fields = {
         "display_language",
         "launch_at_login",
@@ -456,14 +528,6 @@ def _complete_onboarding(payload: dict):
         "completed": existing_migration["completed"],
         "sourcePath": existing_migration["source_path"],
     }
-
-    if should_import and validated_source:
-        source_root, source_history, target_history, same_root = validated_source
-        if not same_root and not (existing_migration["completed"] and existing_migration["source_path"] == str(source_root)):
-            _copy_missing_legacy_history(source_history, target_history)
-            imported = True
-        else:
-            imported = False
 
     with _automation_config_lock:
         saved_provider = load_provider_config()
@@ -503,8 +567,18 @@ def _complete_onboarding(payload: dict):
                 "providers": providers,
             }
 
+        if payload["skip_chat_setup"] is False:
+            saved_provider = save_provider_config(provider_config)
+        provider_configured = bool(get_provider_chain_config())
+        if payload["skip_chat_setup"] is False and not provider_configured:
+            raise HTTPException(status_code=422, detail="Complete provider credentials are required unless chat setup is skipped.")
+
         if should_import and validated_source:
-            source_root = validated_source[0]
+            source_root, source_history, target_history, same_root = validated_source
+            imported = False
+            if not same_root and not (existing_migration["completed"] and existing_migration["source_path"] == str(source_root)):
+                _copy_missing_legacy_history(source_history, target_history, history_changes)
+                imported = True
             migration_state = load_migration_state()
             imported_at = migration_state["imported_at"] or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             saved_migration = save_migration_state({
@@ -518,11 +592,6 @@ def _complete_onboarding(payload: dict):
                 "sourcePath": saved_migration["source_path"],
             }
 
-        if payload["skip_chat_setup"] is False:
-            saved_provider = save_provider_config(provider_config)
-        provider_configured = bool(get_provider_chain_config())
-        if payload["skip_chat_setup"] is False and not provider_configured:
-            raise HTTPException(status_code=422, detail="Complete provider credentials are required unless chat setup is skipped.")
         current_settings = load_settings()
         saved_settings = save_settings({
             **current_settings,
