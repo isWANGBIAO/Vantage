@@ -338,6 +338,16 @@ async function resetProviderSettings(config = syntheticProviders()) {
     await click('.settings-sidebar button', 'AI Provider');
 }
 
+async function takePendingDiscovery() {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+        if (pendingDiscoveries.length) return pendingDiscoveries.shift();
+        await checkErrors();
+        await delay(25);
+    }
+    throw new Error('The synthetic provider discovery request did not arrive');
+}
+
 async function exerciseProviderSettings() {
     await resetProviderSettings();
     await editSettingsInput('Provider Route', 'alpha-renamed');
@@ -380,6 +390,25 @@ async function exerciseProviderSettings() {
         assert.equal(await evaluate(() => document.querySelector('.settings-section input')?.value), 'https://beta.invalid/v1');
     }
     console.log('PASS voice inheritance follows the persisted active provider, not the browsed editor');
+    for (const edit of ['delete', 'endpoint', 'rename']) {
+        await resetProviderSettings();
+        if (edit === 'rename') await editSettingsInput('API Key', 'synthetic-reentered-key');
+        await click('.settings-icon-button[title="Refresh Models"]');
+        const respond = await takePendingDiscovery();
+        if (edit === 'delete') {
+            // Only the native confirmation boundary is replaced; real React deletion runs.
+            await evaluate(() => { window.confirm = () => true; });
+            await click('.settings-provider-editor-actions button', 'Delete');
+        } else if (edit === 'endpoint') await editSettingsInput('Base URL', 'https://changed.invalid/v1');
+        else await editSettingsInput('Provider Route', 'alpha-renamed');
+        respond({ models: ['late-model'], model_capabilities: { 'late-model': [] } });
+        await waitFor('stale discovery settled', () => document.querySelector('.settings-icon-button[title="Refresh Models"]')?.disabled === false);
+        await waitForNetworkIdle();
+        assert.equal(await evaluate(() => document.querySelector('.settings-provider-model-select')?.value), edit === 'delete' ? 'beta-model' : 'alpha-model');
+        if (edit === 'delete') assert.deepEqual(await evaluate(() => [...document.querySelectorAll('.settings-provider-name')].map(node => node.textContent)), ['Beta Provider']);
+        if (edit === 'rename') assert.equal(await evaluate(() => document.querySelector('input[aria-label="Provider Route"]')?.value), 'alpha-renamed');
+    }
+    console.log('PASS late model discovery cannot recreate deleted or overwrite edited providers');
     await click('.settings-sidebar button', 'General');
 }
 

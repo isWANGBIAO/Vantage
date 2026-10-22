@@ -490,6 +490,9 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       });
       const discoveredModels = Array.isArray(payload?.models) ? payload.models : [];
       updateProviderConfig((providerConfig) => {
+        // A response belongs to the exact draft entry that initiated it. A
+        // deleted, renamed, edited, or replaced provider must never be rebuilt.
+        if (providerConfig.providers[currentProviderRoute] !== currentProvider) return providerConfig;
         const provider = createProviderEntry(currentProviderRoute, providerConfig.providers[currentProviderRoute]);
         const nextSelection = resolveRefreshedModelSelection({
           currentModel: provider.model,
