@@ -453,6 +453,12 @@ export default function ExpenseSheet({ theme = 'dark' }) {
       }
 
       const payload = await res.json();
+      if (payload?.status === 'unavailable' || payload?.source?.available === false || payload?.error) {
+        const sourcePath = String(payload?.source?.path || '');
+        let message = redactSensitiveText(payload.error || payload.source?.error || t('expense.error.load_sheet'));
+        if (sourcePath) message = message.split(sourcePath).join(sourcePath.split(/[\\/]/).pop() || 'Balance Sheet.xlsx');
+        throw new Error(message);
+      }
       setData(payload);
 
       if (plotResult.ok) {
@@ -467,6 +473,7 @@ export default function ExpenseSheet({ theme = 'dark' }) {
         setBalanceChartError(plotResult.error);
       }
     } catch (err) {
+      setData(null);
       setBalanceChart(null);
       setError(err.message || t('expense.error.generic'));
     } finally {
@@ -653,17 +660,27 @@ export default function ExpenseSheet({ theme = 'dark' }) {
         method: 'DELETE',
         retryPolicy: 'mutation',
       });
+      const restoredItem = dismissedPurchaseItems.find((item) => item.id === itemId);
       setDismissedPurchaseItems((current) => current.filter((item) => item.id !== itemId));
       setDismissedPurchaseCount(Number(payload?.count) || 0);
       setPurchaseRecommendations((current) => (
         current
-          ? { ...current, dismissed_count: Number(payload?.count) || 0 }
+          ? {
+            ...current,
+            dismissed_count: Number(payload?.count) || 0,
+            recommendation_groups: (current.recommendation_groups || []).map((group) => (
+              group.key === restoredItem?.group_key
+                && !(group.items || []).some((item) => normalizePurchaseItemName(item.name) === normalizePurchaseItemName(restoredItem.name))
+                ? { ...group, items: [...(group.items || []), restoredItem] }
+                : group
+            )),
+          }
           : current
       ));
     } catch (err) {
       setPurchaseError(err.message || t('expense.error.generic'));
     }
-  }, [t]);
+  }, [dismissedPurchaseItems, t]);
 
   const handleClearDismissedPurchaseItems = useCallback(async () => {
     try {

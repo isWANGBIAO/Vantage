@@ -43,6 +43,7 @@ export default function Dashboard({ isVisible = false }) {
   const [time, setTime] = useState(new Date());
   const [storageEstimate, setStorageEstimate] = useState({ daysLeft: 0, groupSizeMB: 0 });
   const [aqi, setAqi] = useState(null);
+  const [aqiUnavailable, setAqiUnavailable] = useState(false);
   const [healthStats, setHealthStats] = useState(null);
   const [mediaPrivacyRevealed, setMediaPrivacyRevealed] = useState(false);
   const [folderStatus, setFolderStatus] = useState('');
@@ -114,12 +115,19 @@ export default function Dashboard({ isVisible = false }) {
 
       const res = await fetchBackend(url, { retryPolicy: 'poll', allowHttpError: true });
       if (!res.ok) {
+        setAqi(null);
+        setAqiUnavailable(true);
+        await res.body?.cancel();
         return;
       }
 
       const data = await res.json();
-      setAqi(data);
+      const available = data?.status !== 'unavailable' && Number.isFinite(data?.aqi);
+      setAqi(available ? data : null);
+      setAqiUnavailable(!available);
     } catch (err) {
+      setAqi(null);
+      setAqiUnavailable(true);
       logPollErrorOnce('aqi', 'Failed to fetch AQI', err);
     }
   }, [logPollErrorOnce]);
@@ -520,7 +528,7 @@ export default function Dashboard({ isVisible = false }) {
           icon={<Wind size={24} color={aqi?.color || '#b2bec3'} />}
           title={t('dashboard.stat.air_quality')}
           value={aqi?.aqi ?? '--'}
-          subValue={aqi ? `${aqi.city} - ${aqi.level}` : t('dashboard.stat.loading')}
+          subValue={aqi ? `${aqi.city} - ${aqi.level}` : t(aqiUnavailable ? 'dashboard.stat.unavailable' : 'dashboard.stat.loading')}
           color={aqi?.color || '#b2bec3'}
           titleColor={aqi?.color}
         />

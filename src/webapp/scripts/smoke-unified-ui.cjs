@@ -54,6 +54,8 @@ let server;
 let shuttingDown = false;
 let backendConnection;
 let smokeSession;
+let todayReadFailures = 0;
+let todayReadFailuresObserved = 0;
 
 const chart = (id, title) => ({
     id, title, summary: [],
@@ -97,6 +99,23 @@ const readFixtures = {
     '/api/v1/body-analysis/status': { status: 'disabled', last_report_available: false },
     '/api/v1/usage': { summary: {}, sources: [], sessions: [] },
 };
+const fixtureStatus = {};
+if (runsRecoveryCase('aqi')) {
+    readFixtures['/api/v1/system/air-quality'] = { aqi: 62, city: 'Synthetic city', level: 'Moderate', color: '#aaa', status: 'ready' };
+}
+if (runsRecoveryCase('purchase-restore')) {
+    readFixtures['/api/v1/finance/purchase-recommendations'] = {
+        status: 'ready', cache_key: 'synthetic-cache', dismissed_count: 0,
+        recommendation_groups: [{ key: 'practical', title: 'Synthetic practical', items: [{ name: 'Synthetic desk lamp', reason: 'Synthetic recommendation' }] }],
+    };
+}
+if (runsRecoveryCase('finance-unavailable')) {
+    readFixtures['/api/v1/finance/balance-sheet'] = {
+        status: 'unavailable', source: { available: false, path: '/synthetic/private/Balance Sheet.xlsx' },
+        error: 'File not found: /synthetic/private/Balance Sheet.xlsx',
+    };
+    readFixtures['/api/v1/plots/data'].charts[1] = { id: 'balance', title: 'Synthetic balance chart', empty: true, error: 'Synthetic balance validation failed', summary: [] };
+}
 
 function onboardingState() {
     return {
@@ -117,6 +136,17 @@ async function serveFixture(req, res) {
     calls.push({ method: req.method, pathname, ...(payload ? { payload } : {}) });
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Cache-Control', 'no-store');
+    if (req.method === 'GET' && pathname === '/api/v1/action-plan/today' && todayReadFailures > 0) {
+        todayReadFailures--;
+        todayReadFailuresObserved++;
+        res.end('{'); // A transient, fully consumed invalid backend response.
+        return;
+    }
+    if (req.method === 'GET' && pathname === '/api/v1/action-plan/jobs/synthetic-recovery/events') {
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.end(`${JSON.stringify({ sequence: 1, log: 'STREAM_ANALYSIS_CONTENT:"Synthetic incomplete progress"' })}\n`);
+        return;
+    }
     let result;
     if (req.method === 'GET' && pathname === '/api/v1/settings') result = settingsState();
     else if (req.method === 'GET' && pathname === '/api/v1/settings/display-language') result = { display_language: settings.display_language };
@@ -140,7 +170,18 @@ async function serveFixture(req, res) {
             settings: { display_language: settings.display_language, theme: settings.theme, theme_mode: settings.theme_mode, launch_at_login: false },
             provider: { selected_provider: null, providers: [] },
         };
-    } else if (req.method === 'GET' && Object.hasOwn(readFixtures, pathname)) result = readFixtures[pathname];
+    } else if (req.method === 'POST' && pathname === '/api/v1/plots/refresh') result = { ok: true };
+    else if (req.method === 'POST' && pathname === '/api/v1/finance/purchase-recommendations/dismiss') {
+        const item = { ...payload.item, id: 1, group_key: payload.group_key, cache_key: payload.cache_key };
+        readFixtures['/api/v1/finance/purchase-recommendations/dismissed'] = { items: [item], count: 1 };
+        result = { ok: true, item, count: 1 };
+    } else if (req.method === 'DELETE' && pathname === '/api/v1/finance/purchase-recommendations/dismissed/1') {
+        readFixtures['/api/v1/finance/purchase-recommendations/dismissed'] = { items: [], count: 0 };
+        result = { ok: true, count: 0 };
+    } else if (req.method === 'GET' && Object.hasOwn(readFixtures, pathname)) {
+        res.statusCode = fixtureStatus[pathname] || 200;
+        result = readFixtures[pathname];
+    }
     else {
         unexpectedRequests.push(`${req.method} ${pathname}`);
         res.statusCode = 404;
@@ -376,6 +417,22 @@ async function exerciseUi() {
     assert.ok(nativeCalls.preferences >= 1, 'Saved onboarding preferences must reach the native bridge.');
     console.log('PASS onboarding interruption, Back, cancelled picker, skip, and finish');
 
+    if (runsRecoveryCase('missing-job')) {
+        const job = { id: 'synthetic-recovery', status: 'running', trigger: 'manual', event_cursor: 1 };
+        readFixtures['/api/v1/action-plan/jobs/synthetic-recovery'] = job;
+        readFixtures['/api/v1/action-plan/jobs'] = { jobs: [job], active: job };
+        await waitFor('running job replaces saved view', () => document.querySelector('.app-main')?.innerText.includes('Synthetic incomplete progress'));
+        todayReadFailures = 1;
+        readFixtures['/api/v1/action-plan/jobs'] = { jobs: [], active: null };
+        await waitFor('missing job reports transient saved-view failure', () => document.querySelector('.app-main')?.innerText.includes('Reconnecting to backend status'));
+        await waitFor('next healthy poll recovers complete saved plan', () => document.querySelector('.app-main')?.innerText.includes('Synthetic smoke action plan')
+            && !document.querySelector('.app-main')?.innerText.includes('Synthetic incomplete progress'));
+        assert.equal(todayReadFailuresObserved, 1);
+        assert.equal(calls.some(call => call.method === 'POST' && call.pathname.startsWith('/api/v1/action-plan/jobs')), false,
+            'Recovery observes existing work and must not generate or cancel.');
+        console.log('PASS missing active job retries a failed saved-plan read (#133)');
+    }
+
     if (runsRecoveryCase('empty-hash')) {
         await navigate('dashboard', '.dashboard-page', 'System Dashboard');
         await evaluate(() => history.back());
@@ -390,6 +447,20 @@ async function exerciseUi() {
 
     await navigate('dashboard', '.dashboard-page', 'System Dashboard');
     await waitFor('synthetic dashboard data', () => document.querySelector('.dashboard-page')?.innerText.includes('12%'));
+    if (runsRecoveryCase('aqi')) {
+        await waitFor('initial valid AQI', () => document.querySelector('.dashboard-page')?.innerText.includes('Synthetic city - Moderate'));
+        fixtureStatus['/api/v1/system/air-quality'] = 503;
+        await click('.app-nav a[href="#action-plan"]');
+        await click('.app-nav a[href="#dashboard"]');
+        await waitFor('AQI failure invalidates old current value', () => !document.querySelector('.dashboard-page')?.innerText.includes('Synthetic city - Moderate')
+            && document.querySelector('.dashboard-page')?.innerText.includes('Measurement unavailable'));
+        fixtureStatus['/api/v1/system/air-quality'] = 200;
+        readFixtures['/api/v1/system/air-quality'] = { aqi: 84, city: 'Recovered city', level: 'Moderate', status: 'ready' };
+        await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
+        await navigate('dashboard', '.dashboard-page', 'System Dashboard');
+        await waitFor('AQI automatically recovers', () => document.querySelector('.dashboard-page')?.innerText.includes('Recovered city - Moderate'));
+        console.log('PASS failed AQI is unavailable, then recovers (#85)');
+    }
     if (process.env.VANTAGE_UI_SMOKE_SCREENSHOT) {
         await delay(200);
         const screenshot = await window.webContents.debugger.sendCommand('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
@@ -397,6 +468,29 @@ async function exerciseUi() {
     }
     await navigate('project-progress', '.project-progress-container', 'Verify the unified workspace');
     await navigate('expense-sheet', '.expense-sheet', 'Expense Sheet');
+    if (runsRecoveryCase('finance-unavailable')) {
+        await waitFor('HTTP 200 finance unavailable is visible', () => document.querySelector('.expense-state-panel.expense-error-panel')?.textContent.includes('File not found: Balance Sheet.xlsx'));
+        assert.equal(await evaluate(() => document.querySelector('.expense-state-panel.expense-error-panel')?.textContent.includes('/synthetic/private')), false,
+            'The error notice must retain the reason without expanding the private source path.');
+        readFixtures['/api/v1/finance/balance-sheet'] = { status: 'ready', sheets: [], summary: {}, source: { available: true } };
+        await click('.expense-toolbar .expense-refresh-button');
+        await waitFor('finance retry clears error', () => !document.querySelector('.expense-state-panel.expense-error-panel')
+            && document.querySelector('.expense-sheet')?.innerText.includes('Synthetic balance validation failed'));
+        console.log('PASS unavailable finance HTTP 200 is shown and retry recovers (#110)');
+    }
+    if (runsRecoveryCase('purchase-restore')) {
+        await waitFor('synthetic purchase card', () => document.querySelector('.expense-purchase-item')?.textContent.includes('Synthetic desk lamp'));
+        await click('.expense-purchase-item .expense-purchase-dismiss-button');
+        await waitFor('purchase card dismissed', () => !document.querySelector('.expense-purchase-item'));
+        await click('.expense-purchase-show-dismissed');
+        await waitFor('dismissed card listed', () => document.querySelector('.expense-purchase-dismissed-item')?.textContent.includes('Synthetic desk lamp'));
+        const generationCalls = calls.filter(call => call.pathname.endsWith('/regenerate')).length;
+        await click('.expense-purchase-dismissed-item .expense-purchase-dismiss-button');
+        await waitFor('single restored purchase card visible again', () => document.querySelector('.expense-purchase-item')?.textContent.includes('Synthetic desk lamp')
+            && !document.querySelector('.expense-purchase-dismissed-item'));
+        assert.equal(calls.filter(call => call.pathname.endsWith('/regenerate')).length, generationCalls, 'Restore must not invoke the model.');
+        console.log('PASS restoring one dismissed purchase item returns its card without generation (#84)');
+    }
     await navigate('plots', '.app-main', 'Synthetic sleep chart');
     await waitFor('production chart rendering', () => [...document.querySelectorAll('.app-main canvas')].some(canvas => canvas.getClientRects().length && canvas.width > 0));
     await navigate('system-logs', '.app-main', 'Synthetic unified UI smoke is ready');
