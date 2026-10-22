@@ -14,7 +14,7 @@ class ActionPlanStreamPrinterTests(unittest.TestCase):
     def test_unicode_and_escaped_text_survives_real_default_limit_pipe(self):
         for text in ("中" * 12000, "🙂" * 12000, ('中文🙂\\\"\n\t' * 12000)):
             with self.subTest(sample=text[:8]):
-                async def read_pipe():
+                async def read_pipe(text=text):
                     proc = await asyncio.create_subprocess_exec(
                         sys.executable, "-c",
                         "import sys; from src.utils.action_plan_stream import emit_action_plan_stream_event; "
