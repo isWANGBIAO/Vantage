@@ -2,7 +2,7 @@ APScheduler==3.11.3
 SciencePlots==2.2.2
 chinese-calendar==1.11.0
 cv2-enumerate-cameras==1.4.0
-fastapi==0.143.2
+fastapi==0.161.1
 matplotlib==3.11.2
 mcp==2.3.0
 mss==10.2.0
