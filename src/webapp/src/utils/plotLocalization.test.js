@@ -169,7 +169,7 @@ test('localizePlotWarnings translates running extraction issue details for Engli
     {
       id: 'running-missing-main',
       title: '跑步主图存在未完整提取的记录',
-      message: '这些记录会让配速 / 心率 / 距离出现断点。请按原文修正 Excel 后再 refresh charts。',
+      message: '部分跑步记录缺少距离或用时，或包含明确异常值。请核对 Time.xlsx「记录」页的运动原文后刷新图表。',
       details: [
         '未知日期：缺少 配速、心率异常值 255；原文：跑步 3km',
         '2026-04-20：距离 < 1 km（0.50 km）；原文：test',
@@ -182,8 +182,61 @@ test('localizePlotWarnings translates running extraction issue details for Engli
 
   assert.equal(localized[0].title, 'Running main chart has incompletely extracted records');
   assert.equal(
+    localized[0].message,
+    'Some running records lack distance or duration, or contain an explicit anomalous value. Check the exercise text on the Records sheet in Time.xlsx, then refresh charts.',
+  );
+  assert.equal(
     localized[0].details[0],
     'unknown date: Missing pace, Abnormal heart rate 255; source: 跑步 3km',
   );
   assert.equal(localized[0].details[1], '2026-04-20: Distance < 1 km (0.50 km); source: test');
+});
+
+test('missing heart rate HRC empty state localizes without an error', () => {
+  const chart = localizePlotChart({
+    id: 'running-hrc',
+    title: 'Heart Rate Cost of Running (HRC)',
+    empty: true,
+    error: null,
+    message: '暂无心率数据，HRC 暂不计算。其他跑步指标照常显示。',
+  }, 'en-US');
+
+  assert.equal(chart.empty, true);
+  assert.equal(chart.error, null);
+  assert.equal(chart.message, 'No heart rate data is recorded, so HRC is unavailable. Other running metrics remain visible.');
+});
+
+test('running warnings direct English users to Time exercise text', () => {
+  const messages = [
+    '部分记录的用时、步频或步幅数值需要核对。请核对 Time.xlsx「记录」页的运动原文后刷新图表。',
+    '部分记录的距离、用时或已记录心率需要核对，未计入 HRC 趋势。请核对 Time.xlsx「记录」页的运动原文。',
+    '这些异常记录未计入相应跑步趋势。请核对 Time.xlsx「记录」页的运动原文。',
+  ];
+  const warnings = messages.map((message) => ({
+    message,
+    details: ['其余 2 条异常记录已省略，请核对 Time.xlsx「记录」页的运动原文。'],
+  }));
+
+  const localized = localizePlotWarnings(warnings, 'en-US');
+
+  for (const warning of localized) {
+    assert.match(warning.message, /exercise text on the Records sheet in Time\.xlsx/);
+    assert.doesNotMatch(warning.message, /export/i);
+    assert.equal(warning.details[0], '2 more anomalous records are hidden. Check the exercise text on the Records sheet in Time.xlsx.');
+  }
+});
+
+test('running form summary identifies calculated stride values in both languages', () => {
+  const chart = {
+    id: 'running-form',
+    summary: [{ label: '计算/估算步幅', value: '2次' }],
+  };
+
+  assert.deepEqual(localizePlotChart(chart, 'zh-CN').summary, [{ label: '计算/估算步幅', value: '2次' }]);
+  const plural = localizePlotChart(chart, 'en-US').summary[0];
+  assert.equal(plural.label, 'Calculated/Estimated Stride');
+  assert.equal(plural.value, '2 times');
+  const singular = localizePlotChart({ ...chart, summary: [{ label: '计算/估算步幅', value: '1次' }] }, 'en-US').summary[0];
+  assert.equal(singular.label, 'Calculated/Estimated Stride');
+  assert.equal(singular.value, '1 time');
 });

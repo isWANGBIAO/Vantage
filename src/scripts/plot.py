@@ -1399,6 +1399,9 @@ def _looks_like_running_text(text):
     if has_walking_keyword:
         return False
 
+    if any(keyword in text for keyword in ("骑行", "骑车", "单车", "游泳", "蛙泳", "自由泳", "椭圆机")):
+        return False
+
     if has_running_metric_keyword or "配速" in text:
         return True
 
@@ -1440,6 +1443,47 @@ def _parse_running_text(text):
         "配速除以心率": pace_over_hr,
         "运动文本": text,
     }
+
+
+def _parse_running_sessions(text):
+    """Read separate runs and their numbered addenda from one daily Time cell."""
+    if not isinstance(text, str) or not _looks_like_running_text(text):
+        return []
+    addendum_pattern = re.compile(
+        r"(?:^|(?<=[；;]))(?P<label>该次|第(?P<number>\d+)次)(?:指标|步幅)?(?:补录|补充)"
+        r"[（(](?P<clock>[^）)]+)[）)]\s*[：:]\s*(?P<body>[^\r\n；;]*)",
+        flags=re.MULTILINE,
+    )
+    addenda = list(addendum_pattern.finditer(text))
+    core = addendum_pattern.sub("", text)
+    marker = re.compile(
+        r"(?:跑步|慢跑|快跑|夜跑|晨跑)|跑了(?=\s*\d+(?:\.\d+)?\s*(?:km|公里|千米))|跑(?=\s*\d)",
+        flags=re.IGNORECASE,
+    )
+    starts = list(marker.finditer(core))
+    segments = [core[m.start():starts[i + 1].start() if i + 1 < len(starts) else len(core)] for i, m in enumerate(starts)]
+    if not segments:
+        segments = [core]
+    additions = {}
+    for match in addenda:
+        number = int(match.group("number")) if match.group("number") else (1 if len(segments) == 1 else None)
+        if number is None:
+            continue
+        additions.setdefault(number, []).append(match.group("body"))
+    result = []
+    for number, segment in enumerate(segments, start=1):
+        combined = "\n".join([segment, *additions.get(number, [])])
+        parsed = _parse_running_text(combined)
+        if parsed is not None:
+            if len(segments) == 1:
+                parsed["运动文本"] = text
+            parsed["run_sequence"] = number
+            parsed["stride_source"] = (
+                "calculated" if re.search(r"(?:估算|计算).{0,15}步幅|步幅.{0,35}(?:估算|计算)", combined)
+                else "recorded" if parsed.get("步幅") is not None else "missing"
+            )
+            result.append(parsed)
+    return result
 
 
 def _resolve_running_data_root(data_dir=None, required_dir=None):
@@ -1922,70 +1966,21 @@ def _attach_running_dashboard_views(running_metrics, date_col="日期"):
 
 
 def compute_preferred_running_metrics(data_frame=None, source_col="运动", date_col="日期", output_dir=None):
-    app_running_frame = load_app_running_log_frame(date_col=date_col, source_col=source_col)
-    app_metrics = (
-        compute_running_metrics(app_running_frame, source_col=source_col, date_col=date_col, output_dir=None, infer_gait=False)
-        if not app_running_frame.empty
-        else pd.DataFrame()
-    )
-    source_excluded_rows = app_running_frame.attrs.get("source_excluded_rows") or []
-    app_metrics.attrs["source_excluded_rows"] = source_excluded_rows
-
+    """Time is the reviewed source of truth; exports are offline import inputs."""
     if data_frame is None:
         data_frame = load_time_data()
-
-    manual_metrics = (
-        compute_running_metrics(data_frame, source_col=source_col, date_col=date_col, output_dir=None)
+    metrics = (
+        compute_running_metrics(data_frame, source_col=source_col, date_col=date_col, output_dir=None, infer_gait=False)
         if data_frame is not None and not data_frame.empty
         else pd.DataFrame()
     )
-
-    if app_metrics.empty:
-        manual_metrics.attrs["source_excluded_rows"] = source_excluded_rows
-        manual_metrics = _attach_running_dashboard_views(manual_metrics, date_col=date_col)
-        manual_metrics.attrs["running_source"] = "time_xlsx"
-        if output_dir is not None:
-            output_path = Path(output_dir) / "running_metrics.csv"
-            manual_metrics.to_csv(output_path, index=False, encoding="utf-8-sig")
-            print(f"跑步指标已保存: {output_path}")
-        return manual_metrics
-
-    if manual_metrics.empty:
-        app_metrics = _attach_running_dashboard_views(app_metrics, date_col=date_col)
-        app_metrics.attrs["running_source"] = "app_exports"
-        if output_dir is not None:
-            output_path = Path(output_dir) / "running_metrics.csv"
-            app_metrics.to_csv(output_path, index=False, encoding="utf-8-sig")
-            print(f"跑步指标已保存: {output_path}")
-        return app_metrics
-
-    cutoff = pd.to_datetime(app_metrics[date_col], errors="coerce").max()
-    manual_dates = pd.to_datetime(manual_metrics[date_col], errors="coerce")
-    manual_tail = manual_metrics.loc[manual_dates > cutoff].copy()
-    if manual_tail.empty:
-        app_metrics = _attach_running_dashboard_views(app_metrics, date_col=date_col)
-        app_metrics.attrs["running_source"] = "app_exports"
-        if output_dir is not None:
-            output_path = Path(output_dir) / "running_metrics.csv"
-            app_metrics.to_csv(output_path, index=False, encoding="utf-8-sig")
-            print(f"跑步指标已保存: {output_path}")
-        return app_metrics
-
-    combined = pd.concat([app_metrics, manual_tail], ignore_index=True)
-    combined[date_col] = pd.to_datetime(combined[date_col], errors="coerce")
-    combined = combined.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
-    combined.attrs["invalid_rows"] = _merge_running_invalid_rows(
-        app_metrics.attrs.get("invalid_rows"),
-        _filter_invalid_rows_after(manual_metrics.attrs.get("invalid_rows"), cutoff),
-    )
-    combined.attrs["source_excluded_rows"] = source_excluded_rows
-    combined = _attach_running_dashboard_views(combined, date_col=date_col)
-    combined.attrs["running_source"] = "app_exports_plus_time_xlsx"
+    metrics = _attach_running_dashboard_views(metrics, date_col=date_col)
+    metrics.attrs["running_source"] = "time_xlsx"
     if output_dir is not None:
         output_path = Path(output_dir) / "running_metrics.csv"
-        combined.to_csv(output_path, index=False, encoding="utf-8-sig")
+        metrics.to_csv(output_path, index=False, encoding="utf-8-sig")
         print(f"跑步指标已保存: {output_path}")
-    return combined
+    return metrics
 
 
 def compute_running_metrics(
@@ -2001,11 +1996,9 @@ def compute_running_metrics(
 
     records = []
     for _, row in data_frame[[date_col, source_col]].dropna(subset=[source_col]).iterrows():
-        metrics = _parse_running_text(str(row[source_col]))
-        if metrics is None:
-            continue
-        metrics[date_col] = row[date_col]
-        records.append(metrics)
+        for metrics in _parse_running_sessions(str(row[source_col])):
+            metrics[date_col] = row[date_col]
+            records.append(metrics)
 
     if not records:
         print("未找到跑步记录")
@@ -2021,8 +2014,8 @@ def compute_running_metrics(
     result["pace_min_per_km"] = result["配速_min_per_km"]
     result["pace_mmss"] = result["配速_mmss"]
     heart_rate_raw = pd.to_numeric(result["心率"], errors="coerce")
-    invalid_heart_rate_mask = (heart_rate_raw < 40) | (heart_rate_raw > 230)
-    result["heart_rate_bpm"] = heart_rate_raw.where(~invalid_heart_rate_mask, np.nan)
+    invalid_heart_rate_mask = (heart_rate_raw > 0) & ((heart_rate_raw < 40) | (heart_rate_raw > 230))
+    result["heart_rate_bpm"] = heart_rate_raw.where(heart_rate_raw.between(40, 230), np.nan)
     cadence_raw = pd.to_numeric(result["步频"], errors="coerce")
     stride_raw = pd.to_numeric(result["步幅"], errors="coerce")
     result["speed_m_per_min"] = np.where(
@@ -2062,12 +2055,9 @@ def compute_running_metrics(
         running_issues = []
         if pd.isna(row.get("pace_min_per_km")):
             running_issues.append("缺少 配速")
-        if pd.isna(row.get("heart_rate_bpm")):
+        if invalid_heart_rate_mask.loc[row_index]:
             raw_heart_rate = heart_rate_raw.loc[row_index]
-            if pd.notna(raw_heart_rate) and ((raw_heart_rate < 40) or (raw_heart_rate > 230)):
-                running_issues.append(f"心率异常值 {int(raw_heart_rate)}")
-            else:
-                running_issues.append("缺少 心率")
+            running_issues.append(f"心率异常值 {int(raw_heart_rate)}")
         if pd.isna(row.get("distance_km")):
             running_issues.append("缺少 距离")
         if running_issues:
@@ -2076,10 +2066,6 @@ def compute_running_metrics(
         running_form_issues = []
         if pd.isna(row.get("duration_min")):
             running_form_issues.append("缺少 用时")
-        if pd.isna(row.get("cadence_spm")):
-            running_form_issues.append("缺少 步频")
-        if pd.isna(row.get("stride_m")):
-            running_form_issues.append("缺少 步幅")
         if running_form_issues:
             issues_by_chart["running-form"] = running_form_issues
 
@@ -2088,14 +2074,9 @@ def compute_running_metrics(
             running_hrc_issues.append("缺少 距离")
         if pd.isna(row.get("duration_min")):
             running_hrc_issues.append("缺少 用时/配速")
-        if pd.isna(row.get("heart_rate_bpm")):
+        if invalid_heart_rate_mask.loc[row_index]:
             raw_heart_rate = heart_rate_raw.loc[row_index]
-            if pd.notna(raw_heart_rate) and ((raw_heart_rate < 40) or (raw_heart_rate > 230)):
-                running_hrc_issues.append(f"心率异常值 {int(raw_heart_rate)}")
-            else:
-                running_hrc_issues.append("缺少 心率")
-        if pd.isna(row.get("HRC_m_per_beat")):
-            running_hrc_issues.append("缺少 HRC")
+            running_hrc_issues.append(f"心率异常值 {int(raw_heart_rate)}")
         if running_hrc_issues:
             deduped_issues = list(dict.fromkeys(running_hrc_issues))
             issues_by_chart["running-hrc"] = deduped_issues

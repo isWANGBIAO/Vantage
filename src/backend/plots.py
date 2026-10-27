@@ -38,14 +38,9 @@ def _file_signature(path):
     return (str(candidate), stat.st_mtime_ns, stat.st_size)
 
 def _get_plot_dashboard_cache_key():
-    mi_fitness_data_root = DataLoader.resolve_health_data_root("mi_fiteness_data")
-    zepp_data_root = DataLoader.resolve_health_data_root("zepplift_data")
     source_paths = [
         DataLoader.resolve_data_path("Time.xlsx"),
         DataLoader.resolve_data_path("Balance Sheet.xlsx"),
-        mi_fitness_data_root / "mi_fiteness_data" / "20260416_881116692_MiFitness_hlth_center_sport_record.csv",
-        zepp_data_root / "zepplift_data" / "SPORT" / "SPORT_running_master.csv",
-        zepp_data_root / "zepplift_data" / "SPORT" / "SPORT_1776331608562.csv",
     ]
     return tuple(_file_signature(path) for path in source_paths)
 

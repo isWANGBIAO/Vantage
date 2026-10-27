@@ -44,6 +44,8 @@ const ENGLISH_TEXT = {
     'Combine duration, cadence, and stride length to judge running form stability beyond pace alone.',
   '这里按速度 ÷ 心率计算 HRC，单位是 m/beat。数值越高，表示单位心搏支持的前进效率越高。':
     'HRC is calculated as speed divided by heart rate, in m/beat. Higher values mean each heartbeat supports more forward movement.',
+  '暂无心率数据，HRC 暂不计算。其他跑步指标照常显示。':
+    'No heart rate data is recorded, so HRC is unavailable. Other running metrics remain visible.',
 
   '体重 (kg)': 'Weight (kg)',
   '体脂率 (%)': 'Body Fat (%)',
@@ -139,22 +141,23 @@ const ENGLISH_TEXT = {
   '最近用时': 'Latest Duration',
   '平均步频': 'Average Cadence',
   '平均步幅': 'Average Stride',
+  '计算/估算步幅': 'Calculated/Estimated Stride',
   '最新 HRC': 'Latest HRC',
   '最佳 HRC': 'Best HRC',
   '对应心率': 'Matching Heart Rate',
 
   '跑步主图存在未完整提取的记录': 'Running main chart has incompletely extracted records',
-  '部分记录缺少配速、心率或距离，相关曲线可能出现断点。请核对对应来源的原始记录或导出文件后刷新图表。':
-    'Missing pace, heart rate, or distance can leave gaps in these curves. Check the original records or export files for the relevant source, then refresh charts.',
+  '部分跑步记录缺少距离或用时，或包含明确异常值。请核对 Time.xlsx「记录」页的运动原文后刷新图表。':
+    'Some running records lack distance or duration, or contain an explicit anomalous value. Check the exercise text on the Records sheet in Time.xlsx, then refresh charts.',
   '跑步技术结构存在未完整提取的记录': 'Running form chart has incompletely extracted records',
-  '部分记录缺少用时、步频或步幅，相关曲线可能出现断点。请核对对应来源的原始记录或导出文件后刷新图表。':
-    'Missing duration, cadence, or stride can leave gaps in these curves. Check the original records or export files for the relevant source, then refresh charts.',
+  '部分记录的用时、步频或步幅数值需要核对。请核对 Time.xlsx「记录」页的运动原文后刷新图表。':
+    'Some recorded duration, cadence, or stride values need review. Check the exercise text on the Records sheet in Time.xlsx, then refresh charts.',
   'HRC 分析存在未完整提取的记录': 'HRC analysis has incompletely extracted records',
-  '这些记录缺少计算 HRC 所需的字段，未计入 HRC 趋势。请核对对应来源的原始记录或导出文件。':
-    'These records lack fields needed to calculate HRC and are excluded from its trend. Check the original records or export files for the relevant source.',
+  '部分记录的距离、用时或已记录心率需要核对，未计入 HRC 趋势。请核对 Time.xlsx「记录」页的运动原文。':
+    'Some recorded distance, duration, or heart rate values need review and are excluded from HRC trends. Check the exercise text on the Records sheet in Time.xlsx.',
   '已排除的异常跑步记录': 'Excluded anomalous running records',
-  '这些异常记录未计入跑步、心率和技术结构趋势。请核对对应来源的原始记录或导出文件。':
-    'These anomalous records are excluded from running, heart-rate, and form trends. Check the original records or export files for the relevant source.',
+  '这些异常记录未计入相应跑步趋势。请核对 Time.xlsx「记录」页的运动原文。':
+    'These anomalous records are excluded from the affected running trends. Check the exercise text on the Records sheet in Time.xlsx.',
   '这些记录未参与时间类图表计算。请修改 Excel 源数据后刷新 Plots 页面。':
     'These rows were excluded from time charts. Fix the Excel source data, then refresh the Plots page.',
   '关键字段异常': 'key field invalid',
@@ -202,6 +205,11 @@ function localizePatternText(text) {
     return `${match[1]}-Sample Average`;
   }
 
+  match = text.match(/^(\d+)次$/);
+  if (match) {
+    return `${match[1]} ${Number(match[1]) === 1 ? 'time' : 'times'}`;
+  }
+
   match = text.match(/^已跳过 (\d+) 条异常时间数据$/);
   if (match) {
     return `Skipped ${match[1]} anomalous time rows`;
@@ -212,9 +220,9 @@ function localizePatternText(text) {
     return `${match[1]} more anomalous rows are hidden. Inspect the Excel source data directly.`;
   }
 
-  match = text.match(/^其余 (\d+) 条异常记录已省略，请核对对应来源的原始记录或导出文件。$/);
+  match = text.match(/^其余 (\d+) 条异常记录已省略，请核对 Time\.xlsx「记录」页的运动原文。$/);
   if (match) {
-    return `${match[1]} more anomalous records are hidden. Check the original records or export files for the relevant source.`;
+    return `${match[1]} more anomalous records are hidden. Check the exercise text on the Records sheet in Time.xlsx.`;
   }
 
   match = text.match(/^缺少 (.+)$/);

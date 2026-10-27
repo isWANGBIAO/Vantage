@@ -38,22 +38,22 @@ RUNNING_WARNING_CONFIG = {
     'running': {
         'id': 'running-missing-main',
         'title': '跑步主图存在未完整提取的记录',
-        'message': '部分记录缺少配速、心率或距离，相关曲线可能出现断点。请核对对应来源的原始记录或导出文件后刷新图表。',
+        'message': '部分跑步记录缺少距离或用时，或包含明确异常值。请核对 Time.xlsx「记录」页的运动原文后刷新图表。',
     },
     'running-form': {
         'id': 'running-missing-form',
         'title': '跑步技术结构存在未完整提取的记录',
-        'message': '部分记录缺少用时、步频或步幅，相关曲线可能出现断点。请核对对应来源的原始记录或导出文件后刷新图表。',
+        'message': '部分记录的用时、步频或步幅数值需要核对。请核对 Time.xlsx「记录」页的运动原文后刷新图表。',
     },
     'running-hrc': {
         'id': 'running-missing-hrc',
         'title': 'HRC 分析存在未完整提取的记录',
-        'message': '这些记录缺少计算 HRC 所需的字段，未计入 HRC 趋势。请核对对应来源的原始记录或导出文件。',
+        'message': '部分记录的距离、用时或已记录心率需要核对，未计入 HRC 趋势。请核对 Time.xlsx「记录」页的运动原文。',
     },
     'running-excluded': {
         'id': 'running-excluded-records',
         'title': '已排除的异常跑步记录',
-        'message': '这些异常记录未计入跑步、心率和技术结构趋势。请核对对应来源的原始记录或导出文件。',
+        'message': '这些异常记录未计入相应跑步趋势。请核对 Time.xlsx「记录」页的运动原文。',
     },
 }
 
@@ -241,7 +241,7 @@ def _build_empty_chart(chart_id, title, description, error, *, formatter='defaul
         'summary': [],
         'option': {},
         'empty': True,
-        'error': str(error),
+        'error': None if error is None else str(error),
     }
 
 
@@ -296,6 +296,24 @@ def _build_source_unavailable_warning(source_name, error, affected_chart_ids):
     }
 
 
+def _running_warning_issues(issues):
+    if isinstance(issues, str):
+        issues = [issues]
+    remaining = []
+    for issue in issues or []:
+        if issue is None:
+            continue
+        text = str(issue).strip()
+        compact = re.sub(r'\s+', '', text)
+        if re.fullmatch(r'缺少(?:心率|HRC|步频|步幅)', compact, re.I):
+            continue
+        if re.fullmatch(r'(?:心率|步频|步幅)异常值[+-]?0(?:\.0+)?(?:次/分|步/分|厘米|bpm|spm)?', compact, re.I):
+            continue
+        if text:
+            remaining.append(text)
+    return list(dict.fromkeys(remaining))
+
+
 def _build_running_data_warnings(invalid_rows):
     if not invalid_rows:
         return []
@@ -311,7 +329,10 @@ def _build_running_data_warnings(invalid_rows):
         for chart_id, issues in issues_by_chart.items():
             if chart_id not in grouped_rows:
                 continue
-            issue_text = '、'.join(issues) if issues else '关键字段异常'
+            issues = _running_warning_issues(issues)
+            if not issues:
+                continue
+            issue_text = '、'.join(issues)
             grouped_rows[chart_id].append(f"{date_text}：{issue_text}；原文：{raw_text or '空'}")
 
     warnings = []
@@ -322,7 +343,7 @@ def _build_running_data_warnings(invalid_rows):
         visible_details = details[:6]
         remaining_count = len(details) - len(visible_details)
         if remaining_count > 0:
-            visible_details.append(f"其余 {remaining_count} 条异常记录已省略，请核对对应来源的原始记录或导出文件。")
+            visible_details.append(f"其余 {remaining_count} 条异常记录已省略，请核对 Time.xlsx「记录」页的运动原文。")
         warnings.append(
             {
                 'id': config['id'],
@@ -1441,6 +1462,10 @@ def _build_running_form_dashboard_chart(running_df):
     stride_mean = running_df['stride_m'].dropna().mean()
     if pd.notna(stride_mean):
         summary.append({'label': '平均步幅', 'value': f"{_to_chart_number(stride_mean, 2)} m"})
+    if 'stride_source' in running_df:
+        calculated_count = int(running_df['stride_source'].eq('calculated').sum())
+        if calculated_count:
+            summary.append({'label': '计算/估算步幅', 'value': f'{calculated_count}次'})
 
     return _build_chart(
         'running-form',
@@ -1455,8 +1480,25 @@ def _build_running_form_dashboard_chart(running_df):
 
 def _build_running_hrc_dashboard_chart(running_df):
     dashboard_frames = running_df.attrs.get('dashboard_frames') or {}
+    base = dashboard_frames.get('running', running_df)
+    if not base.empty:
+        recorded_heart_rate = base.get('心率', base.get('heart_rate_bpm', pd.Series(np.nan, index=base.index)))
+        recorded_heart_rate = pd.to_numeric(recorded_heart_rate, errors='coerce')
+        if (recorded_heart_rate.isna() | recorded_heart_rate.eq(0)).all():
+            chart = _build_empty_chart(
+                'running-hrc',
+                'Heart Rate Cost of Running (HRC)',
+                '这里按速度 ÷ 心率计算 HRC，单位是 m/beat。数值越高，表示单位心搏支持的前进效率越高。',
+                None,
+                formatter='generic',
+                height=400,
+            )
+            chart['message'] = '暂无心率数据，HRC 暂不计算。其他跑步指标照常显示。'
+            return chart
     running_df = dashboard_frames.get('running-hrc', running_df).copy()
-    running_df = running_df.dropna(subset=['heart_rate_bpm', 'HRC_m_per_beat']).sort_values('日期')
+    heart_rate = pd.to_numeric(running_df['heart_rate_bpm'], errors='coerce')
+    hrc = pd.to_numeric(running_df['HRC_m_per_beat'], errors='coerce')
+    running_df = running_df.loc[np.isfinite(heart_rate) & heart_rate.between(40, 230) & np.isfinite(hrc) & (hrc > 0)].sort_values('日期')
     if running_df.empty:
         raise ValueError('未找到可展示的 HRC 数据')
 

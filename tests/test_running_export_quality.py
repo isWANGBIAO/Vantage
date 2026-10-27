@@ -252,29 +252,31 @@ def test_combining_app_sources_retains_exclusions_even_from_empty_sources(mi_emp
 @pytest.mark.parametrize(
     ("app_empty", "manual_day", "expected_source"),
     [
-        (False, None, "app_exports"),
-        (False, -1, "app_exports"),
-        (False, 2, "app_exports_plus_time_xlsx"),
+        (False, None, "time_xlsx"),
+        (False, -1, "time_xlsx"),
+        (False, 2, "time_xlsx"),
         (True, 2, "time_xlsx"),
         (True, None, "time_xlsx"),
     ],
     ids=["app-only", "manual-before-app", "manual-tail", "manual-fallback", "all-excluded"],
 )
-def test_preferred_metrics_preserve_source_exclusion_warnings_in_every_return_branch(app_empty, manual_day, expected_source):
+def test_preferred_metrics_use_only_reviewed_time_even_when_exports_exist(app_empty, manual_day, expected_source):
     app = _running_frame(empty=app_empty)
     marker = "synthetic-source-exclusion"
     app.attrs["source_excluded_rows"] = [_source_exclusion(1, marker)]
     manual = _running_frame(day=manual_day) if manual_day is not None else _running_frame(empty=True)
 
-    with patch.object(plot, "load_app_running_log_frame", return_value=app):
+    with patch.object(plot, "load_app_running_log_frame", return_value=app) as loader:
         result = plot.compute_preferred_running_metrics(manual)
 
+    loader.assert_not_called()
     assert result.attrs["running_source"] == expected_source
     excluded = result.attrs.get("excluded_rows", [])
-    assert any(item["原文"] == marker and item["issues_by_chart"]["running-excluded"] for item in excluded)
+    assert not any(item["原文"] == marker for item in excluded)
+    assert len(result) == len(manual)
 
 
-def test_preferred_metrics_keep_source_and_existing_manual_chart_exclusions_together():
+def test_preferred_metrics_keep_only_time_chart_exclusions():
     app = _running_frame()
     marker = "synthetic-source-exclusion"
     app.attrs["source_excluded_rows"] = [_source_exclusion(1, marker)]
@@ -284,9 +286,9 @@ def test_preferred_metrics_keep_source_and_existing_manual_chart_exclusions_toge
     with patch.object(plot, "load_app_running_log_frame", return_value=app):
         result = plot.compute_preferred_running_metrics(manual)
 
-    assert result.attrs["running_source"] == "app_exports_plus_time_xlsx"
+    assert result.attrs["running_source"] == "time_xlsx"
     excluded = result.attrs.get("excluded_rows", [])
-    assert {item["原文"] for item in excluded} == {marker, manual_text}
+    assert {item["原文"] for item in excluded} == {manual_text}
     assert all(item["issues_by_chart"]["running-excluded"] for item in excluded)
 
 
@@ -297,8 +299,8 @@ def test_walking_gait_metrics_do_not_turn_a_walk_into_a_run():
 
 
 def _preferred_app_metrics(app):
-    with patch.object(plot, "load_app_running_log_frame", return_value=app):
-        return plot.compute_preferred_running_metrics(_running_frame(empty=True))
+    # Offline loader diagnostics still retain native missing-value semantics.
+    return plot._attach_running_dashboard_views(plot.compute_running_metrics(app, infer_gait=False))
 
 
 def test_app_cadence_is_displayed_without_inventing_a_missing_native_stride():
