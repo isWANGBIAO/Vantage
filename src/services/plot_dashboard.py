@@ -38,22 +38,22 @@ RUNNING_WARNING_CONFIG = {
     'running': {
         'id': 'running-missing-main',
         'title': '跑步主图存在未完整提取的记录',
-        'message': '这些记录会让配速 / 心率 / 距离出现断点。请按原文修正 Excel 后再 refresh charts。',
+        'message': '部分记录缺少配速、心率或距离，相关曲线可能出现断点。请核对对应来源的原始记录或导出文件后刷新图表。',
     },
     'running-form': {
         'id': 'running-missing-form',
         'title': '跑步技术结构存在未完整提取的记录',
-        'message': '这些记录会让用时 / 步频 / 步幅出现断点。请补齐原始文本后再 refresh charts。',
+        'message': '部分记录缺少用时、步频或步幅，相关曲线可能出现断点。请核对对应来源的原始记录或导出文件后刷新图表。',
     },
     'running-hrc': {
         'id': 'running-missing-hrc',
         'title': 'HRC 分析存在未完整提取的记录',
-        'message': '这些记录无法可靠计算 HRC，会直接影响趋势判断。请优先修正缺失字段。',
+        'message': '这些记录缺少计算 HRC 所需的字段，未计入 HRC 趋势。请核对对应来源的原始记录或导出文件。',
     },
     'running-excluded': {
         'id': 'running-excluded-records',
         'title': '已排除的异常跑步记录',
-        'message': '这些记录未参与主跑步图 / 心率分析 / 技术结构图计算，避免明显失真的脏数据污染趋势。',
+        'message': '这些异常记录未计入跑步、心率和技术结构趋势。请核对对应来源的原始记录或导出文件。',
     },
 }
 
@@ -322,7 +322,7 @@ def _build_running_data_warnings(invalid_rows):
         visible_details = details[:6]
         remaining_count = len(details) - len(visible_details)
         if remaining_count > 0:
-            visible_details.append(f"其余 {remaining_count} 条异常记录已省略，请直接检查 Excel 源数据。")
+            visible_details.append(f"其余 {remaining_count} 条异常记录已省略，请核对对应来源的原始记录或导出文件。")
         warnings.append(
             {
                 'id': config['id'],
@@ -1368,7 +1368,7 @@ def _build_running_dashboard_chart(running_df):
 def _build_running_form_dashboard_chart(running_df):
     dashboard_frames = running_df.attrs.get('dashboard_frames') or {}
     running_df = dashboard_frames.get('running-form', running_df).copy()
-    running_df = running_df.dropna(subset=['duration_min', 'cadence_spm', 'stride_m']).sort_values('日期')
+    running_df = running_df.dropna(subset=['duration_min']).sort_values('日期')
     if running_df.empty:
         raise ValueError('未找到可展示的跑步技术结构数据')
 

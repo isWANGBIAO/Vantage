@@ -1383,21 +1383,24 @@ def _looks_like_running_text(text):
         return False
 
     lowered = text.lower()
-    running_keywords = ("跑步", "慢跑", "快跑", "夜跑", "晨跑", "跑了", "竞速", "配速")
+    running_keywords = ("跑步", "慢跑", "快跑", "夜跑", "晨跑", "跑了", "竞速")
     running_metric_keywords = ("步频", "步幅")
     walking_keywords = ("走了", "走路", "散步", "步行", "徒步", "快走", "暴走", "绕湖走")
 
-    has_running_keyword = any(keyword in text for keyword in running_keywords)
+    has_running_keyword = any(keyword in text for keyword in running_keywords) or bool(re.search(r"跑\s*\d", text))
     has_running_metric_keyword = any(keyword in text for keyword in running_metric_keywords)
     has_walking_keyword = any(keyword in text for keyword in walking_keywords)
     has_distance_keyword = "公里" in text or "km" in lowered
     has_time_keyword = "用时" in text or "分钟" in text or "分" in text
 
-    if has_running_keyword or has_running_metric_keyword:
+    if has_running_keyword:
         return True
 
     if has_walking_keyword:
         return False
+
+    if has_running_metric_keyword or "配速" in text:
+        return True
 
     return has_distance_keyword and has_time_keyword
 
@@ -1449,7 +1452,7 @@ def _resolve_running_data_root(data_dir=None, required_dir=None):
 
 def _safe_float(value):
     number = pd.to_numeric([value], errors="coerce")[0]
-    if pd.isna(number):
+    if pd.isna(number) or not np.isfinite(number):
         return None
     return float(number)
 
@@ -1511,6 +1514,7 @@ def _build_running_export_text(
     cadence_spm=None,
     calories_kcal=None,
     steps=None,
+    stride_cm=None,
 ):
     title = f"{source_label} 跑步"
     if distance_km is not None and distance_km > 0:
@@ -1531,7 +1535,11 @@ def _build_running_export_text(
 
     cadence_value = _safe_float(cadence_spm)
     if cadence_value is not None and cadence_value > 0:
-        parts.append(f"步频{int(round(cadence_value))}")
+        parts.append(f"步频{int(round(cadence_value))}步/分")
+
+    stride_value = _safe_float(stride_cm)
+    if stride_value is not None and stride_value > 0:
+        parts.append(f"步幅{stride_value:g}厘米")
 
     calories_value = _safe_float(calories_kcal)
     if calories_value is not None and calories_value > 0:
@@ -1542,6 +1550,59 @@ def _build_running_export_text(
         parts.append(f"步数{int(round(steps_value))}")
 
     return "，".join(parts)
+
+
+def _finalize_running_export_frame(records, date_col, source_col):
+    """Keep device errors available for review without presenting them as runs."""
+    valid_records = []
+    excluded_rows = []
+    for record in records:
+        distance = _safe_float(record.get("_distance_km"))
+        duration = _safe_float(record.get("_duration_seconds"))
+        reasons = []
+        if distance is None or distance <= 0:
+            reasons.append("设备里程缺失或无效")
+        if duration is None or duration <= 0:
+            reasons.append("设备运动用时缺失或无效")
+        if not reasons and duration / 60.0 / distance > 30.0:
+            reasons.append("设备计时与里程不匹配（全程配速超过30分/公里），待核对")
+        if reasons:
+            excluded_rows.append({
+                "日期": record[date_col],
+                "原文": record[source_col].replace(" 跑步", " 设备异常记录", 1),
+                "issues_by_chart": {"running-excluded": reasons},
+            })
+        else:
+            valid_records.append({date_col: record[date_col], source_col: record[source_col]})
+    frame = pd.DataFrame(valid_records, columns=[date_col, source_col])
+    frame[date_col] = pd.to_datetime(frame[date_col], errors="coerce")
+    frame = frame.dropna(subset=[date_col]).drop_duplicates(subset=[date_col], keep="last")
+    frame = frame.sort_values(by=date_col).reset_index(drop=True)
+    frame.attrs["source_excluded_rows"] = excluded_rows
+    return frame
+
+
+def _load_zepp_detail_metrics(sport_dir, started_at, detail_file_name=None):
+    """Read exported samples, never infer exercise HR from daily HR readings."""
+    name = str(detail_file_name or "").strip()
+    if not name or name.lower() == "nan":
+        name = f"Workout--{started_at:%Y-%m-%d--%H-%M-%S}.csv"
+    if Path(name).name != name:
+        return {}
+    try:
+        detail = pd.read_csv(sport_dir / "details" / name, encoding="utf-8-sig")
+    except (OSError, ValueError, UnicodeError):
+        return {}
+    result = {}
+    # These CSVs already store total steps/minute; FIT's half-cadence does not apply.
+    for field, lower, upper in [("heart_rate", 40, 230), ("cadence", 20, 300)]:
+        if field not in detail:
+            continue
+        samples = pd.to_numeric(detail[field], errors="coerce")
+        valid = samples[np.isfinite(samples) & samples.between(lower, upper)]
+        if not valid.empty:
+            result[field] = float(valid.mean())
+    return result
 
 
 def _read_running_exports(directory, pattern, required_columns):
@@ -1601,6 +1662,8 @@ def load_mi_fitness_running_log_frame(data_dir=None, date_col="日期", source_c
         records.append(
             {
                 date_col: started_at,
+                "_distance_km": distance_km,
+                "_duration_seconds": duration_seconds,
                 source_col: _build_running_export_text(
                     "Mi Fitness",
                     distance_km=distance_km,
@@ -1610,15 +1673,12 @@ def load_mi_fitness_running_log_frame(data_dir=None, date_col="日期", source_c
                     cadence_spm=payload.get("avg_cadence"),
                     calories_kcal=payload.get("calories"),
                     steps=payload.get("steps"),
+                    stride_cm=payload.get("avg_stride"),
                 ),
             }
         )
 
-    result = pd.DataFrame(records, columns=columns)
-    if result.empty:
-        return result
-    result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
-    return result.dropna(subset=[date_col]).drop_duplicates(subset=[date_col], keep="last").sort_values(by=date_col).reset_index(drop=True)
+    return _finalize_running_export_frame(records, date_col, source_col)
 
 
 def load_zepp_running_log_frame(data_dir=None, date_col="日期", source_col="运动"):
@@ -1633,6 +1693,9 @@ def load_zepp_running_log_frame(data_dir=None, date_col="日期", source_col="�
 
         records = []
         for _, row in raw.iterrows():
+            sport_type = _safe_float(row.get("type"))
+            if sport_type is not None and sport_type != 1:
+                continue
             started_at = pd.to_datetime(row.get("summary_start_local"), errors="coerce")
             if pd.isna(started_at):
                 started_at = _timestamp_to_local_datetime(row.get("summary_start_utc"))
@@ -1645,10 +1708,23 @@ def load_zepp_running_log_frame(data_dir=None, date_col="日期", source_col="�
             heart_rate_bpm = _safe_float(row.get("detail_heart_rate_avg"))
             cadence_spm = _safe_float(row.get("detail_cadence_avg"))
             calories_kcal = _safe_float(row.get("calories_kcal"))
+            if heart_rate_bpm is not None and not 40 <= heart_rate_bpm <= 230:
+                heart_rate_bpm = None
+            if cadence_spm is not None and not 20 <= cadence_spm <= 300:
+                cadence_spm = None
+
+            if heart_rate_bpm is None or cadence_spm is None:
+                detail = _load_zepp_detail_metrics(sport_dir, started_at, row.get("detail_file_name"))
+                if heart_rate_bpm is None:
+                    heart_rate_bpm = detail.get("heart_rate")
+                if cadence_spm is None:
+                    cadence_spm = detail.get("cadence")
 
             records.append(
                 {
                     date_col: started_at,
+                    "_distance_km": distance_km,
+                    "_duration_seconds": duration_seconds,
                     source_col: _build_running_export_text(
                         "Zepp",
                         distance_km=distance_km,
@@ -1661,11 +1737,7 @@ def load_zepp_running_log_frame(data_dir=None, date_col="日期", source_col="�
                 }
             )
 
-        result = pd.DataFrame(records, columns=columns)
-        if result.empty:
-            return result
-        result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
-        return result.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
+        return _finalize_running_export_frame(records, date_col, source_col)
 
     raw = _read_running_exports(sport_dir, "SPORT_*.csv", ["type"])
     if raw.empty or "type" not in raw.columns:
@@ -1684,41 +1756,50 @@ def load_zepp_running_log_frame(data_dir=None, date_col="日期", source_col="�
         distance_km = distance_m / 1000.0 if distance_m is not None and distance_m > 0 else None
         duration_min = duration_seconds / 60.0 if duration_seconds is not None and duration_seconds > 0 else None
         pace_min_per_km = duration_min / distance_km if distance_km and duration_min else None
+        detail = _load_zepp_detail_metrics(sport_dir, started_at)
 
         records.append(
             {
                 date_col: started_at,
+                "_distance_km": distance_km,
+                "_duration_seconds": duration_seconds,
                 source_col: _build_running_export_text(
                     "Zepp",
                     distance_km=distance_km,
                     duration_seconds=duration_seconds,
                     pace_min_per_km=pace_min_per_km,
                     calories_kcal=row.get("calories(kcal)"),
+                    heart_rate_bpm=detail.get("heart_rate"),
+                    cadence_spm=detail.get("cadence"),
                 ),
             }
         )
 
-    result = pd.DataFrame(records, columns=columns)
-    if result.empty:
-        return result
-    result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
-    return result.dropna(subset=[date_col]).drop_duplicates(subset=[date_col], keep="last").sort_values(by=date_col).reset_index(drop=True)
+    return _finalize_running_export_frame(records, date_col, source_col)
 
 
 def load_app_running_log_frame(data_dir=None, date_col="日期", source_col="运动"):
     mi_fitness = load_mi_fitness_running_log_frame(data_dir=data_dir, date_col=date_col, source_col=source_col)
     zepp = load_zepp_running_log_frame(data_dir=data_dir, date_col=date_col, source_col=source_col)
+    source_excluded_rows = _merge_running_invalid_rows(
+        mi_fitness.attrs.get("source_excluded_rows"),
+        zepp.attrs.get("source_excluded_rows"),
+    )
 
     if not mi_fitness.empty and not zepp.empty:
         zepp = zepp[zepp[date_col] < mi_fitness[date_col].min()].copy()
 
     frames = [frame for frame in (zepp, mi_fitness) if not frame.empty]
     if not frames:
-        return pd.DataFrame(columns=[date_col, source_col])
+        result = pd.DataFrame(columns=[date_col, source_col])
+        result.attrs["source_excluded_rows"] = source_excluded_rows
+        return result
 
     result = pd.concat(frames, ignore_index=True)
     result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
-    return result.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
+    result = result.dropna(subset=[date_col]).sort_values(by=date_col).reset_index(drop=True)
+    result.attrs["source_excluded_rows"] = source_excluded_rows
+    return result
 
 
 def _filter_invalid_rows_after(invalid_rows, cutoff):
@@ -1818,7 +1899,7 @@ def _build_running_dashboard_frames(running_metrics, date_col="日期"):
 
     primary_df = base.loc[keep_primary_mask].copy().reset_index(drop=True)
     heart_df = primary_df.copy().reset_index(drop=True)
-    form_df = primary_df.dropna(subset=["duration_min", "cadence_spm", "stride_m"]).copy().reset_index(drop=True)
+    form_df = primary_df.dropna(subset=["duration_min"]).copy().reset_index(drop=True)
     hrc_df = primary_df.dropna(subset=["heart_rate_bpm", "HRC_m_per_beat"]).copy().reset_index(drop=True)
     return (
         {
@@ -1834,17 +1915,21 @@ def _build_running_dashboard_frames(running_metrics, date_col="日期"):
 def _attach_running_dashboard_views(running_metrics, date_col="日期"):
     dashboard_frames, excluded_rows = _build_running_dashboard_frames(running_metrics, date_col=date_col)
     running_metrics.attrs["dashboard_frames"] = dashboard_frames
-    running_metrics.attrs["excluded_rows"] = excluded_rows
+    running_metrics.attrs["excluded_rows"] = _merge_running_invalid_rows(
+        excluded_rows, running_metrics.attrs.get("source_excluded_rows"),
+    )
     return running_metrics
 
 
 def compute_preferred_running_metrics(data_frame=None, source_col="运动", date_col="日期", output_dir=None):
     app_running_frame = load_app_running_log_frame(date_col=date_col, source_col=source_col)
     app_metrics = (
-        compute_running_metrics(app_running_frame, source_col=source_col, date_col=date_col, output_dir=None)
+        compute_running_metrics(app_running_frame, source_col=source_col, date_col=date_col, output_dir=None, infer_gait=False)
         if not app_running_frame.empty
         else pd.DataFrame()
     )
+    source_excluded_rows = app_running_frame.attrs.get("source_excluded_rows") or []
+    app_metrics.attrs["source_excluded_rows"] = source_excluded_rows
 
     if data_frame is None:
         data_frame = load_time_data()
@@ -1856,6 +1941,7 @@ def compute_preferred_running_metrics(data_frame=None, source_col="运动", date
     )
 
     if app_metrics.empty:
+        manual_metrics.attrs["source_excluded_rows"] = source_excluded_rows
         manual_metrics = _attach_running_dashboard_views(manual_metrics, date_col=date_col)
         manual_metrics.attrs["running_source"] = "time_xlsx"
         if output_dir is not None:
@@ -1892,6 +1978,7 @@ def compute_preferred_running_metrics(data_frame=None, source_col="运动", date
         app_metrics.attrs.get("invalid_rows"),
         _filter_invalid_rows_after(manual_metrics.attrs.get("invalid_rows"), cutoff),
     )
+    combined.attrs["source_excluded_rows"] = source_excluded_rows
     combined = _attach_running_dashboard_views(combined, date_col=date_col)
     combined.attrs["running_source"] = "app_exports_plus_time_xlsx"
     if output_dir is not None:
@@ -1906,6 +1993,7 @@ def compute_running_metrics(
     source_col="运动",
     date_col="日期",
     output_dir=None,
+    infer_gait=True,
 ):
     if source_col not in data_frame.columns:
         print(f"数据中未找到 {source_col} 列。当前可用列为:", list(data_frame.columns))
@@ -1948,13 +2036,19 @@ def compute_running_metrics(
         result["speed_m_per_min"] / normalized_stride_m,
         np.nan,
     )
-    result["cadence_spm"] = np.where(pd.notna(cadence_raw), cadence_raw, inferred_cadence_spm)
+    result["cadence_spm"] = (
+        np.where(pd.notna(cadence_raw), cadence_raw, inferred_cadence_spm)
+        if infer_gait else cadence_raw
+    )
     inferred_stride_m = np.where(
         (result["cadence_spm"] > 0) & np.isfinite(result["speed_m_per_min"]),
         result["speed_m_per_min"] / result["cadence_spm"],
         np.nan,
     )
-    result["stride_m"] = np.where(pd.notna(normalized_stride_m), normalized_stride_m, inferred_stride_m)
+    result["stride_m"] = (
+        np.where(pd.notna(normalized_stride_m), normalized_stride_m, inferred_stride_m)
+        if infer_gait else normalized_stride_m
+    )
     result["speed_km_per_h"] = result["speed_m_per_min"] * 0.06
     result["HRC_m_per_beat"] = np.where(
         (result["heart_rate_bpm"] > 0) & np.isfinite(result["speed_m_per_min"]),

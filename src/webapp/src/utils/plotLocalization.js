@@ -144,17 +144,17 @@ const ENGLISH_TEXT = {
   '对应心率': 'Matching Heart Rate',
 
   '跑步主图存在未完整提取的记录': 'Running main chart has incompletely extracted records',
-  '这些记录会让配速 / 心率 / 距离出现断点。请按原文修正 Excel 后再 refresh charts。':
-    'These records can create gaps in pace, heart rate, or distance. Fix the Excel source text, then refresh charts.',
+  '部分记录缺少配速、心率或距离，相关曲线可能出现断点。请核对对应来源的原始记录或导出文件后刷新图表。':
+    'Missing pace, heart rate, or distance can leave gaps in these curves. Check the original records or export files for the relevant source, then refresh charts.',
   '跑步技术结构存在未完整提取的记录': 'Running form chart has incompletely extracted records',
-  '这些记录会让用时 / 步频 / 步幅出现断点。请补齐原始文本后再 refresh charts。':
-    'These records can create gaps in duration, cadence, or stride. Complete the source text, then refresh charts.',
+  '部分记录缺少用时、步频或步幅，相关曲线可能出现断点。请核对对应来源的原始记录或导出文件后刷新图表。':
+    'Missing duration, cadence, or stride can leave gaps in these curves. Check the original records or export files for the relevant source, then refresh charts.',
   'HRC 分析存在未完整提取的记录': 'HRC analysis has incompletely extracted records',
-  '这些记录无法可靠计算 HRC，会直接影响趋势判断。请优先修正缺失字段。':
-    'These records cannot produce reliable HRC values and will affect trend judgment. Fix missing fields first.',
+  '这些记录缺少计算 HRC 所需的字段，未计入 HRC 趋势。请核对对应来源的原始记录或导出文件。':
+    'These records lack fields needed to calculate HRC and are excluded from its trend. Check the original records or export files for the relevant source.',
   '已排除的异常跑步记录': 'Excluded anomalous running records',
-  '这些记录未参与主跑步图 / 心率分析 / 技术结构图计算，避免明显失真的脏数据污染趋势。':
-    'These records were excluded from the main running, heart-rate, and form charts to keep distorted source data out of the trends.',
+  '这些异常记录未计入跑步、心率和技术结构趋势。请核对对应来源的原始记录或导出文件。':
+    'These anomalous records are excluded from running, heart-rate, and form trends. Check the original records or export files for the relevant source.',
   '这些记录未参与时间类图表计算。请修改 Excel 源数据后刷新 Plots 页面。':
     'These rows were excluded from time charts. Fix the Excel source data, then refresh the Plots page.',
   '关键字段异常': 'key field invalid',
@@ -210,6 +210,11 @@ function localizePatternText(text) {
   match = text.match(/^其余 (\d+) 条异常记录已省略，请直接检查 Excel 源数据。$/);
   if (match) {
     return `${match[1]} more anomalous rows are hidden. Inspect the Excel source data directly.`;
+  }
+
+  match = text.match(/^其余 (\d+) 条异常记录已省略，请核对对应来源的原始记录或导出文件。$/);
+  if (match) {
+    return `${match[1]} more anomalous records are hidden. Check the original records or export files for the relevant source.`;
   }
 
   match = text.match(/^缺少 (.+)$/);
