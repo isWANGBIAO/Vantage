@@ -358,3 +358,40 @@ if(!d.startSession()) process.exit(2); console.log(JSON.stringify(d.getStatus())
         for proc in (host, backend, watcher):
             if proc and proc.poll() is None:
                 proc.kill(); proc.wait(timeout=5)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Windows normal-exit observation')
+def test_real_normal_shutdown_is_recorded_without_false_interruption(tmp_path):
+    module = observer()
+    utility = str(Path('src/webapp/src/utils/crashDiagnostics.cjs').resolve())
+    script = '''const {createCrashDiagnostics}=require(process.argv[1]);
+const d=createCrashDiagnostics({dataDir:process.env.VANTAGE_TEST_ROOT});
+d.startSession(); console.log(JSON.stringify(d.getObserverSession()));
+process.stdin.once('data',()=>{d.beginShutdown();d.markClean();process.exit(0)});'''
+    env = {**os.environ, 'VANTAGE_TEST_ROOT': str(tmp_path)}
+    host = subprocess.Popen(['node', '-e', script, utility], env=env, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    watcher = None
+    try:
+        identity = json.loads(host.stdout.readline())
+        path = Path(identity['sessionPath'])
+        watcher = subprocess.Popen([sys.executable, '-m', 'src.core.exit_observer', '--watch', str(path)],
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
+        ready = path.parent.parent / 'lifecycle' / f'watcher-{identity["sessionId"]}.json'
+        deadline = time.monotonic() + 8
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        assert json.loads(ready.read_text())['status'] == 'ready'
+        host.stdin.write('quit\n'); host.stdin.flush()
+        host.wait(timeout=5); watcher.wait(timeout=8)
+        assert host.returncode == watcher.returncode == 0
+        values = [json.loads(p.read_text()) for p in ready.parent.glob('exit-*.json')]
+        assert any(v['source'] == 'observer' and v['reason'] == 'normal-exit' for v in values)
+        assert not (path.parent.parent / 'electron-session.active.json').exists()
+    finally:
+        for stream in (host.stdin, host.stdout):
+            if stream:
+                stream.close()
+        for proc in (host, watcher):
+            if proc and proc.poll() is None:
+                proc.kill(); proc.wait(timeout=5)
