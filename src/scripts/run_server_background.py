@@ -46,6 +46,15 @@ def _ensure_project_root_on_sys_path(
 
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
+# Exit observation must remain independent of application configuration, native
+# inference libraries, server imports and the backend-runtime build lock.
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] in (
+    "--diagnostics-launch", "--diagnostics-watch", "--diagnostics-probe",
+):
+    from src.core.exit_observer import main as exit_observer_main
+
+    raise SystemExit(exit_observer_main(sys.argv[1:]))
+
 from src.core.cpu_runtime_policy import configure_cpu_runtime
 
 configure_cpu_runtime()

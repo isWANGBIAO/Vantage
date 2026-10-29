@@ -7,7 +7,9 @@ never uploads records and never changes Windows error-reporting settings.
 from __future__ import annotations
 
 import atexit
+from datetime import datetime, timezone
 import faulthandler
+import json
 import os
 from pathlib import Path
 import re
@@ -188,12 +190,29 @@ def recover_stale_python_records(directory):
             continue
         try:
             if info.st_size == 0:
+                # A dead writer cannot tell us its exit time/code. Preserve
+                # discovery metadata instead of erasing its only evidence.
+                if root.name == 'python' and root.parent.name == 'diagnostics':
+                    from src.core.exit_observer import atomic_json, prune_history
+                    target = root.parent / 'lifecycle'
+                    if not _safe_directory(root.parent) or not _safe_directory(target, create=True):
+                        continue
+                    role = path.name.rsplit(f'-{match.group(1)}-', 1)[0]
+                    payload = {
+                        'schemaVersion': 1, 'processType': role,
+                        'pid': int(match.group(1)), 'source': 'python-recovery',
+                        'reason': 'interrupted', 'observedAt': None, 'exitCode': None,
+                        'detectedAt': datetime.now(timezone.utc).isoformat(),
+                        'lastWriteAt': datetime.fromtimestamp(info.st_mtime, timezone.utc).isoformat(),
+                    }
+                    atomic_json(target / f'exit-python-{path.name.removesuffix(".active.log")}.json', payload)
+                    prune_history(target)
                 _safe_unlink(path, root, info)
             else:
                 # UUID names prevent collisions; compare size/mtime too, because
                 # a report modified after enumeration is not completed evidence.
                 _safe_complete_record(path, root, info)
-        except OSError:
+        except (OSError, ValueError, json.JSONDecodeError):
             pass
 
 

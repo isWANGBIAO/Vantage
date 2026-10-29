@@ -136,6 +136,24 @@ def test_live_active_file_is_not_recovered(tmp_path):
     assert path.exists()
 
 
+def test_empty_interrupted_python_record_leaves_bounded_metadata_before_removal(tmp_path, monkeypatch):
+    import json
+    module = diagnostics_module()
+    root = tmp_path / 'diagnostics' / 'python'
+    root.mkdir(parents=True)
+    path = root / 'backend-12345-7b627c02726042b794e51fad2652c03ba.active.log'
+    path.write_text('')
+    monkeypatch.setattr(module, '_process_alive', lambda _pid: False)
+    module.recover_stale_python_records(root)
+    records = list((root.parent / 'lifecycle').glob('exit-*.json'))
+    assert records, 'do not delete the only evidence of an interrupted Python process'
+    data = json.loads(records[0].read_text())
+    assert data['pid'] == 12345 and data['processType'] == 'backend'
+    assert data['reason'] == 'interrupted' and data['source'] == 'python-recovery'
+    assert data['observedAt'] is None and data['detectedAt']
+    assert not path.exists()
+
+
 def test_entry_points_initialize_before_service_imports():
     diagnostics_module()
     root = Path(__file__).resolve().parents[1]

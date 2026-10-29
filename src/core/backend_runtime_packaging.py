@@ -137,6 +137,7 @@ PYINSTALLER_EXCLUDES = (
 
 # Keep MCP imports explicit; collecting mcp.cli pulls an unused optional Typer dependency.
 PYINSTALLER_HIDDEN_IMPORTS = (
+    "src.core.exit_observer",
     "chinese_calendar",
     "zhdate",
     "src.cli",

@@ -33,12 +33,13 @@ const { APP_SCHEME, APP_ORIGIN, APP_ENTRY_URL, APP_SCHEME_PRIVILEGES, installApp
 protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: APP_SCHEME_PRIVILEGES }]);
 const { resolveRuntimePaths, ensureRuntimeDirs } = require('./src/utils/runtimePaths.cjs');
 const { applyLaunchAtLoginSetting } = require('./src/utils/autoLaunch.cjs');
-const { ensureBundledBackendReady, terminateBundledBackendProcess } = require('./src/utils/backendRuntime.cjs');
+const { ensureBundledBackendReady, terminateBundledBackendProcess, resolveBundledBackendExecutable } = require('./src/utils/backendRuntime.cjs');
 const { resolveAppBuildInfo } = require('./src/utils/buildInfo.cjs');
 const { createBoundedLogger } = require('./src/utils/boundedLogger.cjs');
 const { loadAppIcon } = require('./src/utils/appIcon.cjs');
 const { handleWindowCloseShortcut } = require('./src/utils/windowCloseShortcut.cjs');
 const { createCrashDiagnostics } = require('./src/utils/crashDiagnostics.cjs');
+const { startExitObserver, monitorExitObserver, isSessionProcessAlive } = require('./src/utils/exitObserver.cjs');
 const { installNeverStopBridge } = require('./src/utils/neverStopBridge.cjs');
 const { createNeverStopQuitGate } = require('./src/utils/neverStopLifecycle.cjs');
 const { resolveNeverStopPaths } = require('./src/utils/neverStopPaths.cjs');
@@ -110,6 +111,7 @@ let backendReadyPromise = Promise.resolve();
 let rendererCameraFramePostInFlight = false;
 let rendererCameraFramePostPending = null;
 let crashDiagnostics = null;
+let stopExitObserverHealth = () => {};
 let neverStopService = null;
 let neverStopServicePromise = null;
 let neverStopInitError = null;
@@ -824,9 +826,17 @@ if (!gotTheLock) {
             dialog.showErrorBox('无法结束受管理执行', String(error.message || error));
         },
     });
-    crashDiagnostics = createCrashDiagnostics({ dataDir: runtimePaths.dataDir });
+    const diagnosticsExecutable = shouldManageLoginItem ? resolveBundledBackendExecutable() : null;
+    crashDiagnostics = createCrashDiagnostics({
+        dataDir: runtimePaths.dataDir,
+        isSessionAlive: prior => isSessionProcessAlive({
+            prior, executablePath: diagnosticsExecutable, dataDir: runtimePaths.dataDir,
+            onFailure: reason => log.warn(`Exit diagnostics: ${reason}`),
+        }),
+        onFailure: reason => log.warn(`Exit diagnostics: ${reason}`),
+    });
     crashDiagnostics.startNativeCollector({ app, crashReporter });
-    crashDiagnostics.startSession();
+    const diagnosticSessionStarted = crashDiagnostics.startSession();
     crashDiagnostics.startPeriodicCleanup();
     crashDiagnostics.installIpc({
         ipcMain,
@@ -864,6 +874,23 @@ if (!gotTheLock) {
     log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
     log.info(`Log file: ${logFile}`);
     log.info(`Runtime data dir: ${runtimePaths.dataDir}`);
+    if (!crashDiagnostics.getStatus().available || !diagnosticSessionStarted) {
+        log.warn('Exit diagnostics unavailable: session initialization failed; no complete exit coverage');
+    }
+    if (diagnosticSessionStarted && diagnosticsExecutable) {
+        void startExitObserver({ diagnostics: crashDiagnostics, dataDir: runtimePaths.dataDir,
+            executablePath: diagnosticsExecutable }).then(observer => {
+            if (app.isQuitting) return;
+            if (observer.status !== 'ready') {
+                log.warn('Exit observer unavailable: heartbeat recovery only');
+                return;
+            }
+            log.info(`Exit observer ready: isolation=${observer.isolation}`);
+            if (observer.isolation !== 'breakaway') log.warn('Exit observer isolation degraded: shared process-job termination may require restart recovery');
+            stopExitObserverHealth = monitorExitObserver({ diagnostics: crashDiagnostics, observer, dataDir: runtimePaths.dataDir,
+                onStopped: reason => log.warn(`Exit diagnostics: ${reason}; heartbeat recovery only`) });
+        }).catch(() => log.warn('Exit observer unavailable: initialization failed'));
+    }
 
     app.on('second-instance', () => {
         log.info('Second instance detected, focusing existing window');
@@ -1005,6 +1032,7 @@ app.on('before-quit', event => {
     }
     log.info('App quitting...');
     app.isQuitting = true;
+    stopExitObserverHealth();
     crashDiagnostics?.beginShutdown();
     terminateBundledBackendProcess(bundledBackendProcess, {
         platform: process.platform,
