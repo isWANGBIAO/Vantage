@@ -188,7 +188,7 @@ function createCrashDiagnostics({
       schemaVersion: 1, recordedAt: stamp, sessionId: info.sessionId,
       processType: PROCESS_TYPES.has(processType) ? processType : 'child',
       pid: validPid(details.pid) ? details.pid : (processType === 'main' && validPid(info.pid) ? info.pid : null),
-      parentPid: validPid(info.parentPid) ? info.parentPid : null,
+      parentPid: processType === 'backend' ? (validPid(info.pid) ? info.pid : null) : (validPid(info.parentPid) ? info.parentPid : null),
       startedAt: (processType === 'main' ? info.startedAt : (processType === 'backend' ? info.backendStartedAt : null)) || null,
       lastHeartbeatAt: info.lastHeartbeatAt || null,
       phase: info.phase, source: recovered ? 'recovery' : 'main',
@@ -300,7 +300,9 @@ function createCrashDiagnostics({
   }
 
   function liveSession(snapshot) {
-    return (isPidAlive(snapshot.pid) && isSessionAlive(snapshot) !== false)
+    // Identity probing may spawn a native helper. Retention runs on Electron's
+    // event loop, so conservatively preserve any live PID without that probe.
+    return isPidAlive(snapshot.pid)
       || (validPid(snapshot.backendPid) && isPidAlive(snapshot.backendPid))
       || (validPid(snapshot.observerStatus.pid) && isPidAlive(snapshot.observerStatus.pid));
   }

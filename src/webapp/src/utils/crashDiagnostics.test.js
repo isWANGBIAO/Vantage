@@ -95,6 +95,8 @@ test('backend code zero is unexpected unless intentional shutdown has started', 
   first.emit('exit', 0, null); first.emit('exit', 0, null);
   let events = lifecycleRecords(root).filter(event => event.processType === 'backend');
   assert.equal(events.length, 1); assert.equal(events[0].reason, 'abnormal-exit'); assert.equal(events[0].exitCode, 0);
+  assert.equal(events[0].parentPid, 12345);
+  assert.equal(events[0].startedAt, JSON.parse(fs.readFileSync(collector.getObserverSession().sessionPath)).backendStartedAt);
   const incidentDir = path.join(root, 'diagnostics', 'incidents');
   const incident = JSON.parse(fs.readFileSync(path.join(incidentDir, fs.readdirSync(incidentDir)[0])));
   assert.equal(incident.pid, 555);
@@ -174,6 +176,17 @@ test('session identity callback permits recovery when a live PID has been reused
   assert.equal(received.pid, 12345);
   assert.equal(recovered.getStatus().previousInterrupted, true);
   recovered.markClean();
+});
+
+test('identity probes run only during startup recovery and never periodic retention', t => {
+  const root = fixture(t); const first = create(root); first.startSession();
+  let probes = 0;
+  const collector = create(root, { pid: 22222, isPidAlive: () => true, isSessionAlive: () => { probes += 1; return false; } });
+  assert.equal(collector.startSession(), true);
+  assert.equal(probes, 1);
+  collector.cleanup(); collector.cleanup(); collector.heartbeat();
+  assert.equal(probes, 1);
+  collector.markClean();
 });
 
 test('initial marker publication never replaces a concurrently created live marker', t => {
