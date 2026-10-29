@@ -108,13 +108,111 @@ test('backend code zero is unexpected unless intentional shutdown has started', 
 test('unsafe previous markers are not overwritten and failures report only enums', t => {
   const root = fixture(t); const dir = path.join(root, 'diagnostics'); fs.mkdirSync(dir);
   const marker = path.join(dir, 'electron-session.active.json');
-  const text = JSON.stringify({ pid: 123, sessionId: '../private-secret', startedAt: 'arbitrary-private-value' });
-  fs.writeFileSync(marker, text);
+  const outside = fixture(t); const target = path.join(outside, 'private.json');
+  fs.writeFileSync(target, 'private-secret');
+  fs.symlinkSync(outside, marker, process.platform === 'win32' ? 'junction' : 'dir');
   const failures = []; const collector = create(root, { onFailure: code => failures.push(code) });
   assert.equal(collector.startSession(), false);
-  assert.equal(fs.readFileSync(marker, 'utf8'), text);
+  assert.equal(fs.lstatSync(marker).isSymbolicLink(), true);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'private-secret');
   assert.deepEqual(failures, ['storage-unavailable']);
   assert.equal(collector.getStatus().available, false);
+});
+
+test('initial snapshots and marker are atomically published without direct partial writes', t => {
+  const root = fixture(t); const collector = create(root);
+  const original = fs.openSync;
+  const opened = [];
+  fs.openSync = (filename, ...args) => {
+    if (typeof filename === 'string') {
+      opened.push(filename);
+      if (/electron-session\.active\.json$|sessions[/\\].+\.active\.json$/.test(filename)) throw new Error('Direct session write would be partial');
+    }
+    return original(filename, ...args);
+  };
+  try { assert.equal(collector.startSession(), true); }
+  finally { fs.openSync = original; }
+  assert.ok(opened.some(filename => path.basename(filename).startsWith('.tmp-')));
+  collector.markClean();
+});
+
+test('a partial old marker leaves only bounded corrupt-marker metadata and permits recovery', t => {
+  const root = fixture(t); const dir = path.join(root, 'diagnostics'); fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'electron-session.active.json'), '{"secret":"private-sensitive-prefix');
+  const collector = create(root);
+  assert.equal(collector.startSession(), true);
+  assert.equal(collector.getStatus().available, true);
+  const recovered = lifecycleRecords(root).find(event => event.reason === 'corrupt-marker');
+  assert.ok(recovered);
+  assert.equal(recovered.source, 'recovery');
+  assert.equal(recovered.pid, null);
+  assert.equal(recovered.sessionId, null);
+  assert.equal(recovered.observedAt, null);
+  assert.doesNotMatch(JSON.stringify(lifecycleRecords(root)), /private-sensitive-prefix|"secret"/);
+  assert.ok(fs.existsSync(collector.getObserverSession().sessionPath));
+  collector.markClean();
+});
+
+test('a marker read failure is not misclassified as corrupt content or overwritten', t => {
+  const root = fixture(t); const first = create(root); first.startSession();
+  const marker = path.join(root, 'diagnostics', 'electron-session.active.json');
+  const original = fs.readFileSync; const text = original(marker, 'utf8');
+  fs.readFileSync = (filename, ...args) => { if (filename === marker) { const error = new Error('private filesystem detail'); error.code = 'EACCES'; throw error; } return original(filename, ...args); };
+  const failures = []; const second = create(root, { onFailure: code => failures.push(code) });
+  try { assert.equal(second.startSession(), false); }
+  finally { fs.readFileSync = original; }
+  assert.equal(fs.readFileSync(marker, 'utf8'), text);
+  assert.deepEqual(failures, ['storage-unavailable']);
+});
+
+test('session identity callback permits recovery when a live PID has been reused', t => {
+  const root = fixture(t); const first = create(root); first.startSession();
+  const old = first.getObserverSession(); let received;
+  const recovered = create(root, { pid: 22222, isPidAlive: () => true, isSessionAlive: prior => { received = prior; return false; } });
+  assert.equal(recovered.startSession(), true);
+  assert.equal(received.sessionId, old.sessionId);
+  assert.equal(received.pid, 12345);
+  assert.equal(recovered.getStatus().previousInterrupted, true);
+  recovered.markClean();
+});
+
+test('initial marker publication never replaces a concurrently created live marker', t => {
+  const root = fixture(t); const collector = create(root);
+  const original = fs.fsyncSync; let injected = false;
+  const marker = path.join(root, 'diagnostics', 'electron-session.active.json');
+  const concurrent = { pid: 22222, sessionId: '11111111-1111-1111-1111-111111111111', startedAt: '2026-01-01T00:00:00.000Z' };
+  fs.fsyncSync = (...args) => {
+    const result = original(...args);
+    if (!injected) { injected = true; fs.writeFileSync(marker, JSON.stringify(concurrent)); }
+    return result;
+  };
+  try { assert.equal(collector.startSession(), false); }
+  finally { fs.fsyncSync = original; }
+  assert.deepEqual(JSON.parse(fs.readFileSync(marker)), concurrent);
+});
+
+test('live backend and observer preserve old sessions and watcher acknowledgements beyond retention budget', t => {
+  const root = fixture(t); const dir = path.join(root, 'diagnostics');
+  fs.mkdirSync(path.join(dir, 'sessions'), { recursive: true }); fs.mkdirSync(path.join(dir, 'lifecycle'));
+  const saved = [];
+  for (let index = 0; index < 24; index += 1) {
+    const sessionId = `11111111-1111-1111-1111-${String(index).padStart(12, '0')}`;
+    const livePid = 60000 + index;
+    const snapshot = { schemaVersion: 1, sessionId, pid: 30000 + index, startedAt: '2026-01-01T00:00:00.000Z', phase: 'running', backendPid: index % 2 ? null : livePid, observerStatus: { status: 'ready', isolation: 'breakaway', pid: index % 2 ? livePid : null } };
+    const sessionFile = path.join(dir, 'sessions', `${sessionId}.active.json`);
+    const ackFile = path.join(dir, 'lifecycle', `watcher-${sessionId}.json`);
+    fs.writeFileSync(sessionFile, JSON.stringify(snapshot)); fs.writeFileSync(ackFile, JSON.stringify({ status: 'ready', pid: livePid }));
+    saved.push(sessionFile, ackFile);
+  }
+  for (let index = 0; index < 110; index += 1) writeReport(dir, `lifecycle/exit-old-${index}.json`, 5, 120000 + index);
+  const failures = [];
+  const collector = create(root, { isPidAlive: value => value >= 60000, onFailure: code => failures.push(code) });
+  assert.equal(collector.startSession(), true); collector.cleanup();
+  for (const filename of saved) assert.equal(fs.existsSync(filename), true);
+  assert.ok(failures.includes('retention-active-over-budget'));
+  assert.equal(collector.getStatus().available, true);
+  assert.ok(fs.readdirSync(path.join(dir, 'lifecycle')).length <= 100);
+  collector.markClean();
 });
 
 test('heartbeat never steals another session marker', t => {

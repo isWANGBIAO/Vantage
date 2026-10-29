@@ -25,6 +25,7 @@ function createCrashDiagnostics({
   pid = process.pid,
   parentPid = process.ppid,
   isPidAlive = defaultIsPidAlive,
+  isSessionAlive = prior => isPidAlive(prior.pid),
   maxRecords = MAX_RECORDS,
   maxBytes = MAX_BYTES,
   now = Date.now,
@@ -43,6 +44,7 @@ function createCrashDiagnostics({
   let ownsMarker = false;
   let shuttingDown = false;
   let timer;
+  let retentionWarning = false;
 
   function ensureDirectory(relative = '') {
     // Never follow a symlink/junction within the diagnostics tree.
@@ -83,11 +85,20 @@ function createCrashDiagnostics({
     });
   }
 
-  function readMarker() {
+  function readMarker({ allowCorrupt = false, withSnapshot = false } = {}) {
     if (!fs.existsSync(markerPath)) return null;
     const stat = fs.lstatSync(markerPath);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) throw new Error('Unsafe session marker');
-    return sanitizeSession(JSON.parse(fs.readFileSync(markerPath, 'utf8')));
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Unsafe session marker');
+    const text = stat.size <= 4096 ? fs.readFileSync(markerPath, 'utf8') : null;
+    let value;
+    try {
+      if (text === null) throw new Error('Oversized session marker');
+      value = sanitizeSession(JSON.parse(text));
+    } catch (error) {
+      if (!allowCorrupt) throw error;
+      return { value: null, stat, corrupt: true };
+    }
+    return withSnapshot ? { value, stat, corrupt: false } : value;
   }
 
   function sanitizeSession(value) {
@@ -113,7 +124,7 @@ function createCrashDiagnostics({
     };
   }
 
-  function writeDurableJson(filename, value, { atomic = false } = {}) {
+  function writeDurableJson(filename, value, { atomic = false, exclusive = false } = {}) {
     if (!hasSafeParents(filename)) throw new Error('Unsafe diagnostics parent');
     const existing = lstatOrNull(filename);
     if (existing && (!existing.isFile() || existing.isSymbolicLink())) throw new Error('Unsafe diagnostics file');
@@ -124,7 +135,12 @@ function createCrashDiagnostics({
       fs.writeFileSync(descriptor, JSON.stringify(value, null, 2));
       fs.fsyncSync(descriptor);
       fs.closeSync(descriptor); descriptor = undefined;
-      if (atomic) fs.renameSync(temporary, filename);
+      if (atomic) {
+        // A first publication must not replace another owner's concurrently
+        // published marker. Hard-link creation is atomic and fails on EEXIST.
+        if (exclusive) fs.linkSync(temporary, filename);
+        else fs.renameSync(temporary, filename);
+      }
       if (process.platform !== 'win32') {
         const parent = fs.openSync(path.dirname(filename), 'r');
         try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
@@ -176,7 +192,7 @@ function createCrashDiagnostics({
       startedAt: (processType === 'main' ? info.startedAt : (processType === 'backend' ? info.backendStartedAt : null)) || null,
       lastHeartbeatAt: info.lastHeartbeatAt || null,
       phase: info.phase, source: recovered ? 'recovery' : 'main',
-      reason: ['interrupted', 'clean-exit', ...EXIT_REASONS].includes(details.reason) ? details.reason : 'abnormal-exit',
+      reason: ['interrupted', 'corrupt-marker', 'clean-exit', ...EXIT_REASONS].includes(details.reason) ? details.reason : 'abnormal-exit',
       exitCode: Number.isSafeInteger(details.exitCode) ? details.exitCode : null,
       signal: ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGABRT', 'SIGSEGV'].includes(details.signal) ? details.signal : null,
       observedAt: recovered ? null : stamp,
@@ -192,18 +208,24 @@ function createCrashDiagnostics({
       ensureDirectory();
       ensureDirectory('sessions');
       ensureDirectory('lifecycle');
-      const prior = readMarker();
-      if (prior && isPidAlive(prior.pid)) return false;
-      if (prior) {
+      const marker = readMarker({ allowCorrupt: true, withSnapshot: true });
+      const prior = marker?.value;
+      if (prior && isSessionAlive(prior) !== false) return false;
+      if (marker) {
         previousInterrupted = true;
-        writeIncident('main', { reason: 'abnormal-exit' }, prior);
-        writeLifecycle('main', { reason: 'interrupted', source: 'recovery' }, prior);
+        if (marker.corrupt) {
+          writeLifecycle('main', { reason: 'corrupt-marker', source: 'recovery' }, { sessionId: null, pid: null, parentPid: null, phase: 'unknown' });
+        } else {
+          writeIncident('main', { reason: 'abnormal-exit' }, prior);
+          writeLifecycle('main', { reason: 'interrupted', source: 'recovery' }, prior);
+        }
+        if (!hasSafeParents(markerPath) || !sameFileSnapshot(lstatOrNull(markerPath), marker.stat)) return false;
         fs.unlinkSync(markerPath);
       }
       const stamp = new Date(now()).toISOString();
       state = sanitizeSession({ pid, parentPid, sessionId, startedAt: stamp, lastHeartbeatAt: stamp, phase: 'running' });
-      writeDurableJson(sessionPath, state);
-      writeDurableJson(markerPath, state);
+      writeDurableJson(sessionPath, state, { atomic: true, exclusive: true });
+      writeDurableJson(markerPath, state, { atomic: true, exclusive: true });
       ownsMarker = true;
       cleanup();
       return true;
@@ -273,32 +295,69 @@ function createCrashDiagnostics({
     }
   }
 
+  function sameFileSnapshot(current, expected) {
+    return current?.isFile() && !current.isSymbolicLink() && current.dev === expected.dev && current.ino === expected.ino && current.size === expected.size && current.mtimeMs === expected.mtimeMs;
+  }
+
+  function liveSession(snapshot) {
+    return (isPidAlive(snapshot.pid) && isSessionAlive(snapshot) !== false)
+      || (validPid(snapshot.backendPid) && isPidAlive(snapshot.backendPid))
+      || (validPid(snapshot.observerStatus.pid) && isPidAlive(snapshot.observerStatus.pid));
+  }
+
   function cleanupLifecycle() {
-    const lifecycle = lstatOrNull(path.join(directory, 'lifecycle'));
-    if (lifecycle) {
-      ensureDirectory('lifecycle');
-      const files = fs.readdirSync(path.join(directory, 'lifecycle')).filter(name => /^(exit-|watcher-).+\.json$/.test(name) && name !== `watcher-${sessionId}.json`).map(name => {
-        const filename = path.join(directory, 'lifecycle', name); return { filename, stat: lstatOrNull(filename) };
-      }).filter(item => item.stat?.isFile() && !item.stat.isSymbolicLink());
-      pruneSnapshots(files, MAX_LIFECYCLE_RECORDS, MAX_LIFECYCLE_BYTES);
-    }
+    const protectedIds = new Set([sessionId]);
+    let overBudget = false;
     const sessions = lstatOrNull(path.join(directory, 'sessions'));
     if (sessions) {
       ensureDirectory('sessions');
-      const files = [];
+      const files = []; const protectedFiles = [];
       for (const name of fs.readdirSync(path.join(directory, 'sessions'))) {
-        if (!UUID_PATTERN.test(name.replace(/\.active\.json$/, '')) || !name.endsWith('.active.json') || name === `${sessionId}.active.json`) continue;
+        const identity = name.replace(/\.active\.json$/, '');
+        if (!UUID_PATTERN.test(identity) || !name.endsWith('.active.json')) continue;
         const filename = path.join(directory, 'sessions', name);
         const stat = lstatOrNull(filename);
-        if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > 16384) continue;
+        if (!stat?.isFile() || stat.isSymbolicLink()) continue;
+        const item = { filename, stat };
+        if (identity === sessionId) { protectedFiles.push(item); continue; }
         let snapshot;
-        try { snapshot = sanitizeSession(JSON.parse(fs.readFileSync(filename, 'utf8'))); }
-        catch { continue; } // An unrelated malformed historical file must not disable live evidence.
-        if (isPidAlive(snapshot.pid)) continue;
-        files.push({ filename, stat });
+        try {
+          if (stat.size > 16384) throw new Error('Oversized session snapshot');
+          snapshot = sanitizeSession(JSON.parse(fs.readFileSync(filename, 'utf8')));
+        } catch {
+          protectedIds.add(identity); protectedFiles.push(item); continue;
+        } // Unknown historical identity: preserve without disabling live evidence.
+        if (liveSession(snapshot)) { protectedIds.add(identity); protectedFiles.push(item); }
+        else files.push(item);
       }
-      pruneSnapshots(files, MAX_OLD_SESSIONS, MAX_LIFECYCLE_BYTES);
+      const activeBytes = protectedFiles.reduce((total, item) => total + item.stat.size, 0);
+      overBudget ||= protectedFiles.length > MAX_OLD_SESSIONS + 1 || activeBytes > MAX_LIFECYCLE_BYTES;
+      pruneSnapshots(files, Math.max(0, MAX_OLD_SESSIONS + 1 - protectedFiles.length), Math.max(0, MAX_LIFECYCLE_BYTES - activeBytes));
     }
+    const lifecycle = lstatOrNull(path.join(directory, 'lifecycle'));
+    if (lifecycle) {
+      ensureDirectory('lifecycle');
+      const files = []; const protectedFiles = [];
+      for (const name of fs.readdirSync(path.join(directory, 'lifecycle'))) {
+        if (!/^(exit-|watcher-).+\.json$/.test(name)) continue;
+        const filename = path.join(directory, 'lifecycle', name); const stat = lstatOrNull(filename);
+        if (!stat?.isFile() || stat.isSymbolicLink()) continue;
+        const item = { filename, stat };
+        const watcherId = name.startsWith('watcher-') ? name.slice(8, -5) : null;
+        let liveWatcher = false;
+        if (watcherId && stat.size <= 4096) {
+          try { const ack = JSON.parse(fs.readFileSync(filename, 'utf8')); liveWatcher = validPid(ack.pid) && isPidAlive(ack.pid); }
+          catch { /* No usable live identity in a malformed acknowledgement. */ }
+        }
+        if (watcherId && (protectedIds.has(watcherId) || liveWatcher)) protectedFiles.push(item);
+        else files.push(item);
+      }
+      const activeBytes = protectedFiles.reduce((total, item) => total + item.stat.size, 0);
+      overBudget ||= protectedFiles.length > MAX_LIFECYCLE_RECORDS || activeBytes > MAX_LIFECYCLE_BYTES;
+      pruneSnapshots(files, Math.max(0, MAX_LIFECYCLE_RECORDS - protectedFiles.length), Math.max(0, MAX_LIFECYCLE_BYTES - activeBytes));
+    }
+    if (overBudget && !retentionWarning) { try { onFailure('retention-active-over-budget'); } catch { /* Metadata-only warning. */ } }
+    retentionWarning = overBudget;
   }
 
   function hasSafeParents(filename) {
