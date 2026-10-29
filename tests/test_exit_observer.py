@@ -184,6 +184,42 @@ def test_backend_exit_identity_is_not_main_parent_or_start(tmp_path):
     assert value['startedAt'] == state['backendStartedAt']
 
 
+def test_legal_atomic_snapshot_change_between_stat_and_open_is_not_failure(tmp_path, monkeypatch):
+    module = observer()
+    path, state = session(tmp_path)
+    original = module.open_shared_read
+    changed = False
+    def swapped(filename):
+        nonlocal changed
+        if not changed:
+            changed = True
+            replacement = path.with_name('new.tmp')
+            replacement.write_text(json.dumps(state))
+            os.replace(replacement, path)
+        return original(filename)
+    monkeypatch.setattr(module, 'open_shared_read', swapped)
+    assert module.read_session(path)['sessionId'] == state['sessionId']
+
+
+def test_acknowledgement_retries_brief_windows_rename_contention(tmp_path, monkeypatch):
+    module = observer()
+    path, _ = session(tmp_path)
+    directory = path.parent.parent / 'lifecycle'
+    directory.mkdir()
+    original = os.replace
+    attempts = 0
+    def locked_once(source, target):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError(13, 'PRIVATE_SECRET')
+        return original(source, target)
+    monkeypatch.setattr(module.os, 'replace', locked_once)
+    module.atomic_json(directory / 'watcher-test.json', {'status': 'ready'})
+    assert attempts == 3
+    assert json.loads((directory / 'watcher-test.json').read_text())['status'] == 'ready'
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='native Windows observer')
 def test_actual_observer_records_forced_child_exit_without_application_writer(tmp_path):
     module = observer()

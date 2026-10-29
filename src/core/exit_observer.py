@@ -94,20 +94,35 @@ def open_shared_read(path):
     return os.fdopen(fd, 'r', encoding='utf-8')
 
 
+class SnapshotChanged(ValueError):
+    """A legitimate atomic publication raced a short reader."""
+
+
 def read_session(path):
+    for attempt in range(4):
+        try:
+            return _read_session_once(path)
+        except SnapshotChanged:
+            if attempt == 3:
+                raise
+
+
+def _read_session_once(path):
     path, _, sid = _session_root(path)
     info = path.lstat()
     if _linked(info) or not stat.S_ISREG(info.st_mode) or info.st_size > MAX_STATE_BYTES:
         raise ValueError('unsafe-session-file')
     with open_shared_read(path) as stream:
         opened = os.fstat(stream.fileno())
-        if not stat.S_ISREG(opened.st_mode) or (opened.st_ino, opened.st_dev) != (info.st_ino, info.st_dev):
-            raise ValueError('session-identity-changed')
+        if not stat.S_ISREG(opened.st_mode) or _linked(opened):
+            raise ValueError('unsafe-opened-session')
+        if (opened.st_ino, opened.st_dev) != (info.st_ino, info.st_dev):
+            raise SnapshotChanged('session-publication-raced-read')
         content = stream.read(MAX_STATE_BYTES + 1)
         if len(content.encode('utf-8')) > MAX_STATE_BYTES:
             raise ValueError('oversized-session')
         value = json.loads(content)
-    if value.get('schemaVersion') != 1 or value.get('sessionId') != sid:
+    if not isinstance(value, dict) or value.get('schemaVersion') != 1 or value.get('sessionId') != sid:
         raise ValueError('invalid-session-identity')
     if value.get('phase') not in ('running', 'shutting-down', 'clean'):
         raise ValueError('invalid-session-phase')
@@ -138,7 +153,15 @@ def atomic_json(path, value):
             os.fsync(stream.fileno())
         _directory(path.parent.parent)
         _directory(path.parent)
-        os.replace(temp, path)
+        deadline = time.monotonic() + .05
+        for attempt in range(11):
+            try:
+                os.replace(temp, path)
+                break
+            except OSError as error:
+                if error.errno not in (1, 13, 16) or attempt == 10 or time.monotonic() >= deadline:
+                    raise
+                time.sleep(.004)
     finally:
         temp.unlink(missing_ok=True)
 
