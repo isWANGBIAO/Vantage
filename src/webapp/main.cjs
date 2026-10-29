@@ -984,6 +984,9 @@ if (!gotTheLock) {
                     },
                 });
                 bundledBackendProcess = backendBootstrap.process;
+                if (!backendBootstrap.process) {
+                    log.warn('Exit diagnostics degraded: reused or external backend is not owned by this session; observer covers Electron main only');
+                }
                 backendReady();
                 log.info(
                     backendBootstrap.started

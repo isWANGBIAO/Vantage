@@ -35,6 +35,11 @@ Do not label recovery time as exit time or invent a terminating actor. Power los
 storage failure, and explicitly deleting evidence cannot be absolutely covered;
 report storage/observer failures instead of silently promising coverage.
 
+Backend process observation covers the backend launched and owned by this desktop
+session. Reused/external backend services without a verified local process handle
+are explicitly reported as main-only coverage in the ordinary log; do not infer
+coverage from an older observer or claim complete readiness for that case.
+
 ## Delivery
 
 Unit tests first, isolated real-process termination tests, existing native crash

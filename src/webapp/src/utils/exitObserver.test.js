@@ -119,4 +119,5 @@ test('main connects readiness, identity checks, failure warnings and shutdown cl
     assert.match(source, /monitorExitObserver\(/);
     assert.match(source, /stopExitObserverHealth\(\)/);
     assert.match(source, /Exit observer unavailable/);
+    assert.match(source, /Exit diagnostics degraded: reused or external backend is not owned by this session/);
 });
