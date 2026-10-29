@@ -12,6 +12,8 @@ const MAX_LIFECYCLE_RECORDS = 100;
 const MAX_LIFECYCLE_BYTES = 5 * 1024 * 1024;
 const MAX_OLD_SESSIONS = 20;
 const HEARTBEAT_MS = 5000;
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const RENAME_RETRY_WAIT = new Int32Array(new SharedArrayBuffer(4));
 const validPid = value => Number.isSafeInteger(value) && value > 0 && value <= 0xffffffff;
 const validTime = value => typeof value === 'string' && value.length <= 32 && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 
@@ -139,7 +141,7 @@ function createCrashDiagnostics({
         // A first publication must not replace another owner's concurrently
         // published marker. Hard-link creation is atomic and fails on EEXIST.
         if (exclusive) fs.linkSync(temporary, filename);
-        else fs.renameSync(temporary, filename);
+        else renameWithBriefRetry(temporary, filename);
       }
       if (process.platform !== 'win32') {
         const parent = fs.openSync(path.dirname(filename), 'r');
@@ -148,6 +150,20 @@ function createCrashDiagnostics({
     } finally {
       if (descriptor !== undefined) fs.closeSync(descriptor);
       if (atomic && fs.existsSync(temporary)) fs.unlinkSync(temporary);
+    }
+  }
+
+  function renameWithBriefRetry(source, destination) {
+    const started = process.hrtime.bigint();
+    for (let attempt = 0; ; attempt += 1) {
+      try { fs.renameSync(source, destination); return; }
+      catch (error) {
+        const remaining = 50 - Number(process.hrtime.bigint() - started) / 1e6;
+        // An observer may briefly hold the target on Windows. Cap both the
+        // attempt count and elapsed budget; real storage failures still surface.
+        if (!RENAME_RETRY_CODES.has(error.code) || attempt >= 11 || remaining <= 2) throw error;
+        Atomics.wait(RENAME_RETRY_WAIT, 0, 0, Math.min(4, remaining - 1));
+      }
     }
   }
 

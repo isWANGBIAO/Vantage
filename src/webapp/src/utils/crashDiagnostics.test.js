@@ -237,6 +237,49 @@ test('heartbeat never steals another session marker', t => {
   second.markClean();
 });
 
+test('transient Windows rename contention retries briefly without disabling heartbeat', t => {
+  for (const failuresBeforeSuccess of [1, 2]) {
+    const root = fixture(t); const warnings = [];
+    const collector = create(root, { onFailure: code => warnings.push(code) });
+    assert.equal(collector.startSession(), true);
+    const original = fs.renameSync; let attempts = 0;
+    fs.renameSync = (...args) => {
+      attempts += 1;
+      if (attempts <= failuresBeforeSuccess) { const error = new Error('transient sharing violation'); error.code = 'EPERM'; throw error; }
+      return original(...args);
+    };
+    try { assert.equal(collector.heartbeat(), true); }
+    finally { fs.renameSync = original; }
+    assert.ok(attempts > failuresBeforeSuccess);
+    assert.equal(collector.getStatus().available, true);
+    assert.deepEqual(warnings, []);
+    collector.markClean();
+  }
+});
+
+test('persistent rename contention gives up within a bounded retry budget and reports failure', t => {
+  const root = fixture(t); const warnings = [];
+  const collector = create(root, { onFailure: code => warnings.push(code) }); collector.startSession();
+  const original = fs.renameSync; let attempts = 0;
+  fs.renameSync = () => { attempts += 1; const error = new Error('persistent sharing violation'); error.code = 'EACCES'; throw error; };
+  const started = performance.now();
+  try { assert.equal(collector.heartbeat(), false); }
+  finally { fs.renameSync = original; }
+  assert.ok(attempts > 1 && attempts <= 20);
+  assert.ok(performance.now() - started < 250);
+  assert.deepEqual(warnings, ['storage-unavailable']);
+  assert.equal(collector.getStatus().available, false);
+  collector.markClean();
+});
+
+test('renderer and generic child lifecycle events never impersonate the main PID', t => {
+  const root = fixture(t); const collector = create(root); collector.startSession();
+  collector.recordExit('renderer', { reason: 'crashed', exitCode: 1 });
+  collector.recordExit('child', { reason: 'killed', exitCode: 2 });
+  for (const event of lifecycleRecords(root)) assert.equal(event.pid, null);
+  collector.markClean();
+});
+
 test('lifecycle retention is separate, bounded and never follows session junctions', t => {
   const root = fixture(t); const outside = fixture(t);
   const external = writeReport(outside, 'preserved.json', 5);
