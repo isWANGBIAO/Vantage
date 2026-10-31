@@ -147,7 +147,7 @@ test('Electron main process has no recursive inline file and console logger', ()
 });
 
 test('Electron main process activates and cleans file logging only for the primary instance', () => {
-  const lockCall = 'const gotTheLock = app.requestSingleInstanceLock();';
+  const lockCall = "const gotTheLock = desktopStartup.action === 'continue' && app.requestSingleInstanceLock();";
   const lockIndex = mainSource.indexOf(lockCall);
   assert.notEqual(lockIndex, -1);
   assert.doesNotMatch(
@@ -164,7 +164,7 @@ test('Electron main process activates and cleans file logging only for the prima
   const singleInstanceBranch = mainSource
     .slice(lockIndex + lockCall.length)
     .match(
-      /^\s*if\s*\(!gotTheLock\)\s*\{(?<secondary>[\s\S]*?)\}\s*else\s*\{(?<primaryPrefix>[\s\S]*?)app\.on\('second-instance'/,
+      /else if \(desktopStartup\.action === 'relaunched' \|\| !gotTheLock\)\s*\{(?<secondary>[\s\S]*?)\}\s*else\s*\{(?<primaryPrefix>[\s\S]*?)app\.on\('second-instance'/,
     );
 
   assert.ok(singleInstanceBranch, 'expected cleanup to be scoped by the single-instance branch');

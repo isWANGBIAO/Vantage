@@ -4,6 +4,10 @@ const { spawnSync } = require('node:child_process');
 const RESTART_FLAG = '--vantage-independent-start';
 const ENVIRONMENT_KEYS = new Set([
     'systemroot', 'windir', 'path', 'pathext', 'temp', 'tmp', 'localappdata', 'userprofile',
+    'appdata', 'homedrive', 'homepath', 'username', 'userdomain',
+    'vantage_data_dir', 'vantage_config_dir', 'vantage_history_dir', 'vantage_log_dir',
+    'vantage_plot_dir', 'vantage_cache_dir', 'vantage_runtime_dir', 'vantage_migration_dir',
+    'vantage_backend_url', 'vantage_backend_host', 'vantage_backend_port',
 ]);
 const validPid = value => Number.isSafeInteger(value) && value > 0 && value <= 0xffffffff;
 const validExecutable = value => typeof value === 'string' && value.length > 0
@@ -61,4 +65,4 @@ function prepareIndependentLaunch({ platform = process.platform, isPackaged,
         : { action: 'failed', reason: 'independent-launch-failed' };
 }
 
-module.exports = { prepareIndependentLaunch };
+module.exports = { prepareIndependentLaunch, verifiedIdentity };

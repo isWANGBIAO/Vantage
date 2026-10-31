@@ -122,7 +122,7 @@ test('helper failures never leak diagnostics text and cannot continue unsafe sta
 test('helper calls have bounded waits and no inherited credentials or Node override', () => {
     const env = { SystemRoot: 'Windows', Path: 'safe-bin', LOCALAPPDATA: 'profile',
         TEMP: 'temporary', API_KEY: 'PRIVATE_SECRET', ELECTRON_RUN_AS_NODE: '1',
-        VANTAGE_BACKEND_URL: 'https://PRIVATE_SECRET', VANTAGE_DATA_DIR: 'private-profile',
+        VANTAGE_BACKEND_URL: 'http://127.0.0.1:8001', VANTAGE_DATA_DIR: 'custom-profile',
     };
     let value;
     launcher.prepareIndependentLaunch(options({ env, spawnSyncProcess: (_exe, _args, settings) => {
@@ -138,9 +138,24 @@ test('helper calls have bounded waits and no inherited credentials or Node overr
     assert.equal(value.env.Path, 'safe-bin');
     assert.equal(value.env.API_KEY, undefined);
     assert.equal(value.env.ELECTRON_RUN_AS_NODE, undefined);
-    assert.equal(value.env.VANTAGE_DATA_DIR, undefined);
-    assert.doesNotMatch(JSON.stringify(value), /PRIVATE_SECRET|private-profile/);
+    assert.equal(value.env.VANTAGE_DATA_DIR, 'custom-profile');
+    assert.equal(value.env.VANTAGE_BACKEND_URL, 'http://127.0.0.1:8001');
+    assert.doesNotMatch(JSON.stringify(value), /PRIVATE_SECRET/);
     assert.equal(env.API_KEY, 'PRIVATE_SECRET');
+});
+
+test('main verifies independence before taking the singleton lock or writing a session', async () => {
+    const { readFileSync } = await import('node:fs');
+    const source = readFileSync(new URL('../../main.cjs', import.meta.url), 'utf8');
+    const gate = source.indexOf('const desktopStartup = prepareIndependentLaunch(');
+    assert.ok(gate > 0);
+    assert.ok(gate < source.indexOf('app.requestSingleInstanceLock()'));
+    assert.ok(gate < source.indexOf('crashDiagnostics = createCrashDiagnostics('));
+    assert.match(source.slice(gate, source.indexOf('let buildInfo', gate)), /isPackaged: app\.isPackaged/);
+    assert.match(source.slice(gate, source.indexOf('let buildInfo', gate)), /resolveBundledBackendExecutable\(\{ env: \{\} \}\)/);
+    assert.match(source, /desktopStartup\.action === 'failed'/);
+    assert.match(source, /desktopStartup\.action === 'relaunched'/);
+    assert.match(source, /launchIdentity: desktopStartup\.identity/);
 });
 
 test('missing or unsafe executable configuration fails without starting a process', () => {

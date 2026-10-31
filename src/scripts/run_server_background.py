@@ -46,6 +46,13 @@ def _ensure_project_root_on_sys_path(
 
 PROJECT_ROOT = _ensure_project_root_on_sys_path()
 
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] in (
+    "--launch-desktop-app", "--diagnostics-isolation",
+):
+    from src.core.desktop_entry import main as desktop_entry_main
+
+    raise SystemExit(desktop_entry_main(sys.argv[1:]))
+
 # Exit observation must remain independent of application configuration, native
 # inference libraries, server imports and the backend-runtime build lock.
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] in (

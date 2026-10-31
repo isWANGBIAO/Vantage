@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { verifiedIdentity } = require('./desktopLaunch.cjs');
 
 const MAX_RECORDS = 10;
 const MAX_BYTES = 200 * 1024 * 1024;
@@ -26,6 +27,7 @@ function createCrashDiagnostics({
   dataDir,
   pid = process.pid,
   parentPid = process.ppid,
+  launchIdentity = null,
   isPidAlive = defaultIsPidAlive,
   isSessionAlive = prior => isPidAlive(prior.pid),
   maxRecords = MAX_RECORDS,
@@ -114,6 +116,7 @@ function createCrashDiagnostics({
       phase: ['running', 'shutting-down', 'clean'].includes(value.phase) ? value.phase : 'running',
       backendPid: validPid(value.backendPid) ? value.backendPid : null,
       backendStartedAt: value.backendStartedAt || null,
+      launchIdentity: verifiedIdentity(value.launchIdentity, value.pid),
       observerStatus: sanitizeObserver(value.observerStatus),
     };
   }
@@ -121,8 +124,9 @@ function createCrashDiagnostics({
   function sanitizeObserver(value = {}) {
     return {
       status: ['not-started', 'starting', 'ready', 'failed', 'unsupported', 'stopped'].includes(value?.status) ? value.status : 'not-started',
-      isolation: ['unknown', 'breakaway', 'detached', 'degraded', 'unsupported', 'inherited-job'].includes(value?.isolation) ? value.isolation : 'unknown',
+      isolation: ['unknown', 'breakaway', 'detached', 'degraded', 'unsupported', 'inherited-job', 'desktop-independent'].includes(value?.isolation) ? value.isolation : 'unknown',
       pid: validPid(value?.pid) ? value.pid : null,
+      ...(verifiedIdentity(value?.identity, value?.pid) ? { identity: verifiedIdentity(value.identity, value.pid) } : {}),
     };
   }
 
@@ -239,7 +243,7 @@ function createCrashDiagnostics({
         fs.unlinkSync(markerPath);
       }
       const stamp = new Date(now()).toISOString();
-      state = sanitizeSession({ pid, parentPid, sessionId, startedAt: stamp, lastHeartbeatAt: stamp, phase: 'running' });
+      state = sanitizeSession({ pid, parentPid, launchIdentity, sessionId, startedAt: stamp, lastHeartbeatAt: stamp, phase: 'running' });
       writeDurableJson(sessionPath, state, { atomic: true, exclusive: true });
       writeDurableJson(markerPath, state, { atomic: true, exclusive: true });
       ownsMarker = true;

@@ -25,6 +25,13 @@ def test_run_bat_release_flow_keeps_source_cleanup_scoped():
     assert 'taskkill /IM VantageBackend.exe /F' in content
 
 
+def test_run_bat_uses_verified_desktop_launch_instead_of_inheriting_the_build_shell():
+    content = Path('RUN.bat').read_text(encoding='utf-8')
+    assert '--launch-desktop-app "%INSTALLED_EXE%"' in content
+    assert 'start "" "%INSTALLED_EXE%"' not in content
+    assert 'Independent desktop launch failed' in content
+
+
 def test_development_launchers_do_not_wrap_server_in_cmd_windows():
     run_dev_bat = Path("RUN_DEV.bat").read_text(encoding="utf-8")
     start_webapp = Path("START_WEBAPP.bat").read_text(encoding="utf-8")

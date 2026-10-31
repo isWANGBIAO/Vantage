@@ -11,7 +11,6 @@ import json
 import os
 from pathlib import Path
 import stat
-import subprocess
 import sys
 import time
 import uuid
@@ -289,17 +288,32 @@ def _ack(path, status, **details):
     _directory(directory, create=True)
     value = dict(schemaVersion=1, sessionId=sid, status=status, pid=os.getpid(),
                  isolation=details.get('isolation', 'unknown'), recordedAt=utc_now())
+    if details.get('identity') is not None:
+        from src.core.desktop_entry import sanitize_identity
+        value['identity'] = sanitize_identity(details['identity'], os.getpid())
     if details.get('reason') in ('unsupported-platform', 'observer-failed'):
         value['reason'] = details['reason']
     atomic_json(directory / f'watcher-{sid}.json', value)
     return value
 
 
-def watch(session_path, isolation='unknown', process_factory=WindowsProcess):
+def watch(session_path, isolation='unknown', process_factory=WindowsProcess, inspect_identity=None):
     if sys.platform != 'win32':
         _ack(session_path, 'failed', reason='unsupported-platform')
         return 2
     state = read_session(session_path)
+    identity = None
+    if isolation == 'desktop-independent':
+        try:
+            if inspect_identity is None:
+                from src.core.windows_process_launch import inspect_process as inspect_identity
+            from src.core.desktop_entry import sanitize_identity
+            identity = sanitize_identity(inspect_identity(), os.getpid())
+            if not identity['isIndependent']:
+                raise ValueError('observer-not-independent')
+        except (OSError, ValueError, RuntimeError):
+            _ack(session_path, 'failed', isolation=isolation, reason='observer-failed')
+            return 2
     handles, observed = {}, set()
     last_ack = 0
     try:
@@ -325,7 +339,7 @@ def watch(session_path, isolation='unknown', process_factory=WindowsProcess):
             if not observed and not handles:
                 raise ValueError('no-observable-processes')
             if time.monotonic() - last_ack >= 2:
-                _ack(session_path, 'ready', isolation=isolation)
+                _ack(session_path, 'ready', isolation=isolation, identity=identity)
                 last_ack = time.monotonic()
             for role, handle in list(handles.items()):
                 code = handle.exit_code()
@@ -348,24 +362,23 @@ def watch(session_path, isolation='unknown', process_factory=WindowsProcess):
             handle.close()
 
 
-def launch_observer(session_path, *, command=None, popen=subprocess.Popen, platform=sys.platform):
+def launch_observer(session_path, *, command=None, launch_process=None, platform=sys.platform):
     read_session(session_path)
     if platform != 'win32':
         return _ack(session_path, 'failed', reason='unsupported-platform')
     if command is None:
         command = ([sys.executable, '--diagnostics-watch'] if getattr(sys, 'frozen', False)
                    else [sys.executable, '-m', 'src.core.exit_observer', '--watch'])
-    flags = 0x08000000 | 0x00000200 | 0x00000008
-    kwargs = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                  stderr=subprocess.DEVNULL, close_fds=True)
-    isolation = 'breakaway'
-    try:
-        child = popen([*command, str(session_path), '--isolation', isolation],
-                      creationflags=flags | 0x01000000, **kwargs)
-    except PermissionError:
-        isolation = 'inherited-job'
-        child = popen([*command, str(session_path), '--isolation', isolation], creationflags=flags, **kwargs)
-    return dict(status='starting', isolation=isolation, pid=child.pid)
+    if launch_process is None:
+        from src.core.windows_process_launch import launch_from_desktop as launch_process
+    from src.core.desktop_entry import desktop_environment, sanitize_identity
+    result = launch_process([*command, str(session_path), '--isolation', 'desktop-independent'],
+                            environment=desktop_environment(os.environ), hide=True,
+                            cwd=str(Path(sys.executable).parent) if getattr(sys, 'frozen', False) else os.getcwd())
+    identity = sanitize_identity(result['identity'], result['pid'])
+    if result.get('isolation') != 'desktop-independent' or not identity['isIndependent']:
+        raise ValueError('observer-launch-not-independent')
+    return dict(status='starting', isolation='desktop-independent', pid=result['pid'])
 
 
 def main(argv=None):
@@ -385,14 +398,14 @@ def main(argv=None):
     mode = args.pop(0)
     options = argparse.ArgumentParser()
     options.add_argument('session')
-    options.add_argument('--isolation', choices=('breakaway', 'inherited-job', 'unknown'), default='unknown')
+    options.add_argument('--isolation', choices=('desktop-independent', 'breakaway', 'inherited-job', 'unknown'), default='unknown')
     parsed = options.parse_args(args)
     try:
         if mode in ('--launch', '--diagnostics-launch'):
             result = launch_observer(parsed.session)
             return 0 if result['status'] == 'starting' else 2
         return watch(parsed.session, parsed.isolation)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):
         try:
             _ack(parsed.session, 'failed', reason='observer-failed')
         except (OSError, ValueError):

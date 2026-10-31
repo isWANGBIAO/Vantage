@@ -161,7 +161,11 @@ if not exist "%INSTALLED_EXE%" (
     exit /b 1
 )
 
-start "" "%INSTALLED_EXE%"
+"%INSTALL_ROOT%\resources\backend-runtime\VantageBackend\VantageBackend.exe" --launch-desktop-app "%INSTALLED_EXE%"
+if errorlevel 1 (
+    echo       Independent desktop launch failed
+    exit /b 1
+)
 call :StepDone "Install and launch command complete"
 
 call :CaptureSeconds RUN_END_SECONDS

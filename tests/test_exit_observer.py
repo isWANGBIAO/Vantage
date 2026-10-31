@@ -12,6 +12,15 @@ import uuid
 import pytest
 
 
+def interactive_desktop_available():
+    if sys.platform != 'win32':
+        return False
+    import ctypes
+    shell = ctypes.WinDLL('user32', use_last_error=True).GetShellWindow
+    shell.argtypes, shell.restype = [], ctypes.c_void_p
+    return bool(shell())
+
+
 def observer():
     try:
         return importlib.import_module('src.core.exit_observer')
@@ -86,23 +95,50 @@ def test_code_zero_is_not_normal_unless_shutdown_was_requested(tmp_path):
     assert module.record_exit(path, state, 'main', pid=102, exit_code=9)['reason'] == 'unexpected-exit'
 
 
-def test_launcher_requests_breakaway_and_reports_fallback(tmp_path):
+def test_launcher_requires_verified_desktop_identity_and_never_falls_back(tmp_path):
     module = observer()
     path, _ = session(tmp_path)
     calls = []
-    class Child:
-        pid = 123
-    def spawn(command, **kwargs):
-        calls.append(kwargs)
-        if len(calls) == 1:
-            raise PermissionError(5, 'private failure detail')
-        return Child()
-    status = module.launch_observer(path, command=['synthetic'], popen=spawn, platform='win32')
-    assert calls[0]['creationflags'] & 0x01000000
-    assert not calls[1]['creationflags'] & 0x01000000
-    assert status['isolation'] == 'inherited-job'
+    identity = dict(pid=123, parentPid=10, inJob=False, hasPackageIdentity=False,
+                    parentIsShell=True, isIndependent=True, createdAt=module.utc_now())
+    def launch(command, **kwargs):
+        calls.append((command, kwargs))
+        return dict(pid=123, isolation='desktop-independent', identity=identity)
+    status = module.launch_observer(path, command=['synthetic'], launch_process=launch, platform='win32')
+    assert calls[0][0][-2:] == ['--isolation', 'desktop-independent']
+    assert calls[0][1]['hide'] is True
+    assert status['isolation'] == 'desktop-independent'
     assert status['pid'] == 123
-    assert 'private' not in json.dumps(status)
+    def fail(*args, **kwargs):
+        calls.append('failed')
+        raise PermissionError('PRIVATE_SECRET')
+    with pytest.raises(PermissionError):
+        module.launch_observer(path, command=['synthetic'], launch_process=fail, platform='win32')
+    assert calls[-1] == 'failed' and len(calls) == 2
+
+
+def test_watcher_cannot_claim_independence_from_a_command_line_flag(tmp_path):
+    module = observer()
+    path, state = session(tmp_path)
+    identity = dict(pid=os.getpid(), parentPid=os.getppid(), inJob=True,
+                    hasPackageIdentity=False, parentIsShell=False, isIndependent=False,
+                    createdAt=module.utc_now())
+    assert module.watch(path, isolation='desktop-independent', inspect_identity=lambda: identity) == 2
+    ack = json.loads((path.parent.parent / 'lifecycle' / f'watcher-{state["sessionId"]}.json').read_text())
+    assert ack['status'] == 'failed'
+
+
+def test_native_launcher_failure_publishes_controlled_failed_ack(tmp_path, monkeypatch, capsys):
+    module = observer()
+    path, state = session(tmp_path)
+    def fail(_path):
+        raise RuntimeError('PRIVATE_SECRET')
+    monkeypatch.setattr(module, 'launch_observer', fail)
+    assert module.main(['--launch', str(path)]) == 2
+    ack = json.loads((path.parent.parent / 'lifecycle' / f'watcher-{state["sessionId"]}.json').read_text())
+    assert ack['status'] == 'failed'
+    assert ack['reason'] == 'observer-failed'
+    assert 'PRIVATE_SECRET' not in json.dumps(ack) + capsys.readouterr().err
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='native Windows process handles')
@@ -271,7 +307,7 @@ except ImportError:
     assert 'heavy-import-was-reached' not in result.stdout
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='Windows breakaway launcher')
+@pytest.mark.skipif(not interactive_desktop_available(), reason='interactive Windows Explorer required')
 def test_real_detached_launcher_acknowledges_and_observes(tmp_path):
     module = observer()
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],
@@ -285,7 +321,13 @@ def test_real_detached_launcher_acknowledges_and_observes(tmp_path):
         deadline = time.monotonic() + 8
         while not ready.exists() and time.monotonic() < deadline:
             time.sleep(.05)
-        assert json.loads(ready.read_text())['status'] == 'ready'
+        acknowledgement = json.loads(ready.read_text())
+        assert acknowledgement['status'] == 'ready'
+        assert acknowledgement['isolation'] == 'desktop-independent'
+        assert acknowledgement['identity']['pid'] == launch['pid']
+        assert acknowledgement['identity']['inJob'] is False
+        assert acknowledgement['identity']['hasPackageIdentity'] is False
+        assert acknowledgement['identity']['parentIsShell'] is True
         child.terminate()
         child.wait(timeout=5)
         deadline = time.monotonic() + 8

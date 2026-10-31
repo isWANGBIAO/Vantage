@@ -25,11 +25,25 @@ Native crash dumps can still contain private memory; do not publish them.
 
 ## Interpreting coverage
 
-`breakaway` means the observer requested independent Windows job execution.
-If the launching job forbids breakaway, `inherited-job` is explicitly logged as
-degraded isolation. Reused/external backend services without an owned process
-handle are explicitly logged as main-only coverage. Other platforms currently
-use durable heartbeat recovery and report the observer as unsupported.
+`desktop-independent` is accepted only after native Windows checks confirm an
+Explorer parent, no job membership and no package identity. The installed GUI
+checks this before acquiring its singleton lock or writing a session; unsafe
+startup relays once through the bundled desktop launcher, then verifies again.
+The observer is launched separately with the same native checks and repeats the
+check before acknowledging readiness. A flag or a requested breakaway label is
+not evidence. No ordinary inherited-job fallback is used. The session retains
+only allowlisted identity metadata, never package names, paths or environment.
+
+The native launcher uses the existing same-user/session desktop shell as the
+documented process parent and explicitly requests DesktopAppPolicy breakaway;
+the new child remains suspended until its identity has been verified. It does
+not change tokens, security settings, scheduled tasks or services. The backend
+remains owned by Electron, so normal application exit still cleans it up.
+Development launch ownership is unchanged.
+
+Reused/external backend services without an owned process handle are explicitly
+logged as main-only coverage. Other platforms currently use durable heartbeat
+recovery and report the observer as unsupported.
 
 Failed storage, failed initialization, lost observer heartbeat and unavailable
 process handles are explicit warnings. No observer can promise immediate writes
@@ -45,8 +59,8 @@ budget. Existing native/Python crash reports retain their separate 10-record /
 ## Verification
 
 ```powershell
-node --test src/webapp/src/utils/crashDiagnostics.test.js src/webapp/src/utils/exitObserver.test.js
-python -m pytest -q tests/test_exit_observer.py tests/test_crash_diagnostics.py tests/test_run_server_background.py
+node --test src/webapp/src/utils/crashDiagnostics.test.js src/webapp/src/utils/exitObserver.test.js src/webapp/src/utils/desktopLaunch.test.js
+python -m pytest -q tests/test_windows_process_launch.py tests/test_desktop_entry.py tests/test_exit_observer.py tests/test_exit_observer_isolation.py tests/test_crash_diagnostics.py tests/test_run_server_background.py
 npm --prefix src/webapp run test:crash-diagnostics
 ```
 
@@ -55,3 +69,9 @@ native crashes, backend/main force termination, losing all evidence writers,
 interruption recovery, PID reuse, storage failures, bounded history, metadata
 privacy and legitimate atomic file-publication races. Packaging and installed
 readiness must still be verified separately for every release.
+
+Windows native tests require an interactive Explorer shell; service-only CI
+cannot substitute for desktop acceptance. Synthetic tests cover a restrictive
+desktop policy and kill-on-close launcher job, including a real observer that
+continues writing after that launcher dies. They do not claim that a real Codex
+AppX update has been triggered or that every external termination is observable.

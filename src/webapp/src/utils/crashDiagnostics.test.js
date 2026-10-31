@@ -36,6 +36,26 @@ function lifecycleRecords(root) {
   return fs.existsSync(dir) ? fs.readdirSync(dir).filter(name => name.endsWith('.json')).map(name => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'))) : [];
 }
 
+test('snapshots retain only verified native main and observer independence evidence', t => {
+  const root = fixture(t);
+  const identity = { pid: 12345, parentPid: 678, inJob: false, hasPackageIdentity: false,
+    parentIsShell: true, isIndependent: true, createdAt: '2026-01-01T00:00:00.000Z' };
+  const collector = create(root, { launchIdentity: { ...identity, secret: 'PRIVATE_SECRET' } });
+  assert.equal(collector.startSession(), true);
+  collector.setObserverStatus({ status: 'ready', isolation: 'desktop-independent', pid: 987,
+    identity: { ...identity, pid: 987, packageName: 'PRIVATE_PACKAGE' } });
+  const saved = JSON.parse(fs.readFileSync(collector.getObserverSession().sessionPath));
+  assert.deepEqual(saved.launchIdentity, identity);
+  assert.deepEqual(saved.observerStatus.identity, { ...identity, pid: 987 });
+  assert.equal(saved.observerStatus.isolation, 'desktop-independent');
+  assert.doesNotMatch(JSON.stringify(saved), /PRIVATE/);
+  collector.markClean();
+  const next = create(root, { launchIdentity: { ...identity, inJob: true } });
+  next.startSession();
+  assert.equal(JSON.parse(fs.readFileSync(next.getObserverSession().sessionPath)).launchIdentity, null);
+  next.markClean();
+});
+
 test('durable session snapshots track heartbeat, backend, observer and shutdown phase', t => {
   const root = fixture(t);
   let clock = Date.parse('2026-01-01T00:00:00Z');
@@ -516,12 +536,12 @@ test('Windows native writer without delete sharing is preserved without collecto
 
 test('main starts the collector only for the primary instance, before any BrowserWindow', () => {
   const source = fs.readFileSync(new URL('../../main.cjs', import.meta.url), 'utf8');
-  const lock = source.indexOf('const gotTheLock = app.requestSingleInstanceLock();');
+  const lock = source.indexOf("const gotTheLock = desktopStartup.action === 'continue' && app.requestSingleInstanceLock();");
   assert.ok(lock > 0);
   assert.doesNotMatch(source.slice(0, lock), /createCrashDiagnostics\(\{/);
   assert.match(source.slice(lock), /crashDiagnostics\.startNativeCollector\(\{ app, crashReporter \}\)/);
   const init = source.indexOf('crashDiagnostics.startNativeCollector');
-  assert.ok(init < source.indexOf('app.whenReady()', lock));
+  assert.ok(init < source.indexOf('app.whenReady().then(async', lock));
   assert.match(source, /app\.on\('quit',[^]*crashDiagnostics\?\.markClean\(\)/);
   assert.match(source, /onSpawned:\s*child\s*=>\s*\{\s*bundledBackendProcess = child;\s*crashDiagnostics\.observeBackend\(child\)/);
 });

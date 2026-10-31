@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
+const { verifiedIdentity } = require('./desktopLaunch.cjs');
 
 function observerEnvironment(env, dataDir) {
     const allowed = new Set(['systemroot', 'windir', 'path', 'pathext', 'temp', 'tmp', 'localappdata', 'userprofile']);
@@ -18,8 +19,10 @@ function readAcknowledgement(filename, sessionId) {
     const value = JSON.parse(fs.readFileSync(filename, 'utf8'));
     if (value.schemaVersion !== 1 || value.sessionId !== sessionId || !['ready', 'failed'].includes(value.status)) throw new Error('invalid-acknowledgement');
     if (!Number.isSafeInteger(value.pid) || value.pid <= 0 || value.pid > 0xffffffff) throw new Error('invalid-observer-pid');
-    return { status: value.status, pid: value.pid,
-        isolation: ['breakaway', 'inherited-job'].includes(value.isolation) ? value.isolation : 'unknown' };
+    if (value.status === 'failed') return { status: 'failed', pid: value.pid, isolation: 'unknown' };
+    const identity = verifiedIdentity(value.identity, value.pid);
+    if (value.isolation !== 'desktop-independent' || !identity) throw new Error('unverified-observer');
+    return { status: 'ready', pid: value.pid, isolation: 'desktop-independent', identity };
 }
 
 async function startExitObserver({ diagnostics, dataDir, executablePath, env = process.env,
@@ -100,7 +103,8 @@ function monitorExitObserver({ diagnostics, observer, dataDir, onStopped = () =>
             try {
                 const state = readAcknowledgement(ack, identity.sessionId);
                 const fresh = Date.now() - fs.statSync(ack).mtimeMs <= 15000;
-                if (state.status === 'failed' || state.pid !== observer.pid) healthy = false;
+                if (state.status === 'failed' || state.pid !== observer.pid
+                    || state.identity?.createdAt !== observer.identity?.createdAt) healthy = false;
                 else if (fresh) staleChecks = 0;
                 else healthy = ++staleChecks < 2;
             } catch { healthy = ++staleChecks < 2; }

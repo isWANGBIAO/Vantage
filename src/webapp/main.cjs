@@ -39,6 +39,7 @@ const { createBoundedLogger } = require('./src/utils/boundedLogger.cjs');
 const { loadAppIcon } = require('./src/utils/appIcon.cjs');
 const { handleWindowCloseShortcut } = require('./src/utils/windowCloseShortcut.cjs');
 const { createCrashDiagnostics } = require('./src/utils/crashDiagnostics.cjs');
+const { prepareIndependentLaunch } = require('./src/utils/desktopLaunch.cjs');
 const { startExitObserver, monitorExitObserver, isSessionProcessAlive } = require('./src/utils/exitObserver.cjs');
 const { installNeverStopBridge } = require('./src/utils/neverStopBridge.cjs');
 const { createNeverStopQuitGate } = require('./src/utils/neverStopLifecycle.cjs');
@@ -46,6 +47,13 @@ const { resolveNeverStopPaths } = require('./src/utils/neverStopPaths.cjs');
 const { createVantageNeverStopService } = require('./never-stop/core/vantage-service.cjs');
 const { retireLegacyStartup } = require('./never-stop/core/legacy-startup.cjs');
 const packageJson = require('./package.json');
+// A packaged app never trusts a launcher-supplied helper override for its
+// isolation evidence. Development launches keep their existing ownership.
+const desktopStartup = prepareIndependentLaunch({
+    isPackaged: app.isPackaged,
+    appExecutable: process.execPath,
+    backendExecutable: app.isPackaged ? resolveBundledBackendExecutable({ env: {} }) : null,
+});
 let buildInfo = {};
 try {
     buildInfo = require('./build-info.json');
@@ -55,13 +63,14 @@ try {
 
 const projectRoot = path.join(__dirname, '..', '..');
 const runtimePaths = resolveRuntimePaths({
+    appMode: app.isPackaged ? 'packaged' : undefined,
     app,
     env: process.env,
     projectRoot,
     platform: process.platform,
 });
 
-ensureRuntimeDirs(runtimePaths);
+if (desktopStartup.action === 'continue') ensureRuntimeDirs(runtimePaths);
 
 const logsDir = runtimePaths.logDir;
 const logFile = path.join(logsDir, `electron_${new Date().toISOString().split('T')[0]}.log`);
@@ -804,9 +813,16 @@ function createTray() {
     });
 }
 
-const gotTheLock = app.requestSingleInstanceLock();
+// Before acquiring the singleton lock: a launcher must not hold that lock while
+// the independently-created replacement is trying to start.
+const gotTheLock = desktopStartup.action === 'continue' && app.requestSingleInstanceLock();
 
-if (!gotTheLock) {
+if (desktopStartup.action === 'failed') {
+    void app.whenReady().then(() => {
+        dialog.showErrorBox('Vantage 启动失败', '无法确认独立的 Windows 启动环境。为避免启动器退出时连带关闭 Vantage，本次未继续启动。请从开始菜单重试。');
+        app.exit(1);
+    });
+} else if (desktopStartup.action === 'relaunched' || !gotTheLock) {
     app.quit();
 } else {
     neverStopBridge = installNeverStopBridge({
@@ -826,9 +842,10 @@ if (!gotTheLock) {
             dialog.showErrorBox('无法结束受管理执行', String(error.message || error));
         },
     });
-    const diagnosticsExecutable = shouldManageLoginItem ? resolveBundledBackendExecutable() : null;
+    const diagnosticsExecutable = app.isPackaged ? resolveBundledBackendExecutable({ env: {} }) : null;
     crashDiagnostics = createCrashDiagnostics({
         dataDir: runtimePaths.dataDir,
+        launchIdentity: desktopStartup.identity,
         isSessionAlive: prior => isSessionProcessAlive({
             prior, executablePath: diagnosticsExecutable, dataDir: runtimePaths.dataDir,
             onFailure: reason => log.warn(`Exit diagnostics: ${reason}`),
@@ -871,6 +888,7 @@ if (!gotTheLock) {
     });
     log.cleanup();
     log.info('Vantage Electron starting...');
+    if (desktopStartup.identity) log.info(`Independent desktop launch verified: ${JSON.stringify(desktopStartup.identity)}`);
     log.info(`Mode: ${isDev ? 'Development' : 'Production'}`);
     log.info(`Log file: ${logFile}`);
     log.info(`Runtime data dir: ${runtimePaths.dataDir}`);
@@ -886,7 +904,6 @@ if (!gotTheLock) {
                 return;
             }
             log.info(`Exit observer ready: isolation=${observer.isolation}`);
-            if (observer.isolation !== 'breakaway') log.warn('Exit observer isolation degraded: shared process-job termination may require restart recovery');
             stopExitObserverHealth = monitorExitObserver({ diagnostics: crashDiagnostics, observer, dataDir: runtimePaths.dataDir,
                 onStopped: reason => log.warn(`Exit diagnostics: ${reason}; heartbeat recovery only`) });
         }).catch(() => log.warn('Exit observer unavailable: initialization failed'));

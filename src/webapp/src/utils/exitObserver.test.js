@@ -22,6 +22,8 @@ function fixture(t) {
     };
     return { root, sessionId, diagnostics, statuses };
 }
+const nativeIdentity = pid => ({ pid, parentPid: 10, inJob: false, hasPackageIdentity: false,
+    parentIsShell: true, isIndependent: true, createdAt: '2026-10-31T10:00:00.000Z' });
 
 test('launcher waits for trusted ready acknowledgement and strips environment secrets', async t => {
     const f = fixture(t);
@@ -33,11 +35,12 @@ test('launcher waits for trusted ready acknowledgement and strips environment se
             options = value;
             assert.equal(args[0], '--diagnostics-launch');
             fs.writeFileSync(path.join(f.root, 'diagnostics', 'lifecycle', `watcher-${f.sessionId}.json`), JSON.stringify({
-                schemaVersion: 1, sessionId: f.sessionId, status: 'ready', pid: 987, isolation: 'breakaway', secret: 'PRIVATE_SECRET',
+                schemaVersion: 1, sessionId: f.sessionId, status: 'ready', pid: 987,
+                isolation: 'desktop-independent', identity: nativeIdentity(987), secret: 'PRIVATE_SECRET',
             }));
             return new EventEmitter();
         } });
-    assert.deepEqual(result, { status: 'ready', pid: 987, isolation: 'breakaway' });
+    assert.deepEqual(result, { status: 'ready', pid: 987, isolation: 'desktop-independent', identity: nativeIdentity(987) });
     assert.equal(options.windowsHide, true);
     assert.equal(options.env.API_KEY, undefined);
     assert.doesNotMatch(JSON.stringify(f.statuses), /PRIVATE_SECRET/);
@@ -65,6 +68,22 @@ test('wrong-session or linked acknowledgements cannot claim readiness', async t 
         executablePath: 'synthetic-backend', platform: 'win32', timeoutMs: 20,
         spawnProcess: () => new EventEmitter() });
     assert.equal(result.status, 'failed');
+});
+
+test('a requested breakaway label or unverified identity is not desktop independence', async t => {
+    const f = fixture(t);
+    const ack = path.join(f.root, 'diagnostics', 'lifecycle', `watcher-${f.sessionId}.json`);
+    for (const extra of [
+        { isolation: 'breakaway' },
+        { isolation: 'desktop-independent', identity: { ...nativeIdentity(987), inJob: true } },
+        { isolation: 'desktop-independent', identity: nativeIdentity(123) },
+    ]) {
+        fs.writeFileSync(ack, JSON.stringify({ schemaVersion: 1, sessionId: f.sessionId, status: 'ready', pid: 987, ...extra }));
+        const value = await observer.startExitObserver({ diagnostics: f.diagnostics, dataDir: f.root,
+            executablePath: 'synthetic-backend', platform: 'win32', timeoutMs: 20,
+            spawnProcess: () => new EventEmitter() });
+        assert.equal(value.status, 'failed');
+    }
 });
 
 test('unsupported systems explicitly retain recovery without pretending to observe', async t => {
