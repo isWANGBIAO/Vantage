@@ -11,6 +11,19 @@ import time
 import pytest
 
 
+def _desktop_unavailable():
+    if sys.platform != 'win32':
+        return True
+    import ctypes
+    from ctypes import wintypes
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    user.GetShellWindow.argtypes = ()
+    user.GetShellWindow.restype = wintypes.HWND
+    # A service CI runner may have no interactive shell. Other native failures
+    # are not converted into skips, and this is not installed-app acceptance.
+    return not user.GetShellWindow()
+
+
 def module():
     try:
         return importlib.import_module('src.core.windows_process_launch')
@@ -67,7 +80,7 @@ def _owned_process(pid):
     return kernel, handle
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='native Windows desktop process launch')
+@pytest.mark.skipif(_desktop_unavailable(), reason='requires Windows with an interactive Explorer shell')
 def test_real_launch_is_outside_jobs_packages_and_has_shell_parent():
     launcher = module()
     result = launcher.launch_from_desktop([sys.executable, '-c', 'import time;time.sleep(30)'])
@@ -89,7 +102,7 @@ def test_real_launch_is_outside_jobs_packages_and_has_shell_parent():
         kernel.CloseHandle(handle)
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='native Windows command-line/environment handling')
+@pytest.mark.skipif(_desktop_unavailable(), reason='requires Windows with an interactive Explorer shell')
 def test_unicode_arguments_environment_and_cwd_are_preserved(tmp_path):
     launcher = module()
     cwd = tmp_path / 'unicode 路径'
@@ -113,7 +126,7 @@ def test_unicode_arguments_environment_and_cwd_are_preserved(tmp_path):
         kernel.CloseHandle(handle)
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='native Windows kill-on-close job')
+@pytest.mark.skipif(_desktop_unavailable(), reason='requires Windows with an interactive Explorer shell')
 def test_desktop_child_survives_kill_on_close_of_its_launcher_job():
     import ctypes as c
     from ctypes import wintypes as w
@@ -168,7 +181,7 @@ sys.stdin.readline()
                 stream.close()
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='native suspended-child cleanup')
+@pytest.mark.skipif(_desktop_unavailable(), reason='requires Windows with an interactive Explorer shell')
 def test_failed_independence_check_stops_only_new_suspended_child(monkeypatch, tmp_path):
     launcher = module()
     real_api = launcher._WindowsAPI
@@ -196,7 +209,7 @@ def test_failed_independence_check_stops_only_new_suspended_child(monkeypatch, t
             kernel.CloseHandle(handle)
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='native desktop-app-policy inheritance')
+@pytest.mark.skipif(_desktop_unavailable(), reason='requires Windows with an interactive Explorer shell')
 def test_explicit_restrictive_policy_launcher_can_create_verified_desktop_child(tmp_path):
     """Policy 6 fixture is synthetic; it is not proof of an actual AppX update."""
     import ctypes as c

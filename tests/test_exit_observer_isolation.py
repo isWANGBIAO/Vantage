@@ -13,6 +13,17 @@ import uuid
 import pytest
 
 
+def _desktop_unavailable():
+    if sys.platform != 'win32':
+        return True
+    user = c.WinDLL('user32', use_last_error=True)
+    user.GetShellWindow.argtypes = ()
+    user.GetShellWindow.restype = w.HWND
+    # Only an absent interactive shell is unsupported. Do not hide API failures
+    # or treat a service-runner skip as real installed-app verification.
+    return not user.GetShellWindow()
+
+
 def _eventually(read, predicate, timeout=15):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -56,7 +67,7 @@ class _ExtendedJobLimits(c.Structure):
                 ('peakProcessMemory', c.c_size_t), ('peakJobMemory', c.c_size_t)]
 
 
-@pytest.mark.skipif(sys.platform != 'win32', reason='native interactive Windows desktop acceptance')
+@pytest.mark.skipif(_desktop_unavailable(), reason='requires Windows with an interactive Explorer shell')
 def test_observer_survives_launcher_job_close_and_records_owned_main_exit(tmp_path):
     from src.core.exit_observer import open_shared_read
     from src.core.windows_process_launch import inspect_process
