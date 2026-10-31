@@ -130,6 +130,7 @@ test('helper calls have bounded waits and no inherited credentials or Node overr
         return reply(INDEPENDENT);
     } }));
     assert.equal(value.windowsHide, true);
+    assert.equal(value.detached, true, 'the probe must not create a libuv job in the process it is inspecting');
     assert.equal(value.encoding, 'utf8');
     assert.deepEqual(value.stdio, ['ignore', 'pipe', 'pipe']);
     assert.ok(value.timeout > 0 && value.timeout <= 10000);

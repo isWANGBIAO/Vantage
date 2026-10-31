@@ -46,7 +46,9 @@ function prepareIndependentLaunch({ platform = process.platform, isPackaged,
         try {
             return readHelperResult(spawnSyncProcess(backendExecutable, args, {
                 env: environment, encoding: 'utf8', timeout: 10000,
-                maxBuffer: 16384, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+                // A regular libuv spawn enrolls its *parent* in a private job.
+                // The identity probe must not mutate the identity it inspects.
+                detached: true, maxBuffer: 16384, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
             }));
         } catch { return null; }
     };

@@ -41,6 +41,12 @@ not change tokens, security settings, scheduled tasks or services. The backend
 remains owned by Electron, so normal application exit still cleans it up.
 Development launch ownership is unchanged.
 
+The startup probe/relay helpers use detached Node spawn semantics so the probe
+does not itself enroll the inspected GUI in libuv's private kill-on-close job.
+`launchIdentity` describes the verified startup boundary, not a permanent ban on
+application-owned jobs. Later managed backend/worker creation may legitimately
+put Electron in its own libuv job; that does not reconnect it to the launcher.
+
 Reused/external backend services without an owned process handle are explicitly
 logged as main-only coverage. Other platforms currently use durable heartbeat
 recovery and report the observer as unsupported.
@@ -60,7 +66,7 @@ budget. Existing native/Python crash reports retain their separate 10-record /
 
 ```powershell
 node --test src/webapp/src/utils/crashDiagnostics.test.js src/webapp/src/utils/exitObserver.test.js src/webapp/src/utils/desktopLaunch.test.js
-python -m pytest -q tests/test_windows_process_launch.py tests/test_desktop_entry.py tests/test_exit_observer.py tests/test_exit_observer_isolation.py tests/test_crash_diagnostics.py tests/test_run_server_background.py
+python -m pytest -q tests/test_windows_process_launch.py tests/test_desktop_entry.py tests/test_desktop_node_probe.py tests/test_exit_observer.py tests/test_exit_observer_isolation.py tests/test_crash_diagnostics.py tests/test_run_server_background.py
 npm --prefix src/webapp run test:crash-diagnostics
 ```
 

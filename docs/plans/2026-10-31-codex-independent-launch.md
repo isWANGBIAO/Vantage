@@ -43,3 +43,14 @@ launch error, not permission to bypass security. Even independent processes cann
 survive power loss, arbitrary administrator termination or storage destruction.
 Persist bounded boolean/enum/PID/time evidence, never package names, full process
 paths, command lines, environment values or secrets.
+
+## Packaged acceptance correction
+
+The first packaged run exposed a probe side effect absent from mocked spawn
+tests: libuv initializes its own anonymous job on an ordinary spawn and enrolls
+the spawning process itself. A regular identity-probe spawn therefore changed
+the main process from no-job to its own job before inspection, causing a false
+failure. Keep strict startup identity checks; make only the short-lived startup
+probe/relay helpers detached. Add a real Node/native probe control test, not just
+an options assertion. Later application-owned jobs remain valid. Primary source:
+https://github.com/libuv/libuv/blob/v1.x/src/win/process.c
