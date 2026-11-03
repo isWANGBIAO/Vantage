@@ -137,6 +137,8 @@ PYINSTALLER_EXCLUDES = (
 
 # Keep MCP imports explicit; collecting mcp.cli pulls an unused optional Typer dependency.
 PYINSTALLER_HIDDEN_IMPORTS = (
+    "src.utils.adaptive_prompt_cache",
+    "src.utils.adaptive_prompt_layout",
     "src.core.windows_process_launch",
     "src.core.desktop_entry",
     "src.core.exit_observer",

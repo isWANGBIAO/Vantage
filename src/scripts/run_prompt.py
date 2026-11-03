@@ -4,6 +4,7 @@ import argparse
 import logging
 import uuid
 import os
+import hashlib
 from pathlib import Path
 from datetime import datetime
 
@@ -334,6 +335,14 @@ def _build_action_plan_prompt_kwargs(prompt_budget_tokens):
         "start_date": ACTION_PLAN_TIME_SERIES_START_DATE,
         "prompt_token_budget": prompt_budget_tokens,
     }
+
+
+def _action_plan_cache_layout_path(history_dir, prompt_path, time_path):
+    # Namespace different source roots without storing their private paths in
+    # the cache state or public request metadata. Tests use their own history.
+    identity = f"{Path(prompt_path).resolve()}\0{Path(time_path).resolve()}"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+    return Path(history_dir) / "cache-layout" / f"action-plan-{digest}.json"
 
 
 def _validate_complete_action_plan_budget(client, messages, model, provider_route, *, reserve_tokens=0):
@@ -748,9 +757,12 @@ def main():
                     model_override,
                     provider_route,
                 )
+                personal_source = DataLoader.resolve_data_path("Prompt_Personal_Info.md")
+                time_source = DataLoader.resolve_data_path("Time.xlsx")
                 prompt_text = DataLoader.construct_prompt(
-                    DataLoader.resolve_data_path("Prompt_Personal_Info.md"),
-                    DataLoader.resolve_data_path("Time.xlsx"),
+                    personal_source,
+                    time_source,
+                    cache_layout_state_path=_action_plan_cache_layout_path(history_dir, personal_source, time_source),
                     **_build_action_plan_prompt_kwargs(prompt_budget["input_budget_tokens"]),
                 )
             prompt_text = f"{prompt_text}{LONG_TERM_PLAN_SCOPE}"

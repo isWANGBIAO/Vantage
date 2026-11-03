@@ -63,6 +63,8 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 
 行动计划只通过 canonical /api/v1/action-plan/jobs 进入单一 ActionPlanJobService。action_plan.jobs.create 返回稳定任务 ID；重复请求合并到正在运行的任务，响应 reused=true。断开观察不会取消生成；需显式调用 action_plan.jobs.cancel。任务仅在收到完成信号且验证新保存结果完整后成功。事件只做有界进程内保留；后端重启后任务 ID 可失效，已保存计划不丢失。
 
+默认行动计划输入使用自适应前缀布局，不再按固定“最近一天/七天”判定稳定性。Markdown、Time 单日与财务单条记录按实际指纹变化保留稳定区/易变区；修改和新增进入尾部，至少三次独立观测且 24 小时未修改后才允许批量归档，归档批次至少间隔 24 小时。状态保存在已配置 history/cache-layout 下的私有 JSON，仅有指纹、排列、计数和时间，不存提示词正文。动态统计、当前时间、源顺序映射放尾部；源数据完整、最新、无旧值补丁。超预算必须报错，不得静默省略历史行。第二轮原样继承第一轮全部消息和完整回答。首次新布局需要预热，实际命中率以 provider 返回的 hit/miss tokens 为准，不承诺固定百分比。实现与验证见 docs/adaptive-prompt-cache.md；财务独立生成入口暂保留原显式格式。
+
 ## 用户可见操作映射
 
 下表由当前 automation catalog 与 CLI 命令生成规则整理。MCP 工具名与第二列相同；目录中标为 desktop_only 的工具是可发现但不能从 CLI/MCP 完成的窄桌面动作，应通过 Vantage 可见 UI/电脑操作。

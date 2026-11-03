@@ -623,6 +623,7 @@ class DataLoader:
         balance_sheet_row_limit_per_sheet=None,
         prompt_token_budget=None,
         tokenizer=None,
+        cache_layout_state_path=None,
     ):
         prompt_file_path = Path(prompt_file_path)
         excel_file_path = Path(excel_file_path)
@@ -875,6 +876,11 @@ class DataLoader:
                 budget_tokens=remaining_row_budget,
                 tokenizer=tokenizer,
             )
+            if cache_layout_state_path is not None and row_metadata["omitted_row_count"]:
+                raise ValueError(
+                    "Complete adaptive action-plan data exceeds its input budget; "
+                    "required historical rows cannot be silently omitted. No request was sent."
+                )
             payload_rows = [candidate["values"] for candidate in selected_candidates]
             selection_metadata = {
                 "budget_tokens": int(prompt_token_budget),
@@ -941,6 +947,24 @@ class DataLoader:
             f"\n\n{runtime_context_summary}"
         )
 
+        # Action Plan opts in explicitly. Other consumers retain their existing
+        # format until their own content/fidelity contracts are migrated.
+        if cache_layout_state_path is not None:
+            from src.utils.adaptive_prompt_layout import build_adaptive_prompt
+            combined_content = build_adaptive_prompt(
+                prompt_sections=prompt_sections,
+                time_payload=data_payload,
+                balance_summary=balance_sheet_summary,
+                future_planned_rows=future_planned_rows,
+                current_day_payload={
+                    "current_day": current_day_row,
+                    "latest_values": latest_values,
+                    "non_null_counts": non_null_counts,
+                },
+                runtime_context_summary=runtime_context_summary,
+                state_path=cache_layout_state_path,
+            )
+
         if prompt_token_budget is not None and estimate_tokens(combined_content, tokenizer) > int(prompt_token_budget):
             raise ValueError(
                 "Complete action-plan prompt exceeds its input budget; shorten required prompts or workbook text, "
@@ -955,6 +979,30 @@ class DataLoader:
             "cache_layout": "system_time_json_then_prompts",
             "full_prompt_hash": DataLoader._hash_text(prompt_text),
         }
+
+        if prompt_text.startswith("# Vantage Adaptive Context v1\n"):
+            metadata["cache_layout"] = "adaptive_stable_prefix_v1"
+            marker = "## Cache Layout Diagnostics\n\n```json\n"
+            try:
+                start = prompt_text.rindex(marker) + len(marker)
+                end = prompt_text.index("\n```", start)
+                diagnostics = json.loads(prompt_text[start:end])
+                if not isinstance(diagnostics, dict):
+                    return metadata
+            except (ValueError, TypeError):
+                return metadata
+            for key in ("stable_prefix_char_count", "stable_unit_count", "volatile_unit_count",
+                        "promoted_unit_count", "demoted_unit_count", "new_unit_count", "deleted_unit_count",
+                        "unit_count", "schema_version"):
+                value = diagnostics.get(key)
+                if type(value) is int and value >= 0:
+                    metadata[f"adaptive_{key}"] = value
+            digest = diagnostics.get("stable_prefix_hash")
+            if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest):
+                metadata["adaptive_stable_prefix_hash"] = digest
+            if diagnostics.get("state") in ("initialized", "ready", "reset", "unavailable"):
+                metadata["adaptive_state"] = diagnostics["state"]
+            return metadata
 
         marker = "## Time Series Data (JSON)\n\n```json\n"
         try:
