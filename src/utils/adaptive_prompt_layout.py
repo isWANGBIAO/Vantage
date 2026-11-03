@@ -18,6 +18,7 @@ STABLE_MARKER = '## Stable Context'
 MUTABLE_MARKER = '## Mutable Context'
 DIAGNOSTICS_MARKER = '## Cache Layout Diagnostics'
 BALANCE_MARKER = '## Balance Sheet Data (JSON)\n\n```json\n'
+RECORD_FENCE_BASE = 'vantage-records-jsonl'
 DIAGNOSTIC_COUNTS = frozenset({'schema_version', 'stable_unit_count', 'volatile_unit_count',
     'new_unit_count', 'deleted_unit_count', 'demoted_unit_count', 'promoted_unit_count'})
 DIAGNOSTIC_STATES = frozenset({'initialized', 'ready', 'reset', 'unavailable'})
@@ -33,6 +34,17 @@ def _identity(*parts):
 
 def _json_block(title, value):
     return f'## {title}\n\n```json\n{_json(value)}\n```'
+
+
+def _record_fence(raw_texts):
+    """Pick a stable reserved language absent from every raw document/example."""
+    occupied = {tag.casefold() for text in raw_texts for tag in re.findall(
+        re.escape(RECORD_FENCE_BASE) + r'(?:-\d+)?', text, flags=re.IGNORECASE)}
+    candidate, suffix = RECORD_FENCE_BASE, 0
+    while candidate in occupied:
+        suffix += 1
+        candidate = f'{RECORD_FENCE_BASE}-{suffix}'
+    return candidate
 
 
 def _balance_payload(text):
@@ -69,12 +81,12 @@ def _finance_anchor(columns, row, index):
     return ('index', index)
 
 
-def _render(entries, by_id):
+def _render(entries, by_id, record_fence):
     chunks, rows = [], []
 
     def flush():
         if rows:
-            chunks.append('```jsonl\n' + '\n'.join(rows) + '\n```')
+            chunks.append('```' + record_fence + '\n' + '\n'.join(rows) + '\n```')
             rows.clear()
 
     for identity in entries:
@@ -107,6 +119,8 @@ def build_adaptive_prompt(*, prompt_sections, time_payload, balance_summary,
         raise ValueError('invalid-adaptive-documents')
     if not all(isinstance(s, str) for s in (balance_summary, future_planned_rows, runtime_context_summary)):
         raise ValueError('invalid-adaptive-context-text')
+    record_fence = _record_fence([*prompt_sections, balance_summary,
+        future_planned_rows, runtime_context_summary])
 
     units = []
     def add(key, text, *, kind='text', stable=True, always=False):
@@ -178,7 +192,7 @@ def build_adaptive_prompt(*, prompt_sections, time_payload, balance_summary,
                 source_rows[source].append(identity)
 
     # No statistics, source row counts or clock values are inside this schema.
-    schema = {'version': 1, 'record_format': ['source', 'values'],
+    schema = {'version': 1, 'record_format': ['source', 'values'], 'record_fence': record_fence,
         'sources': dict(sorted(sources.items()))}
     time_metadata = {key: value for key,value in time_payload.items() if key not in ('columns','rows','column_meta')}
     current_metadata = {key: value for key,value in current_day_payload.items() if key != 'current_day'}
@@ -216,15 +230,17 @@ def build_adaptive_prompt(*, prompt_sections, time_payload, balance_summary,
         for source, identities in source_rows.items()}
     by_id[dynamic_identity]['text'] = _json_block('Dynamic Context (JSON)', dynamic)
     preamble = (PROTOCOL_HEADER + '\n\n'
-        'Records are complete current values, not patches. JSONL entries use the '
-        'schema below. Number all JSONL records across Stable then Mutable Context '
-        'from zero. The trailing source_row_order maps each source original row '
+        'Records are complete current values, not patches. Only generated data '
+        f'fences with language exactly "{record_fence}" contain source records. '
+        'Ordinary JSONL/Markdown examples in documents are not source records. '
+        'Data entries use the schema below. Number only those generated records '
+        'across Stable then Mutable Context from zero. The trailing source_row_order maps each source original row '
         'to that global record ordinal, preserving source order and duplicates. '
         'Use dates rather than presentation order for chronology. Resolve the '
         'current-day source/index reference through source_row_order.\n\n'
         + _json_block('Context Schema (JSON)', schema))
-    prefix = preamble + '\n\n' + STABLE_MARKER + '\n\n' + _render(stable, by_id) + '\n\n'
-    mutable_text = _render(mutable_records + footer, by_id)
+    prefix = preamble + '\n\n' + STABLE_MARKER + '\n\n' + _render(stable, by_id, record_fence) + '\n\n'
+    mutable_text = _render(mutable_records + footer, by_id, record_fence)
     metadata = arranged.get('metadata') or {}
     diagnostics = {key: value for key,value in metadata.items()
         if key in DIAGNOSTIC_COUNTS and type(value) is int and value >= 0}

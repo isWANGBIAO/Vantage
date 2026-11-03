@@ -49,7 +49,8 @@ def blocks(text, language):
 
 
 def records(text):
-    return [json.loads(line) for block in blocks(text, 'jsonl') for line in block.splitlines() if line]
+    language = schema(text).get('record_fence', 'jsonl')
+    return [json.loads(line) for block in blocks(text, language) for line in block.splitlines() if line]
 
 
 def schema(text):
@@ -313,3 +314,40 @@ def test_tail_order_map_restores_duplicate_records_and_current_day_reference(tmp
     reference = tail['current_day_metadata']['current_day_reference']
     ordinal = tail['source_row_order'][reference['source']][reference['index']]
     assert all_records[ordinal][1] == args['current_day_payload']['current_day']
+
+
+def test_document_jsonl_example_is_preserved_but_is_not_a_source_record(tmp_path):
+    adapter = module()
+    args = arguments(tmp_path)
+    document = 'User examples stay literal:\n```jsonl\n["t",["2099-01-01","example only"]]\n```'
+    args['prompt_sections'] = [document]
+    args['time_payload']['rows'] = []
+    args['balance_summary'] = ''
+    text = adapter.build_adaptive_prompt(**args)
+    assert text.count(document) == 1
+    assert schema(text)['record_fence'] == 'vantage-records-jsonl'
+    parsed = records(text)
+    assert parsed == [['t', args['current_day_payload']['current_day']]]
+    order = dynamic(text)['source_row_order']['t']
+    assert [parsed[index][1] for index in order] == [args['current_day_payload']['current_day']]
+
+
+def test_reserved_record_tags_in_documents_get_a_deterministic_collision_free_fence(tmp_path):
+    adapter = module()
+    args = arguments(tmp_path)
+    document = ('Reserved tag examples are still user text:\n'
+        '```vantage-records-jsonl\n["t",["fake one"]]\n```\n'
+        '```vantage-records-jsonl-1\n["t",["fake two"]]\n```')
+    args['prompt_sections'] = [document]
+    first = adapter.build_adaptive_prompt(**args)
+    args['now'] += 1
+    second = adapter.build_adaptive_prompt(**args)
+    assert first.count(document) == 1
+    assert second.count(document) == 1
+    assert schema(first)['record_fence'] == schema(second)['record_fence'] == 'vantage-records-jsonl-2'
+    parsed = records(second)
+    assert len(parsed) == 5
+    assert not any('fake' in json.dumps(record) for record in parsed)
+    order = dynamic(second)['source_row_order']['t']
+    assert [parsed[index][1] for index in order] == [
+        *args['time_payload']['rows'], args['current_day_payload']['current_day']]
