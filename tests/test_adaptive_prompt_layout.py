@@ -234,8 +234,8 @@ def test_real_engine_edits_arbitrary_old_record_then_archives_without_old_values
     args['now'] += 1
     args['time_payload']['rows'][0][1] = 'new-current-value'
     changed = adapter.build_adaptive_prompt(**args)
-    old_record = '["t",["2025-01-01",1],0]'
-    new_record = '["t",["2025-01-01","new-current-value"],0]'
+    old_record = '["t",["2025-01-01",1]]'
+    new_record = '["t",["2025-01-01","new-current-value"]]'
     assert old_record in first
     assert old_record not in changed
     assert new_record not in changed.split(adapter.MUTABLE_MARKER)[0]
@@ -256,3 +256,60 @@ def test_real_engine_edits_arbitrary_old_record_then_archives_without_old_values
     assert 'new-current-value' not in deleted
     assert ['2020-01-01','new-backfill'] in [r[1] for r in records(deleted)]
     assert deleted.count('new-backfill') == 1
+
+
+@pytest.mark.parametrize('source', ['t', 'b0'])
+@pytest.mark.parametrize('operation', ['insert', 'delete'])
+def test_source_position_changes_do_not_demote_unchanged_records(tmp_path, source, operation):
+    adapter = module()
+    args = arguments(tmp_path)
+    first = adapter.build_adaptive_prompt(**args)
+    if source == 't':
+        target = ['2026-11-01', 2]
+        original_rows = args['time_payload']['rows']
+        if operation == 'insert':
+            original_rows.insert(0, ['2020-01-01', 'new-earlier-row'])
+        else:
+            original_rows.pop(0)
+        expected = [*original_rows, args['current_day_payload']['current_day']]
+    else:
+        target = ['B', 2]
+        original_rows = [['A',1], ['B',2]]
+        if operation == 'insert':
+            original_rows.insert(0, ['X', 9])
+        else:
+            original_rows.pop(0)
+        args['balance_summary'] = balanced([{'name': 'Assets', 'columns':['Name','Amount'],
+            'rows':original_rows, 'row_count':len(original_rows)}])
+        expected = original_rows
+    args['now'] += 1
+    second = adapter.build_adaptive_prompt(**args)
+    before = next(record for record in records(first) if record[0] == source and record[1] == target)
+    after = next(record for record in records(second) if record[0] == source and record[1] == target)
+    assert before == after, 'source-row index must not change stable record text'
+    assert after in records(second.split(adapter.MUTABLE_MARKER)[0])
+    order = dynamic(second)['source_row_order'][source]
+    all_records = records(second)
+    assert [all_records[index][1] for index in order] == expected
+    assert all(all_records[index][0] == source for index in order)
+
+
+def test_tail_order_map_restores_duplicate_records_and_current_day_reference(tmp_path):
+    adapter = module()
+    args = arguments(tmp_path)
+    args['time_payload']['rows'] = [['2025-01-01',1], ['2025-01-01',1], ['2025-01-01',2]]
+    args['balance_summary'] = balanced([{'name':'Assets','columns':['Name','Amount'],
+        'rows':[['A',1], ['A',1], ['A',2]]}])
+    adapter.build_adaptive_prompt(**args)
+    args['now'] += 1
+    args['time_payload']['rows'][1][1] = 999
+    text = adapter.build_adaptive_prompt(**args)
+    all_records = records(text)
+    tail = dynamic(text)
+    assert all(len(record) == 2 for record in all_records)
+    expected_time = [*args['time_payload']['rows'], args['current_day_payload']['current_day']]
+    assert [all_records[i][1] for i in tail['source_row_order']['t']] == expected_time
+    assert [all_records[i][1] for i in tail['source_row_order']['b0']] == [['A',1], ['A',1], ['A',2]]
+    reference = tail['current_day_metadata']['current_day_reference']
+    ordinal = tail['source_row_order'][reference['source']][reference['index']]
+    assert all_records[ordinal][1] == args['current_day_payload']['current_day']

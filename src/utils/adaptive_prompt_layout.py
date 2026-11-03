@@ -93,9 +93,9 @@ def build_adaptive_prompt(*, prompt_sections, time_payload, balance_summary,
     state_path, now=None):
     """Return current full input in persistent stable/mutable order.
 
-    JSONL records are ``[source_code, row_values, original_source_row_index]``.
-    The source schema carries columns once. The original index preserves source
-    ordering/duplicates even when cache-oriented presentation changes order.
+    JSONL records are ``[source_code, row_values]``. Source ordering lives only
+    in a trailing ``source_row_order`` map, never in record fingerprints, so an
+    insertion/deletion cannot make unchanged later records appear modified.
     """
     if not isinstance(time_payload, dict) or not isinstance(current_day_payload, dict):
         raise ValueError('invalid-adaptive-prompt-input')
@@ -126,6 +126,7 @@ def build_adaptive_prompt(*, prompt_sections, time_payload, balance_summary,
         add(('document', anchor, occurrence), document)
 
     sources = {'t': {'kind': 'time', 'columns': time_payload['columns']}}
+    source_rows = {'t': []}
     if 'column_meta' in time_payload:
         sources['t']['column_meta'] = time_payload['column_meta']
     time_rows = list(time_payload['rows'])
@@ -140,7 +141,9 @@ def build_adaptive_prompt(*, prompt_sections, time_payload, balance_summary,
         anchor = _json(row[0] if row else None)
         occurrence = time_occurrences[anchor]
         time_occurrences[anchor] += 1
-        add(('time', anchor, occurrence), _json(['t', row, index]), kind='record', stable=index != current_index)
+        identity = add(('time', anchor, occurrence), _json(['t', row]),
+            kind='record', stable=index != current_index)
+        source_rows['t'].append(identity)
 
     payload = _balance_payload(balance_summary)
     balance_metadata = None
@@ -160,6 +163,7 @@ def build_adaptive_prompt(*, prompt_sections, time_payload, balance_summary,
             if source in sources:
                 raise ValueError('adaptive-source-identity-collision')
             sources[source] = {'kind': 'balance', 'columns': sheet['columns']}
+            source_rows[source] = []
             if 'name' in sheet:
                 sources[source]['name'] = sheet['name']
             metadata = {key: value for key,value in sheet.items() if key not in ('name','columns','rows')}
@@ -169,18 +173,19 @@ def build_adaptive_prompt(*, prompt_sections, time_payload, balance_summary,
                 row_anchor = _json(_finance_anchor(sheet['columns'], row, index))
                 row_occurrence = row_occurrences[row_anchor]
                 row_occurrences[row_anchor] += 1
-                add(('balance', sheet_identity, row_anchor, row_occurrence),
-                    _json([source, row, index]), kind='record')
+                identity = add(('balance', sheet_identity, row_anchor, row_occurrence),
+                    _json([source, row]), kind='record')
+                source_rows[source].append(identity)
 
     # No statistics, source row counts or clock values are inside this schema.
-    schema = {'version': 1, 'record_format': ['source', 'values', 'source_row_index'],
+    schema = {'version': 1, 'record_format': ['source', 'values'],
         'sources': dict(sorted(sources.items()))}
     time_metadata = {key: value for key,value in time_payload.items() if key not in ('columns','rows','column_meta')}
     current_metadata = {key: value for key,value in current_day_payload.items() if key != 'current_day'}
     current_metadata['current_day_reference'] = {'source': 't', 'index': current_index} if current_index is not None else None
     dynamic = {'time_metadata': time_metadata, 'current_day_metadata': current_metadata,
         'balance_metadata': balance_metadata}
-    add(('tail','dynamic'), _json_block('Dynamic Context (JSON)', dynamic), stable=False, always=True)
+    dynamic_identity = add(('tail','dynamic'), _json_block('Dynamic Context (JSON)', dynamic), stable=False, always=True)
     if balance_summary and payload is None:
         add(('tail','unparsed-balance'), balance_summary, stable=False, always=True)
     if future_planned_rows:
@@ -202,11 +207,21 @@ def build_adaptive_prompt(*, prompt_sections, time_payload, balance_summary,
     # regardless of when a stable record was demoted by the state engine.
     mutable_records = [key for key in mutable if not by_id[key]['always_volatile']]
     footer = [unit['id'] for unit in units if unit['always_volatile']]
+    # These ordinals describe presentation, not content. Derive them only after
+    # ordering, and keep the map in the dynamic footer to avoid a fingerprint
+    # feedback loop when source rows are inserted, deleted or archived.
+    presentation = [key for key in stable + mutable_records if by_id[key]['kind'] == 'record']
+    ordinal = {identity: index for index, identity in enumerate(presentation)}
+    dynamic['source_row_order'] = {source: [ordinal[key] for key in identities]
+        for source, identities in source_rows.items()}
+    by_id[dynamic_identity]['text'] = _json_block('Dynamic Context (JSON)', dynamic)
     preamble = (PROTOCOL_HEADER + '\n\n'
         'Records are complete current values, not patches. JSONL entries use the '
-        'schema below. Their source_row_index preserves original table order; '
-        'use record dates rather than presentation order for chronology. '
-        'The current-day reference points to the corresponding Time source row.\n\n'
+        'schema below. Number all JSONL records across Stable then Mutable Context '
+        'from zero. The trailing source_row_order maps each source original row '
+        'to that global record ordinal, preserving source order and duplicates. '
+        'Use dates rather than presentation order for chronology. Resolve the '
+        'current-day source/index reference through source_row_order.\n\n'
         + _json_block('Context Schema (JSON)', schema))
     prefix = preamble + '\n\n' + STABLE_MARKER + '\n\n' + _render(stable, by_id) + '\n\n'
     mutable_text = _render(mutable_records + footer, by_id)
