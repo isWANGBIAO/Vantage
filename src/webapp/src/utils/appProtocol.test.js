@@ -112,6 +112,32 @@ test('proxy never follows a redirect or exposes its destination to the renderer'
   });
 }));
 
+test('HEAD media proxy preserves file length without forwarding a body or credentials', async () => withAssets(async ({ bundle }) => {
+  await withBackend((_request, response) => {
+    response.setHeader('content-type', 'image/jpeg');
+    response.setHeader('content-length', '123456');
+    response.setHeader('set-cookie', 'private=1');
+    response.end();
+  }, async connection => {
+    const handle = createAppProtocolHandler({ assetRoot: bundle, connection });
+    const response = await handle(trustedRequest('/static/photos/sample.jpg', { method: 'HEAD' }));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-length'), '123456');
+    assert.equal(response.headers.has('set-cookie'), false);
+    assert.equal(response.body, null);
+  });
+}));
+
+test('GET proxy does not copy an upstream length that may describe encoded rather than decoded bytes', async () => withAssets(async ({ bundle }) => {
+  const handle = createAppProtocolHandler({
+    assetRoot: bundle, connection: { baseUrl: 'http://127.0.0.1:8000' },
+    fetchBackend: async () => new Response('decoded', { headers: { 'content-length': '123', 'content-encoding': 'gzip' } }),
+  });
+  const response = await handle(trustedRequest('/static/photos/sample.jpg'));
+  assert.equal(response.headers.has('content-length'), false);
+  assert.equal(await response.text(), 'decoded');
+}));
+
 test('NDJSON remains streaming and cancelling an observer never posts job cancellation', async () => withAssets(async ({ bundle }) => {
   let closed;
   const didClose = new Promise(resolve => { closed = resolve; });

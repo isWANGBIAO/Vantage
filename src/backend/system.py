@@ -16,6 +16,7 @@ from src.services.location_trust import browser_location_rejection
 from src.services.location_trust import compare_browser_location
 from datetime import datetime
 from src.manager.get_location import get_trusted_location_sample_async
+from src.services.capture_storage_forecast import capture_storage_forecast
 import os
 import psutil
 import requests
@@ -64,6 +65,15 @@ async def get_sys_stats():
         legacy_size = _runtime.state.legacy_size
 
         total, used, free = shutil.disk_usage(_runtime.state.photos_path or ".")
+        try:
+            storage_forecast = await asyncio.to_thread(
+                capture_storage_forecast.snapshot,
+                roots=[_runtime.state.photos_path, _runtime.state.screenshots_path],
+                capture_interval_seconds=_camera.MONITOR_CAPTURE_INTERVAL_SECONDS,
+            )
+        except Exception:
+            # An optional forecast must not make CPU/memory/free-space polling fail.
+            storage_forecast = {"status": "insufficient_data", "days_remaining": None}
 
         return {
             "cpu_usage": cpu_usage,
@@ -73,6 +83,7 @@ async def get_sys_stats():
             "disk_free_gb": round(free / (1024**3), 2),
             "storage_used_mb": round((photos_size + screenshots_size + legacy_size) / (1024**2), 2),
             "storage_scan_truncated": _runtime.state.storage_scan_truncated,
+            "storage_forecast": storage_forecast,
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})

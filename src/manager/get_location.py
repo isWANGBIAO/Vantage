@@ -20,6 +20,7 @@ from src.services.location_trust import (
     LocationStatus,
     LocationTrustResolver,
 )
+from src.services.capture_storage_forecast import capture_storage_forecast
 
 if sys.platform == "win32":
     try:
@@ -345,6 +346,14 @@ def convert_to_exif_coords(value):
     return ((degrees, 1), (minutes, 1), (seconds, 100))
 
 
+def _record_saved_image_storage(photo_path):
+    # Optional diagnostics must never change whether a captured image is saved.
+    try:
+        capture_storage_forecast.record_file(photo_path)
+    except Exception:
+        pass
+
+
 def save_image_with_gps(photo_path, frame, latitude, longitude):
     resolved_path = Path(photo_path)
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
@@ -358,6 +367,7 @@ def save_image_with_gps(photo_path, frame, latitude, longitude):
 
     if latitude is None or longitude is None:
         print(f"Time {_timestamp()} Location unavailable; skipping GPS EXIF for {photo_path}")
+        _record_saved_image_storage(resolved_path)
         return
 
     gps_ifd = {
@@ -373,3 +383,4 @@ def save_image_with_gps(photo_path, frame, latitude, longitude):
         piexif.insert(exif_bytes, str(resolved_path))
     except Exception as exc:
         print(f"Time {_timestamp()} Saved image but could not write GPS EXIF for {photo_path}: {exc}")
+    _record_saved_image_storage(resolved_path)

@@ -4,6 +4,16 @@ import { readFileSync } from 'node:fs';
 
 const dashboardSource = readFileSync(new URL('./Dashboard.jsx', import.meta.url), 'utf8');
 
+test('Dashboard uses the backend capture forecast instead of HEAD headers or a hard-coded cadence', () => {
+  assert.ok(dashboardSource.includes('getStorageForecastPresentation(stats?.storage_forecast)'));
+  assert.ok(dashboardSource.includes('t(storageForecastPresentation.remaining.key, storageForecastPresentation.remaining.params)'));
+  assert.ok(dashboardSource.includes('t(storageForecastPresentation.averageCapture.key, storageForecastPresentation.averageCapture.params)'));
+  assert.ok(!dashboardSource.includes("method: 'HEAD'"));
+  assert.ok(!dashboardSource.includes('groupSizeBytes'));
+  assert.ok(!dashboardSource.includes('daysLeft.toFixed'));
+  assert.ok(dashboardSource.includes('setStats((previous) => previous ? { ...previous, storage_forecast: null } : null)'));
+});
+
 test('Dashboard keeps startup prewarm polling active while delegating geolocation prompting to a policy helper', () => {
   assert.ok(dashboardSource.includes('export default function Dashboard({ isVisible = false })'));
   assert.ok(dashboardSource.includes('const statsInterval = setInterval(() => void fetchStats(), 5000);'));

@@ -15,6 +15,31 @@ from src.backend import system as _backend_system
 
 
 class StorageStatsTests(unittest.TestCase):
+    def test_forecast_failure_does_not_hide_other_system_statistics(self):
+        with (
+            patch.object(_backend_system.capture_storage_forecast, "snapshot", side_effect=RuntimeError("synthetic diagnostic failure")),
+            patch.object(_backend_system.shutil, "disk_usage", return_value=(100, 40, 60)),
+        ):
+            result = asyncio.run(_backend_system.get_sys_stats())
+        self.assertEqual(result["storage_forecast"], {"status": "insufficient_data", "days_remaining": None})
+        self.assertIn("cpu_usage", result)
+        self.assertIn("disk_free_gb", result)
+
+    def test_sys_stats_delegates_forecast_to_capture_records_with_real_interval(self):
+        forecast = {"status": "ready", "days_remaining": 42.5}
+        with (
+            patch.object(_backend_system.capture_storage_forecast, "snapshot", return_value=forecast) as snapshot,
+            patch.object(_backend_system.shutil, "disk_usage", return_value=(100, 40, 60)),
+            patch.object(_backend_runtime.state, "photos_path", "photos-root"),
+            patch.object(_backend_runtime.state, "screenshots_path", "screenshots-root"),
+            patch.object(_backend_system._camera, "MONITOR_CAPTURE_INTERVAL_SECONDS", 75),
+        ):
+            result = asyncio.run(_backend_system.get_sys_stats())
+        self.assertIs(result["storage_forecast"], forecast)
+        snapshot.assert_called_once_with(
+            roots=["photos-root", "screenshots-root"], capture_interval_seconds=75,
+        )
+
     def test_storage_budget_warning_is_limited_to_at_most_once_per_hour(self):
         self.assertGreaterEqual(_backend_media.STORAGE_SCAN_STATUS_LOG_INTERVAL_SECONDS, 3600.0)
 

@@ -100,6 +100,12 @@ function createAppProtocolHandler({ assetRoot, connection, waitUntilReady = asyn
                 for (const name of RESPONSE_HEADERS) {
                     if (response.headers.has(name)) responseHeaders.set(name, response.headers.get(name));
                 }
+                // HEAD describes the corresponding file without transferring it.
+                // Do not copy GET lengths: fetch may have decoded the body.
+                const contentLength = response.headers.get('content-length');
+                if (method === 'HEAD' && /^\d+$/.test(contentLength || '')) {
+                    responseHeaders.set('content-length', contentLength);
+                }
                 // Preserve the live stream. Cancelling it only closes this HTTP
                 // observer; job cancellation requires its explicit POST route.
                 return new Response(method === 'HEAD' || [204, 205, 304].includes(response.status) ? null : response.body, {

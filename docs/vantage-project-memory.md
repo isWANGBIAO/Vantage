@@ -67,6 +67,8 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 
 ## 用户可见操作映射
 
+仪表盘磁盘剩余时间由后端 `system.statistics.read` 的 `storage_forecast` 提供，按近期实际保存的照片和所有屏幕截图的字节数、采集时间推算，不使用前端轮询间隔、单张预览图大小或扫描未完成的历史总量。启动预热、样本不足、采集停滞或读取失败时显示“暂无法估算”；多目录跨卷时按最先耗尽的卷估算。仅保留有界进程内统计，不新增私人文件持久化。此为近期采集速度延续时的估算，不包括其他软件的磁盘写入。
+
 下表由当前 automation catalog 与 CLI 命令生成规则整理。MCP 工具名与第二列相同；目录中标为 desktop_only 的工具是可发现但不能从 CLI/MCP 完成的窄桌面动作，应通过 Vantage 可见 UI/电脑操作。
 
 | Vantage 界面能力 | Catalog / MCP 工具 | CLI 命令 |

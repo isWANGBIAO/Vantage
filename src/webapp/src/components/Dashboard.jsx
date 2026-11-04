@@ -16,6 +16,7 @@ import {
 import { buildBackendUrl, fetchBackend, fetchBackendJson } from '../utils/backendRequest';
 import { buildBrowserLocationQuery } from '../utils/locationSample.js';
 import { shouldUseDashboardGeolocation } from './dashboardAqiPolicy.js';
+import { getStorageForecastPresentation } from './storageForecast.js';
 import {
   degradeFocusHealthSnapshot,
   getFocusStatusPresentation,
@@ -41,7 +42,6 @@ export default function Dashboard({ isVisible = false }) {
   const [stats, setStats] = useState(null);
   const [latestImages, setLatestImages] = useState({ photo: null, screenshot: null });
   const [time, setTime] = useState(new Date());
-  const [storageEstimate, setStorageEstimate] = useState({ daysLeft: 0, groupSizeMB: 0 });
   const [aqi, setAqi] = useState(null);
   const [aqiUnavailable, setAqiUnavailable] = useState(false);
   const [healthStats, setHealthStats] = useState(null);
@@ -57,31 +57,12 @@ export default function Dashboard({ isVisible = false }) {
     console.error(message, error);
   }, []);
 
-  const estimateStorage = useCallback(async (photoUrl, screenUrl) => {
-    try {
-      const [photoResponse, screenshotResponse] = await Promise.all([
-        fetchBackend(photoUrl, { method: 'HEAD', retryPolicy: 'poll' }),
-        fetchBackend(screenUrl, { method: 'HEAD', retryPolicy: 'poll' }),
-      ]);
-
-      const photoSize = parseInt(photoResponse.headers.get('content-length') || 0, 10);
-      const screenshotSize = parseInt(screenshotResponse.headers.get('content-length') || 0, 10);
-      const groupSizeBytes = photoSize + screenshotSize;
-
-      setStorageEstimate({
-        groupSizeMB: groupSizeBytes / (1024 * 1024),
-        groupSizeBytes,
-      });
-    } catch (err) {
-      logPollErrorOnce('storageEstimate', 'Error estimating storage', err);
-    }
-  }, [logPollErrorOnce]);
-
   const fetchStats = useCallback(async () => {
     try {
       const data = await fetchBackendJson('/api/v1/system/statistics', { retryPolicy: 'poll' });
       setStats(data);
     } catch (err) {
+      setStats((previous) => previous ? { ...previous, storage_forecast: null } : null);
       logPollErrorOnce('stats', 'Failed to fetch stats', err);
     }
   }, [logPollErrorOnce]);
@@ -99,14 +80,10 @@ export default function Dashboard({ isVisible = false }) {
       }
 
       setLatestImages(data);
-
-      if (data.photo && data.screenshot) {
-        estimateStorage(data.photo, data.screenshot);
-      }
     } catch (err) {
       logPollErrorOnce('latestImages', 'Failed to fetch latest images', err);
     }
-  }, [estimateStorage, logPollErrorOnce]);
+  }, [logPollErrorOnce]);
 
   const fetchAqiBackend = useCallback(async (position = null) => {
     try {
@@ -232,9 +209,7 @@ export default function Dashboard({ isVisible = false }) {
     };
   }, [fetchStats, fetchLatestImages, fetchAqi, fetchHealth, isVisible]);
 
-  const daysLeft = stats && storageEstimate.groupSizeBytes > 0
-    ? ((stats.disk_free_gb * 1024 * 1024 * 1024) / storageEstimate.groupSizeBytes) * 10 / 86400
-    : 0;
+  const storageForecastPresentation = getStorageForecastPresentation(stats?.storage_forecast);
   const focusStatusPresentation = getFocusStatusPresentation(healthStats);
 
   return (
@@ -508,7 +483,7 @@ export default function Dashboard({ isVisible = false }) {
           icon={<HardDrive size={24} color="#ff7675" />}
           title={t('dashboard.stat.disk_free')}
           value={`${stats?.disk_free_gb || 0} GB`}
-          subValue={t('dashboard.stat.days_left', { value: daysLeft.toFixed(1) })}
+          subValue={t(storageForecastPresentation.remaining.key, storageForecastPresentation.remaining.params)}
           color="#ff7675"
         />
         <StatCard
@@ -521,7 +496,7 @@ export default function Dashboard({ isVisible = false }) {
           })()}
           subValue={stats?.storage_scan_truncated
             ? t('dashboard.stat.storage_partial')
-            : t('dashboard.stat.group_size', { value: storageEstimate.groupSizeMB.toFixed(2) })}
+            : t(storageForecastPresentation.averageCapture.key, storageForecastPresentation.averageCapture.params)}
           color="#55efc4"
         />
         <StatCard

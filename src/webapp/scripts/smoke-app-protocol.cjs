@@ -26,6 +26,12 @@ app.whenReady().then(async () => {
     let jobStatus = 'idle', cancelCount = 0; const calls = [];
     server = createServer(async (req, res) => {
         calls.push({ method: req.method, path: req.url, origin: req.headers.origin });
+        if (req.method === 'HEAD' && req.url === '/static/photos/sample.jpg') {
+            res.setHeader('Content-Type', 'image/jpeg');
+            res.setHeader('Content-Length', '123456');
+            res.end();
+            return;
+        }
         if (req.url.endsWith('/cancel')) cancelCount++;
         if (req.method === 'POST') { for await (const _ of req) {} jobStatus = 'running'; setTimeout(() => { jobStatus = 'succeeded'; }, 400); res.setHeader('Content-Type', 'application/json'); res.end('{"id":"demo"}'); }
         else if (req.url.endsWith('/events')) {
@@ -56,14 +62,15 @@ app.whenReady().then(async () => {
         controller.abort();
         await new Promise(resolve => setTimeout(resolve, 500));
         const status = await (await fetch('/api/v1/action-plan/jobs/demo')).json();
-        return { origin: location.origin, secure: isSecureContext, singleBridge: typeof window.electronAPI === 'undefined', bridge: window.vantagePlatform.descriptor.backend.rendererOrigin, assetLoaded: window.protocolAssetLoaded && document.getElementById('asset').naturalWidth === 2, posted, first: new TextDecoder().decode(first.value), elapsed, status };
+        const head = await fetch('/static/photos/sample.jpg', { method: 'HEAD' });
+        return { headLength: head.headers.get('Content-Length'), headBody: await head.text(), origin: location.origin, secure: isSecureContext, singleBridge: typeof window.electronAPI === 'undefined', bridge: window.vantagePlatform.descriptor.backend.rendererOrigin, assetLoaded: window.protocolAssetLoaded && document.getElementById('asset').naturalWidth === 2, posted, first: new TextDecoder().decode(first.value), elapsed, status };
     })()`);
     const stranger = new BrowserWindow({ show: false, webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, nodeIntegration: false } });
     await stranger.loadURL('data:text/html,<html><body>Untrusted</body></html>');
     const blocked = await stranger.webContents.executeJavaScript(`fetch('vantage://app/api/v1/action-plan/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(() => false, () => true)`);
     stranger.destroy();
     console.log('RESULT', JSON.stringify({ result, blocked, calls }));
-    if (!result.singleBridge || !result.secure || result.origin !== 'vantage://app' || result.posted.id !== 'demo' || !result.first.includes('first') || !result.assetLoaded || result.bridge !== 'vantage://app' || result.status.status !== 'succeeded' || result.status.cancelCount !== 0 || !result.status.streamClosed || !blocked || calls.length !== 3 || calls.some(call => call.method === 'OPTIONS')) throw new Error('Protocol smoke failed');
+    if (result.headLength !== '123456' || result.headBody !== '' || !result.singleBridge || !result.secure || result.origin !== 'vantage://app' || result.posted.id !== 'demo' || !result.first.includes('first') || !result.assetLoaded || result.bridge !== 'vantage://app' || result.status.status !== 'succeeded' || result.status.cancelCount !== 0 || !result.status.streamClosed || !blocked || calls.length !== 4 || calls.some(call => call.method === 'OPTIONS')) throw new Error('Protocol smoke failed');
     window.webContents.stopPainting();
     window.destroy();
     server.closeAllConnections();
