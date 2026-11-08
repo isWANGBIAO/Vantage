@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import process from 'node:process';
 import * as echarts from 'echarts';
 import { buildChartOption } from './plotFormatters.js';
-import { buildSleepAverageOption, buildSleepAverageStatistics, normalizeSleepAverageMode } from './sleepAverageOptions.js';
+import { buildSleepAverageOption, buildSleepAverageStatistics, normalizeSleepAverageMode,
+  normalizeSleepAverageGranularity, selectSleepAverageGranularity } from './sleepAverageOptions.js';
 
 const DAY = 86_400_000;
 const date = (timestamp) => new Date(timestamp).toISOString().slice(0, 10);
@@ -321,4 +322,168 @@ test('explicit bare-date bounds use the same UTC domain as numeric sleep layers'
   assert.deepEqual(result.xAxis.axisLabel, axis.axisLabel);
   assert.equal(axis.min, '2026-01-01');
   assert.equal(axis.max, '2026-03-01');
+});
+
+test('adaptive unit uses exact UTC calendar anniversaries, including leap-day clamps', () => {
+  const base = fixture([['2020-01-01', 25, 33], ['2030-12-31', 25, 33]]);
+  const choose = (startValue, endValue) => selectSleepAverageGranularity(base, { startValue, endValue });
+  assert.equal(choose('2023-03-01', '2024-03-01'), 'month');
+  assert.equal(choose('2023-03-01', '2024-03-02'), 'quarter');
+  assert.equal(choose('2024-02-29', '2025-02-28'), 'month');
+  assert.equal(choose('2024-02-29', '2025-03-01'), 'quarter');
+  assert.equal(choose('2024-02-29', '2027-02-28'), 'quarter');
+  assert.equal(choose('2024-02-29', '2027-03-01'), 'year');
+  assert.equal(choose('2021-01-01', '2024-01-01'), 'quarter');
+  assert.equal(choose('2021-01-01', '2024-01-02'), 'year');
+});
+
+test('adaptive zoom supports percentages, explicit UTC values, arrays, batches, clamping and reversed bounds', () => {
+  const first = Date.parse('2020-01-01T00:00:00Z'), last = Date.parse('2024-01-01T00:00:00Z');
+  const base = fixture([[date(first), 25, 33], [date(last), 25, 33]]);
+  const percentFor = (value) => (Date.parse(`${value}T00:00:00Z`) - first) / (last - first) * 100;
+  assert.equal(selectSleepAverageGranularity(base, { start: 0, end: percentFor('2021-01-01') }), 'month');
+  assert.equal(selectSleepAverageGranularity(base, { start: 0, end: percentFor('2021-01-02') }), 'quarter');
+  assert.equal(selectSleepAverageGranularity(base, { start: 0, end: percentFor('2023-01-01') }), 'quarter');
+  assert.equal(selectSleepAverageGranularity(base, { start: 0, end: percentFor('2023-01-02') }), 'year');
+  assert.equal(selectSleepAverageGranularity(base, [{ startValue: '2023-02-01', endValue: '2024-01-01', start: 0, end: 100 }]), 'month');
+  assert.equal(selectSleepAverageGranularity(base, { batch: [{ startValue: '2021-01-01', endValue: '2024-01-01' }] }), 'quarter');
+  assert.equal(selectSleepAverageGranularity(base, { startValue: '2024-01-01', endValue: '2021-01-01' }), 'quarter');
+  assert.equal(selectSleepAverageGranularity(base, { startValue: '2010-01-01', endValue: '2030-01-01' }), 'year');
+  assert.equal(selectSleepAverageGranularity(base, { startValue: '2023-01-01T00:00:00Z', endValue: last }), 'month');
+});
+
+test('omitted and invalid zooms use full-source span; basedata defaults are only used when explicitly passed', () => {
+  const base = fixture([['2020-01-01', 25, 33], ['2028-01-01', 25, 33]]);
+  base.dataZoom = [{ start: 95, end: 100 }];
+  assert.equal(selectSleepAverageGranularity(base), 'year');
+  assert.equal(selectSleepAverageGranularity(base, base.dataZoom), 'month');
+  for (const zoom of [null, {}, { start: '95', end: false }, { startValue: '2026-02-30T00:00:00Z', endValue: 'bad' }]) {
+    assert.equal(selectSleepAverageGranularity(base, zoom), 'year');
+  }
+  assert.equal(selectSleepAverageGranularity({ series: [] }), 'month');
+  assert.equal(selectSleepAverageGranularity(fixture([['1800-01-01', 25, 33], ['2030-01-01', 25, 33]])), 'month');
+  assert.equal(normalizeSleepAverageGranularity('week'), 'month');
+});
+
+test('quarter and annual means use direct distinct-day weighting, not means of months', () => {
+  const quarterRows = [...days('2026-01-01', 7, 24), ...days('2026-02-01', 21, 28)];
+  const quarter = buildSleepAverageStatistics(fixture(quarterRows), 'quarter');
+  assert.equal(quarter.minimumRecords, 21);
+  assert.equal(quarter.series[0].periods[0].key, '2026-Q1');
+  assert.equal(quarter.series[0].periods[0].count, 28);
+  assert.equal(quarter.series[0].periods[0].value, 27);
+  const annualRows = [...days('2026-01-01', 7, 24), ...days('2026-02-01', 77, 28)];
+  const annual = buildSleepAverageStatistics(fixture(annualRows), 'year');
+  assert.equal(annual.minimumRecords, 84);
+  assert.equal(annual.series[0].periods[0].key, '2026');
+  assert.equal(annual.series[0].periods[0].count, 84);
+  assert.ok(Math.abs(annual.series[0].periods[0].value - (7 * 24 + 77 * 28) / 84) < 1e-12);
+});
+
+test('calendar quarter/year boundaries, sample thresholds and completely missing bins remain explicit', () => {
+  const quarters = buildSleepAverageStatistics(fixture([...days('2026-01-01', 21), ...days('2026-07-01', 20)]), 'quarter');
+  assert.deepEqual(quarters.series[0].periods.map((period) => [period.key, period.count, period.value]), [
+    ['2026-Q1', 21, 25], ['2026-Q2', 0, null], ['2026-Q3', 20, null],
+  ]);
+  assert.equal(quarters.series[0].periods[0].start, Date.parse('2026-01-01T00:00:00Z'));
+  assert.equal(quarters.series[0].periods[1].start, Date.parse('2026-04-01T00:00:00Z'));
+  const years = buildSleepAverageStatistics(fixture([...days('2024-01-01', 84), ...days('2026-01-01', 83)]), 'year');
+  assert.deepEqual(years.series[0].periods.map((period) => [period.key, period.count, period.value]), [
+    ['2024', 84, 25], ['2025', 0, null], ['2026', 83, null],
+  ]);
+  assert.equal(years.series[0].periods[1].start, Date.parse('2025-01-01T00:00:00Z'));
+});
+
+test('panning and zooming within the chosen unit cannot clip aggregate denominators or values', () => {
+  const base = fixture(days('2024-01-01', 1000, (index) => 24 + index % 5));
+  for (const granularity of ['month', 'quarter', 'year']) {
+    const before = buildSleepAverageStatistics(base, granularity);
+    const zoomedBase = { ...base, dataZoom: [{ startValue: '2025-02-15', endValue: '2025-05-15' }] };
+    const after = buildSleepAverageStatistics(zoomedBase, granularity);
+    assert.deepEqual(after.series[0].periods, before.series[0].periods);
+    assert.deepEqual(get(buildSleepAverageOption(base, 'segments', 'zh-CN', granularity), 'segments').data,
+      get(buildSleepAverageOption(zoomedBase, 'segments', 'zh-CN', granularity), 'segments').data);
+    assert.deepEqual(after.series[0].daily, before.series[0].daily);
+    assert.deepEqual(after.series[0].rolling, before.series[0].rolling);
+    assert.equal(after.series[0].total, before.series[0].total);
+  }
+});
+
+test('adaptive aggregate tooltips name the current unit with counts and actual partial range', () => {
+  const base = fixture(days('2026-01-05', 100));
+  const quarter = buildSleepAverageOption(base, 'segments', 'zh-CN', 'quarter');
+  const text = quarter.tooltip.formatter([{ axisValue: '2026-02-05' }]);
+  assert.match(text, /季度平均/);
+  assert.match(text, /2026-Q1/);
+  assert.match(text, /86天/);
+  assert.match(text, /起始2026-01-05/);
+  assert.match(text, /截至2026-03-31/);
+  const year = buildSleepAverageOption(base, 'monthly', 'en-US', 'year');
+  const english = year.tooltip.formatter([{ axisValue: '2026-02-05' }]);
+  assert.match(english, /Annual mean/);
+  assert.match(english, /100 days/);
+  assert.match(english, /from 2026-01-05/);
+  assert.match(english, /through 2026-04-14/);
+});
+
+test('adaptive thresholds and quarter/year statistics are invariant across Shanghai and DST timezones', () => {
+  const originalTimezone = process.env.TZ;
+  try {
+    const base = fixture(days('2023-03-01', 1462, (index) => 24 + index % 5));
+    const expected = ['quarter', 'year'].map((granularity) => buildSleepAverageStatistics(base, granularity).series[0].periods);
+    for (const timezone of ['Asia/Shanghai', 'America/New_York', 'Europe/Berlin', 'UTC']) {
+      process.env.TZ = timezone;
+      assert.equal(selectSleepAverageGranularity(base, { startValue: '2023-03-01', endValue: '2024-03-01' }), 'month');
+      assert.equal(selectSleepAverageGranularity(base, { startValue: '2023-03-01', endValue: '2026-03-01' }), 'quarter');
+      assert.equal(selectSleepAverageGranularity(base, { startValue: '2023-03-01', endValue: '2026-03-02' }), 'year');
+      for (const [index, granularity] of ['quarter', 'year'].entries()) {
+        assert.deepEqual(buildSleepAverageStatistics(base, granularity).series[0].periods, expected[index]);
+      }
+    }
+  } finally {
+    if (originalTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTimezone;
+  }
+});
+
+test('actual ECharts SSR accepts all unit/mode combinations with stable historical references and UTC domains', () => {
+  const base = fixture(days('2023-01-01', 1200, (index) => 24 + index % 4));
+  const total = buildSleepAverageStatistics(base).series[0].total;
+  const chart = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 900, height: 440 });
+  try {
+    for (const granularity of ['month', 'quarter', 'year']) {
+      for (const mode of ['total', 'segments', 'monthly', 'rolling']) {
+        chart.setOption({ ...buildSleepAverageOption(base, mode, 'zh-CN', granularity), animation: false }, { notMerge: true });
+        const svg = chart.renderToSVGString();
+        assert.ok(svg.startsWith('<svg'));
+        assert.ok(!/NaN|undefined/.test(svg), `${granularity}/${mode}`);
+        assert.deepEqual(chart.getModel().getComponent('yAxis').axis.scale.getExtent(), [12, 48]);
+        assert.equal(chart.getOption().series.find((series) => series.id === 'sleep-daily-0').markLine.data[0].yAxis, total);
+        assert.deepEqual(chart.getOption().dataZoom.map((zoom) => [zoom.start, zoom.end]), [[55, 95], [55, 95]]);
+      }
+    }
+  } finally { chart.dispose(); }
+});
+
+test('actual ECharts quarter/year aggregate lines preserve missing bins and separate dashed boundary edges', () => {
+  const datasets = [
+    ['quarter', [...days('2025-01-05', 86), ...days('2025-07-01', 100)]],
+    ['year', [...days('2023-01-05', 361), ...days('2025-01-01', 365), ...days('2026-01-01', 100)]],
+  ];
+  for (const [granularity, rows] of datasets) {
+    const base = { ...fixture(rows), dataZoom: [] };
+    const stats = buildSleepAverageStatistics(base, granularity);
+    assert.ok(stats.series[0].periods.some((period) => period.count === 0 && period.value === null));
+    const chart = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 900, height: 440 });
+    try {
+      const option = buildSleepAverageOption(base, 'monthly', 'zh-CN', granularity);
+      chart.setOption({ ...option, animation: false });
+      assert.ok(!/NaN|undefined/.test(chart.renderToSVGString()));
+      assert.deepEqual(get(option, 'monthly').data.map((row) => row[1]), stats.series[0].periods.map((period) => period.partial ? null : period.value));
+      for (const prefix of ['monthly-partial-start', 'monthly-partial']) {
+        const data = get(option, prefix).data;
+        assert.ok(data.filter((row) => row[1] !== null).length <= 2);
+      }
+    } finally { chart.dispose(); }
+  }
 });

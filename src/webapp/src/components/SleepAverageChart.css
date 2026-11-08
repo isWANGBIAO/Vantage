@@ -3,6 +3,7 @@
 .sleep-average-modes button{min-width:0;min-height:38px;padding:9px 7px;border:0;border-radius:8px;background:transparent;background-image:none;box-shadow:none;transform:none;color:var(--sleep-control-text);font-family:inherit;font-size:13px;font-weight:600;overflow-wrap:anywhere}
 .sleep-average-modes button[aria-pressed=true]{background:var(--sleep-control-active-bg);color:var(--sleep-control-active-text)}
 .sleep-average-modes button:disabled{cursor:wait;opacity:.65}
+.sleep-average-granularity{font-size:12px;line-height:1.5;color:var(--sleep-control-text)}
 .sleep-average-status{font-size:12px;line-height:1.6;color:var(--sleep-control-text);overflow-wrap:anywhere}
 .sleep-average-status button{margin-left:8px;color:var(--sleep-control-text);background:transparent;border:1px solid var(--sleep-control-border);border-radius:6px;padding:3px 8px}
 @media(max-width:500px){.sleep-average-modes button{font-size:12px;padding:8px 3px}}

@@ -40,3 +40,15 @@ test('bundled ECharts includes custom monthly segments and historical reference 
 test('sleep chart grid can shrink below the old canvas intrinsic width', () => {
   assert.match(styles, /\.sleep-average-chart\{[^}]*grid-template-columns:minmax\(0,1fr\)/);
 });
+
+test('calendar grouping follows native visible bounds without persisting derived zoom state', () => {
+  assert.match(component, /selectSleepAverageGranularity\(baseOption, groupingZoom\)/);
+  assert.match(component, /zoomSourceRef\.current === baseOption/);
+  assert.match(component, /startValue: item.startValue, endValue: item.endValue/);
+  assert.match(component, /if \(next !== granularityRef\.current\)/);
+  assert.match(component, /buildSleepAverageOption\(baseOption, mode, language, granularity\)/);
+  assert.match(component, /data-granularity=\{granularity\}/);
+  assert.match(component, /segments: '分段平均', monthly: '平均折线'/);
+  assert.match(component, /mode === 'segments' \|\| mode === 'monthly'/);
+  assert.ok(!component.includes('sleepChartGranularity'));
+});

@@ -86,9 +86,9 @@ const chart = (id, title) => ({
         series: [{ name: 'Synthetic sample', type: 'line', data: [1, 2] }],
     },
 });
-function syntheticSleepChart() {
-    const daily = Array.from({ length: 105 }, (_, index) => {
-        const date = new Date(Date.UTC(2026, 0, 1 + index)).toISOString().slice(0, 10);
+function syntheticSleepChart(length = 105, year = 2026) {
+    const daily = Array.from({ length }, (_, index) => {
+        const date = new Date(Date.UTC(year, 0, 1 + index)).toISOString().slice(0, 10);
         return [date, index >= 65 && index < 80 ? null : 25 + (index % 7) / 10];
     });
     return { id: 'sleep-schedule', title: 'Synthetic sleep chart', summary: [], option: {
@@ -943,6 +943,48 @@ async function exerciseUi() {
         await waitFor('sleep preference read retry recovers saved choice', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'rolling'
             && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
         console.log('PASS four sleep overlays, canonical persistence, reopen, narrow layout and failed read/save recovery');
+        readFixtures['/api/v1/plots/data'].charts[0] = syntheticSleepChart(2557, 2020);
+        await click('.app-main button', '刷新图表');
+        await waitFor('source refresh recomputes grouping from the restored percentage window', () => document.querySelector('.sleep-average-chart')?.dataset.granularity === 'year'
+            && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
+        await click('button[data-sleep-mode="segments"]');
+        await waitFor('annual adaptive average', () => document.querySelector('.sleep-average-chart')?.dataset.granularity === 'year'
+            && document.querySelector('.sleep-average-granularity')?.textContent.includes('按年统计')
+            && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
+        const beforeAdaptiveZoom = calls.filter(call => call.method === 'PUT' && call.pathname === '/api/v1/settings').length;
+        const zoomUntil = async (expected, deltaY) => {
+            for (let attempt = 0; attempt < 18; attempt++) {
+                if (await evaluate(expected => document.querySelector('.sleep-average-chart')?.dataset.granularity === expected, expected)) return;
+                await evaluate(() => document.querySelector('.sleep-average-chart canvas').scrollIntoView({ block: 'center' }));
+                const point = await evaluate(() => {
+                    const rect = document.querySelector('.sleep-average-chart canvas').getBoundingClientRect();
+                    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                });
+                await window.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseWheel', ...point, deltaX: 0, deltaY });
+                await delay(220);
+            }
+            throw new Error(`Native zoom did not reach ${expected} grouping`);
+        };
+        await zoomUntil('quarter', -160);
+        await waitFor('quarter label matches actual grouping', () => document.querySelector('.sleep-average-granularity')?.textContent.includes('按季度统计'));
+        await zoomUntil('month', -160);
+        await waitFor('month label matches actual grouping', () => document.querySelector('.sleep-average-granularity')?.textContent.includes('按月统计'));
+        await zoomUntil('year', 160);
+        await waitFor('zooming out restores annual groups', () => document.querySelector('.sleep-average-granularity')?.textContent.includes('按年统计'));
+        assert.equal(calls.filter(call => call.method === 'PUT' && call.pathname === '/api/v1/settings').length, beforeAdaptiveZoom,
+            'Derived grouping changes must not write user settings.');
+        const adaptiveZoom = await evaluate(() => Number(document.querySelector('.sleep-average-chart').dataset.zoomStart));
+        await click('button[data-sleep-mode="monthly"]');
+        await waitFor('mean-line mode keeps annual grouping', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'monthly'
+            && document.querySelector('.sleep-average-chart')?.dataset.granularity === 'year'
+            && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
+        assert.ok(Math.abs(await evaluate(() => Number(document.querySelector('.sleep-average-chart').dataset.zoomStart)) - adaptiveZoom) < 0.01);
+        await click('button[data-sleep-mode="rolling"]');
+        await waitFor('fixed rolling mode does not show adaptive period label', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'rolling'
+            && !document.querySelector('.sleep-average-granularity')
+            && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
+        await checkErrors();
+        console.log('PASS native zoom adapts year/quarter/month groups, preserves view across modes and never persists derived grouping');
     }
     console.log('RESULT', JSON.stringify({ productionOrigin: security.origin, primaryPages: 8, rendererErrors: errors.length, expectedLifecycleCancellations: expectedCancellations.length, requests: calls.length, isolated: true }));
 }

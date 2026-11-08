@@ -1,6 +1,11 @@
 const DAY_MS = 86_400_000;
 const MAX_DAYS = 36_600;
 export const SLEEP_AVERAGE_MODES = Object.freeze(['total', 'segments', 'monthly', 'rolling']);
+const PERIOD_MONTHS = Object.freeze({ month: 1, quarter: 3, year: 12 });
+
+export function normalizeSleepAverageGranularity(value) {
+  return Object.hasOwn(PERIOD_MONTHS, value) ? value : 'month';
+}
 
 export function normalizeSleepAverageMode(value) {
   return SLEEP_AVERAGE_MODES.includes(value) ? value : 'segments';
@@ -35,8 +40,80 @@ function observationMap(series) {
   return result;
 }
 
+function periodStart(timestamp, granularity) {
+  const date = new Date(timestamp), months = PERIOD_MONTHS[granularity];
+  date.setUTCDate(1);
+  date.setUTCMonth(Math.floor(date.getUTCMonth() / months) * months);
+  return +date;
+}
+
+function periodKey(timestamp, granularity) {
+  const date = new Date(timestamp), year = dateString(timestamp).slice(0, 4);
+  if (granularity === 'year') return year;
+  if (granularity === 'quarter') return `${year}-Q${Math.floor(date.getUTCMonth() / 3) + 1}`;
+  return dateString(timestamp).slice(0, 7);
+}
+
+function calendarAnniversary(timestamp, years) {
+  const date = new Date(timestamp), day = date.getUTCDate();
+  date.setUTCDate(1);
+  date.setUTCFullYear(date.getUTCFullYear() + years);
+  const last = new Date(+date);
+  last.setUTCMonth(last.getUTCMonth() + 1);
+  last.setUTCDate(0);
+  date.setUTCDate(Math.min(day, last.getUTCDate()));
+  return +date;
+}
+
+function zoomTimestamp(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.floor(value / DAY_MS) * DAY_MS;
+  const day = dateTimestamp(value);
+  if (day !== null) return day;
+  // Only timezone-qualified datetimes are accepted; unqualified wall times vary with DST.
+  if (typeof value === 'string' && dateTimestamp(value.slice(0, 10)) !== null
+    && /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) {
+    const timestamp = Date.parse(value);
+    if (Number.isFinite(timestamp)) return Math.floor(timestamp / DAY_MS) * DAY_MS;
+  }
+  return null;
+}
+
+/** Select the aggregate unit from a visible UTC calendar range, not record count. */
+export function selectSleepAverageGranularity(baseOption, zoom) {
+  const originals = baseOption?.series;
+  if (!Array.isArray(originals) || originals.length < 2) return 'month';
+  let sourceStart = Infinity, sourceEnd = -Infinity;
+  for (const series of originals.slice(0, 2)) {
+    for (const timestamp of observationMap(series).keys()) {
+      sourceStart = Math.min(sourceStart, timestamp);
+      sourceEnd = Math.max(sourceEnd, timestamp);
+    }
+  }
+  if (!Number.isFinite(sourceStart) || (sourceEnd - sourceStart) / DAY_MS > MAX_DAYS) return 'month';
+  let selected = zoom;
+  if (Array.isArray(selected)) selected = selected.find((item) => item && typeof item === 'object');
+  if (Array.isArray(selected?.batch)) selected = selected.batch.find((item) => item && typeof item === 'object');
+  const boundary = (valueKey, percentKey, fallback) => {
+    const value = zoomTimestamp(selected?.[valueKey]);
+    if (value !== null) return Math.max(sourceStart, Math.min(sourceEnd, value));
+    const percent = selected?.[percentKey];
+    if (typeof percent === 'number' && Number.isFinite(percent)) {
+      const value = sourceStart + Math.max(0, Math.min(100, percent)) / 100 * (sourceEnd - sourceStart);
+      return Math.floor(Math.round(value) / DAY_MS) * DAY_MS;
+    }
+    return fallback;
+  };
+  const a = boundary('startValue', 'start', sourceStart), b = boundary('endValue', 'end', sourceEnd);
+  const start = Math.min(a, b), end = Math.max(a, b);
+  if (end <= calendarAnniversary(start, 1)) return 'month';
+  if (end <= calendarAnniversary(start, 3)) return 'quarter';
+  return 'year';
+}
+
 /** Statistics use complete source records, never the visible dataZoom window. */
-export function buildSleepAverageStatistics(baseOption) {
+export function buildSleepAverageStatistics(baseOption, selectedGranularity = 'month') {
+  const granularity = normalizeSleepAverageGranularity(selectedGranularity);
+  const monthsPerPeriod = PERIOD_MONTHS[granularity], minimumRecords = 7 * monthsPerPeriod;
   const originals = baseOption?.series;
   if (!Array.isArray(originals) || originals.length < 2) return null;
   const maps = originals.slice(0, 2).map(observationMap);
@@ -46,16 +123,14 @@ export function buildSleepAverageStatistics(baseOption) {
   if ((end - start) / DAY_MS > MAX_DAYS) return null;
   const dailyDates = [];
   for (let timestamp = start; timestamp <= end; timestamp += DAY_MS) dailyDates.push(timestamp);
-  const firstDate = new Date(start);
-  firstDate.setUTCDate(1);
-  const monthStarts = [];
-  let monthStart = +firstDate;
-  while (monthStart <= end) {
-    const current = new Date(monthStart);
-    current.setUTCMonth(current.getUTCMonth() + 1);
+  const periodStarts = [];
+  let first = periodStart(start, granularity);
+  while (first <= end) {
+    const current = new Date(first);
+    current.setUTCMonth(current.getUTCMonth() + monthsPerPeriod);
     const next = +current;
-    monthStarts.push({ start: monthStart, next });
-    monthStart = next;
+    periodStarts.push({ start: first, next });
+    first = next;
   }
   const series = maps.map((map) => {
     const daily = dailyDates.map((timestamp) => [dateString(timestamp), map.get(timestamp) ?? null]);
@@ -74,24 +149,25 @@ export function buildSleepAverageStatistics(baseOption) {
     });
     const buckets = new Map();
     for (const [timestamp, value] of map) {
-      const key = dateString(timestamp).slice(0, 7);
+      const key = periodKey(timestamp, granularity);
       const bucket = buckets.get(key) || { sum: 0, count: 0 };
       bucket.sum += value; bucket.count += 1; buckets.set(key, bucket);
     }
-    const months = monthStarts.map(({ start: first, next }) => {
-      const key = dateString(first).slice(0, 7), bucket = buckets.get(key);
+    const periods = periodStarts.map(({ start: first, next }) => {
+      const key = periodKey(first, granularity), bucket = buckets.get(key);
       const observedStart = Math.max(first, start), observedEnd = Math.min(next - DAY_MS, end);
       return {
         key, start: observedStart, end: observedEnd,
         midpoint: observedStart + Math.floor((observedEnd - observedStart) / DAY_MS / 2) * DAY_MS,
         partial: first < start || next - DAY_MS > end,
         count: bucket?.count ?? 0,
-        value: bucket && bucket.count >= 7 ? bucket.sum / bucket.count : null,
+        value: bucket && bucket.count >= minimumRecords ? bucket.sum / bucket.count : null,
       };
     });
-    return { daily, total, count: values.length, rolling, rollingCounts, months };
+    // `months` remains an alias for callers of the original monthly-only helper.
+    return { daily, total, count: values.length, rolling, rollingCounts, periods, months: periods };
   });
-  return { start, end, firstDate: dateString(start), latestDate: dateString(end), series };
+  return { start, end, firstDate: dateString(start), latestDate: dateString(end), granularity, minimumRecords, series };
 }
 
 function pointDate(params) {
@@ -134,8 +210,8 @@ function utcAxisBounds(axis) {
 }
 
 /** Add average overlays to the existing sleep chart without changing its layout. */
-export function buildSleepAverageOption(baseOption, selectedMode = 'segments', language = 'zh-CN') {
-  const statistics = buildSleepAverageStatistics(baseOption);
+export function buildSleepAverageOption(baseOption, selectedMode = 'segments', language = 'zh-CN', selectedGranularity = 'month') {
+  const statistics = buildSleepAverageStatistics(baseOption, selectedGranularity);
   if (!statistics) return baseOption;
   const mode = normalizeSleepAverageMode(selectedMode), english = englishLanguage(language);
   const originalSeries = baseOption.series.slice(0, 2);
@@ -151,11 +227,13 @@ export function buildSleepAverageOption(baseOption, selectedMode = 'segments', l
     statistics.series.forEach((series, index) => {
       rows.push(`${escapeHtml(names[index])}: ${formatClock(dailyMaps[index].get(date))}`);
       if (mode === 'segments' || mode === 'monthly') {
-        const month = series.months.find((item) => item.key === date.slice(0, 7));
-        const label = english ? 'Monthly mean' : '月平均';
+        const month = series.periods.find((item) => item.key === periodKey(dateTimestamp(date), statistics.granularity));
+        const label = english ? { month: 'Monthly mean', quarter: 'Quarterly mean', year: 'Annual mean' }[statistics.granularity]
+          : { month: '月平均', quarter: '季度平均', year: '年度平均' }[statistics.granularity];
         const count = english ? `${month?.count ?? 0} days` : `${month?.count ?? 0}天`;
-        const partial = month?.partial ? english ? `, through ${dateString(month.end)}` : `，截至${dateString(month.end)}` : '';
-        rows.push(`${label}: ${formatClock(month?.value)} (${count}${partial})`);
+        const partial = month?.partial ? english ? `, through ${dateString(month.end)}, from ${dateString(month.start)}`
+          : `，截至${dateString(month.end)}，起始${dateString(month.start)}` : '';
+        rows.push(`${label}: ${formatClock(month?.value)} (${month?.key ?? ''}, ${count}${partial})`);
       } else if (mode === 'rolling') {
         const count = series.rollingCounts.get(date) ?? 0;
         rows.push(`${english ? 'Trailing 30-day mean' : '过去30天平均'}: ${formatClock(rollingMaps[index].get(date))} (${count}${english ? ' days' : '天'})`);
@@ -193,18 +271,18 @@ export function buildSleepAverageOption(baseOption, selectedMode = 'segments', l
       data: mode === 'rolling' ? series.rolling.map(([date, value]) => [dateTimestamp(date), value]) : [] });
     resultSeries.push({ ...common, id: `sleep-monthly-${index}`, name: legendName,
       showSymbol: true, symbol: 'circle', symbolSize: 6,
-      data: mode === 'monthly' ? series.months.map((month) => [month.midpoint, month.partial ? null : month.value]) : [] });
+      data: mode === 'monthly' ? series.periods.map((month) => [month.midpoint, month.partial ? null : month.value]) : [] });
     resultSeries.push({ ...common, id: `sleep-monthly-partial-${index}`, name: legendName,
       showSymbol: true, symbol: 'emptyCircle', symbolSize: 6,
       lineStyle: { color, width: 3, type: 'dashed' },
-      data: mode === 'monthly' ? partialMonthlyData(series.months, 'end') : [] });
+      data: mode === 'monthly' ? partialMonthlyData(series.periods, 'end') : [] });
     resultSeries.push({ ...common, id: `sleep-monthly-partial-start-${index}`, name: legendName,
       showSymbol: true, symbol: 'emptyCircle', symbolSize: 6,
       lineStyle: { color, width: 3, type: 'dashed' },
-      data: mode === 'monthly' ? partialMonthlyData(series.months, 'start') : [] });
+      data: mode === 'monthly' ? partialMonthlyData(series.periods, 'start') : [] });
     resultSeries.push({
       id: `sleep-segments-${index}`, name: legendName, type: 'custom',
-      data: mode === 'segments' ? series.months.filter((month) => month.value !== null)
+      data: mode === 'segments' ? series.periods.filter((month) => month.value !== null)
         .map((month) => [month.start, month.end, month.value, month.partial ? 1 : 0]) : [],
       encode: { x: [0, 1], y: 2 }, renderItem: segmentRenderer(color), clip: true, z: 4,
     });
