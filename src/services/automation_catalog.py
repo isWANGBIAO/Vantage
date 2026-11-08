@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal, Mapping
 
-from src.core.user_config import MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
+from src.core.user_config import MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES, SLEEP_CHART_MODES
 
 
 OutputKind = Literal["json", "text", "stream", "file"]
@@ -803,6 +803,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 minimum=0,
                 maximum=MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES,
             ),
+            "sleep_chart_mode": _string("Sleep-chart display mode; daily observations remain visible.", enum=SLEEP_CHART_MODES),
             "body_analysis_enabled": _boolean("Enable local body-analysis startup scanning when configured."),
             "body_analysis_leg_dir": _string("Local leg-photo source directory; empty clears it."),
             "body_analysis_scalp_dir": _string("Local scalp-photo source directory; empty clears it."),

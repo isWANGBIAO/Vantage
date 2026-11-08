@@ -27,6 +27,7 @@ const DEFAULT_SETTINGS_STATE = {
     imageLastRefreshedAt: null,
     actionPlanAutoGenerate: true,
     actionPlanCheckIntervalMinutes: 60,
+    sleepChartMode: 'segments',
     bodyAnalysisEnabled: false,
     bodyAnalysisLegDir: '',
     bodyAnalysisScalpDir: '',
@@ -144,6 +145,8 @@ function normalizeSettings(payload, mode) {
         && safeSettings.actionPlanCheckIntervalMinutes >= 0
         && safeSettings.actionPlanCheckIntervalMinutes <= MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
         ? safeSettings.actionPlanCheckIntervalMinutes : 60,
+      sleepChartMode: ['total', 'segments', 'monthly', 'rolling'].includes(safeSettings.sleepChartMode)
+        ? safeSettings.sleepChartMode : defaults.settings.sleepChartMode,
       bodyAnalysisEnabled: safeSettings.bodyAnalysisEnabled === true,
       bodyAnalysisLegDir: typeof safeSettings.bodyAnalysisLegDir === 'string' ? safeSettings.bodyAnalysisLegDir : '',
       bodyAnalysisScalpDir: typeof safeSettings.bodyAnalysisScalpDir === 'string' ? safeSettings.bodyAnalysisScalpDir : '',

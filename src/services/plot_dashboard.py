@@ -609,7 +609,7 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
     if '起床时间' not in data_frame.columns:
         raise ValueError('缺少起床时间列')
 
-    source = data_frame[['日期', '起床时间']].dropna(subset=['日期', '起床时间']).copy().sort_values('日期')
+    source = data_frame[['日期', '起床时间']].dropna(subset=['日期', '起床时间']).copy().sort_values('日期', kind='stable')
     parsed_rows = []
     for _, row in source.iterrows():
         parsed = _parse_primary_sleep_session(row.get('起床时间'))
@@ -625,7 +625,7 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
     if not parsed_rows:
         raise ValueError('未找到可展示的主睡眠作息记录')
 
-    parsed_frame = pd.DataFrame(parsed_rows).sort_values('日期')
+    parsed_frame = pd.DataFrame(parsed_rows).sort_values('日期', kind='stable')
     dates = parsed_frame['日期'].tolist()
     bedtime_wrapped = parsed_frame['bedtime_wrapped_hour'].to_numpy(dtype=float)
     wake_wrapped = parsed_frame['wake_wrapped_hour'].to_numpy(dtype=float)
@@ -688,8 +688,8 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
         summary=[
             {'label': '最近入睡', 'value': _format_clock_text(parsed_frame['bedtime_hour'].iloc[-1])},
             {'label': '最近起床', 'value': _format_clock_text(parsed_frame['wake_hour'].iloc[-1])},
-            {'label': '平均入睡', 'value': _format_clock_text(summary_frame['bedtime_wrapped_hour'].mean())},
-            {'label': '平均起床', 'value': _format_clock_text(summary_frame['wake_wrapped_hour'].mean())},
+            {'label': '近45条平均入睡', 'value': _format_clock_text(summary_frame['bedtime_wrapped_hour'].mean())},
+            {'label': '近45条平均起床', 'value': _format_clock_text(summary_frame['wake_wrapped_hour'].mean())},
             {'label': '样本天数', 'value': str(len(parsed_frame))},
         ],
     )

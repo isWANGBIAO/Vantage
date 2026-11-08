@@ -122,6 +122,8 @@ const ENGLISH_TEXT = {
   '最近起床': 'Latest Wake Time',
   '平均入睡': 'Average Bedtime',
   '平均起床': 'Average Wake Time',
+  '近45条平均入睡': 'Bedtime Mean (Last 45 Records)',
+  '近45条平均起床': 'Wake-Time Mean (Last 45 Records)',
   '样本天数': 'Sample Days',
   '平均睡眠': 'Average Sleep',
   '平均屏幕时间': 'Average Screen Time',

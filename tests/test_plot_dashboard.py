@@ -99,9 +99,21 @@ class SleepScheduleDashboardTests(unittest.TestCase):
         chart = plot_dashboard._build_sleep_schedule_dashboard_chart(data_frame)
         summary = {item["label"]: item["value"] for item in chart["summary"]}
 
-        self.assertEqual(summary["平均入睡"], "02:00")
-        self.assertEqual(summary["平均起床"], "10:00")
+        self.assertEqual(summary["近45条平均入睡"], "02:00")
+        self.assertEqual(summary["近45条平均起床"], "10:00")
         self.assertEqual(summary["样本天数"], "46")
+
+    def test_sleep_duplicate_dates_preserve_source_order_for_last_valid_selection(self):
+        data_frame = pd.DataFrame({
+            "日期": pd.to_datetime(["2026-04-02"] * 20 + ["2026-04-01"]),
+            "起床时间": [f"1.{minute:02d}-9.00" for minute in range(20)] + ["2.00-10.00"],
+        })
+        chart = plot_dashboard._build_sleep_schedule_dashboard_chart(data_frame)
+        points = chart["option"]["series"][0]["data"]
+        duplicate_points = [value for day, value in points if day == "2026-04-02"]
+        self.assertEqual(len(duplicate_points), 20)
+        for minute, value in enumerate(duplicate_points):
+            self.assertAlmostEqual(value, 25 + minute / 60, places=4)
 
     def test_sleep_schedule_axis_expands_for_afternoon_wake_points(self):
         data_frame = pd.DataFrame(

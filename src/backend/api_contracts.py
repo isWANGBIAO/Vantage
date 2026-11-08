@@ -137,6 +137,7 @@ class SettingsValues(ExtensibleModel):
     theme_mode: Literal["dark", "light", "auto"]
     action_plan_auto_generate: bool
     action_plan_check_interval_minutes: int = Field(ge=0, le=35791)
+    sleep_chart_mode: Literal["total", "segments", "monthly", "rolling"] = "segments"
     body_analysis_enabled: bool
     body_analysis_leg_dir: str
     body_analysis_scalp_dir: str

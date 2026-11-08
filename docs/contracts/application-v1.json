@@ -1826,6 +1826,17 @@
               "title": "Action Plan Check Interval Minutes",
               "type": "integer"
             },
+            "sleep_chart_mode": {
+              "default": "segments",
+              "enum": [
+                "total",
+                "segments",
+                "monthly",
+                "rolling"
+              ],
+              "title": "Sleep Chart Mode",
+              "type": "string"
+            },
             "body_analysis_enabled": {
               "title": "Body Analysis Enabled",
               "type": "boolean"
@@ -2717,6 +2728,16 @@
           "description": "Automatic action-plan check interval in minutes (0 disables it).",
           "minimum": 0,
           "maximum": 35791
+        },
+        "sleep_chart_mode": {
+          "type": "string",
+          "description": "Sleep-chart display mode; daily observations remain visible.",
+          "enum": [
+            "total",
+            "segments",
+            "monthly",
+            "rolling"
+          ]
         },
         "body_analysis_enabled": {
           "type": "boolean",

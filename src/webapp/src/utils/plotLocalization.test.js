@@ -4,6 +4,13 @@ import assert from 'node:assert/strict';
 import { buildChartOption, formatSummaryValue } from './plotFormatters.js';
 import { localizePlotChart, localizePlotWarnings } from './plotLocalization.js';
 
+test('sleep recent-record summaries are distinct from all-history reference means', () => {
+  const chart = localizePlotChart({ id: 'sleep-schedule', summary: [
+    { label: '近45条平均入睡', value: '01:30' }, { label: '近45条平均起床', value: '09:00' },
+  ] }, 'en-US');
+  assert.deepEqual(chart.summary.map((item) => item.label), ['Bedtime Mean (Last 45 Records)', 'Wake-Time Mean (Last 45 Records)']);
+});
+
 test('balance chart localizes actual and daily consumption metadata', () => {
   const chart = localizePlotChart({
     id: 'balance',

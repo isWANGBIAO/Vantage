@@ -72,6 +72,8 @@ let faceProgress = { status: 'queued', percent: 0 };
 let faceProgressReads = 0;
 let faceProgressDrops = 0;
 let faceProgressDropsObserved = 0;
+let sleepPreferenceReadFails = false;
+let sleepPreferenceSaveFails = false;
 // A 4x4 solid-color synthetic JPEG, generated solely for transport tests.
 const cameraJpeg = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDlqKKK9s8M/9k=', 'base64');
 
@@ -84,6 +86,18 @@ const chart = (id, title) => ({
         series: [{ name: 'Synthetic sample', type: 'line', data: [1, 2] }],
     },
 });
+function syntheticSleepChart() {
+    const daily = Array.from({ length: 105 }, (_, index) => {
+        const date = new Date(Date.UTC(2026, 0, 1 + index)).toISOString().slice(0, 10);
+        return [date, index >= 65 && index < 80 ? null : 25 + (index % 7) / 10];
+    });
+    return { id: 'sleep-schedule', title: 'Synthetic sleep chart', summary: [], option: {
+        color: ['#ac7ca4', '#5d9e51'], xAxis: { type: 'time' }, yAxis: { min: 12, max: 40, interval: 2 },
+        dataZoom: [{ type: 'inside', start: 40, end: 100 }, { type: 'slider', start: 40, end: 100 }],
+        series: [ { name: 'Bedtime', type: 'line', data: daily },
+            { name: 'Wake Time', type: 'line', data: daily.map(([date, value]) => [date, value === null ? null : value + 8]) } ],
+    } };
+}
 const readFixtures = {
     '/api/v1/action-plan/today': {
         exists: true, date: '2026-01-01',
@@ -104,7 +118,7 @@ const readFixtures = {
     '/api/v1/finance/balance-sheet': { sheets: [], summary: {}, source: {} },
     '/api/v1/finance/purchase-recommendations': { recommendation_groups: [], dismissed_count: 0 },
     '/api/v1/finance/purchase-recommendations/dismissed': { items: [], count: 0 },
-    '/api/v1/plots/data': { charts: [chart('sleep-schedule', 'Synthetic sleep chart'), chart('balance', 'Synthetic balance chart')], warnings: [] },
+    '/api/v1/plots/data': { charts: [syntheticSleepChart(), chart('balance', 'Synthetic balance chart')], warnings: [] },
     '/api/v1/system/logs': { logs: ['INFO Synthetic unified UI smoke is ready'] },
     '/api/v1/system/status': { camera_online: false, show_person_box: false, camera_frame_dark: false },
     '/api/v1/system/statistics': { cpu_usage: 12, memory_used_gb: 1, memory_percent: 25, disk_free_gb: 100 },
@@ -188,10 +202,16 @@ async function serveFixture(req, res) {
         return;
     }
     let result;
-    if (req.method === 'GET' && pathname === '/api/v1/settings') result = settingsState();
+    if (req.method === 'GET' && pathname === '/api/v1/settings') {
+        if (sleepPreferenceReadFails) { res.writeHead(503).end(JSON.stringify({ error: 'Synthetic preference read failed' })); return; }
+        result = settingsState();
+    }
     else if (req.method === 'GET' && pathname === '/api/v1/settings/display-language') result = { display_language: settings.display_language };
     else if (req.method === 'GET' && pathname === '/api/v1/onboarding') result = onboardingState();
     else if (req.method === 'PUT' && pathname === '/api/v1/settings') {
+        if (sleepPreferenceSaveFails && payload.sleep_chart_mode) {
+            res.writeHead(503).end(JSON.stringify({ error: 'Synthetic preference save failed' })); return;
+        }
         Object.assign(settings, payload);
         if (payload.provider_config) providerConfig = payload.provider_config;
         result = settingsState();
@@ -867,6 +887,63 @@ async function exerciseUi() {
     await waitFor('diagnostics storage failure is visible and cannot open', () => document.querySelector('.settings-diagnostics')?.textContent.includes('不可用') && document.querySelector('.settings-diagnostics button')?.disabled === true);
     await checkErrors();
     console.log('PASS Chinese privacy copy and unavailable diagnostics without blocking UI');
+    if (runsRecoveryCase('sleep-modes')) {
+        await navigate('plots', '.app-main', 'Synthetic sleep chart');
+        await waitFor('loaded sleep preference', () => document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
+        assert.equal(await evaluate(() => document.querySelector('.sleep-average-chart')?.dataset.mode), 'segments');
+        await evaluate(() => document.querySelector('.sleep-average-chart canvas').scrollIntoView({ block: 'center' }));
+        const sleepPoint = await evaluate(() => {
+            const rect = document.querySelector('.sleep-average-chart canvas').getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        });
+        await window.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseWheel', ...sleepPoint, deltaX: 0, deltaY: -160 });
+        await delay(350);
+        let savedSleepZoom = null;
+        for (const mode of ['total', 'monthly', 'rolling', 'segments']) {
+            await click(`button[data-sleep-mode="${mode}"]`);
+            await waitFor(`saved sleep mode ${mode}`, mode => document.querySelector('.sleep-average-chart')?.dataset.mode === mode
+                && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4, mode);
+            assert.equal(settings.sleep_chart_mode, mode);
+            const saved = calls.filter(call => call.method === 'PUT' && call.pathname === '/api/v1/settings').at(-1);
+            assert.deepEqual(saved.payload, { sleep_chart_mode: mode }, 'Mode saves must be partial canonical writes.');
+            const zoom = await evaluate(() => Number(document.querySelector('.sleep-average-chart').dataset.zoomStart));
+            if (savedSleepZoom === null) {
+                assert.ok(zoom > 40, `Native chart wheel must change the original 40% zoom, got ${zoom}`);
+                savedSleepZoom = zoom;
+            } else assert.ok(Math.abs(zoom - savedSleepZoom) < 0.01, 'Mode changes must retain the native ECharts zoom.');
+        }
+        sleepPreferenceSaveFails = true;
+        await click('button[data-sleep-mode="rolling"]');
+        await waitFor('failed sleep preference restored', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'segments'
+            && document.querySelector('.sleep-average-status')?.textContent.includes('保存失败'));
+        assert.equal(settings.sleep_chart_mode, 'segments');
+        sleepPreferenceSaveFails = false;
+        await click('button[data-sleep-mode="rolling"]');
+        await waitFor('recovered sleep preference saved', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'rolling'
+            && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
+        await closeWindow(); await createWindow();
+        await waitFor('workspace restored after sleep preference save', () => document.querySelectorAll('.app-nav a').length === 8);
+        await navigate('plots', '.app-main', 'Synthetic sleep chart');
+        await waitFor('sleep preference survives new window', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'rolling'
+            && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
+        await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width: 320, height: 900, deviceScaleFactor: 1, mobile: false });
+        await delay(350);
+        await waitFor('sleep controls fit narrow window', () => {
+            const controls = document.querySelector('.sleep-average-modes');
+            return controls && controls.getBoundingClientRect().width < 320 && controls.scrollWidth <= controls.clientWidth + 1;
+        });
+        await window.webContents.debugger.sendCommand('Emulation.clearDeviceMetricsOverride');
+        await navigate('system-logs', '.app-main', 'Synthetic unified UI smoke is ready');
+        sleepPreferenceReadFails = true;
+        await navigate('plots', '.app-main', 'Synthetic sleep chart');
+        await waitFor('sleep preference read failure is visible', () => document.querySelector('.sleep-average-status')?.textContent.includes('读取失败'));
+        assert.equal(await evaluate(() => document.querySelectorAll('.sleep-average-modes button:disabled').length), 4);
+        sleepPreferenceReadFails = false;
+        await click('.sleep-average-status button');
+        await waitFor('sleep preference read retry recovers saved choice', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'rolling'
+            && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
+        console.log('PASS four sleep overlays, canonical persistence, reopen, narrow layout and failed read/save recovery');
+    }
     console.log('RESULT', JSON.stringify({ productionOrigin: security.origin, primaryPages: 8, rendererErrors: errors.length, expectedLifecycleCancellations: expectedCancellations.length, requests: calls.length, isolated: true }));
 }
 

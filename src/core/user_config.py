@@ -77,6 +77,9 @@ DEFAULT_MODEL_PROFILES = {
     },
 }
 
+SLEEP_CHART_MODES = ("total", "segments", "monthly", "rolling")
+DEFAULT_SLEEP_CHART_MODE = "segments"
+
 DEFAULT_SETTINGS = {
     "version": SETTINGS_VERSION,
     "onboarding_completed": False,
@@ -86,6 +89,7 @@ DEFAULT_SETTINGS = {
     "theme_mode": "dark",
     "action_plan_auto_generate": True,
     "action_plan_check_interval_minutes": 60,
+    "sleep_chart_mode": DEFAULT_SLEEP_CHART_MODE,
     "body_analysis_enabled": False,
     "body_analysis_leg_dir": "",
     "body_analysis_scalp_dir": "",
@@ -465,6 +469,9 @@ def _sanitize_settings(payload: dict | None) -> dict:
         "theme_mode": _coerce_theme_mode(payload),
         "action_plan_auto_generate": _coerce_bool(payload, "action_plan_auto_generate", True),
         "action_plan_check_interval_minutes": interval,
+        "sleep_chart_mode": ((payload or {}).get("sleep_chart_mode")
+                             if (payload or {}).get("sleep_chart_mode") in SLEEP_CHART_MODES
+                             else DEFAULT_SLEEP_CHART_MODE),
         "body_analysis_enabled": _coerce_bool(payload, "body_analysis_enabled", False),
         "body_analysis_leg_dir": _coerce_optional_str(payload, "body_analysis_leg_dir") or "",
         "body_analysis_scalp_dir": _coerce_optional_str(payload, "body_analysis_scalp_dir") or "",
@@ -667,6 +674,8 @@ def load_settings(settings_file: str | Path | None = None) -> dict:
 
 def save_settings(payload: dict | None, settings_file: str | Path | None = None) -> dict:
     with USER_CONFIG_LOCK:
+        if isinstance(payload, dict) and "sleep_chart_mode" in payload and payload["sleep_chart_mode"] not in SLEEP_CHART_MODES:
+            raise ValueError("sleep_chart_mode must be total, segments, monthly, or rolling")
         resolved_settings_file = Path(settings_file) if settings_file else get_settings_file()
         return _write_json_payload(resolved_settings_file, _sanitize_settings(payload))
 

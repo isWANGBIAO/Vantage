@@ -8,12 +8,14 @@ import {
   ToolboxComponent,
   DataZoomComponent,
   RadarComponent,
+  MarkLineComponent,
 } from 'echarts/components';
 import {
   LineChart,
   BarChart,
   ScatterChart,
   RadarChart,
+  CustomChart,
 } from 'echarts/charts';
 import { CanvasRenderer } from 'echarts/renderers';
 
@@ -24,10 +26,12 @@ echarts.use([
   ToolboxComponent,
   DataZoomComponent,
   RadarComponent,
+  MarkLineComponent,
   LineChart,
   BarChart,
   ScatterChart,
   RadarChart,
+  CustomChart,
   CanvasRenderer,
 ]);
 

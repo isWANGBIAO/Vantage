@@ -7,6 +7,7 @@ import { buildChartOption, formatSummaryValue } from '../utils/plotFormatters';
 import { getChartTheme } from '../utils/chartTheme.js';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 import { localizePlotChart, localizePlotWarnings } from '../utils/plotLocalization.js';
+import SleepAverageChart from './SleepAverageChart.jsx';
 
 const SECTION_DEFINITIONS = [
   {
@@ -437,6 +438,7 @@ function ChartCard({
       ref={chartRef}
       id={`plot-${chart?.id}`}
       style={{
+        minWidth: 0,
         display: 'grid',
         gap: 18,
         padding: featured ? 24 : 20,
@@ -568,6 +570,7 @@ function ChartCard({
         <div
           ref={containerRef}
           style={{
+            minWidth: 0,
             borderRadius: 28,
             padding: featured ? 18 : 14,
             minHeight: chartHeight + (featured ? 36 : 28),
@@ -576,7 +579,10 @@ function ChartCard({
           }}
         >
           {isReady ? (
-            <ReactECharts option={buildChartOption(chart, theme, language)} notMerge lazyUpdate style={{ width: '100%', height: chartHeight }} />
+            chart?.id === 'sleep-schedule' ? (
+              <SleepAverageChart baseOption={buildChartOption(chart, theme, language)} language={language}
+                themeTokens={themeTokens} height={chartHeight} />
+            ) : <ReactECharts option={buildChartOption(chart, theme, language)} notMerge lazyUpdate style={{ width: '100%', height: chartHeight }} />
           ) : (
             <div
               style={{

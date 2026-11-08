@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS = {
   theme_mode: 'dark',
   action_plan_auto_generate: true,
   action_plan_check_interval_minutes: 60,
+  sleep_chart_mode: 'segments',
   voice_provider_mode: 'inherit_ai',
   voice_base_url: '',
   voice_api_key: '',
@@ -205,6 +206,8 @@ function sanitizeSettings(payload) {
       && safePayload.action_plan_check_interval_minutes >= 0
       && safePayload.action_plan_check_interval_minutes <= MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
       ? safePayload.action_plan_check_interval_minutes : 60,
+    sleep_chart_mode: ['total', 'segments', 'monthly', 'rolling'].includes(safePayload.sleep_chart_mode)
+      ? safePayload.sleep_chart_mode : DEFAULT_SETTINGS.sleep_chart_mode,
     voice_provider_mode: sanitizeSpecialProviderMode(safePayload.voice_provider_mode, safePayload, 'voice'),
     voice_base_url: normalizeOptionalString(safePayload.voice_base_url) || '',
     voice_api_key: normalizeOptionalString(safePayload.voice_api_key) || '',
@@ -518,6 +521,7 @@ function buildSettingsState({
       launchAtLogin: settings.launch_at_login,
       actionPlanAutoGenerate: settings.action_plan_auto_generate,
       actionPlanCheckIntervalMinutes: settings.action_plan_check_interval_minutes,
+      sleepChartMode: settings.sleep_chart_mode,
       voiceProviderMode: settings.voice_provider_mode,
       voiceBaseUrl: settings.voice_base_url,
       voiceApiKey: maskApiKey(settings.voice_api_key),
@@ -646,6 +650,11 @@ function saveSettingsPayload({
   const currentProviderConfig = loadProviderConfig(runtimePaths);
   const safePayload = payload && typeof payload === 'object' ? payload : {};
 
+  if (Object.prototype.hasOwnProperty.call(safePayload, 'sleepChartMode')
+    && !['total', 'segments', 'monthly', 'rolling'].includes(safePayload.sleepChartMode)) {
+    throw new TypeError('sleepChartMode must be total, segments, monthly, or rolling');
+  }
+
   saveSettings(runtimePaths, {
     ...currentSettings,
     display_language: sanitizeDisplayLanguage(safePayload.displayLanguage),
@@ -674,6 +683,8 @@ function saveSettingsPayload({
       && safePayload.actionPlanCheckIntervalMinutes >= 0
       && safePayload.actionPlanCheckIntervalMinutes <= MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
       ? safePayload.actionPlanCheckIntervalMinutes : currentSettings.action_plan_check_interval_minutes,
+    sleep_chart_mode: Object.prototype.hasOwnProperty.call(safePayload, 'sleepChartMode')
+      ? safePayload.sleepChartMode : currentSettings.sleep_chart_mode,
     voice_provider_mode: Object.prototype.hasOwnProperty.call(safePayload, 'voiceProviderMode')
       ? (safePayload.voiceProviderMode === 'custom' ? 'custom' : 'inherit_ai')
       : currentSettings.voice_provider_mode,

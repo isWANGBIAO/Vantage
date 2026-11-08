@@ -72,3 +72,35 @@ test('body-analysis settings round-trip through the shared JSON settings API', a
   assert.equal(result.settings.bodyAnalysisEnabled, true);
   assert.equal(result.settings.bodyAnalysisLegDir, 'leg-directory');
 });
+
+test('sleep chart modes round-trip with explicit partial updates and old-server defaults', async () => {
+  let settings = {};
+  const calls = [];
+  const platform = nativePlatform(async (method, _path, payload) => {
+    if (method === 'PUT') {
+      calls.push(payload);
+      settings = { ...settings, ...payload };
+    }
+    return { settings };
+  });
+  assert.equal((await loadSettingsState(platform)).settings.sleepChartMode, 'segments');
+  for (const mode of ['total', 'segments', 'monthly', 'rolling']) {
+    assert.equal((await saveSettingsState({ sleepChartMode: mode }, platform)).settings.sleepChartMode, mode);
+    assert.deepEqual(calls.at(-1), { sleep_chart_mode: mode });
+  }
+  // The general settings form does not edit this preference. Its stale save
+  // must omit the field, preserving changes made from the chart meanwhile.
+  await saveSettingsState({ theme: 'light', displayLanguage: 'en-US' }, platform);
+  assert.deepEqual(calls.at(-1), { theme: 'light', display_language: 'en-US' });
+  assert.equal((await loadSettingsState(platform)).settings.sleepChartMode, 'rolling');
+});
+
+test('invalid sleep mode submissions are sent to shared backend validation without coercion', async () => {
+  let submitted;
+  const platform = nativePlatform(async (_method, _path, payload) => {
+    submitted = payload;
+    throw new Error('sleep_chart_mode rejected');
+  });
+  await assert.rejects(saveSettingsState({ sleepChartMode: 'weekly' }, platform), /rejected/);
+  assert.deepEqual(submitted, { sleep_chart_mode: 'weekly' });
+});

@@ -39,6 +39,28 @@ test('Action Plan interval persists zero and custom values across partial saves'
   }
 });
 
+test('sleep chart preference persists and unrelated old-dialog saves do not replace it', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-sleep-mode-'));
+  const runtimePaths = Object.fromEntries(['config', 'history', 'log', 'plot', 'cache', 'runtime', 'migration', 'data'].map(key => [`${key}Dir`, path.join(root, key)]));
+  try {
+    assert.equal(loadSettings(runtimePaths).sleep_chart_mode, 'segments');
+    for (const mode of ['total', 'segments', 'monthly', 'rolling']) {
+      const state = saveSettingsPayload({ runtimePaths, payload: { sleepChartMode: mode } });
+      assert.equal(state.settings.sleepChartMode, mode);
+      saveSettingsPayload({ runtimePaths, payload: { theme: 'light' } });
+      assert.equal(loadSettings(runtimePaths).sleep_chart_mode, mode);
+    }
+    const settingsFile = path.join(runtimePaths.configDir, 'settings.json');
+    const before = readFileSync(settingsFile, 'utf8');
+    for (const invalid of ['weekly', null, false, 0, [], {}]) {
+      assert.throws(() => saveSettingsPayload({ runtimePaths, payload: { sleepChartMode: invalid } }), /sleepChartMode/);
+      assert.equal(readFileSync(settingsFile, 'utf8'), before);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('sanitizeProviderConfig removes deprecated provider models', () => {
   const removedName = ['gemi', 'ni'].join('');
   const sanitized = sanitizeProviderConfig({
@@ -296,6 +318,7 @@ test('saveSettingsPayload persists general settings and provider config', () => 
     theme_mode: 'auto',
     action_plan_auto_generate: false,
     action_plan_check_interval_minutes: 60,
+    sleep_chart_mode: 'segments',
     voice_provider_mode: 'custom',
     voice_base_url: 'https://voice.example.invalid/v1',
     voice_api_key: 'sk-voice-secret',
@@ -670,6 +693,7 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
     theme_mode: 'dark',
     action_plan_auto_generate: true,
     action_plan_check_interval_minutes: 60,
+    sleep_chart_mode: 'segments',
     voice_provider_mode: 'inherit_ai',
     voice_base_url: '',
     voice_api_key: '',
@@ -765,6 +789,7 @@ test('saveOnboardingCompletion preserves every formal setting while migrating fu
     theme_mode: 'auto',
     action_plan_auto_generate: false,
     action_plan_check_interval_minutes: 60,
+    sleep_chart_mode: 'segments',
     voice_provider_mode: 'custom',
     voice_base_url: 'https://voice.example.invalid/v1',
     voice_api_key: 'sk-voice',

@@ -58,6 +58,7 @@ _AUTOMATION_SETTINGS_FIELDS = frozenset({
     "launch_at_login",
     "action_plan_auto_generate",
     "action_plan_check_interval_minutes",
+    "sleep_chart_mode",
     "body_analysis_enabled",
     *BODY_ANALYSIS_DIRECTORY_FIELDS,
     "face_analysis_method",
