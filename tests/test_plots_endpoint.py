@@ -8,6 +8,28 @@ from src.services import plot_dashboard
 
 
 class PlotRefreshEndpointTests(unittest.TestCase):
+    def test_sleep_schedule_metadata_survives_cache_without_shared_mutation(self):
+        payload = {
+            "charts": [{"id": "sleep-schedule", "sleep_schedule": {
+                "version": 1, "latest_date": "2026-01-05",
+                "daily": [{"date": "2026-01-05", "bedtime_hour": 25.0, "wake_hour": 33.0}],
+                "weeks": [{"start": "2026-01-05", "end": "2026-01-05", "record_count": 1,
+                           "bedtime_hour": None, "wake_hour": None, "partial": True}],
+                "duplicate_day_count": 0,
+            }}],
+            "count": 1,
+        }
+        with (
+            patch.object(_backend_plots, "_get_plot_dashboard_cache_key", return_value=(("synthetic", 1, 1),)),
+            patch.object(plot_dashboard, "build_plot_dashboard_data", return_value=payload) as build,
+        ):
+            first = asyncio.run(_backend_plots.get_plot_dashboard_data())
+            first["charts"][0]["sleep_schedule"]["weeks"][0]["bedtime_hour"] = 99
+            second = asyncio.run(_backend_plots.get_plot_dashboard_data())
+        self.assertIsNone(second["charts"][0]["sleep_schedule"]["weeks"][0]["bedtime_hour"])
+        self.assertEqual(second["charts"][0]["sleep_schedule"]["daily"][0]["bedtime_hour"], 25)
+        build.assert_called_once()
+
     def setUp(self):
         if hasattr(_backend_plots, "_clear_plot_dashboard_cache"):
             _backend_plots._clear_plot_dashboard_cache()

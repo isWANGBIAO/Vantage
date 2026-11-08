@@ -7,6 +7,8 @@ import { buildChartOption, formatSummaryValue } from '../utils/plotFormatters';
 import { getChartTheme } from '../utils/chartTheme.js';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 import { localizePlotChart, localizePlotWarnings } from '../utils/plotLocalization.js';
+import SleepScheduleChart from './SleepScheduleChart.jsx';
+import { isSleepSchedulePayload } from '../utils/sleepSchedule.js';
 
 const SECTION_DEFINITIONS = [
   {
@@ -416,7 +418,18 @@ function ChartInlineWarnings({ warnings, themeTokens, t }) {
   );
 }
 
-function ChartCard({
+function ChartCard(props) {
+  const { chart, chartRef, theme, language, chartWarnings = [], themeTokens, t } = props;
+  if (chart?.id === 'sleep-schedule' && isSleepSchedulePayload(chart.sleep_schedule)) {
+    return (
+      <SleepScheduleChart chart={chart} chartRef={chartRef} theme={theme} language={language}
+        warningContent={chartWarnings.length ? <ChartInlineWarnings warnings={chartWarnings} themeTokens={themeTokens} t={t} /> : null} />
+    );
+  }
+  return <LegacyChartCard {...props} />;
+}
+
+function LegacyChartCard({
   chart,
   chartRef,
   featured = false,

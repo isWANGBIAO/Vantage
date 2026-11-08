@@ -84,6 +84,41 @@ const chart = (id, title) => ({
         series: [{ name: 'Synthetic sample', type: 'line', data: [1, 2] }],
     },
 });
+
+function weeklySleepChart() {
+    // Pure synthetic observations, including an empty week and an unfinished one.
+    const day = 86400000;
+    const first = Date.UTC(2026, 0, 5);
+    const median = values => {
+        const sorted = [...values].sort((a, b) => a - b);
+        return sorted.length ? (sorted[Math.floor((sorted.length - 1) / 2)] + sorted[Math.ceil((sorted.length - 1) / 2)]) / 2 : null;
+    };
+    const daily = Array.from({ length: 110 }, (_, index) => {
+        const week = Math.floor(index / 7);
+        const missing = week === 8;
+        const jitter = ((index % 3) - 1) * 0.1;
+        return {
+            date: new Date(first + index * day).toISOString().slice(0, 10),
+            bedtime_hour: missing ? null : 25 + (week % 4) * 0.4 + jitter,
+            wake_hour: missing ? null : 32.5 + (week % 3) * 0.5 + jitter,
+        };
+    });
+    const weeks = Array.from({ length: 16 }, (_, index) => {
+        const observations = daily.slice(index * 7, index * 7 + 7);
+        const valid = observations.filter(item => item.bedtime_hour !== null);
+        return {
+            start: observations[0].date,
+            end: observations.at(-1).date,
+            record_count: valid.length,
+            bedtime_hour: valid.length >= 4 ? median(valid.map(item => item.bedtime_hour)) : null,
+            wake_hour: valid.length >= 4 ? median(valid.map(item => item.wake_hour)) : null,
+            partial: observations.length < 7,
+        };
+    });
+    return { ...chart('sleep-schedule', 'Synthetic sleep chart'), sleep_schedule: {
+        version: 1, latest_date: daily.at(-1).date, daily, weeks, duplicate_day_count: 0,
+    } };
+}
 const readFixtures = {
     '/api/v1/action-plan/today': {
         exists: true, date: '2026-01-01',
@@ -741,6 +776,51 @@ async function exerciseUi() {
     }
     await navigate('plots', '.app-main', 'Synthetic sleep chart');
     await waitFor('production chart rendering', () => [...document.querySelectorAll('.app-main canvas')].some(canvas => canvas.getClientRects().length && canvas.width > 0));
+    readFixtures['/api/v1/plots/data'].charts[0] = weeklySleepChart();
+    await click('.app-main button', 'Refresh charts');
+    await waitFor('weekly sleep component with actual SVG layers', () => {
+        const card = document.querySelector('.sleep-schedule-card');
+        return card?.getClientRects().length > 0
+            && card.querySelectorAll('[data-series="daily"]').length === 2
+            && card.querySelectorAll('[data-series="weekly"]').length > 1
+            && card.querySelectorAll('[data-direction]').length > 1;
+    });
+    assert.equal(await evaluate(() => [...document.querySelectorAll('.sleep-schedule-card path')]
+        .some(node => /NaN|Infinity/.test(node.getAttribute('d') || ''))), false, 'Sleep chart geometry must be finite.');
+    await click('.sleep-schedule-card button', 'Month');
+    await waitFor('month range selected', () => [...document.querySelectorAll('.sleep-schedule-card button')]
+        .some(button => button.textContent.trim() === 'Month' && button.getAttribute('aria-pressed') === 'true'));
+    await click('.sleep-schedule-card button', '6 months');
+    await waitFor('six month range selected', () => [...document.querySelectorAll('.sleep-schedule-card button')]
+        .some(button => button.textContent.trim() === '6 months' && button.getAttribute('aria-pressed') === 'true'));
+    assert.equal(await evaluate(() => document.querySelector('.sleep-schedule-period')?.textContent.toLowerCase().includes('this week')), false,
+        'Old source dates must not be presented as the real current week.');
+    await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', {
+        width: 320, height: 1000, screenWidth: 320, screenHeight: 1000, deviceScaleFactor: 1, mobile: false,
+    });
+    await waitFor('sleep card fits a narrow viewport', () => {
+        const card = document.querySelector('.sleep-schedule-card');
+        const holder = card?.querySelector('.sleep-schedule-chart');
+        const svg = holder?.querySelector('svg');
+        return card?.clientWidth > 0 && card.scrollWidth <= card.clientWidth + 1 && svg
+            && svg.getBoundingClientRect().width <= holder.clientWidth + 1
+            // Wait for ResizeObserver's React geometry update, not only CSS's
+            // immediate max-width scaling of the previous desktop SVG.
+            && Math.abs(Number(svg.getAttribute('width')) - holder.getBoundingClientRect().width) < 1;
+    });
+    assert.deepEqual(await evaluate(() => {
+        const svg = document.querySelector('.sleep-schedule-chart svg');
+        const width = svg.getBoundingClientRect().width;
+        return [...svg.querySelectorAll('text')].flatMap(text => {
+            const bounds = text.getBBox();
+            return bounds.x < -1 || bounds.x + bounds.width > width + 1
+                ? [{ label: text.textContent, x: bounds.x, width: bounds.width, chartWidth: width }] : [];
+        });
+    }), [], 'Narrow chart tick labels must not be clipped.');
+    await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', {
+        width: 1440, height: 1000, screenWidth: 1440, screenHeight: 1000, deviceScaleFactor: 1, mobile: false,
+    });
+    console.log('PASS daily observations, weekly segments, direction arrows, range controls and legacy chart fallback');
     await navigate('system-logs', '.app-main', 'Synthetic unified UI smoke is ready');
     await navigate('body-analysis', '.app-main', 'Body Analysis');
     await waitFor('active dark-circles subpage', () => {
@@ -838,6 +918,30 @@ async function exerciseUi() {
     await waitFor('completed setup stays complete on reopen', () => document.querySelectorAll('.app-nav a').length === 8
         && !document.querySelector('.onboarding-shell') && document.documentElement.dataset.theme === 'light');
     await waitFor('clean startup diagnostics status fetched', () => !document.querySelector('.crash-diagnostics-notice'));
+    await navigate('plots', '.sleep-schedule-card');
+    await waitFor('light sleep chart renders on a fresh metadata-first mount', () =>
+        document.querySelector('.sleep-schedule-card')?.dataset.theme === 'light'
+        && document.querySelectorAll('.sleep-schedule-card [data-series="daily"]').length === 2);
+    readFixtures['/api/v1/plots/data'].charts[0] = chart('sleep-schedule', 'Synthetic legacy sleep chart');
+    await click('.app-main button', 'Refresh charts');
+    await waitFor('metadata-first chart can fall back to real legacy ECharts', () =>
+        !document.querySelector('.sleep-schedule-card')
+        && [...document.querySelectorAll('.app-main canvas')].some(canvas => canvas.getClientRects().length && canvas.width > 0));
+    readFixtures['/api/v1/plots/data'].charts[0] = weeklySleepChart();
+    await click('.app-main button', 'Refresh charts');
+    await waitFor('legacy chart upgrades back to weekly view', () => document.querySelector('.sleep-schedule-card')?.dataset.theme === 'light');
+    const sparse = weeklySleepChart();
+    sparse.sleep_schedule.daily = [sparse.sleep_schedule.daily[0]];
+    sparse.sleep_schedule.latest_date = sparse.sleep_schedule.daily[0].date;
+    sparse.sleep_schedule.weeks = [{ ...sparse.sleep_schedule.weeks[0], end: sparse.sleep_schedule.latest_date,
+        record_count: 1, bedtime_hour: null, wake_hour: null, partial: true }];
+    readFixtures['/api/v1/plots/data'].charts[0] = sparse;
+    await click('.app-main button', 'Refresh charts');
+    await waitFor('single recorded day stays visibly plotted without a synthetic week', () =>
+        document.querySelectorAll('.sleep-schedule-card circle[data-series="daily-point"]').length === 2
+        && document.querySelectorAll('.sleep-schedule-card [data-series="weekly"]').length === 0);
+    readFixtures['/api/v1/plots/data'].charts[0] = weeklySleepChart();
+    console.log('PASS light theme, bidirectional metadata compatibility and isolated daily points');
     await openSettings();
     await waitFor('saved settings survive window reopen', () => document.querySelector('.settings-segmented .is-active')?.textContent === 'Light');
     await checkErrors();
@@ -856,6 +960,10 @@ async function exerciseUi() {
     });
     await click('.settings-save-button');
     await waitFor('Chinese display saved', () => document.querySelector('.settings-header h2')?.textContent === '通用');
+    await navigate('plots', '.sleep-schedule-card', '作息趋势');
+    assert.match(await evaluate(() => document.querySelector('.sleep-schedule-period')?.textContent), /最新记录周/);
+    assert.equal(await evaluate(() => document.querySelector('.sleep-schedule-card')?.dataset.theme), 'light');
+    await openSettings();
     await click('.settings-sidebar button', '关于');
     await waitFor('Chinese local-only privacy copy', () => document.querySelector('.settings-diagnostics')?.textContent.includes('不会自动上传'));
     diagnosticsAvailable = false;

@@ -8,6 +8,16 @@ test('Plots promotes sleep schedule into the health lead charts', () => {
   assert.ok(plotsSource.includes("leadIds: ['sleep-schedule', 'weight-bodyfat', 'time-allocation']"));
 });
 
+test('Plots uses the weekly sleep card only when versioned metadata is available', () => {
+  assert.ok(plotsSource.includes("import SleepScheduleChart from './SleepScheduleChart.jsx'"));
+  assert.ok(plotsSource.includes("chart?.id === 'sleep-schedule' && isSleepSchedulePayload(chart.sleep_schedule)"));
+  assert.ok(plotsSource.includes('<SleepScheduleChart chart={chart} chartRef={chartRef} theme={theme} language={language}'));
+  assert.ok(plotsSource.includes('<ReactECharts option={buildChartOption(chart, theme, language)}'));
+  assert.ok(plotsSource.includes('return <LegacyChartCard {...props} />'));
+  const router = plotsSource.slice(plotsSource.indexOf('function ChartCard(props)'), plotsSource.indexOf('function LegacyChartCard('));
+  assert.ok(!router.includes('useChartMountReady'));
+});
+
 test('Plots routes visible shell copy through the display language layer', () => {
   assert.ok(plotsSource.includes("useDisplayLanguage()"));
   assert.ok(plotsSource.includes("t('plots.hero.title')"));

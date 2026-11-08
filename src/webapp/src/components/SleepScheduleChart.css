@@ -1,0 +1,46 @@
+.sleep-schedule-card{--sleep-page:#000;--sleep-surface:#1c1c1e;--sleep-text:#f5f5f7;--sleep-muted:#aaaab0;--sleep-grid:#343438;--sleep-segments:#2c2c2e;--sleep-selected:#636366;--sleep-bedtime:#a5a3ff;--sleep-wake:#66d4e7;display:grid;gap:18px;min-width:0;padding:24px;border-radius:26px;background:var(--sleep-page);color:var(--sleep-text);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI','Microsoft YaHei',sans-serif}
+.sleep-schedule-card[data-theme=light]{--sleep-page:#f2f2f7;--sleep-surface:#fff;--sleep-text:#1c1c1e;--sleep-muted:#6c6c70;--sleep-grid:#e8e8ed;--sleep-segments:#e5e5ea;--sleep-selected:#fff;--sleep-bedtime:#5e5ce6;--sleep-wake:#279eb3}
+.sleep-schedule-card *{box-sizing:border-box}
+.sleep-schedule-heading>span{font-size:12px;color:var(--sleep-muted)}
+.sleep-schedule-heading h3{font-size:28px;font-weight:700;letter-spacing:-.6px;line-height:1.2;margin:6px 0 8px}
+.sleep-schedule-heading p{font-size:13px;color:var(--sleep-muted);margin:0;line-height:1.5}
+.sleep-schedule-ranges{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:3px;gap:3px;background:var(--sleep-segments);border-radius:10px}
+.sleep-schedule-ranges button{min-width:0;min-height:34px;padding:7px 8px;border:0;border-radius:8px;background:transparent;background-image:none;box-shadow:none;color:var(--sleep-text);font-family:inherit;font-size:13px;font-weight:600;white-space:normal;transform:none}
+.sleep-schedule-ranges button[aria-pressed=true]{background:var(--sleep-selected);box-shadow:0 2px 5px #00000012}
+.sleep-schedule-ranges button:hover{background:var(--sleep-selected);transform:none}
+.sleep-schedule-surface{min-width:0;background:var(--sleep-surface);padding:21px;border-radius:20px}
+.sleep-schedule-period{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px;font-size:14px}
+.sleep-schedule-period strong{font-size:14px;font-weight:600}
+.sleep-schedule-period>span{font-size:12px;color:var(--sleep-muted)}
+.sleep-schedule-times{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:20px}
+.sleep-schedule-times>div{min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.sleep-schedule-times span{display:flex;align-items:center;gap:6px;color:var(--sleep-muted);font-size:12px}
+.sleep-schedule-times i{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}
+.sleep-bedtime-dot{background:var(--sleep-bedtime)}
+.sleep-wake-dot{background:var(--sleep-wake)}
+.sleep-schedule-times strong{font-size:36px;line-height:1.15;letter-spacing:-1px;font-weight:650;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.sleep-schedule-times small{font-size:12px;font-weight:400;line-height:1.5;color:var(--sleep-muted)}
+.sleep-schedule-baseline{font-size:12px;line-height:1.5;color:var(--sleep-muted);margin-bottom:14px;overflow-wrap:anywhere}
+.sleep-schedule-legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--sleep-muted);margin-bottom:8px}
+.sleep-schedule-legend>span{display:flex;align-items:center;gap:7px}
+.sleep-schedule-legend i{display:inline-block;width:23px;background:var(--sleep-muted)}
+.sleep-schedule-daily-key{height:1px;opacity:.45}
+.sleep-schedule-weekly-key{height:3px}
+.sleep-schedule-chart{width:100%;min-width:0;min-height:305px}
+.sleep-schedule-chart svg{display:block;max-width:100%;font-family:inherit}
+.sleep-schedule-axis{fill:var(--sleep-muted);font-size:11px;font-weight:400}
+.sleep-schedule-grid{stroke:var(--sleep-grid);stroke-width:1}
+.sleep-schedule-shade{fill:var(--sleep-muted);opacity:.065;pointer-events:none}
+.sleep-schedule-daily,.sleep-schedule-weekly,.sleep-schedule-arrow{fill:none;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.sleep-series-bedtime{stroke:var(--sleep-bedtime)}
+.sleep-series-wake{stroke:var(--sleep-wake)}
+.sleep-schedule-daily{stroke-width:1.25;opacity:.23}
+.sleep-schedule-weekly{stroke-width:3}
+.sleep-schedule-arrow{stroke-width:2.4}
+.sleep-schedule-daily-point{fill:var(--sleep-surface);stroke-width:1.8;pointer-events:none}
+.sleep-schedule-announcement{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.sleep-schedule-detail{min-height:43px;padding:12px 0;font-size:12px;line-height:1.5;color:var(--sleep-text);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.sleep-schedule-guide{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid var(--sleep-grid);padding-top:14px;font-size:12px;color:var(--sleep-muted)}
+.sleep-schedule-card footer{display:grid;gap:5px;font-size:11px;line-height:1.6;color:var(--sleep-muted);padding:0 4px}
+.sleep-schedule-unavailable{display:grid;place-items:center;min-height:305px;padding:20px;color:var(--sleep-muted);text-align:center;font-size:13px;line-height:1.6}
+@media(max-width:500px){.sleep-schedule-card{padding:16px;gap:15px;border-radius:20px}.sleep-schedule-surface{padding:17px 13px}.sleep-schedule-heading h3{font-size:25px}.sleep-schedule-times{gap:12px}.sleep-schedule-times strong{font-size:28px}.sleep-schedule-ranges button{font-size:12px;padding:7px 4px}.sleep-schedule-detail{min-height:58px}}
