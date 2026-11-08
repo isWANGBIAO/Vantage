@@ -137,7 +137,6 @@ PYINSTALLER_EXCLUDES = (
 
 # Keep MCP imports explicit; collecting mcp.cli pulls an unused optional Typer dependency.
 PYINSTALLER_HIDDEN_IMPORTS = (
-    "src.services.sleep_schedule",
     "src.services.capture_storage_forecast",
     "src.utils.adaptive_prompt_cache",
     "src.utils.adaptive_prompt_layout",

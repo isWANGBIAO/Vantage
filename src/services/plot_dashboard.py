@@ -3,7 +3,6 @@ import pandas as pd
 import re
 
 from src.scripts import plot as plot_module
-from src.services.sleep_schedule import build_sleep_schedule_payload
 
 SLEEP_SCHEDULE_WRAP_HOUR = 12
 SLEEP_SCHEDULE_SUMMARY_POINTS = 45
@@ -610,7 +609,7 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
     if '起床时间' not in data_frame.columns:
         raise ValueError('缺少起床时间列')
 
-    source = data_frame[['日期', '起床时间']].dropna(subset=['日期', '起床时间']).copy().sort_values('日期', kind='stable')
+    source = data_frame[['日期', '起床时间']].dropna(subset=['日期', '起床时间']).copy().sort_values('日期')
     parsed_rows = []
     for _, row in source.iterrows():
         parsed = _parse_primary_sleep_session(row.get('起床时间'))
@@ -626,7 +625,7 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
     if not parsed_rows:
         raise ValueError('未找到可展示的主睡眠作息记录')
 
-    parsed_frame = pd.DataFrame(parsed_rows).sort_values('日期', kind='stable')
+    parsed_frame = pd.DataFrame(parsed_rows).sort_values('日期')
     dates = parsed_frame['日期'].tolist()
     bedtime_wrapped = parsed_frame['bedtime_wrapped_hour'].to_numpy(dtype=float)
     wake_wrapped = parsed_frame['wake_wrapped_hour'].to_numpy(dtype=float)
@@ -679,7 +678,7 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
         ],
     }
 
-    chart = _build_chart(
+    return _build_chart(
         'sleep-schedule',
         '作息趋势',
         '把主睡眠的入睡时间和起床时间放到同一条时间轴上，并按起床当天归属，直接看作息是提前还是后移。',
@@ -694,15 +693,6 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
             {'label': '样本天数', 'value': str(len(parsed_frame))},
         ],
     )
-    chart['sleep_schedule'] = build_sleep_schedule_payload([
-        {
-            'date': _to_chart_date(row['日期']),
-            'bedtime_hour': row['bedtime_wrapped_hour'],
-            'wake_hour': row['wake_wrapped_hour'],
-        }
-        for row in parsed_rows
-    ])
-    return chart
 
 
 def _build_time_allocation_dashboard_chart(trend):
