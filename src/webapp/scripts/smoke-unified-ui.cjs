@@ -953,7 +953,9 @@ async function exerciseUi() {
             && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
         const beforeAdaptiveZoom = calls.filter(call => call.method === 'PUT' && call.pathname === '/api/v1/settings').length;
         const zoomUntil = async (expected, deltaY) => {
-            for (let attempt = 0; attempt < 18; attempt++) {
+            // ECharts may scale each wheel tick by only 1.1. Expanding a weekly
+            // window beyond three years requires more ticks than a month view.
+            for (let attempt = 0; attempt < 40; attempt++) {
                 if (await evaluate(expected => document.querySelector('.sleep-average-chart')?.dataset.granularity === expected, expected)) return;
                 await evaluate(() => document.querySelector('.sleep-average-chart canvas').scrollIntoView({ block: 'center' }));
                 const point = await evaluate(() => {
@@ -963,16 +965,32 @@ async function exerciseUi() {
                 await window.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseWheel', ...point, deltaX: 0, deltaY });
                 await delay(220);
             }
-            throw new Error(`Native zoom did not reach ${expected} grouping`);
+            const actual = await evaluate(() => {
+                const chart = document.querySelector('.sleep-average-chart');
+                return { unit: chart?.dataset.granularity, start: chart?.dataset.zoomStart, end: chart?.dataset.zoomEnd };
+            });
+            throw new Error(`Native zoom did not reach ${expected} grouping: ${JSON.stringify(actual)}`);
         };
         await zoomUntil('quarter', -160);
         await waitFor('quarter label matches actual grouping', () => document.querySelector('.sleep-average-granularity')?.textContent.includes('按季度统计'));
         await zoomUntil('month', -160);
         await waitFor('month label matches actual grouping', () => document.querySelector('.sleep-average-granularity')?.textContent.includes('按月统计'));
+        await zoomUntil('week', -160);
+        await waitFor('week label matches actual grouping', () => document.querySelector('.sleep-average-granularity')?.textContent.includes('按周统计'));
+        const weeklyZoom = await evaluate(() => Number(document.querySelector('.sleep-average-chart').dataset.zoomStart));
+        await click('button[data-sleep-mode="monthly"]');
+        await waitFor('mean-line mode keeps weekly grouping', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'monthly'
+            && document.querySelector('.sleep-average-chart')?.dataset.granularity === 'week'
+            && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
+        assert.ok(Math.abs(await evaluate(() => Number(document.querySelector('.sleep-average-chart').dataset.zoomStart)) - weeklyZoom) < 0.01);
+        await click('button[data-sleep-mode="segments"]');
+        await waitFor('weekly segments restored', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'segments'
+            && document.querySelector('.sleep-average-chart')?.dataset.granularity === 'week'
+            && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
         await zoomUntil('year', 160);
         await waitFor('zooming out restores annual groups', () => document.querySelector('.sleep-average-granularity')?.textContent.includes('按年统计'));
-        assert.equal(calls.filter(call => call.method === 'PUT' && call.pathname === '/api/v1/settings').length, beforeAdaptiveZoom,
-            'Derived grouping changes must not write user settings.');
+        assert.equal(calls.filter(call => call.method === 'PUT' && call.pathname === '/api/v1/settings').length, beforeAdaptiveZoom + 2,
+            'Only the two explicit weekly mode changes may write settings; derived grouping must not.');
         const adaptiveZoom = await evaluate(() => Number(document.querySelector('.sleep-average-chart').dataset.zoomStart));
         await click('button[data-sleep-mode="monthly"]');
         await waitFor('mean-line mode keeps annual grouping', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'monthly'
@@ -984,7 +1002,7 @@ async function exerciseUi() {
             && !document.querySelector('.sleep-average-granularity')
             && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
         await checkErrors();
-        console.log('PASS native zoom adapts year/quarter/month groups, preserves view across modes and never persists derived grouping');
+        console.log('PASS native zoom adapts year/quarter/month/week groups, preserves weekly view across modes and never persists derived grouping');
     }
     console.log('RESULT', JSON.stringify({ productionOrigin: security.origin, primaryPages: 8, rendererErrors: errors.length, expectedLifecycleCancellations: expectedCancellations.length, requests: calls.length, isolated: true }));
 }

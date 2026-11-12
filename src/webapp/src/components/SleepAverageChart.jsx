@@ -11,15 +11,15 @@ const COPY = {
     label: '显示方式', total: '历史平均', segments: '分段平均', monthly: '平均折线', rolling: '30日趋势',
     loading: '正在读取图表偏好…', saving: '正在保存…', retry: '重试读取',
     readError: '图表偏好读取失败，尚未更改设置。', saveError: '保存失败，已恢复上次选择。',
-    note: '每日记录一直保留；虚线为全部历史平均。分段均值按完整日历月／季度／年计算，不随平移截断；记录不足留空，未完整统计段使用虚线。30日趋势始终固定30天。',
-    granularity: { month: '当前按月统计 · 至少7天', quarter: '当前按季度统计 · 至少21天', year: '当前按年统计 · 至少84天' },
+    note: '每日记录一直保留；虚线为全部历史平均。分段均值按完整周／月／季度／年计算，周一至周日为一周，不随平移截断；记录不足留空，未完整统计段使用虚线。30日趋势始终固定30天。',
+    granularity: { week: '当前按周统计 · 至少4天', month: '当前按月统计 · 至少7天', quarter: '当前按季度统计 · 至少21天', year: '当前按年统计 · 至少84天' },
   },
   en: {
     label: 'Display mode', total: 'Historical mean', segments: 'Grouped means', monthly: 'Mean line', rolling: '30-day trend',
     loading: 'Loading chart preference…', saving: 'Saving…', retry: 'Retry loading',
     readError: 'Could not load the chart preference. Settings have not changed.', saveError: 'Save failed. The previous choice was restored.',
-    note: 'Daily records remain visible; dashed references use all history. Grouped means use full calendar periods, not clipped panning windows. Insufficient records stay blank; partial periods are dashed. The 30-day trend always keeps its fixed 30-day window.',
-    granularity: { month: 'Grouped by month · 7 days minimum', quarter: 'Grouped by quarter · 21 days minimum', year: 'Grouped by year · 84 days minimum' },
+    note: 'Daily records remain visible; dashed references use all history. Grouped means use full weeks/months/quarters/years, with Monday–Sunday weeks, not clipped panning windows. Insufficient records stay blank; partial periods are dashed. The 30-day trend always keeps its fixed 30-day window.',
+    granularity: { week: 'Grouped by week · 4 days minimum', month: 'Grouped by month · 7 days minimum', quarter: 'Grouped by quarter · 21 days minimum', year: 'Grouped by year · 84 days minimum' },
   },
 };
 

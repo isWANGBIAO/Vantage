@@ -362,7 +362,8 @@ test('omitted and invalid zooms use full-source span; basedata defaults are only
   }
   assert.equal(selectSleepAverageGranularity({ series: [] }), 'month');
   assert.equal(selectSleepAverageGranularity(fixture([['1800-01-01', 25, 33], ['2030-01-01', 25, 33]])), 'month');
-  assert.equal(normalizeSleepAverageGranularity('week'), 'month');
+  assert.equal(normalizeSleepAverageGranularity('week'), 'week');
+  assert.equal(normalizeSleepAverageGranularity('day'), 'month');
 });
 
 test('quarter and annual means use direct distinct-day weighting, not means of months', () => {
@@ -396,7 +397,7 @@ test('calendar quarter/year boundaries, sample thresholds and completely missing
 
 test('panning and zooming within the chosen unit cannot clip aggregate denominators or values', () => {
   const base = fixture(days('2024-01-01', 1000, (index) => 24 + index % 5));
-  for (const granularity of ['month', 'quarter', 'year']) {
+  for (const granularity of ['week', 'month', 'quarter', 'year']) {
     const before = buildSleepAverageStatistics(base, granularity);
     const zoomedBase = { ...base, dataZoom: [{ startValue: '2025-02-15', endValue: '2025-05-15' }] };
     const after = buildSleepAverageStatistics(zoomedBase, granularity);
@@ -426,17 +427,18 @@ test('adaptive aggregate tooltips name the current unit with counts and actual p
   assert.match(english, /through 2026-04-14/);
 });
 
-test('adaptive thresholds and quarter/year statistics are invariant across Shanghai and DST timezones', () => {
+test('adaptive thresholds and week/quarter/year statistics are invariant across Shanghai and DST timezones', () => {
   const originalTimezone = process.env.TZ;
   try {
     const base = fixture(days('2023-03-01', 1462, (index) => 24 + index % 5));
-    const expected = ['quarter', 'year'].map((granularity) => buildSleepAverageStatistics(base, granularity).series[0].periods);
+    const expected = ['week', 'quarter', 'year'].map((granularity) => buildSleepAverageStatistics(base, granularity).series[0].periods);
     for (const timezone of ['Asia/Shanghai', 'America/New_York', 'Europe/Berlin', 'UTC']) {
       process.env.TZ = timezone;
+      assert.equal(selectSleepAverageGranularity(base, { startValue: '2023-03-01', endValue: '2023-06-01' }), 'week');
       assert.equal(selectSleepAverageGranularity(base, { startValue: '2023-03-01', endValue: '2024-03-01' }), 'month');
       assert.equal(selectSleepAverageGranularity(base, { startValue: '2023-03-01', endValue: '2026-03-01' }), 'quarter');
       assert.equal(selectSleepAverageGranularity(base, { startValue: '2023-03-01', endValue: '2026-03-02' }), 'year');
-      for (const [index, granularity] of ['quarter', 'year'].entries()) {
+      for (const [index, granularity] of ['week', 'quarter', 'year'].entries()) {
         assert.deepEqual(buildSleepAverageStatistics(base, granularity).series[0].periods, expected[index]);
       }
     }
@@ -451,7 +453,7 @@ test('actual ECharts SSR accepts all unit/mode combinations with stable historic
   const total = buildSleepAverageStatistics(base).series[0].total;
   const chart = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 900, height: 440 });
   try {
-    for (const granularity of ['month', 'quarter', 'year']) {
+    for (const granularity of ['week', 'month', 'quarter', 'year']) {
       for (const mode of ['total', 'segments', 'monthly', 'rolling']) {
         chart.setOption({ ...buildSleepAverageOption(base, mode, 'zh-CN', granularity), animation: false }, { notMerge: true });
         const svg = chart.renderToSVGString();
@@ -465,8 +467,9 @@ test('actual ECharts SSR accepts all unit/mode combinations with stable historic
   } finally { chart.dispose(); }
 });
 
-test('actual ECharts quarter/year aggregate lines preserve missing bins and separate dashed boundary edges', () => {
+test('actual ECharts week/quarter/year aggregate lines preserve missing bins and separate dashed boundary edges', () => {
   const datasets = [
+    ['week', [...days('2025-12-31', 11), ...days('2026-01-19', 25)]],
     ['quarter', [...days('2025-01-05', 86), ...days('2025-07-01', 100)]],
     ['year', [...days('2023-01-05', 361), ...days('2025-01-01', 365), ...days('2026-01-01', 100)]],
   ];
@@ -486,4 +489,61 @@ test('actual ECharts quarter/year aggregate lines preserve missing bins and sepa
       }
     } finally { chart.dispose(); }
   }
+});
+
+test('weekly adaptive range uses three calendar months with clamped month ends and inclusive boundaries', () => {
+  const base = fixture([['2020-01-01', 25, 33], ['2030-12-31', 25, 33]]);
+  const choose = (startValue, endValue) => selectSleepAverageGranularity(base, { startValue, endValue });
+  for (const [start, end] of [['2026-01-31', '2026-04-30'], ['2023-11-30', '2024-02-29'],
+    ['2024-11-30', '2025-02-28'], ['2025-12-31', '2026-03-31']]) {
+    assert.equal(choose(start, end), 'week');
+    assert.equal(choose(start, date(Date.parse(`${end}T00:00:00Z`) + DAY)), 'month');
+    assert.equal(choose(end, start), 'week');
+  }
+  assert.equal(choose('2026-03-29', '2026-03-29'), 'week');
+  const first = Date.parse('2020-01-01T00:00:00Z'), last = Date.parse('2030-12-31T00:00:00Z');
+  const end = (Date.parse('2020-04-01T00:00:00Z') - first) / (last - first) * 100;
+  assert.equal(selectSleepAverageGranularity(base, { start: 0, end }), 'week');
+  assert.equal(selectSleepAverageGranularity(fixture(days('2026-01-01', 30))), 'week');
+});
+
+test('weekly bins run Monday to Sunday across calendar years and preserve empty and partial weeks', () => {
+  const rows = [...days('2025-12-31', 5), ...days('2026-01-12', 3), ...days('2026-01-19', 4)];
+  const stats = buildSleepAverageStatistics(fixture(rows), 'week');
+  assert.equal(stats.minimumRecords, 4);
+  assert.deepEqual(stats.series[0].periods.map(({ key, count, value, partial }) => [key, count, value, partial]), [
+    ['2025-12-29', 5, 25, true], ['2026-01-05', 0, null, false],
+    ['2026-01-12', 3, null, false], ['2026-01-19', 4, 25, true],
+  ]);
+  assert.equal(stats.series[0].periods[0].start, Date.parse('2025-12-31T00:00:00Z'));
+  assert.equal(stats.series[0].periods[0].end, Date.parse('2026-01-04T00:00:00Z'));
+  assert.equal(stats.series[0].periods[1].end, Date.parse('2026-01-11T00:00:00Z'));
+  assert.equal(stats.series[0].periods.at(-1).end, Date.parse('2026-01-22T00:00:00Z'));
+  const complete = buildSleepAverageStatistics(fixture(days('2025-12-29', 7)), 'week');
+  assert.deepEqual(complete.series[0].periods.map(({ key, count, partial }) => [key, count, partial]), [['2025-12-29', 7, false]]);
+});
+
+test('weekly means weight distinct valid dates directly and duplicates cannot manufacture four sample days', () => {
+  const rows = [...days('2026-01-05', 3, 24), ...days('2026-01-12', 4, 24)];
+  rows.push(['2026-01-07', 28, 34], ['2026-01-07', null, null], ['2026-01-07', '29', false]);
+  rows.push(['2026-01-15', 28, 34], ['2026-01-15', false, null]);
+  const stats = buildSleepAverageStatistics(fixture(rows), 'week');
+  assert.equal(stats.series[0].periods[0].count, 3);
+  assert.equal(stats.series[0].periods[0].value, null);
+  assert.equal(stats.series[0].periods[1].count, 4);
+  assert.equal(stats.series[0].periods[1].value, 25);
+  assert.equal(stats.series[0].count, 7);
+});
+
+test('weekly tooltips identify the Monday key, actual cutoff and minimum-sample gaps in both languages', () => {
+  const base = fixture(days('2025-12-31', 11));
+  const chinese = buildSleepAverageOption(base, 'segments', 'zh-CN', 'week').tooltip.formatter([{ axisValue: '2026-01-01' }]);
+  assert.match(chinese, /周平均: 01:00 \(2025-12-29, 5天/);
+  assert.match(chinese, /起始2025-12-31/);
+  assert.match(chinese, /截至2026-01-04/);
+  const english = buildSleepAverageOption(base, 'monthly', 'en-US', 'week').tooltip.formatter([{ axisValue: '2026-01-07' }]);
+  assert.match(english, /Weekly mean: 01:00 \(2026-01-05, 6 days/);
+  assert.match(english, /through 2026-01-10/);
+  const missing = buildSleepAverageOption(fixture(days('2026-01-05', 3)), 'segments', 'en-US', 'week');
+  assert.match(missing.tooltip.formatter([{ axisValue: '2026-01-06' }]), /Weekly mean: No record \(2026-01-05, 3 days/);
 });

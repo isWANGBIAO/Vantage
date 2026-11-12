@@ -2,9 +2,10 @@ const DAY_MS = 86_400_000;
 const MAX_DAYS = 36_600;
 export const SLEEP_AVERAGE_MODES = Object.freeze(['total', 'segments', 'monthly', 'rolling']);
 const PERIOD_MONTHS = Object.freeze({ month: 1, quarter: 3, year: 12 });
+const PERIOD_MINIMUMS = Object.freeze({ week: 4, month: 7, quarter: 21, year: 84 });
 
 export function normalizeSleepAverageGranularity(value) {
-  return Object.hasOwn(PERIOD_MONTHS, value) ? value : 'month';
+  return Object.hasOwn(PERIOD_MINIMUMS, value) ? value : 'month';
 }
 
 export function normalizeSleepAverageMode(value) {
@@ -42,6 +43,7 @@ function observationMap(series) {
 
 function periodStart(timestamp, granularity) {
   const date = new Date(timestamp), months = PERIOD_MONTHS[granularity];
+  if (granularity === 'week') return timestamp - ((date.getUTCDay() + 6) % 7) * DAY_MS;
   date.setUTCDate(1);
   date.setUTCMonth(Math.floor(date.getUTCMonth() / months) * months);
   return +date;
@@ -49,15 +51,18 @@ function periodStart(timestamp, granularity) {
 
 function periodKey(timestamp, granularity) {
   const date = new Date(timestamp), year = dateString(timestamp).slice(0, 4);
+  // A Monday date is unambiguous across month/year boundaries, unlike mixing
+  // calendar years with ISO week numbers.
+  if (granularity === 'week') return dateString(periodStart(timestamp, granularity));
   if (granularity === 'year') return year;
   if (granularity === 'quarter') return `${year}-Q${Math.floor(date.getUTCMonth() / 3) + 1}`;
   return dateString(timestamp).slice(0, 7);
 }
 
-function calendarAnniversary(timestamp, years) {
+function calendarOffsetMonths(timestamp, months) {
   const date = new Date(timestamp), day = date.getUTCDate();
   date.setUTCDate(1);
-  date.setUTCFullYear(date.getUTCFullYear() + years);
+  date.setUTCMonth(date.getUTCMonth() + months);
   const last = new Date(+date);
   last.setUTCMonth(last.getUTCMonth() + 1);
   last.setUTCDate(0);
@@ -105,15 +110,16 @@ export function selectSleepAverageGranularity(baseOption, zoom) {
   };
   const a = boundary('startValue', 'start', sourceStart), b = boundary('endValue', 'end', sourceEnd);
   const start = Math.min(a, b), end = Math.max(a, b);
-  if (end <= calendarAnniversary(start, 1)) return 'month';
-  if (end <= calendarAnniversary(start, 3)) return 'quarter';
+  if (end <= calendarOffsetMonths(start, 3)) return 'week';
+  if (end <= calendarOffsetMonths(start, 12)) return 'month';
+  if (end <= calendarOffsetMonths(start, 36)) return 'quarter';
   return 'year';
 }
 
 /** Statistics use complete source records, never the visible dataZoom window. */
 export function buildSleepAverageStatistics(baseOption, selectedGranularity = 'month') {
   const granularity = normalizeSleepAverageGranularity(selectedGranularity);
-  const monthsPerPeriod = PERIOD_MONTHS[granularity], minimumRecords = 7 * monthsPerPeriod;
+  const monthsPerPeriod = PERIOD_MONTHS[granularity], minimumRecords = PERIOD_MINIMUMS[granularity];
   const originals = baseOption?.series;
   if (!Array.isArray(originals) || originals.length < 2) return null;
   const maps = originals.slice(0, 2).map(observationMap);
@@ -127,7 +133,8 @@ export function buildSleepAverageStatistics(baseOption, selectedGranularity = 'm
   let first = periodStart(start, granularity);
   while (first <= end) {
     const current = new Date(first);
-    current.setUTCMonth(current.getUTCMonth() + monthsPerPeriod);
+    if (granularity === 'week') current.setUTCDate(current.getUTCDate() + 7);
+    else current.setUTCMonth(current.getUTCMonth() + monthsPerPeriod);
     const next = +current;
     periodStarts.push({ start: first, next });
     first = next;
@@ -228,8 +235,8 @@ export function buildSleepAverageOption(baseOption, selectedMode = 'segments', l
       rows.push(`${escapeHtml(names[index])}: ${formatClock(dailyMaps[index].get(date))}`);
       if (mode === 'segments' || mode === 'monthly') {
         const month = series.periods.find((item) => item.key === periodKey(dateTimestamp(date), statistics.granularity));
-        const label = english ? { month: 'Monthly mean', quarter: 'Quarterly mean', year: 'Annual mean' }[statistics.granularity]
-          : { month: '月平均', quarter: '季度平均', year: '年度平均' }[statistics.granularity];
+        const label = english ? { week: 'Weekly mean', month: 'Monthly mean', quarter: 'Quarterly mean', year: 'Annual mean' }[statistics.granularity]
+          : { week: '周平均', month: '月平均', quarter: '季度平均', year: '年度平均' }[statistics.granularity];
         const count = english ? `${month?.count ?? 0} days` : `${month?.count ?? 0}天`;
         const partial = month?.partial ? english ? `, through ${dateString(month.end)}, from ${dateString(month.start)}`
           : `，截至${dateString(month.end)}，起始${dateString(month.start)}` : '';

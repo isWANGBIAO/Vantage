@@ -49,6 +49,9 @@ test('calendar grouping follows native visible bounds without persisting derived
   assert.match(component, /buildSleepAverageOption\(baseOption, mode, language, granularity\)/);
   assert.match(component, /data-granularity=\{granularity\}/);
   assert.match(component, /segments: '分段平均', monthly: '平均折线'/);
+  assert.match(component, /week: '当前按周统计 · 至少4天'/);
+  assert.match(component, /week: 'Grouped by week · 4 days minimum'/);
+  assert.match(component, /周一至周日为一周/);
   assert.match(component, /mode === 'segments' \|\| mode === 'monthly'/);
   assert.ok(!component.includes('sleepChartGranularity'));
 });
