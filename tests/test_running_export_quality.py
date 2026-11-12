@@ -369,4 +369,3 @@ def test_manual_records_keep_the_existing_optional_gait_inference(manual_text, m
     metrics = plot.compute_running_metrics(manual)
 
     assert metrics.iloc[0][metric] == pytest.approx(expected)
-
