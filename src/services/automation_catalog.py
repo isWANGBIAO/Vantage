@@ -13,6 +13,7 @@ from types import MappingProxyType
 from typing import Any, Literal, Mapping
 
 from src.core.user_config import MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES, SLEEP_CHART_MODES
+from src.services.clothing_models import ClothingRecord
 
 
 OutputKind = Literal["json", "text", "stream", "file"]
@@ -292,6 +293,36 @@ _EMPTY = _object_schema()
 
 
 OPERATIONS: tuple[Operation, ...] = (
+    Operation(
+        name="clothing.state.read", description="Read a temporary snapshot of the single clothing workbook, original evidence and image-model availability.",
+        method="GET", path="/api/v1/clothing/state", input_schema=_EMPTY, output_kind="json", sensitive=True,
+    ),
+    Operation(
+        name="clothing.config.update", description="Save the existing clothing workbook path in shared settings; empty restores data-root discovery.",
+        method="PUT", path="/api/v1/clothing/config", output_kind="json", mutation=True, sensitive=True,
+        input_schema=_object_schema({"workbook_path": _string("Existing single-sheet clothing workbook path, or empty.")}, required=("workbook_path",)),
+    ),
+    Operation(
+        name="clothing.extract", description="Send only a user-selected size-chart image to the currently selected AI provider/model without fallback; returns unconfirmed fields, never saves records.",
+        method="POST", path="/api/v1/clothing/extract", output_kind="json", side_effect=True, sensitive=True,
+        input_schema=_object_schema({"image_data_url": {"type": "string", "maxLength": 11_200_000, "writeOnly": True,
+            "description": "PNG/JPEG/WebP Base64 data URL; maximum decoded input 8 MiB. Never use a remote image URL."},
+            "provider_route": _string("Expected selected provider shown by clothing.state.read; a changed selection refuses transmission."),
+            "model": _string("Expected selected model shown by clothing.state.read.")}, required=("image_data_url", "provider_route", "model")),
+    ),
+    Operation(
+        name="clothing.compare", description="Compare a user-reviewed clothing candidate against version-matched workbook evidence locally; preserves unknown measurement and feedback scopes.",
+        method="POST", path="/api/v1/clothing/compare", output_kind="json", sensitive=True,
+        input_schema=_object_schema({"candidate": ClothingRecord.model_json_schema(), "confirmed": {"type": "boolean", "enum": [True]},
+            "revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, required=("candidate", "confirmed", "revision")),
+    ),
+    Operation(
+        name="clothing.records.save", description="Append reviewed records or update only existing trial feedback in the same workbook; rejects busy Excel or changed revisions without overwriting edits.",
+        method="POST", path="/api/v1/clothing/records", output_kind="json", mutation=True, side_effect=True, sensitive=True,
+        input_schema=_object_schema({"records": {"type": "array", "minItems": 1, "maxItems": 40, "items": ClothingRecord.model_json_schema()},
+            "confirmed": {"type": "boolean", "enum": [True]}, "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+            required=("records", "confirmed", "expected_revision")),
+    ),
     Operation(
         name="system.capabilities.read", description="Discover the versioned backend API and platform-owned capabilities.",
         method="GET", path="/api/v1/capabilities", input_schema=_EMPTY, output_kind="json",
@@ -804,6 +835,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 maximum=MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES,
             ),
             "sleep_chart_mode": _string("Sleep-chart display mode; daily observations remain visible.", enum=SLEEP_CHART_MODES),
+            "clothing_workbook_path": _string("Single clothing workbook path; empty uses the existing personal data root."),
             "body_analysis_enabled": _boolean("Enable local body-analysis startup scanning when configured."),
             "body_analysis_leg_dir": _string("Local leg-photo source directory; empty clears it."),
             "body_analysis_scalp_dir": _string("Local scalp-photo source directory; empty clears it."),

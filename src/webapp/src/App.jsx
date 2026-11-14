@@ -26,6 +26,7 @@ const ExpenseSheet = lazyWithPreload(() => import('./components/ExpenseSheet'));
 const Plots = lazyWithPreload(() => import('./components/Plots'));
 const SystemLogs = lazyWithPreload(() => import('./components/SystemLogs'));
 const BodyAnalysis = lazyWithPreload(() => import('./components/BodyAnalysis'));
+const ClothingFit = lazyWithPreload(() => import('./components/ClothingFit'));
 const NeverStopPage = lazyWithPreload(() => import('./components/NeverStopPage'));
 const Settings = lazyWithPreload(() => import('./components/Settings'));
 
@@ -45,6 +46,7 @@ const NAV_ITEMS = [
   { key: 'plots', labelKey: 'app.nav.plots' },
   { key: 'system logs', labelKey: 'app.nav.system_logs' },
   { key: 'body-analysis', labelKey: 'app.nav.body_analysis' },
+  { key: 'clothing-fit', labelKey: 'app.nav.clothing_fit' },
   { key: 'never-stop', labelKey: 'app.nav.never_stop' },
 ];
 
@@ -108,6 +110,7 @@ function AppShell() {
   const { t, displayLanguage, setDisplayLanguage } = useDisplayLanguage();
   const [activeTab, setActiveTab] = useState(() => getTabKeyFromHash(window.location.hash) || 'action plan');
   const [neverStopVisited, setNeverStopVisited] = useState(() => getTabKeyFromHash(window.location.hash) === 'never-stop');
+  const [clothingVisited, setClothingVisited] = useState(() => getTabKeyFromHash(window.location.hash) === 'clothing-fit');
   const [neverStopOpenRequest, setNeverStopOpenRequest] = useState(null);
   const [themeMode, setThemeMode] = useState(() => (
     localStorage.getItem('themeMode') || localStorage.getItem('theme') || 'dark'
@@ -148,6 +151,7 @@ function AppShell() {
       const nextTab = getTabKeyFromHash(window.location.hash) || 'action plan';
       setActiveTab(nextTab);
       if (nextTab === 'never-stop') setNeverStopVisited(true);
+      if (nextTab === 'clothing-fit') setClothingVisited(true);
     };
 
     syncActiveTabFromHash();
@@ -362,6 +366,7 @@ function AppShell() {
   };
 
   const handleNavTabChange = (tabKey) => {
+    if (tabKey === 'clothing-fit') setClothingVisited(true);
     setActiveTab(tabKey);
     if (tabKey === 'never-stop') setNeverStopVisited(true);
     const nextHash = TAB_KEY_TO_HASH[tabKey];
@@ -542,6 +547,9 @@ function AppShell() {
           ) : null}
         </Suspense>
         <Suspense fallback={null}>
+          {(activeTab === 'clothing-fit' || clothingVisited) ? <div style={{ display: activeTab === 'clothing-fit' ? 'block' : 'none' }}><ClothingFit /></div> : null}
+        </Suspense>
+        <Suspense fallback={null}>
           {(activeTab === 'never-stop' || neverStopVisited) ? (
             <div style={{ display: activeTab === 'never-stop' ? 'block' : 'none' }}>
               <NeverStopPage isVisible={activeTab === 'never-stop'} openRequest={neverStopOpenRequest} />
@@ -558,6 +566,7 @@ function AppShell() {
       {activeTab !== 'plots' &&
         activeTab !== 'action plan' &&
         activeTab !== 'body-analysis' &&
+        activeTab !== 'clothing-fit' &&
         activeTab !== 'expense sheet' &&
         activeTab !== 'system logs' &&
         activeTab !== 'settings' &&

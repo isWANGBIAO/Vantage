@@ -1837,6 +1837,11 @@
               "title": "Sleep Chart Mode",
               "type": "string"
             },
+            "clothing_workbook_path": {
+              "default": "",
+              "title": "Clothing Workbook Path",
+              "type": "string"
+            },
             "body_analysis_enabled": {
               "title": "Body Analysis Enabled",
               "type": "boolean"
@@ -2686,6 +2691,265 @@
       "title": "ContextErrorResponse",
       "type": "object"
     },
+    "ClothingRecord": {
+      "properties": {
+        "row": {
+          "anyOf": [
+            {
+              "minimum": 2,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Row"
+        },
+        "garment": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Garment",
+          "type": "string"
+        },
+        "brand": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Brand",
+          "type": "string"
+        },
+        "style_code": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Style Code",
+          "type": "string"
+        },
+        "category": {
+          "default": "未知",
+          "maxLength": 2000,
+          "title": "Category",
+          "type": "string"
+        },
+        "size": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Size",
+          "type": "string"
+        },
+        "component": {
+          "default": "未知",
+          "enum": [
+            "外壳",
+            "内胆",
+            "整件",
+            "未知"
+          ],
+          "title": "Component",
+          "type": "string"
+        },
+        "length_cm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 500,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Length Cm"
+        },
+        "chest_cm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 500,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chest Cm"
+        },
+        "chest_width_cm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 500,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chest Width Cm"
+        },
+        "shoulder_cm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 500,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shoulder Cm"
+        },
+        "sleeve_cm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 500,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sleeve Cm"
+        },
+        "length_basis": {
+          "default": "未知",
+          "enum": [
+            "后肩衣长",
+            "未知"
+          ],
+          "title": "Length Basis",
+          "type": "string"
+        },
+        "sleeve_basis": {
+          "default": "未知",
+          "enum": [
+            "肩点袖长",
+            "连肩袖长",
+            "未知"
+          ],
+          "title": "Sleeve Basis",
+          "type": "string"
+        },
+        "measurement_source": {
+          "default": "历史未确认",
+          "maxLength": 2000,
+          "title": "Measurement Source",
+          "type": "string"
+        },
+        "measurement_tolerance_cm": {
+          "anyOf": [
+            {
+              "maximum": 20,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Measurement Tolerance Cm"
+        },
+        "trial_date": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trial Date"
+        },
+        "feedback_scope": {
+          "default": "未知",
+          "enum": [
+            "外壳",
+            "内胆",
+            "整件",
+            "未知"
+          ],
+          "title": "Feedback Scope",
+          "type": "string"
+        },
+        "shoulder_feedback": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Shoulder Feedback",
+          "type": "string"
+        },
+        "sleeve_feedback": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Sleeve Feedback",
+          "type": "string"
+        },
+        "length_feedback": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Length Feedback",
+          "type": "string"
+        },
+        "chest_feedback": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Chest Feedback",
+          "type": "string"
+        },
+        "mobility_feedback": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Mobility Feedback",
+          "type": "string"
+        },
+        "overall_feedback": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Overall Feedback",
+          "type": "string"
+        },
+        "layering": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Layering",
+          "type": "string"
+        },
+        "notes": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Notes",
+          "type": "string"
+        },
+        "warnings": {
+          "items": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Warnings",
+          "type": "array"
+        },
+        "record_kind": {
+          "default": "garment",
+          "enum": [
+            "garment",
+            "body",
+            "unclassified"
+          ],
+          "title": "Record Kind",
+          "type": "string"
+        }
+      },
+      "title": "ClothingRecord",
+      "type": "object"
+    },
     "SettingsUpdateRequest": {
       "type": "object",
       "properties": {
@@ -2738,6 +3002,10 @@
             "monthly",
             "rolling"
           ]
+        },
+        "clothing_workbook_path": {
+          "type": "string",
+          "description": "Single clothing workbook path; empty uses the existing personal data root."
         },
         "body_analysis_enabled": {
           "type": "boolean",
@@ -3137,6 +3405,609 @@
             ]
           }
         }
+      ]
+    },
+    "ClothingConfigRequest": {
+      "type": "object",
+      "properties": {
+        "workbook_path": {
+          "type": "string",
+          "description": "Existing single-sheet clothing workbook path, or empty."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "workbook_path"
+      ]
+    },
+    "ClothingExtractRequest": {
+      "type": "object",
+      "properties": {
+        "image_data_url": {
+          "type": "string",
+          "maxLength": 11200000,
+          "writeOnly": true,
+          "description": "PNG/JPEG/WebP Base64 data URL; maximum decoded input 8 MiB. Never use a remote image URL."
+        },
+        "provider_route": {
+          "type": "string",
+          "description": "Expected selected provider shown by clothing.state.read; a changed selection refuses transmission."
+        },
+        "model": {
+          "type": "string",
+          "description": "Expected selected model shown by clothing.state.read."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "image_data_url",
+        "provider_route",
+        "model"
+      ]
+    },
+    "ClothingCompareRequest": {
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "properties": {
+            "row": {
+              "anyOf": [
+                {
+                  "minimum": 2,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Row"
+            },
+            "garment": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Garment",
+              "type": "string"
+            },
+            "brand": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Brand",
+              "type": "string"
+            },
+            "style_code": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Style Code",
+              "type": "string"
+            },
+            "category": {
+              "default": "未知",
+              "maxLength": 2000,
+              "title": "Category",
+              "type": "string"
+            },
+            "size": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Size",
+              "type": "string"
+            },
+            "component": {
+              "default": "未知",
+              "enum": [
+                "外壳",
+                "内胆",
+                "整件",
+                "未知"
+              ],
+              "title": "Component",
+              "type": "string"
+            },
+            "length_cm": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 500,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Length Cm"
+            },
+            "chest_cm": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 500,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Chest Cm"
+            },
+            "chest_width_cm": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 500,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Chest Width Cm"
+            },
+            "shoulder_cm": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 500,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Shoulder Cm"
+            },
+            "sleeve_cm": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 500,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sleeve Cm"
+            },
+            "length_basis": {
+              "default": "未知",
+              "enum": [
+                "后肩衣长",
+                "未知"
+              ],
+              "title": "Length Basis",
+              "type": "string"
+            },
+            "sleeve_basis": {
+              "default": "未知",
+              "enum": [
+                "肩点袖长",
+                "连肩袖长",
+                "未知"
+              ],
+              "title": "Sleeve Basis",
+              "type": "string"
+            },
+            "measurement_source": {
+              "default": "历史未确认",
+              "maxLength": 2000,
+              "title": "Measurement Source",
+              "type": "string"
+            },
+            "measurement_tolerance_cm": {
+              "anyOf": [
+                {
+                  "maximum": 20,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Measurement Tolerance Cm"
+            },
+            "trial_date": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Trial Date"
+            },
+            "feedback_scope": {
+              "default": "未知",
+              "enum": [
+                "外壳",
+                "内胆",
+                "整件",
+                "未知"
+              ],
+              "title": "Feedback Scope",
+              "type": "string"
+            },
+            "shoulder_feedback": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Shoulder Feedback",
+              "type": "string"
+            },
+            "sleeve_feedback": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Sleeve Feedback",
+              "type": "string"
+            },
+            "length_feedback": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Length Feedback",
+              "type": "string"
+            },
+            "chest_feedback": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Chest Feedback",
+              "type": "string"
+            },
+            "mobility_feedback": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Mobility Feedback",
+              "type": "string"
+            },
+            "overall_feedback": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Overall Feedback",
+              "type": "string"
+            },
+            "layering": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Layering",
+              "type": "string"
+            },
+            "notes": {
+              "default": "",
+              "maxLength": 2000,
+              "title": "Notes",
+              "type": "string"
+            },
+            "warnings": {
+              "items": {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              "maxItems": 50,
+              "title": "Warnings",
+              "type": "array"
+            },
+            "record_kind": {
+              "default": "garment",
+              "enum": [
+                "garment",
+                "body",
+                "unclassified"
+              ],
+              "title": "Record Kind",
+              "type": "string"
+            }
+          },
+          "title": "ClothingRecord",
+          "type": "object"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "candidate",
+        "confirmed",
+        "revision"
+      ]
+    },
+    "ClothingSaveRequest": {
+      "type": "object",
+      "properties": {
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 40,
+          "items": {
+            "properties": {
+              "row": {
+                "anyOf": [
+                  {
+                    "minimum": 2,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Row"
+              },
+              "garment": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Garment",
+                "type": "string"
+              },
+              "brand": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Brand",
+                "type": "string"
+              },
+              "style_code": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Style Code",
+                "type": "string"
+              },
+              "category": {
+                "default": "未知",
+                "maxLength": 2000,
+                "title": "Category",
+                "type": "string"
+              },
+              "size": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Size",
+                "type": "string"
+              },
+              "component": {
+                "default": "未知",
+                "enum": [
+                  "外壳",
+                  "内胆",
+                  "整件",
+                  "未知"
+                ],
+                "title": "Component",
+                "type": "string"
+              },
+              "length_cm": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "maximum": 500,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Length Cm"
+              },
+              "chest_cm": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "maximum": 500,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Chest Cm"
+              },
+              "chest_width_cm": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "maximum": 500,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Chest Width Cm"
+              },
+              "shoulder_cm": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "maximum": 500,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Shoulder Cm"
+              },
+              "sleeve_cm": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "maximum": 500,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Sleeve Cm"
+              },
+              "length_basis": {
+                "default": "未知",
+                "enum": [
+                  "后肩衣长",
+                  "未知"
+                ],
+                "title": "Length Basis",
+                "type": "string"
+              },
+              "sleeve_basis": {
+                "default": "未知",
+                "enum": [
+                  "肩点袖长",
+                  "连肩袖长",
+                  "未知"
+                ],
+                "title": "Sleeve Basis",
+                "type": "string"
+              },
+              "measurement_source": {
+                "default": "历史未确认",
+                "maxLength": 2000,
+                "title": "Measurement Source",
+                "type": "string"
+              },
+              "measurement_tolerance_cm": {
+                "anyOf": [
+                  {
+                    "maximum": 20,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Measurement Tolerance Cm"
+              },
+              "trial_date": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Trial Date"
+              },
+              "feedback_scope": {
+                "default": "未知",
+                "enum": [
+                  "外壳",
+                  "内胆",
+                  "整件",
+                  "未知"
+                ],
+                "title": "Feedback Scope",
+                "type": "string"
+              },
+              "shoulder_feedback": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Shoulder Feedback",
+                "type": "string"
+              },
+              "sleeve_feedback": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Sleeve Feedback",
+                "type": "string"
+              },
+              "length_feedback": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Length Feedback",
+                "type": "string"
+              },
+              "chest_feedback": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Chest Feedback",
+                "type": "string"
+              },
+              "mobility_feedback": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Mobility Feedback",
+                "type": "string"
+              },
+              "overall_feedback": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Overall Feedback",
+                "type": "string"
+              },
+              "layering": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Layering",
+                "type": "string"
+              },
+              "notes": {
+                "default": "",
+                "maxLength": 2000,
+                "title": "Notes",
+                "type": "string"
+              },
+              "warnings": {
+                "items": {
+                  "maxLength": 1000,
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "title": "Warnings",
+                "type": "array"
+              },
+              "record_kind": {
+                "default": "garment",
+                "enum": [
+                  "garment",
+                  "body",
+                  "unclassified"
+                ],
+                "title": "Record Kind",
+                "type": "string"
+              }
+            },
+            "title": "ClothingRecord",
+            "type": "object"
+          }
+        },
+        "confirmed": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        },
+        "expected_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "records",
+        "confirmed",
+        "expected_revision"
       ]
     }
   }

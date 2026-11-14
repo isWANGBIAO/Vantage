@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = {
   action_plan_auto_generate: true,
   action_plan_check_interval_minutes: 60,
   sleep_chart_mode: 'segments',
+  clothing_workbook_path: '',
   voice_provider_mode: 'inherit_ai',
   voice_base_url: '',
   voice_api_key: '',
@@ -208,6 +209,7 @@ function sanitizeSettings(payload) {
       ? safePayload.action_plan_check_interval_minutes : 60,
     sleep_chart_mode: ['total', 'segments', 'monthly', 'rolling'].includes(safePayload.sleep_chart_mode)
       ? safePayload.sleep_chart_mode : DEFAULT_SETTINGS.sleep_chart_mode,
+    clothing_workbook_path: typeof safePayload.clothing_workbook_path === 'string' ? safePayload.clothing_workbook_path : '',
     voice_provider_mode: sanitizeSpecialProviderMode(safePayload.voice_provider_mode, safePayload, 'voice'),
     voice_base_url: normalizeOptionalString(safePayload.voice_base_url) || '',
     voice_api_key: normalizeOptionalString(safePayload.voice_api_key) || '',
@@ -522,6 +524,7 @@ function buildSettingsState({
       actionPlanAutoGenerate: settings.action_plan_auto_generate,
       actionPlanCheckIntervalMinutes: settings.action_plan_check_interval_minutes,
       sleepChartMode: settings.sleep_chart_mode,
+      clothingWorkbookPath: settings.clothing_workbook_path || '',
       voiceProviderMode: settings.voice_provider_mode,
       voiceBaseUrl: settings.voice_base_url,
       voiceApiKey: maskApiKey(settings.voice_api_key),
@@ -685,6 +688,8 @@ function saveSettingsPayload({
       ? safePayload.actionPlanCheckIntervalMinutes : currentSettings.action_plan_check_interval_minutes,
     sleep_chart_mode: Object.prototype.hasOwnProperty.call(safePayload, 'sleepChartMode')
       ? safePayload.sleepChartMode : currentSettings.sleep_chart_mode,
+    clothing_workbook_path: Object.prototype.hasOwnProperty.call(safePayload, 'clothingWorkbookPath')
+      ? (normalizeOptionalString(safePayload.clothingWorkbookPath) || '') : currentSettings.clothing_workbook_path,
     voice_provider_mode: Object.prototype.hasOwnProperty.call(safePayload, 'voiceProviderMode')
       ? (safePayload.voiceProviderMode === 'custom' ? 'custom' : 'inherit_ai')
       : currentSettings.voice_provider_mode,

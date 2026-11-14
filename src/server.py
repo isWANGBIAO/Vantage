@@ -36,6 +36,7 @@ from src.backend import (
     body_analysis,
     camera,
     chat,
+    clothing,
     face,
     finance_data,
     finance_recommendations,
@@ -70,6 +71,7 @@ app.add_middleware(security.LoopbackAccessMiddleware)
 
 ROUTE_MODULES = (
     settings,
+    clothing,
     body_analysis,
     camera,
     system,

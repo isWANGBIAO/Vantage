@@ -137,6 +137,11 @@ PYINSTALLER_EXCLUDES = (
 
 # Keep MCP imports explicit; collecting mcp.cli pulls an unused optional Typer dependency.
 PYINSTALLER_HIDDEN_IMPORTS = (
+    "src.backend.clothing",
+    "src.services.clothing_models",
+    "src.services.clothing_workbook",
+    "src.services.clothing_comparison",
+    "src.services.clothing_vision",
     "src.services.capture_storage_forecast",
     "src.utils.adaptive_prompt_cache",
     "src.utils.adaptive_prompt_layout",

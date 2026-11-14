@@ -90,6 +90,7 @@ DEFAULT_SETTINGS = {
     "action_plan_auto_generate": True,
     "action_plan_check_interval_minutes": 60,
     "sleep_chart_mode": DEFAULT_SLEEP_CHART_MODE,
+    "clothing_workbook_path": "",
     "body_analysis_enabled": False,
     "body_analysis_leg_dir": "",
     "body_analysis_scalp_dir": "",
@@ -473,6 +474,7 @@ def _sanitize_settings(payload: dict | None) -> dict:
                              if (payload or {}).get("sleep_chart_mode") in SLEEP_CHART_MODES
                              else DEFAULT_SLEEP_CHART_MODE),
         "body_analysis_enabled": _coerce_bool(payload, "body_analysis_enabled", False),
+        "clothing_workbook_path": _coerce_optional_str(payload, "clothing_workbook_path") or "",
         "body_analysis_leg_dir": _coerce_optional_str(payload, "body_analysis_leg_dir") or "",
         "body_analysis_scalp_dir": _coerce_optional_str(payload, "body_analysis_scalp_dir") or "",
         "body_analysis_model_dir": _coerce_optional_str(payload, "body_analysis_model_dir") or "",

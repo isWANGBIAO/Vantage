@@ -33,7 +33,7 @@ const unexpectedRequests = [];
 const forbiddenNetwork = [];
 const pendingDiagnostics = new Set();
 const expectedCancellations = [];
-const activeRequests = new Set();
+const activeRequests = new Map();
 let lastNetworkActivity = 0;
 const nativeCalls = { picker: 0, preferences: 0, themes: [] };
 let previousInterrupted = true;
@@ -74,6 +74,7 @@ let faceProgressDrops = 0;
 let faceProgressDropsObserved = 0;
 let sleepPreferenceReadFails = false;
 let sleepPreferenceSaveFails = false;
+let clothingWriteConflicts = false;
 // A 4x4 solid-color synthetic JPEG, generated solely for transport tests.
 const cameraJpeg = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDlqKKK9s8M/9k=', 'base64');
 
@@ -99,6 +100,11 @@ function syntheticSleepChart(length = 105, year = 2026) {
     } };
 }
 const readFixtures = {
+    '/api/v1/clothing/state': { workbook_path: '/synthetic/clothing.xlsx', configured_path: '', revision: 'a'.repeat(64), sheet: 'Sheet1',
+        records: [{ row: 2, garment: 'Synthetic jacket', brand: 'Example', style_code: 'DEMO-A', category: '外套', size: 'M', component: '外壳',
+            chest_cm: 110, shoulder_cm: 44, length_cm: 70, length_basis: '后肩衣长', sleeve_cm: 60, sleeve_basis: '未知',
+            feedback_scope: '整件', shoulder_feedback: '显窄', overall_feedback: 'Synthetic whole garment feedback', record_kind: 'garment', warnings: [] }],
+        warnings: [], vision: { ready: true, model: 'synthetic-vision', provider_route: 'Example' } },
     '/api/v1/action-plan/today': {
         exists: true, date: '2026-01-01',
         analysis: { body: 'Synthetic smoke analysis' },
@@ -237,6 +243,28 @@ async function serveFixture(req, res) {
         };
     } else if (req.method === 'POST' && pathname === '/api/v1/face/analyze' && runsRecoveryCase('face-progress')) result = { status: 'started' };
     else if (req.method === 'POST' && pathname === '/api/v1/plots/refresh') result = { ok: true };
+    else if (req.method === 'POST' && pathname === '/api/v1/clothing/extract') {
+        assert.ok(payload.image_data_url.startsWith('data:image/'));
+        assert.equal(payload.provider_route, readFixtures['/api/v1/clothing/state'].vision.provider_route);
+        assert.equal(payload.model, readFixtures['/api/v1/clothing/state'].vision.model);
+        result = { records: [{ ...readFixtures['/api/v1/clothing/state'].records[0], row: null,
+            overall_feedback: '', feedback_scope: '未知', shoulder_feedback: '', measurement_source: 'Synthetic size chart' }], warnings: ['Synthetic extraction requires review'], model: 'synthetic-vision' };
+    } else if (req.method === 'POST' && pathname === '/api/v1/clothing/compare') {
+        assert.equal(payload.confirmed, true);
+        assert.equal(payload.revision, readFixtures['/api/v1/clothing/state'].revision);
+        result = { summary: 'Synthetic local comparison retains unknown fit', matches: [], unknowns: ['Synthetic missing fit evidence'], warnings: [] };
+    } else if (req.method === 'POST' && pathname === '/api/v1/clothing/records') {
+        assert.equal(payload.confirmed, true);
+        if (clothingWriteConflicts) { res.writeHead(409).end(JSON.stringify({ detail: { code: 'workbook_changed', message: 'Synthetic concurrent edit' } })); return; }
+        assert.equal(payload.expected_revision, readFixtures['/api/v1/clothing/state'].revision);
+        const state = readFixtures['/api/v1/clothing/state'];
+        for (const record of payload.records) {
+            if (record.row) Object.assign(state.records.find(item => item.row === record.row), record);
+            else state.records.push({ ...record, row: state.records.length + 2, record_kind: 'garment' });
+        }
+        state.revision = 'b'.repeat(64);
+        result = state;
+    }
     else if (req.method === 'POST' && pathname === '/api/v1/finance/purchase-recommendations/dismiss') {
         const item = { ...payload.item, id: 1, group_key: payload.group_key, cache_key: payload.cache_key };
         readFixtures['/api/v1/finance/purchase-recommendations/dismissed'] = { items: [item], count: 1 };
@@ -353,7 +381,7 @@ async function createWindow() {
             errors.push(params.exceptionDetails.exception?.description || params.exceptionDetails.text);
         }
         if (method === 'Network.requestWillBeSent') {
-            activeRequests.add(`${contents.id}:${params.requestId}`);
+            activeRequests.set(`${contents.id}:${params.requestId}`, params.request.url.startsWith('data:') ? 'inline data preview' : params.request.url);
             lastNetworkActivity = Date.now();
         } else if (method === 'Network.loadingFinished' || method === 'Network.loadingFailed') {
             activeRequests.delete(`${contents.id}:${params.requestId}`);
@@ -620,7 +648,7 @@ async function exerciseUi() {
     await expectStep(3);
     await click('.onboarding-actions button', 'Continue');
     await click('.onboarding-actions button', 'Finish Setup');
-    await waitFor('ready unified workspace', () => document.querySelectorAll('.app-nav a').length === 8
+    await waitFor('ready unified workspace', () => document.querySelectorAll('.app-nav a').length === 9
         && document.querySelector('.app-main')?.innerText.includes('Synthetic smoke action plan')
         && !document.querySelector('.onboarding-shell'));
     assert.equal(calls.filter(call => call.pathname === '/api/v1/onboarding/complete').length, 1);
@@ -797,11 +825,83 @@ async function exerciseUi() {
         assert.ok(calls.filter(call => call.pathname === '/api/v1/face/report').length > reportReads);
         console.log('PASS queued/transport-failed/running face job stays active, idle unlocks and refreshes report (#134)');
     }
+    await navigate('clothing-fit', '.clothing-fit', 'Clothing sizes & fitting evidence');
+    await waitFor('clothing history loaded from its only source', () => document.querySelector('.clothing-history')?.textContent.includes('Synthetic jacket')
+        && !document.querySelector('.clothing-status')?.textContent.includes('Working'));
+    if (runsRecoveryCase('clothing-fit')) {
+        const imagePath = path.join(root, 'synthetic-size-chart.jpg');
+        fs.writeFileSync(imagePath, cameraJpeg);
+        const document = await window.webContents.debugger.sendCommand('DOM.getDocument');
+        const upload = await window.webContents.debugger.sendCommand('DOM.querySelector', { nodeId: document.root.nodeId, selector: '.clothing-upload input[type="file"]' });
+        await window.webContents.debugger.sendCommand('DOM.setFileInputFiles', { nodeId: upload.nodeId, files: [imagePath] });
+        await waitFor('size image selected but not uploaded yet', () => document.querySelector('.clothing-image img')?.complete === true);
+        assert.equal(calls.filter(call => call.pathname === '/api/v1/clothing/extract').length, 0);
+        await click('.clothing-image button', 'Extract sizes');
+        await waitFor('unconfirmed extracted rows', () => document.querySelector('.clothing-extractions')?.textContent.includes('Synthetic jacket'));
+        await click('.clothing-extractions button');
+        await waitFor('candidate adopted without fitting claims', () => document.querySelector('.clothing-editor input[name="garment"]')?.value === 'Synthetic jacket'
+            && document.querySelector('.clothing-editor textarea[name="overall_feedback"]')?.value === '');
+        assert.equal(await evaluate(() => [...document.querySelectorAll('.clothing-editor button')].find(button => button.textContent === 'Compare with history')?.disabled), true);
+        await click('.clothing-reviewed input');
+        await click('.clothing-editor button', 'Compare with history');
+        await waitFor('local evidence comparison', () => document.querySelector('.clothing-result')?.textContent.includes('Synthetic local comparison'));
+        await evaluate(() => {
+            const input = document.querySelector('.clothing-editor textarea[name="overall_feedback"]');
+            Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Synthetic fitting draft');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await waitFor('editing clears prior review and comparison', () => !document.querySelector('.clothing-reviewed input').checked && !document.querySelector('.clothing-result'));
+        await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
+        await navigate('clothing-fit', '.clothing-fit', 'Clothing sizes & fitting evidence');
+        assert.equal(await evaluate(() => document.querySelector('.clothing-editor textarea[name="overall_feedback"]').value), 'Synthetic fitting draft', 'Navigation must not lose unsaved clothing evidence.');
+        await click('.clothing-reviewed input');
+        clothingWriteConflicts = true;
+        await click('.clothing-editor button', 'Append to Excel');
+        await waitFor('concurrent workbook edit preserves draft', () => document.querySelector('.clothing-status')?.textContent.includes('Excel is open or the source changed')
+            && document.querySelector('.clothing-editor textarea[name="overall_feedback"]').value === 'Synthetic fitting draft');
+        const writeCount = calls.filter(call => call.pathname === '/api/v1/clothing/records').length;
+        await delay(300);
+        assert.equal(calls.filter(call => call.pathname === '/api/v1/clothing/records').length, writeCount, 'A conflicted write must never retry automatically.');
+        clothingWriteConflicts = false;
+        await click('.clothing-panel button', 'Refresh history (keep draft)');
+        await waitFor('refresh keeps candidate and requires review again', () => document.querySelector('.clothing-status')?.textContent.includes('History refreshed')
+            && !document.querySelector('.clothing-reviewed input').checked);
+        await click('.clothing-reviewed input');
+        await click('.clothing-editor button', 'Append to Excel');
+        await waitFor('reviewed candidate saved to single source', () => document.querySelector('.clothing-status')?.textContent.includes('Saved to the source Excel')
+            && document.querySelector('.clothing-history')?.textContent.includes('Synthetic fitting draft'));
+        assert.equal(calls.filter(call => call.pathname === '/api/v1/clothing/extract').length, 1, 'Refresh, comparison and save cannot call the model.');
+        assert.equal(await evaluate(() => document.querySelectorAll('.clothing-history tbody tr').length), 2);
+        await click('.clothing-history button', 'View / add feedback');
+        await waitFor('historical measurements stay read only', () => document.querySelector('.clothing-editor input[name="garment"]').readOnly
+            && document.querySelector('.clothing-editor input[name="chest_cm"]').readOnly
+            && document.querySelector('.clothing-editor select[name="component"]').disabled);
+        assert.equal(await evaluate(() => document.querySelector('.clothing-editor textarea[name="overall_feedback"]').value), 'Synthetic whole garment feedback');
+        await evaluate(() => {
+            const input = document.querySelector('.clothing-editor textarea[name="mobility_feedback"]');
+            Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Synthetic movement unknown');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await click('.clothing-reviewed input');
+        await click('.clothing-editor button', 'Update feedback on this row only');
+        await waitFor('feedback update does not append another garment', () => document.querySelector('.clothing-status')?.textContent.includes('Saved to the source Excel'));
+        assert.equal(readFixtures['/api/v1/clothing/state'].records.length, 2);
+        assert.equal(readFixtures['/api/v1/clothing/state'].records[0].chest_cm, 110);
+        assert.equal(readFixtures['/api/v1/clothing/state'].records[0].mobility_feedback, 'Synthetic movement unknown');
+        if (process.env.VANTAGE_UI_CAPTURE_CLOTHING === '1') {
+            await evaluate(() => document.querySelector('.clothing-fit').scrollIntoView({ block: 'start' }));
+            await delay(250);
+            const capture = path.join(os.tmpdir(), `vantage-clothing-preview-${Date.now()}.png`);
+            fs.writeFileSync(capture, (await window.webContents.capturePage()).toPNG());
+            console.log('CAPTURE clothing', capture);
+        }
+        console.log('PASS clothing screenshot review, local comparison, navigation draft retention, conflict safety and explicit workbook save');
+    }
     await click('.app-nav a[href="#never-stop"]');
     await waitFor('Never Stop embedded page', () => location.hash === '#never-stop'
         && document.querySelector('.never-stop-page-host')?.shadowRoot?.querySelector('.brand')?.textContent.includes('Never Stop'));
     await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
-    console.log('PASS all eight primary pages including embedded Never Stop');
+    console.log('PASS all nine primary pages including clothing and embedded Never Stop');
     await waitFor('previous interrupted session notice', () => document.querySelector('.crash-diagnostics-notice')?.textContent.includes('previous session'));
     await click('.crash-diagnostics-notice button', 'Open crash records');
     await waitFor('safe diagnostics open failure', () => document.querySelector('.crash-diagnostics-notice')?.textContent.includes('Could not open'));
@@ -810,7 +910,7 @@ async function exerciseUi() {
     await waitFor('diagnostics error cleared', () => !document.querySelector('.crash-diagnostics-notice')?.textContent.includes('Could not open'));
     assert.equal(diagnosticsOpenCalls, 2);
     await click('.crash-diagnostics-notice button', 'Dismiss');
-    await waitFor('notice dismissed without blocking workspace', () => !document.querySelector('.crash-diagnostics-notice') && document.querySelectorAll('.app-nav a').length === 8);
+    await waitFor('notice dismissed without blocking workspace', () => !document.querySelector('.crash-diagnostics-notice') && document.querySelectorAll('.app-nav a').length === 9);
     previousInterrupted = false;
 
     // Settings is a page, not a dialog. Navigation is its close/cancel path:
@@ -855,7 +955,7 @@ async function exerciseUi() {
     await navigate('action-plan', '.app-main', 'Synthetic smoke action plan');
     await closeWindow();
     await createWindow();
-    await waitFor('completed setup stays complete on reopen', () => document.querySelectorAll('.app-nav a').length === 8
+    await waitFor('completed setup stays complete on reopen', () => document.querySelectorAll('.app-nav a').length === 9
         && !document.querySelector('.onboarding-shell') && document.documentElement.dataset.theme === 'light');
     await waitFor('clean startup diagnostics status fetched', () => !document.querySelector('.crash-diagnostics-notice'));
     await openSettings();
@@ -881,7 +981,7 @@ async function exerciseUi() {
     diagnosticsAvailable = false;
     await closeWindow();
     await createWindow();
-    await waitFor('Chinese workspace reopened', () => document.querySelectorAll('.app-nav a').length === 8);
+    await waitFor('Chinese workspace reopened', () => document.querySelectorAll('.app-nav a').length === 9);
     await click('.settings-entry-button');
     await click('.settings-sidebar button', '关于');
     await waitFor('diagnostics storage failure is visible and cannot open', () => document.querySelector('.settings-diagnostics')?.textContent.includes('不可用') && document.querySelector('.settings-diagnostics button')?.disabled === true);
@@ -922,7 +1022,7 @@ async function exerciseUi() {
         await waitFor('recovered sleep preference saved', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'rolling'
             && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
         await closeWindow(); await createWindow();
-        await waitFor('workspace restored after sleep preference save', () => document.querySelectorAll('.app-nav a').length === 8);
+        await waitFor('workspace restored after sleep preference save', () => document.querySelectorAll('.app-nav a').length === 9);
         await navigate('plots', '.app-main', 'Synthetic sleep chart');
         await waitFor('sleep preference survives new window', () => document.querySelector('.sleep-average-chart')?.dataset.mode === 'rolling'
             && document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
@@ -1004,7 +1104,7 @@ async function exerciseUi() {
         await checkErrors();
         console.log('PASS native zoom adapts year/quarter/month/week groups, preserves weekly view across modes and never persists derived grouping');
     }
-    console.log('RESULT', JSON.stringify({ productionOrigin: security.origin, primaryPages: 8, rendererErrors: errors.length, expectedLifecycleCancellations: expectedCancellations.length, requests: calls.length, isolated: true }));
+    console.log('RESULT', JSON.stringify({ productionOrigin: security.origin, primaryPages: 9, rendererErrors: errors.length, expectedLifecycleCancellations: expectedCancellations.length, requests: calls.length, isolated: true }));
 }
 
 async function finish(code) {

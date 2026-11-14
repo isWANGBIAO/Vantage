@@ -14,6 +14,11 @@ from src.services.automation_catalog import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 EXPECTED_OPERATION_NAMES = {
+    "clothing.state.read",
+    "clothing.config.update",
+    "clothing.extract",
+    "clothing.compare",
+    "clothing.records.save",
     "body_analysis.asset.read",
     "body_analysis.directory.pick",
     "body_analysis.environment.install",

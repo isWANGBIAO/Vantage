@@ -12,6 +12,7 @@ from src.backend.api_contracts import (
     ChatStreamEvent, SchedulerState, ConfigurationErrorResponse, ContextErrorResponse,
 )
 from src.services.automation_catalog import get_operation
+from src.services.clothing_models import ClothingRecord
 
 
 def contracts():
@@ -20,11 +21,16 @@ def contracts():
         ActionPlanStreamEvent, BackendCapabilities, SettingsState, OnboardingState,
         OnboardingCompletion, DisplayLanguageState, ChatContextResponse, ChatRequest,
         ChatStreamEvent, SchedulerState, ConfigurationErrorResponse, ContextErrorResponse,
+        ClothingRecord,
     )}
     for name, operation in {
         "SettingsUpdateRequest": "settings.update",
         "DisplayLanguageUpdateRequest": "settings.display_language.update",
         "OnboardingCompleteRequest": "onboarding.complete",
+        "ClothingConfigRequest": "clothing.config.update",
+        "ClothingExtractRequest": "clothing.extract",
+        "ClothingCompareRequest": "clothing.compare",
+        "ClothingSaveRequest": "clothing.records.save",
     }.items():
         schemas[name] = json.loads(json.dumps(get_operation(operation).input_schema))
     return {"api_version": API_VERSION, "schemas": schemas}

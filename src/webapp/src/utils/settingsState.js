@@ -28,6 +28,7 @@ const DEFAULT_SETTINGS_STATE = {
     actionPlanAutoGenerate: true,
     actionPlanCheckIntervalMinutes: 60,
     sleepChartMode: 'segments',
+    clothingWorkbookPath: '',
     bodyAnalysisEnabled: false,
     bodyAnalysisLegDir: '',
     bodyAnalysisScalpDir: '',
@@ -147,6 +148,7 @@ function normalizeSettings(payload, mode) {
         ? safeSettings.actionPlanCheckIntervalMinutes : 60,
       sleepChartMode: ['total', 'segments', 'monthly', 'rolling'].includes(safeSettings.sleepChartMode)
         ? safeSettings.sleepChartMode : defaults.settings.sleepChartMode,
+      clothingWorkbookPath: typeof safeSettings.clothingWorkbookPath === 'string' ? safeSettings.clothingWorkbookPath : '',
       bodyAnalysisEnabled: safeSettings.bodyAnalysisEnabled === true,
       bodyAnalysisLegDir: typeof safeSettings.bodyAnalysisLegDir === 'string' ? safeSettings.bodyAnalysisLegDir : '',
       bodyAnalysisScalpDir: typeof safeSettings.bodyAnalysisScalpDir === 'string' ? safeSettings.bodyAnalysisScalpDir : '',

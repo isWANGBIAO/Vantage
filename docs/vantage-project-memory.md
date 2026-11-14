@@ -67,6 +67,12 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 
 ## 用户可见操作映射
 
+“衣服尺码”页只使用一个现有Excel、一个Sheet1作为业务数据源；默认在既有个人数据根寻找衣服尺寸工作簿，也可通过共享settings.json的`clothing_workbook_path`指定。每次先复制稳定临时快照，保存要求版本指纹一致且Excel未占用；有冲突保留草稿，禁止自动重试覆盖。原A:J历史记录不重解释或重写，K:S保存试穿记录，额外口径元数据存同表S列注释；复杂Excel结构拒绝回写，避免静默丢失。新尺寸追加，已有行仅更新试穿反馈。
+
+截图提取只在用户点击后把该图片发送给当前选中的AI服务与模型，不自动切换备用服务，不改绘图模型配置；能否读图以实际调用为准。不上传工作簿或历史反馈，不另建模型环境；未知单位、胸围口径、衣长/袖长起点或部件必须校对，未确认不得比较或保存。本地比较按具体款式/类别、同部件和同测量口径筛选；平铺胸宽仅在明确口径下乘二并说明，误差未知不伪造确定性。身体尺寸不混入成衣比较，整件反馈不证明外壳/内胆单独合适，肩部显窄不等同活动受限。用户私人记录和截图不得加入仓库，公开测试使用合成记录。
+
+回写前的高级结构拒绝策略参考[openpyxl官方的保存警告](https://openpyxl.readthedocs.io/en/stable/tutorial.html#loading-from-a-file)；截图使用兼容对话接口的[Base64图片输入格式](https://developers.openai.com/api/docs/guides/images-vision?api-mode=chat)，实际能力仍由所选服务决定。
+
 作息图保留原 ECharts 布局和每日曲线，提供历史平均、分段平均、平均折线、30日趋势四个互斥模式。`settings.json` 的 `sleep_chart_mode` 是唯一持久化入口，默认 `segments`，兼容原有枚举 `monthly`；前端通过共享设置接口读写，不使用独立浏览器存储。分段与折线模式按当前原生缩放可见范围自适应：不超过3日历月按周、超过3个月不超过1日历年按月、超过1年不超过3年按季度、超过3年按年，界面明确显示粒度。周为周一至周日，周／月／季度／年均值分别至少4／7／21／84个有效日期，直接按全部来源中的日记录加权计算完整日历段，不平均月均值、不因平移截断分组；缺失不补零，来源首尾未完整段显式区分。全部历史均线与向后30日均线（至少15天）口径固定，均按跨午夜连续小时与UTC日期计算。粒度为派生显示状态，不写入JSON；模式切换保留缩放与固定纵轴，原摘要仍明确标为近45条记录。
 
 仪表盘磁盘剩余时间由后端 `system.statistics.read` 的 `storage_forecast` 提供，按近期实际保存的照片和所有屏幕截图的字节数、采集时间推算，不使用前端轮询间隔、单张预览图大小或扫描未完成的历史总量。启动预热、样本不足、采集停滞或读取失败时显示“暂无法估算”；多目录跨卷时按最先耗尽的卷估算。仅保留有界进程内统计，不新增私人文件持久化。此为近期采集速度延续时的估算，不包括其他软件的磁盘写入。
@@ -76,6 +82,11 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 | Vantage 界面能力 | Catalog / MCP 工具 | CLI 命令 |
 | --- | --- | --- |
 | 后端版本与能力 | system.capabilities.read | vantage system capabilities read |
+| 衣服尺码与试穿历史快照 | clothing.state.read | vantage clothing state read |
+| 衣服工作簿路径设置 | clothing.config.update | vantage clothing config update |
+| 尺码截图提取（用户主动发送图片） | clothing.extract | vantage clothing extract |
+| 已校对尺码本地比较 | clothing.compare | vantage clothing compare |
+| 追加衣服或更新试穿反馈 | clothing.records.save | vantage clothing records save |
 | 行动计划来源版本 | action_plan.source_revision.read | vantage action-plan source-revision read |
 | 创建/加入行动计划任务 | action_plan.jobs.create | vantage action-plan jobs create |
 | 列出行动计划任务 | action_plan.jobs.list | vantage action-plan jobs list |
