@@ -4,6 +4,11 @@ import re
 
 from src.scripts import plot as plot_module
 
+
+class PlotDataUnavailable(ValueError):
+    """A known data gap, stable until source evidence changes (not an I/O failure)."""
+
+
 SLEEP_SCHEDULE_WRAP_HOUR = 12
 SLEEP_SCHEDULE_SUMMARY_POINTS = 45
 SLEEP_SCHEDULE_DEFAULT_AXIS_MAX = 36
@@ -249,7 +254,7 @@ def _safe_chart(chart_id, title, description, builder, *, formatter='default', h
     try:
         return builder()
     except Exception as exc:
-        return _build_empty_chart(
+        result = _build_empty_chart(
             chart_id,
             title,
             description,
@@ -257,6 +262,8 @@ def _safe_chart(chart_id, title, description, builder, *, formatter='default', h
             formatter=formatter,
             height=height,
         )
+        result['retry_required'] = not isinstance(exc, PlotDataUnavailable)
+        return result
 
 
 def _build_time_data_warning(skipped_rows):
@@ -360,15 +367,22 @@ def _build_running_data_warnings(invalid_rows):
 
 
 def _compute_time_trend_payload(data_frame):
-    filtered_df, valid_sleep_hours, valid_screen_hours, remaining_hours, skipped_rows = (
-        plot_module.compute_time_allocation_with_warnings(data_frame)
-    )
+    if not {'日期', '睡眠时间', '手机屏幕\n使用时间'}.issubset(data_frame.columns):
+        raise PlotDataUnavailable('缺少时间趋势所需字段')
+    try:
+        filtered_df, valid_sleep_hours, valid_screen_hours, remaining_hours, skipped_rows = (
+            plot_module.compute_time_allocation_with_warnings(data_frame)
+        )
+    except ValueError as exc:
+        if str(exc) == '有效时间数据为空，无法绘图':
+            raise PlotDataUnavailable(str(exc)) from None
+        raise
     filtered_df_1 = filtered_df.copy()
     filtered_df_2 = filtered_df.copy()
     filtered_df_3 = filtered_df.copy()
 
     if filtered_df_1.empty or filtered_df_2.empty or filtered_df_3.empty:
-        raise ValueError('用于时间趋势分析的数据不足')
+        raise PlotDataUnavailable('用于时间趋势分析的数据不足')
 
     valid_1 = valid_sleep_hours
     valid_2 = valid_screen_hours
@@ -495,7 +509,7 @@ def _build_weight_bodyfat_dashboard_chart(data_frame):
     data_frame = plot_module.valid_dated_measurements(data_frame)
     filtered_df_weight = data_frame.dropna(subset=['体重']).copy().sort_values('日期')
     if filtered_df_weight.empty:
-        raise ValueError('体重数据为空')
+        raise PlotDataUnavailable('体重数据为空')
 
     dates_weight = filtered_df_weight['日期'].tolist()
     weight_values = filtered_df_weight['体重'].to_numpy(dtype=float)
@@ -607,7 +621,7 @@ def _build_weight_bodyfat_dashboard_chart(data_frame):
 
 def _build_sleep_schedule_dashboard_chart(data_frame):
     if '起床时间' not in data_frame.columns:
-        raise ValueError('缺少起床时间列')
+        raise PlotDataUnavailable('缺少起床时间列')
 
     source = data_frame[['日期', '起床时间']].dropna(subset=['日期', '起床时间']).copy().sort_values('日期', kind='stable')
     parsed_rows = []
@@ -623,7 +637,7 @@ def _build_sleep_schedule_dashboard_chart(data_frame):
         )
 
     if not parsed_rows:
-        raise ValueError('未找到可展示的主睡眠作息记录')
+        raise PlotDataUnavailable('未找到可展示的主睡眠作息记录')
 
     parsed_frame = pd.DataFrame(parsed_rows).sort_values('日期', kind='stable')
     dates = parsed_frame['日期'].tolist()
@@ -1068,11 +1082,11 @@ def _build_radar_goal_dashboard_chart(data_frame, trend):
 
 def _build_hhh_frequency_dashboard_chart(data_frame):
     if 'HHH' not in data_frame.columns:
-        raise ValueError('未找到 HHH 列')
+        raise PlotDataUnavailable('未找到 HHH 列')
 
     hhh_data = _build_hhh_event_frame_for_dashboard(data_frame)
     if hhh_data.empty:
-        raise ValueError('HHH 数据为空')
+        raise PlotDataUnavailable('HHH 数据为空')
 
     sexual_intercourse = hhh_data[hhh_data['HHH'] > 0].sort_values('日期')
     masturbation = hhh_data[hhh_data['HHH'] < 0].sort_values('日期')
@@ -1124,7 +1138,7 @@ def _build_hhh_frequency_dashboard_chart(data_frame):
 
 def _build_hhh_interval_dashboard_chart(data_frame):
     if 'HHH' not in data_frame.columns:
-        raise ValueError('未找到 HHH 列')
+        raise PlotDataUnavailable('未找到 HHH 列')
 
     hhh_data = _build_hhh_event_frame_for_dashboard(data_frame)
 
@@ -1143,7 +1157,7 @@ def _build_hhh_interval_dashboard_chart(data_frame):
     )
 
     if not intercourse_intervals and not masturbation_intervals:
-        raise ValueError('HHH 间隔数据不足')
+        raise PlotDataUnavailable('HHH 间隔数据不足')
 
     option = {
         'color': [plot_module.COLORS['blue'], plot_module.COLORS['red']],
@@ -1184,19 +1198,19 @@ def _build_balance_dashboard_chart():
     source_balance_df = plot_module.load_balance_sheet().copy().sort_values('日期')
     balance_df = plot_module.filter_balance_sheet_actuals(source_balance_df).sort_values('日期')
     if balance_df.empty:
-        raise ValueError('资产数据为空')
+        raise PlotDataUnavailable('资产数据为空')
 
     dates = balance_df['日期'].tolist()
     daily_col = plot_module._find_balance_column(balance_df, ['日均消费', '日均支出', '日均开销', '日均成本'])
     spend_col = plot_module._find_balance_column(balance_df, ['实际消费', '期间支出', '预测/实际支出'])
     if daily_col is None:
-        raise ValueError('未找到日均消费字段')
+        raise PlotDataUnavailable('未找到日均消费字段')
     balance_col = plot_module._find_balance_column(
         balance_df,
         ['现金及现金等价物+股票', '实际/预测期末现金+股票', '现金及现金等价物'],
     )
     if balance_col is None:
-        raise ValueError('未找到现金及现金等价物字段')
+        raise PlotDataUnavailable('未找到现金及现金等价物字段')
 
     forecast_series_df = plot_module.build_balance_sheet_forecast_series(
         source_balance_df,
@@ -1289,10 +1303,12 @@ def _build_balance_dashboard_chart():
 
 def _build_running_dashboard_chart(running_df):
     dashboard_frames = running_df.attrs.get('dashboard_frames') or {}
+    if dashboard_frames.get('running', running_df).empty:
+        raise PlotDataUnavailable('未找到可展示的跑步配速数据')
     running_df = dashboard_frames.get('running', running_df).copy()
     running_df = running_df.dropna(subset=['pace_min_per_km', 'distance_km'], how='all').sort_values('日期')
     if running_df.empty:
-        raise ValueError('未找到可展示的跑步配速数据')
+        raise PlotDataUnavailable('未找到可展示的跑步配速数据')
 
     dates = running_df['日期'].tolist()
     pace_df = running_df.dropna(subset=['pace_min_per_km']).copy()
@@ -1388,10 +1404,12 @@ def _build_running_dashboard_chart(running_df):
 
 def _build_running_form_dashboard_chart(running_df):
     dashboard_frames = running_df.attrs.get('dashboard_frames') or {}
+    if dashboard_frames.get('running-form', running_df).empty:
+        raise PlotDataUnavailable('未找到可展示的跑步技术结构数据')
     running_df = dashboard_frames.get('running-form', running_df).copy()
     running_df = running_df.dropna(subset=['duration_min']).sort_values('日期')
     if running_df.empty:
-        raise ValueError('未找到可展示的跑步技术结构数据')
+        raise PlotDataUnavailable('未找到可展示的跑步技术结构数据')
 
     dates = running_df['日期'].tolist()
     series = []
@@ -1481,6 +1499,8 @@ def _build_running_form_dashboard_chart(running_df):
 def _build_running_hrc_dashboard_chart(running_df):
     dashboard_frames = running_df.attrs.get('dashboard_frames') or {}
     base = dashboard_frames.get('running', running_df)
+    if base.empty:
+        raise PlotDataUnavailable('未找到可展示的 HRC 数据')
     if not base.empty:
         recorded_heart_rate = base.get('心率', base.get('heart_rate_bpm', pd.Series(np.nan, index=base.index)))
         recorded_heart_rate = pd.to_numeric(recorded_heart_rate, errors='coerce')
@@ -1500,7 +1520,7 @@ def _build_running_hrc_dashboard_chart(running_df):
     hrc = pd.to_numeric(running_df['HRC_m_per_beat'], errors='coerce')
     running_df = running_df.loc[np.isfinite(heart_rate) & heart_rate.between(40, 230) & np.isfinite(hrc) & (hrc > 0)].sort_values('日期')
     if running_df.empty:
-        raise ValueError('未找到可展示的 HRC 数据')
+        raise PlotDataUnavailable('未找到可展示的 HRC 数据')
 
     rolling_window = min(len(running_df), 5)
     running_df['HRC_rolling'] = running_df['HRC_m_per_beat'].rolling(window=rolling_window, min_periods=1).mean()

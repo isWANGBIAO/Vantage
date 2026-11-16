@@ -455,10 +455,13 @@ OPERATIONS: tuple[Operation, ...] = (
     ),
     Operation(
         name="plots.read",
-        description="Read the current dashboard plot data.",
+        description="Read current dashboard plot data, or return unchanged for a matching healthy source revision.",
         method="GET",
         path="/api/v1/plots/data",
-        input_schema=_EMPTY,
+        input_schema=_object_schema({"known_revision": {
+            **_string("Optional revision from the last successful full plot response."),
+            "pattern": "^[0-9a-f]{64}$",
+        }}),
         output_kind="json",
         sensitive=True,
     ),

@@ -8,6 +8,7 @@ import { getChartTheme } from '../utils/chartTheme.js';
 import { useDisplayLanguage } from '../context/DisplayLanguageContext.jsx';
 import { localizePlotChart, localizePlotWarnings } from '../utils/plotLocalization.js';
 import SleepAverageChart from './SleepAverageChart.jsx';
+import { createPlotsUpdater, preservePlotZoom } from '../utils/plotsAutoUpdate.js';
 
 const SECTION_DEFINITIONS = [
   {
@@ -175,6 +176,16 @@ function useChartMountReady() {
     containerRef,
     isReady,
   };
+}
+
+function UpdatingPlotChart({ option, height }) {
+  const chartRef = useRef(null);
+  const zoomRef = useRef(null);
+  const events = useMemo(() => ({ datazoom: () => {
+    zoomRef.current = chartRef.current?.getEchartsInstance().getOption().dataZoom;
+  } }), []);
+  return <ReactECharts ref={chartRef} option={preservePlotZoom(option, zoomRef.current)}
+    notMerge lazyUpdate onEvents={events} style={{ width: '100%', height }} />;
 }
 
 function SummaryPill({ label, value, tone = 'default', themeTokens }) {
@@ -582,7 +593,7 @@ function ChartCard({
             chart?.id === 'sleep-schedule' ? (
               <SleepAverageChart baseOption={buildChartOption(chart, theme, language)} language={language}
                 themeTokens={themeTokens} height={chartHeight} />
-            ) : <ReactECharts option={buildChartOption(chart, theme, language)} notMerge lazyUpdate style={{ width: '100%', height: chartHeight }} />
+            ) : <UpdatingPlotChart option={buildChartOption(chart, theme, language)} height={chartHeight} />
           ) : (
             <div
               style={{
@@ -692,7 +703,7 @@ function SectionBlock({ section, chartRefs, warningCharts, warningMap, theme, th
   );
 }
 
-export default function Plots({ theme = 'dark' }) {
+export default function Plots({ theme = 'dark', isVisible = true }) {
   const { effectiveLanguage, t } = useDisplayLanguage();
   const [charts, setCharts] = useState([]);
   const [warnings, setWarnings] = useState([]);
@@ -701,40 +712,53 @@ export default function Plots({ theme = 'dark' }) {
   const [error, setError] = useState(null);
   const [generatedAt, setGeneratedAt] = useState(null);
   const chartRefs = useRef(new Map());
+  const updaterRef = useRef(null);
+  const isVisibleRef = useRef(isVisible);
+  isVisibleRef.current = isVisible;
+  const errorTextRef = useRef(null);
+  errorTextRef.current = {
+    fallback: t('plots.error_load'),
+    retry: t('plots.auto_update_incomplete'),
+  };
   const themeTokens = useMemo(() => getChartTheme(theme), [theme]);
 
-  const fetchPlots = useCallback(async (refresh = false) => {
-    if (refresh) {
-      setIsRefreshing(true);
-    } else {
-      setIsLoading(true);
-    }
-
-    setError(null);
-
-    try {
-      if (refresh) {
-        await fetchBackendJson('/api/v1/plots/refresh', {
-          method: 'POST',
-          retryPolicy: 'mutation',
-        });
-      }
-
-      const data = await fetchBackendJson('/api/v1/plots/data');
-      setCharts(Array.isArray(data?.charts) ? data.charts : []);
-      setWarnings(Array.isArray(data?.warnings) ? data.warnings : []);
-      setGeneratedAt(data?.generated_at || null);
-    } catch (fetchError) {
-      setError(fetchError.message || t('plots.error_load'));
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [t]);
+  useEffect(() => {
+    const updater = createPlotsUpdater({
+      fetchJson: fetchBackendJson,
+      onData(data) {
+        setCharts(data.charts);
+        setWarnings(Array.isArray(data.warnings) ? data.warnings : []);
+        setGeneratedAt(data.generated_at || null);
+      },
+      onError(fetchError) {
+        setError(!fetchError ? null : fetchError.message === 'plots_retry_required'
+          ? errorTextRef.current.retry : fetchError.message || errorTextRef.current.fallback);
+      },
+      onState({ loading, refreshing }) {
+        setIsLoading(loading);
+        setIsRefreshing(refreshing);
+      },
+    });
+    updaterRef.current = updater;
+    const syncVisibility = () => updater.setActive(isVisibleRef.current && document.visibilityState !== 'hidden');
+    const onFocus = () => {
+      syncVisibility();
+      updater.check();
+    };
+    document.addEventListener('visibilitychange', syncVisibility);
+    window.addEventListener('focus', onFocus);
+    syncVisibility();
+    return () => {
+      document.removeEventListener('visibilitychange', syncVisibility);
+      window.removeEventListener('focus', onFocus);
+      updater.dispose();
+      updaterRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
-    fetchPlots();
-  }, [fetchPlots]);
+    updaterRef.current?.setActive(isVisible && document.visibilityState !== 'hidden');
+  }, [isVisible]);
 
   const localizedCharts = useMemo(
     () => charts.map((chart) => localizePlotChart(chart, effectiveLanguage)),
@@ -870,11 +894,12 @@ export default function Plots({ theme = 'dark' }) {
                 >
                   {t('plots.hero.desc')}
                 </p>
+                <small style={{ color: themeTokens.pageText }}>{t('plots.auto_update_note')}</small>
               </div>
             </div>
 
             <button
-              onClick={() => fetchPlots(true)}
+              onClick={() => updaterRef.current?.refresh()}
               disabled={isRefreshing}
               style={{
                 display: 'inline-flex',
@@ -908,6 +933,10 @@ export default function Plots({ theme = 'dark' }) {
               themeTokens={themeTokens}
             />
             <SummaryPill label={t('plots.summary.generated_at')} value={generatedText} themeTokens={themeTokens} />
+          </div>
+          <div style={{ color: themeTokens.pageText, fontSize: 12 }}>
+            {effectiveLanguage === 'en' ? 'While visible, checks for source changes every 30 seconds; unchanged charts are not redrawn.'
+              : '页面可见时每30秒检查源数据变化；数据未变不重绘，切回页面立即检查。'}
           </div>
 
           {navigationCharts.length ? (

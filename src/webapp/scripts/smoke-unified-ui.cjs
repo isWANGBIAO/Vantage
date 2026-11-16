@@ -75,6 +75,8 @@ let faceProgressDropsObserved = 0;
 let sleepPreferenceReadFails = false;
 let sleepPreferenceSaveFails = false;
 let clothingWriteConflicts = false;
+let plotsRevision = 1;
+let plotsReadFails = false;
 // A 4x4 solid-color synthetic JPEG, generated solely for transport tests.
 const cameraJpeg = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDlqKKK9s8M/9k=', 'base64');
 
@@ -176,7 +178,7 @@ async function serveFixture(req, res) {
     const body = [];
     for await (const chunk of req) body.push(chunk);
     const payload = body.length ? JSON.parse(Buffer.concat(body).toString()) : undefined;
-    calls.push({ method: req.method, pathname, ...(payload ? { payload } : {}) });
+    calls.push({ method: req.method, pathname, query: Object.fromEntries(new URL(req.url, 'http://127.0.0.1').searchParams), ...(payload ? { payload } : {}) });
     if (req.method === 'GET' && pathname === '/api/v1/camera/stream' && runsRecoveryCase('camera-preview')) {
         cameraAttempts++;
         res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame', 'Cache-Control': 'no-store' });
@@ -242,7 +244,7 @@ async function serveFixture(req, res) {
             provider: { selected_provider: null, providers: [] },
         };
     } else if (req.method === 'POST' && pathname === '/api/v1/face/analyze' && runsRecoveryCase('face-progress')) result = { status: 'started' };
-    else if (req.method === 'POST' && pathname === '/api/v1/plots/refresh') result = { ok: true };
+    else if (req.method === 'POST' && pathname === '/api/v1/plots/refresh') { plotsRevision++; result = { ok: true }; }
     else if (req.method === 'POST' && pathname === '/api/v1/clothing/extract') {
         assert.ok(payload.image_data_url.startsWith('data:image/'));
         assert.equal(payload.provider_route, readFixtures['/api/v1/clothing/state'].vision.provider_route);
@@ -272,6 +274,14 @@ async function serveFixture(req, res) {
     } else if (req.method === 'DELETE' && pathname === '/api/v1/finance/purchase-recommendations/dismissed/1') {
         readFixtures['/api/v1/finance/purchase-recommendations/dismissed'] = { items: [], count: 0 };
         result = { ok: true, count: 0 };
+    } else if (req.method === 'GET' && pathname === '/api/v1/plots/data') {
+        const revision = plotsRevision.toString(16).padStart(64, '0');
+        if (plotsReadFails) {
+            res.statusCode = 503;
+            result = { error: 'Synthetic transient workbook read failure' };
+        } else result = new URL(req.url, 'http://127.0.0.1').searchParams.get('known_revision') === revision
+            ? { unchanged: true, source_revision: revision }
+            : { ...readFixtures[pathname], source_revision: revision };
     } else if (req.method === 'GET' && Object.hasOwn(readFixtures, pathname)) {
         res.statusCode = fixtureStatus[pathname] || 200;
         result = readFixtures[pathname];
@@ -360,7 +370,9 @@ async function createWindow() {
         // exception objects. This event also catches resource/security errors.
         const expectedCameraFailure = runsRecoveryCase('camera-preview') && details.sourceId.includes('/api/v1/camera/stream')
             && details.message.startsWith('Failed to load resource:');
-        if (!shuttingDown && details.level === 'error' && !details.message.startsWith('Failed to load model list:') && !expectedCameraFailure) {
+        const expectedPlotFailure = plotsReadFails && details.sourceId.includes('/api/v1/plots/data')
+            && details.message.startsWith('Failed to load resource:');
+        if (!shuttingDown && details.level === 'error' && !details.message.startsWith('Failed to load model list:') && !expectedCameraFailure && !expectedPlotFailure) {
             errors.push(`${details.message} (${details.sourceId}:${details.lineNumber})`);
         }
     });
@@ -991,6 +1003,41 @@ async function exerciseUi() {
         await navigate('plots', '.app-main', 'Synthetic sleep chart');
         await waitFor('loaded sleep preference', () => document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
         assert.equal(await evaluate(() => document.querySelector('.sleep-average-chart')?.dataset.mode), 'segments');
+        const manualRefreshes = calls.filter(call => call.method === 'POST' && call.pathname === '/api/v1/plots/refresh').length;
+        plotsRevision++;
+        readFixtures['/api/v1/plots/data'].charts[0].title = 'Synthetic sleep chart - automatically updated';
+        await evaluate(() => window.dispatchEvent(new Event('focus')));
+        await waitFor('focus automatically updates source data without manual refresh', () => document.body.innerText.includes('Synthetic sleep chart - automatically updated'));
+        assert.equal(calls.filter(call => call.method === 'POST' && call.pathname === '/api/v1/plots/refresh').length, manualRefreshes);
+        await evaluate(() => { window.__plotsCanvas = document.querySelector('.sleep-average-chart canvas'); });
+        const beforeUnchanged = calls.filter(call => call.pathname === '/api/v1/plots/data').length;
+        await evaluate(() => window.dispatchEvent(new Event('focus')));
+        await waitForFixture('conditional unchanged request', () => calls.filter(call => call.pathname === '/api/v1/plots/data').length > beforeUnchanged);
+        await waitForNetworkIdle();
+        assert.equal(await evaluate(() => window.__plotsCanvas === document.querySelector('.sleep-average-chart canvas')), true);
+        assert.equal(calls.filter(call => call.pathname === '/api/v1/plots/data').at(-1).query.known_revision, plotsRevision.toString(16).padStart(64, '0'));
+        plotsReadFails = true;
+        await evaluate(() => window.dispatchEvent(new Event('focus')));
+        await waitFor('automatic update failure keeps existing canvas', () => document.body.innerText.includes('503')
+            && window.__plotsCanvas === document.querySelector('.sleep-average-chart canvas'));
+        await waitForNetworkIdle();
+        plotsReadFails = false;
+        plotsRevision++;
+        readFixtures['/api/v1/plots/data'].charts[0].title = 'Synthetic sleep chart - recovered automatically';
+        await evaluate(() => window.dispatchEvent(new Event('focus')));
+        await waitFor('automatic update recovers without refresh button', () => document.body.innerText.includes('Synthetic sleep chart - recovered automatically'));
+        // Exercise the real production 30-second timer once, rather than
+        // replacing timers or invoking the updater directly in this acceptance.
+        plotsRevision++;
+        readFixtures['/api/v1/plots/data'].charts[0].title = 'Synthetic sleep chart - timer updated';
+        const autoDeadline = Date.now() + 36000;
+        while (Date.now() < autoDeadline && !await evaluate(() => document.body.innerText.includes('Synthetic sleep chart - timer updated'))) {
+            await delay(100);
+            await checkErrors();
+        }
+        assert.equal(await evaluate(() => document.body.innerText.includes('Synthetic sleep chart - timer updated')), true, '30-second timer must update changed data without clicks');
+        assert.equal(await evaluate(() => document.querySelector('.sleep-average-chart')?.dataset.mode), 'segments');
+        console.log('PASS live source revision, unchanged canvas, transient recovery and real 30-second automatic update');
         await evaluate(() => document.querySelector('.sleep-average-chart canvas').scrollIntoView({ block: 'center' }));
         const sleepPoint = await evaluate(() => {
             const rect = document.querySelector('.sleep-average-chart canvas').getBoundingClientRect();
@@ -1132,9 +1179,9 @@ async function finish(code) {
 }
 
 const timeout = setTimeout(() => {
-    console.error('Unified UI smoke exceeded 90 seconds');
+    console.error('Unified UI smoke exceeded 130 seconds');
     void finish(1);
-}, 90000);
+}, 130000);
 timeout.unref();
 
 app.whenReady().then(async () => {

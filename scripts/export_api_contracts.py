@@ -31,6 +31,7 @@ def contracts():
         "ClothingExtractRequest": "clothing.extract",
         "ClothingCompareRequest": "clothing.compare",
         "ClothingSaveRequest": "clothing.records.save",
+        "PlotsReadRequest": "plots.read",
     }.items():
         schemas[name] = json.loads(json.dumps(get_operation(operation).input_schema))
     return {"api_version": API_VERSION, "schemas": schemas}

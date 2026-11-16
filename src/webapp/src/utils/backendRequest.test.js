@@ -17,6 +17,26 @@ function jsonResponse(body, init = {}) {
   });
 }
 
+test('HTTP failures settle their response body before a retry or final error', async () => {
+  const originalFetch = globalThis.fetch;
+  const failures = [];
+  globalThis.fetch = async () => {
+    if (failures.length) assert.equal(failures.at(-1).bodyUsed, true);
+    const response = jsonResponse({ error: 'synthetic temporary failure' }, { status: 503 });
+    failures.push(response);
+    return response;
+  };
+  try {
+    await assert.rejects(fetchBackendJson('/api/v1/plots/data', {
+      retryPolicy: 'poll', wait: async () => {},
+    }), (error) => error.status === 503);
+    assert.equal(failures.length, 3);
+    assert.ok(failures.every(response => response.bodyUsed));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('buildBackendUrl prefixes relative backend paths', () => {
   assert.equal(BACKEND_BASE_URL, 'http://127.0.0.1:8000');
   assert.equal(buildBackendUrl('/api/v1/system/status'), 'http://127.0.0.1:8000/api/v1/system/status');

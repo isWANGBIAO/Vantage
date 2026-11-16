@@ -530,7 +530,7 @@ function AppShell() {
         <Suspense fallback={null}>
           {(activeTab === 'plots' || shouldRenderBackgroundTabs) ? (
             <div style={{ display: activeTab === 'plots' ? 'block' : 'none' }}>
-              <Plots theme={theme} />
+              <Plots theme={theme} isVisible={activeTab === 'plots'} />
             </div>
           ) : null}
         </Suspense>

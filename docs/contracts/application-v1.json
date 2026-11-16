@@ -4009,6 +4009,17 @@
         "confirmed",
         "expected_revision"
       ]
+    },
+    "PlotsReadRequest": {
+      "type": "object",
+      "properties": {
+        "known_revision": {
+          "type": "string",
+          "description": "Optional revision from the last successful full plot response.",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }
