@@ -147,6 +147,8 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 | 选择旧数据根目录（仅发现，不可调用；转可见 UI：首次运行引导 → 迁移数据 → 选择文件夹） | onboarding.legacy_root.pick | vantage onboarding legacy-root pick |
 | 完成首次运行引导 | onboarding.complete | vantage onboarding complete |
 
+Windows对工作簿直接读取返回PermissionError时，图表版本检查使用原生文件复制创建短期只读快照后计算摘要；原文件前后身份仍须一致，快照成功或失败都会清理。不改变文件权限，不要求关闭Excel，不把临时副本当作新的业务数据源。
+
 ## 代码与测试定位
 
 - 目录、schema、可用性和操作元数据：src/services/automation_catalog.py。

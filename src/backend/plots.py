@@ -4,6 +4,9 @@ import asyncio
 import copy
 import hashlib
 import json
+import os
+import shutil
+import tempfile
 import threading
 from datetime import date
 from pathlib import Path
@@ -34,6 +37,28 @@ def _get_plot_dir():
         return Path(FACE_REPORT_PLOT_OUTPUT_DIR)
     return Path(Config.get_plot_dir())
 
+def _copy_plot_source_for_read(source, destination):
+    """Windows copy access can succeed while Excel denies a direct read open."""
+    if os.name != 'nt':
+        shutil.copyfile(source, destination)
+        return
+    import ctypes
+
+    copy_file = ctypes.WinDLL('kernel32', use_last_error=True).CopyFileW
+    copy_file.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_int]
+    copy_file.restype = ctypes.c_int
+    if not copy_file(str(source), str(destination), 1):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _source_digest(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _file_signature(path):
     candidate = Path(path)
     try:
@@ -42,16 +67,21 @@ def _file_signature(path):
         return (str(candidate), None, None)
     # A size/mtime-only key misses edits restored by sync tools or file copies.
     # Hash on the worker thread, then require the same physical file throughout.
-    digest = hashlib.sha256()
-    with candidate.open('rb') as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b''):
-            digest.update(chunk)
+    try:
+        digest = _source_digest(candidate)
+    except PermissionError:
+        # Match the existing workbook loader's temporary-copy behavior without
+        # shell commands, path interpolation, or modifying the original file.
+        with tempfile.TemporaryDirectory(prefix='vantage-plot-fingerprint-') as directory:
+            snapshot = Path(directory) / 'source.xlsx'
+            _copy_plot_source_for_read(candidate, snapshot)
+            digest = _source_digest(snapshot)
     after = candidate.stat()
     before_identity = (before.st_mtime_ns, before.st_ctime_ns, before.st_size, before.st_ino)
     after_identity = (after.st_mtime_ns, after.st_ctime_ns, after.st_size, after.st_ino)
     if before_identity != after_identity:
         raise _PlotSourceChanged('Plot source changed while fingerprinting')
-    return (str(candidate), *after_identity, digest.hexdigest())
+    return (str(candidate), *after_identity, digest)
 
 def _get_plot_dashboard_cache_key():
     source_paths = [

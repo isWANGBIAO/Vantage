@@ -65,6 +65,50 @@ def test_content_fingerprint_detects_same_size_same_mtime_edit(tmp_path):
     assert plots._file_signature(source) != missing
 
 
+def test_locked_workbook_fingerprint_uses_a_disposable_copy(tmp_path, monkeypatch):
+    source = tmp_path / 'source.xlsx'
+    source.write_bytes(b'synthetic workbook content')
+    real_digest = plots._source_digest
+    snapshots = []
+
+    def locked_digest(path):
+        if path == source:
+            raise PermissionError('Synthetic direct-read sharing denial')
+        snapshots.append(path)
+        return real_digest(path)
+
+    monkeypatch.setattr(plots, '_source_digest', locked_digest)
+    first = plots._file_signature(source)
+    assert first[-1] == real_digest(source)
+    assert snapshots and all(not path.exists() for path in snapshots)
+    assert source.read_bytes() == b'synthetic workbook content'
+    source.write_bytes(b'changed synthetic workbook')
+    assert plots._file_signature(source) != first
+
+
+def test_locked_workbook_failed_copy_cleans_snapshot_and_does_not_cache(tmp_path, monkeypatch):
+    source = tmp_path / 'source.xlsx'
+    source.write_bytes(b'synthetic')
+    snapshots = []
+
+    def deny(_):
+        raise PermissionError('Synthetic sharing denial')
+
+    def failed_copy(_source, destination):
+        snapshots.append(destination)
+        destination.write_bytes(b'partial copy')
+        raise PermissionError('Synthetic copy denial')
+
+    monkeypatch.setattr(plots, '_source_digest', deny)
+    monkeypatch.setattr(plots, '_copy_plot_source_for_read', failed_copy)
+    monkeypatch.setattr(plots, '_get_plot_dashboard_cache_key', lambda: plots._file_signature(source))
+    result = asyncio.run(plots.get_plot_dashboard_data())
+    assert result.status_code == 503
+    assert plots._plot_dashboard_cache_payload is None
+    assert snapshots and all(not path.exists() for path in snapshots)
+    assert source.read_bytes() == b'synthetic'
+
+
 def test_mid_build_edit_retries_before_publishing(monkeypatch):
     version = [1]
     calls = []
