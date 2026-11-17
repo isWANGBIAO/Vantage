@@ -6,6 +6,21 @@ import { fileURLToPath } from 'node:url';
 
 import { DISPLAY_COPY, translate } from './displayCopy.js';
 
+test('Chinese font settings explain local-only fonts and save-to-apply in both languages', () => {
+  assert.equal(translate('zh-CN', 'settings.general.chinese_font'), '中文字体');
+  assert.equal(translate('en-US', 'settings.general.chinese_font'), 'Chinese font');
+  const chinese = translate('zh-CN', 'settings.general.chinese_font_hint');
+  const english = translate('en-US', 'settings.general.chinese_font_hint');
+  assert.match(chinese, /本机已安装/);
+  assert.match(chinese, /不会自动下载/);
+  assert.match(chinese, /保存后生效/);
+  assert.match(chinese, /后备字体/);
+  assert.match(english, /locally installed/);
+  assert.match(english, /no fonts are downloaded/);
+  assert.match(english, /Save to apply/);
+  assert.match(english, /fallback fonts/);
+});
+
 test('Never Stop navigation has localized labels', () => {
   assert.equal(translate('zh-CN', 'app.nav.never_stop'), 'Never Stop');
   assert.equal(translate('en-US', 'app.nav.never_stop'), 'Never Stop');

@@ -6,6 +6,19 @@ const app = readFileSync(new URL('./App.jsx', import.meta.url), 'utf8');
 const live = readFileSync(new URL('./LiveOutput.jsx', import.meta.url), 'utf8');
 const runtime = readFileSync(new URL('./RuntimeDisplay.jsx', import.meta.url), 'utf8');
 
+test('shadow UI shares Vantage fonts and retains explicit YaHei standalone fallbacks', () => {
+  const css = readFileSync(new URL('./style.css', import.meta.url), 'utf8');
+  const families = [...css.matchAll(/font-family:\s*([^;]+);/g)].map((match) => match[1]);
+  assert.equal(families.length, 6);
+  assert.match(families[0], /^var\(--font-main,/);
+  for (const family of families) {
+    assert.match(family, /"Microsoft YaHei", "微软雅黑"/);
+    assert.ok(family.indexOf('"Microsoft YaHei"') < family.indexOf('monospace')
+      || family.indexOf('"Microsoft YaHei"') < family.indexOf('system-ui'));
+  }
+  for (const family of families.slice(1)) assert.match(family, /^var\(--font-mono,/);
+});
+
 test('Never Stop UI uses the unified Vantage bridge and explains one startup setting', () => {
   assert.match(app, /window\.vantagePlatform\?\.neverStop/);
   assert.doesNotMatch(app, /window\.neverStop/);

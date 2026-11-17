@@ -28,6 +28,7 @@ const DEFAULT_SETTINGS_STATE = {
     actionPlanAutoGenerate: true,
     actionPlanCheckIntervalMinutes: 60,
     sleepChartMode: 'segments',
+    chineseFontFamily: 'microsoft-yahei',
     clothingWorkbookPath: '',
     bodyAnalysisEnabled: false,
     bodyAnalysisLegDir: '',
@@ -146,6 +147,8 @@ function normalizeSettings(payload, mode) {
         && safeSettings.actionPlanCheckIntervalMinutes >= 0
         && safeSettings.actionPlanCheckIntervalMinutes <= MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
         ? safeSettings.actionPlanCheckIntervalMinutes : 60,
+      chineseFontFamily: ['microsoft-yahei', 'noto-sans-sc', 'microsoft-jhenghei', 'pingfang-sc'].includes(safeSettings.chineseFontFamily)
+        ? safeSettings.chineseFontFamily : defaults.settings.chineseFontFamily,
       sleepChartMode: ['total', 'segments', 'monthly', 'rolling'].includes(safeSettings.sleepChartMode)
         ? safeSettings.sleepChartMode : defaults.settings.sleepChartMode,
       clothingWorkbookPath: typeof safeSettings.clothingWorkbookPath === 'string' ? safeSettings.clothingWorkbookPath : '',

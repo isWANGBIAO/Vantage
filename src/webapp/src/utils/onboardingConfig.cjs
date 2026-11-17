@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = {
   action_plan_auto_generate: true,
   action_plan_check_interval_minutes: 60,
   sleep_chart_mode: 'segments',
+  chinese_font_family: 'microsoft-yahei',
   clothing_workbook_path: '',
   voice_provider_mode: 'inherit_ai',
   voice_base_url: '',
@@ -207,6 +208,8 @@ function sanitizeSettings(payload) {
       && safePayload.action_plan_check_interval_minutes >= 0
       && safePayload.action_plan_check_interval_minutes <= MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
       ? safePayload.action_plan_check_interval_minutes : 60,
+    chinese_font_family: ['microsoft-yahei', 'noto-sans-sc', 'microsoft-jhenghei', 'pingfang-sc'].includes(safePayload.chinese_font_family)
+      ? safePayload.chinese_font_family : DEFAULT_SETTINGS.chinese_font_family,
     sleep_chart_mode: ['total', 'segments', 'monthly', 'rolling'].includes(safePayload.sleep_chart_mode)
       ? safePayload.sleep_chart_mode : DEFAULT_SETTINGS.sleep_chart_mode,
     clothing_workbook_path: typeof safePayload.clothing_workbook_path === 'string' ? safePayload.clothing_workbook_path : '',
@@ -524,6 +527,7 @@ function buildSettingsState({
       actionPlanAutoGenerate: settings.action_plan_auto_generate,
       actionPlanCheckIntervalMinutes: settings.action_plan_check_interval_minutes,
       sleepChartMode: settings.sleep_chart_mode,
+      chineseFontFamily: settings.chinese_font_family,
       clothingWorkbookPath: settings.clothing_workbook_path || '',
       voiceProviderMode: settings.voice_provider_mode,
       voiceBaseUrl: settings.voice_base_url,
@@ -653,6 +657,10 @@ function saveSettingsPayload({
   const currentProviderConfig = loadProviderConfig(runtimePaths);
   const safePayload = payload && typeof payload === 'object' ? payload : {};
 
+  if (Object.prototype.hasOwnProperty.call(safePayload, 'chineseFontFamily')
+    && !['microsoft-yahei', 'noto-sans-sc', 'microsoft-jhenghei', 'pingfang-sc'].includes(safePayload.chineseFontFamily)) {
+    throw new TypeError('chineseFontFamily must name a supported Chinese font');
+  }
   if (Object.prototype.hasOwnProperty.call(safePayload, 'sleepChartMode')
     && !['total', 'segments', 'monthly', 'rolling'].includes(safePayload.sleepChartMode)) {
     throw new TypeError('sleepChartMode must be total, segments, monthly, or rolling');
@@ -686,6 +694,8 @@ function saveSettingsPayload({
       && safePayload.actionPlanCheckIntervalMinutes >= 0
       && safePayload.actionPlanCheckIntervalMinutes <= MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES
       ? safePayload.actionPlanCheckIntervalMinutes : currentSettings.action_plan_check_interval_minutes,
+    chinese_font_family: Object.prototype.hasOwnProperty.call(safePayload, 'chineseFontFamily')
+      ? safePayload.chineseFontFamily : currentSettings.chinese_font_family,
     sleep_chart_mode: Object.prototype.hasOwnProperty.call(safePayload, 'sleepChartMode')
       ? safePayload.sleepChartMode : currentSettings.sleep_chart_mode,
     clothing_workbook_path: Object.prototype.hasOwnProperty.call(safePayload, 'clothingWorkbookPath')

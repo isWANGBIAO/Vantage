@@ -1,4 +1,5 @@
-import { createElement } from 'react';
+import { createElement, useContext, useMemo } from 'react';
+import { FontFamilyContext, withChartFont } from './fontFamily.js';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts/core';
 import {
@@ -38,8 +39,11 @@ echarts.use([
 export { echarts };
 
 export default function ReactECharts(props) {
+  const { main } = useContext(FontFamilyContext);
+  const option = useMemo(() => withChartFont(props.option, main), [props.option, main]);
   return createElement(ReactEChartsCore, {
     echarts,
     ...props,
+    option,
   });
 }

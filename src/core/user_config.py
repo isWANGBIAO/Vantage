@@ -79,6 +79,8 @@ DEFAULT_MODEL_PROFILES = {
 
 SLEEP_CHART_MODES = ("total", "segments", "monthly", "rolling")
 DEFAULT_SLEEP_CHART_MODE = "segments"
+CHINESE_FONT_FAMILIES = ("microsoft-yahei", "noto-sans-sc", "microsoft-jhenghei", "pingfang-sc")
+DEFAULT_CHINESE_FONT_FAMILY = "microsoft-yahei"
 
 DEFAULT_SETTINGS = {
     "version": SETTINGS_VERSION,
@@ -90,6 +92,7 @@ DEFAULT_SETTINGS = {
     "action_plan_auto_generate": True,
     "action_plan_check_interval_minutes": 60,
     "sleep_chart_mode": DEFAULT_SLEEP_CHART_MODE,
+    "chinese_font_family": DEFAULT_CHINESE_FONT_FAMILY,
     "clothing_workbook_path": "",
     "body_analysis_enabled": False,
     "body_analysis_leg_dir": "",
@@ -470,6 +473,9 @@ def _sanitize_settings(payload: dict | None) -> dict:
         "theme_mode": _coerce_theme_mode(payload),
         "action_plan_auto_generate": _coerce_bool(payload, "action_plan_auto_generate", True),
         "action_plan_check_interval_minutes": interval,
+        "chinese_font_family": ((payload or {}).get("chinese_font_family")
+                                if (payload or {}).get("chinese_font_family") in CHINESE_FONT_FAMILIES
+                                else DEFAULT_CHINESE_FONT_FAMILY),
         "sleep_chart_mode": ((payload or {}).get("sleep_chart_mode")
                              if (payload or {}).get("sleep_chart_mode") in SLEEP_CHART_MODES
                              else DEFAULT_SLEEP_CHART_MODE),
@@ -676,6 +682,8 @@ def load_settings(settings_file: str | Path | None = None) -> dict:
 
 def save_settings(payload: dict | None, settings_file: str | Path | None = None) -> dict:
     with USER_CONFIG_LOCK:
+        if isinstance(payload, dict) and "chinese_font_family" in payload and payload["chinese_font_family"] not in CHINESE_FONT_FAMILIES:
+            raise ValueError("chinese_font_family must name a supported Chinese font")
         if isinstance(payload, dict) and "sleep_chart_mode" in payload and payload["sleep_chart_mode"] not in SLEEP_CHART_MODES:
             raise ValueError("sleep_chart_mode must be total, segments, monthly, or rolling")
         resolved_settings_file = Path(settings_file) if settings_file else get_settings_file()

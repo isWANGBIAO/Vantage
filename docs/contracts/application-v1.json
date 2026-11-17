@@ -1837,6 +1837,17 @@
               "title": "Sleep Chart Mode",
               "type": "string"
             },
+            "chinese_font_family": {
+              "default": "microsoft-yahei",
+              "enum": [
+                "microsoft-yahei",
+                "noto-sans-sc",
+                "microsoft-jhenghei",
+                "pingfang-sc"
+              ],
+              "title": "Chinese Font Family",
+              "type": "string"
+            },
             "clothing_workbook_path": {
               "default": "",
               "title": "Clothing Workbook Path",
@@ -3001,6 +3012,16 @@
             "segments",
             "monthly",
             "rolling"
+          ]
+        },
+        "chinese_font_family": {
+          "type": "string",
+          "description": "Explicit local Chinese font selection; no font download.",
+          "enum": [
+            "microsoft-yahei",
+            "noto-sans-sc",
+            "microsoft-jhenghei",
+            "pingfang-sc"
           ]
         },
         "clothing_workbook_path": {

@@ -303,7 +303,7 @@ function WarningPanel({ warnings, onSelectChart, availableChartIds, themeTokens,
                         background: themeTokens.warningPanelDetailBackground,
                         color: themeTokens.warningPanelDetailText,
                         fontSize: 13,
-                        fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+                        fontFamily: 'var(--font-mono)',
                       }}
                     >
                       {detail}
@@ -411,7 +411,7 @@ function ChartInlineWarnings({ warnings, themeTokens, t }) {
               color: themeTokens.warningPanelDetailText,
               fontSize: 12,
               lineHeight: 1.6,
-              fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+              fontFamily: 'var(--font-mono)',
             }}
           >
             <strong>{item.title}</strong>

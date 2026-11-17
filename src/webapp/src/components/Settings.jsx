@@ -44,6 +44,13 @@ const THEME_OPTIONS = [
   { value: 'light', labelKey: 'settings.general.theme_light' },
 ];
 
+const CHINESE_FONT_OPTIONS = [
+  { value: 'microsoft-yahei', label: '微软雅黑' },
+  { value: 'noto-sans-sc', label: 'Noto Sans SC' },
+  { value: 'microsoft-jhenghei', label: '微軟正黑體' },
+  { value: 'pingfang-sc', label: 'PingFang SC' },
+];
+
 const DEFAULT_VOICE_MODEL = 'FunAudioLLM/SenseVoiceSmall';
 const PROVIDER_MODE_OPTIONS = [
   { value: 'inherit_ai', labelKey: 'settings.provider.mode.inherit_ai' },
@@ -181,6 +188,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     displayLanguage,
     theme: currentTheme,
     themeMode: currentThemeMode,
+    chineseFontFamily: 'microsoft-yahei',
     launchAtLogin: false,
     actionPlanAutoGenerate: true,
     voiceProviderMode: 'inherit_ai',
@@ -256,6 +264,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
           displayLanguage: nextState.settings.displayLanguage || initialFormDefaults.current.displayLanguage,
           theme: nextState.settings.theme || initialFormDefaults.current.theme,
           themeMode: nextState.settings.themeMode || nextState.settings.theme || initialFormDefaults.current.themeMode,
+          chineseFontFamily: nextState.settings.chineseFontFamily || 'microsoft-yahei',
           launchAtLogin: Boolean(nextState.settings.launchAtLogin),
           actionPlanAutoGenerate: nextState.settings.actionPlanAutoGenerate !== false,
           voiceProviderMode: nextState.settings.voiceProviderMode || 'inherit_ai',
@@ -312,6 +321,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       `language=${form.displayLanguage}`,
       `theme=${form.theme}`,
       `themeMode=${form.themeMode}`,
+      `chineseFontFamily=${form.chineseFontFamily}`,
       `actionPlanAutoGenerate=${form.actionPlanAutoGenerate}`,
       `voiceProviderMode=${form.voiceProviderMode}`,
       `voiceBaseUrl=${form.voiceBaseUrl || ''}`,
@@ -327,6 +337,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
     form.providerConfig.selected_provider,
     form.theme,
     form.themeMode,
+    form.chineseFontFamily,
     form.voiceProviderMode,
     form.voiceBaseUrl,
     form.voiceModel,
@@ -598,6 +609,7 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
         displayLanguage: savedState.settings.displayLanguage,
         theme: savedState.settings.theme,
         themeMode: savedState.settings.themeMode,
+        chineseFontFamily: savedState.settings.chineseFontFamily || 'microsoft-yahei',
         launchAtLogin: Boolean(savedState.settings.launchAtLogin),
         actionPlanAutoGenerate: savedState.settings.actionPlanAutoGenerate !== false,
         voiceProviderMode: savedState.settings.voiceProviderMode || 'inherit_ai',
@@ -698,6 +710,20 @@ export default function Settings({ currentTheme = 'dark', currentThemeMode = 'da
       <SettingsRow label={t('settings.general.system_locale')}>
         <span>{systemLocale}</span>
       </SettingsRow>
+      <SettingsRow label={t('settings.general.chinese_font')}>
+        <select
+          aria-label={t('settings.general.chinese_font')}
+          aria-describedby="settings-chinese-font-hint"
+          className="settings-input settings-chinese-font-select"
+          value={form.chineseFontFamily}
+          onChange={(event) => setForm((prev) => ({ ...prev, chineseFontFamily: event.target.value }))}
+        >
+          {CHINESE_FONT_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </SettingsRow>
+      <p id="settings-chinese-font-hint" className="settings-status-line">{t('settings.general.chinese_font_hint')}</p>
       <SettingsRow label={t('settings.general.theme')}>
         <div className="settings-segmented">
           {THEME_OPTIONS.map((option) => (

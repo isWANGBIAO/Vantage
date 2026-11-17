@@ -67,6 +67,8 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 
 ## 用户可见操作映射
 
+设置→通用→中文字体通过同一settings.json的`chinese_font_family`保存，默认`microsoft-yahei`，可选`noto-sans-sc`、`microsoft-jhenghei`、`pingfang-sc`。字体选择独立于显示语言；成功保存后统一更新正文、标题、控件、代码/日志、Never Stop Shadow DOM及ECharts Canvas/HTML提示框，重开后保留。只使用本机字体，不下载或打包字体；所选字体缺失时明确后备到微软雅黑、苹方及系统字体。正常英文/数字保留Inter、Segoe UI或Consolas优先级。
+
 图表页可见时每30秒自动核对来源，切回图表页或恢复窗口焦点时立即核对；隐藏页面暂停请求，返回时补查。后端对Time.xlsx和Balance Sheet.xlsx全部内容计算版本，不只看最近记录，也覆盖文件替换、删除、重建和跨日财务口径。`plots.read`可传上次成功的`known_revision`；数据未变化返回`unchanged`，不重新计算或重绘。新数据完整读取后更新，保留显示模式和缩放；并发请求合并，变化中的工作簿不发布为完整缓存。暂时读取失败时保留原有对应图表、明确提示并重试；确定性无数据则清空相应旧图，不用过期数据冒充新结果。只在本机读取，不修改原表，也不触发AI分析。
 
 “衣服尺码”页只使用一个现有Excel、一个Sheet1作为业务数据源；默认在既有个人数据根寻找衣服尺寸工作簿，也可通过共享settings.json的`clothing_workbook_path`指定。每次先复制稳定临时快照，保存要求版本指纹一致且Excel未占用；有冲突保留草稿，禁止自动重试覆盖。原A:J历史记录不重解释或重写，K:S保存试穿记录，额外口径元数据存同表S列注释；复杂Excel结构拒绝回写，避免静默丢失。新尺寸追加，已有行仅更新试穿反馈。

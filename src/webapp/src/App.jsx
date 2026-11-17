@@ -1,5 +1,6 @@
 import { getPlatformAdapter } from './utils/platformAdapter';
-import { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { FontFamilyContext, getFontFamilies } from './utils/fontFamily.js';
 import { Moon, Settings as SettingsIcon, Sun } from 'lucide-react';
 import './App.css';
 import appIcon from '../assets/icon.png';
@@ -118,6 +119,8 @@ function AppShell() {
   const [systemTheme, setSystemTheme] = useState(() => resolveSystemTheme());
   const theme = resolveEffectiveTheme(themeMode, systemTheme);
   const [settingsState, setSettingsState] = useState(null);
+  const [chineseFontFamily, setChineseFontFamily] = useState('microsoft-yahei');
+  const fontFamilies = useMemo(() => getFontFamilies(chineseFontFamily), [chineseFontFamily]);
   const [settingsError, setSettingsError] = useState(null);
   const settingsReady = Boolean(settingsState);
   const [backgroundTabsReady, setBackgroundTabsReady] = useState(false);
@@ -136,6 +139,11 @@ function AppShell() {
     getPlatformAdapter().capabilities.customTitleBar
       ? 'app-layout app-layout--electron'
       : 'app-layout';
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--font-main', fontFamilies.main);
+    document.documentElement.style.setProperty('--font-mono', fontFamilies.mono);
+  }, [fontFamilies]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -206,6 +214,7 @@ function AppShell() {
         setThemeMode(nextThemeMode);
       }
       setSettingsState(nextState);
+      setChineseFontFamily(nextState.settings?.chineseFontFamily || 'microsoft-yahei');
     };
 
     void initializeSettingsState().catch((error) => {
@@ -345,6 +354,7 @@ function AppShell() {
   const handlePickLegacyRoot = async () => pickLegacyRoot();
 
   const handleSettingsApplied = (settings) => {
+    if (settings?.chineseFontFamily) setChineseFontFamily(settings.chineseFontFamily);
     if (settings?.themeMode || settings?.theme) {
       const nextThemeMode = settings.themeMode || settings.theme || themeMode;
       setThemeMode(nextThemeMode);
@@ -427,6 +437,7 @@ function AppShell() {
   }
 
   return (
+    <FontFamilyContext.Provider value={fontFamilies}>
     <div className={appLayoutClassName}>
       <header
         className="app-header"
@@ -586,6 +597,7 @@ function AppShell() {
           </footer>
         )}
     </div>
+    </FontFamilyContext.Provider>
   );
 }
 

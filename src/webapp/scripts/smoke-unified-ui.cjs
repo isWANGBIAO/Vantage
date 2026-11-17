@@ -999,6 +999,45 @@ async function exerciseUi() {
     await waitFor('diagnostics storage failure is visible and cannot open', () => document.querySelector('.settings-diagnostics')?.textContent.includes('不可用') && document.querySelector('.settings-diagnostics button')?.disabled === true);
     await checkErrors();
     console.log('PASS Chinese privacy copy and unavailable diagnostics without blocking UI');
+    await click('.settings-sidebar button', '通用');
+    for (const [id, family] of [['noto-sans-sc', 'Noto Sans SC'], ['microsoft-yahei', 'Microsoft YaHei']]) {
+        await evaluate(id => {
+            const select = document.querySelector('.settings-chinese-font-select');
+            select.value = id; select.dispatchEvent(new Event('change', { bubbles: true }));
+        }, id);
+        await click('.settings-save-button');
+        await waitFor('font choice applies only after shared settings save', family => {
+            const value = getComputedStyle(document.documentElement).getPropertyValue('--font-main');
+            return value.includes(family) && (family !== 'Microsoft YaHei' || !value.includes('Noto Sans SC'));
+        }, family);
+        assert.equal(settings.chinese_font_family, id);
+    }
+    await closeWindow(); await createWindow();
+    await waitFor('saved Chinese font survives new window', () =>
+        document.querySelectorAll('.app-nav a').length === 9
+        && getComputedStyle(document.documentElement).getPropertyValue('--font-main').includes('Microsoft YaHei'));
+    await window.webContents.debugger.sendCommand('DOM.enable');
+    await window.webContents.debugger.sendCommand('CSS.enable');
+    for (const lang of ['en', 'zh-CN']) {
+        await evaluate(lang => {
+            document.documentElement.lang = lang;
+            let sample = document.getElementById('font-policy-sample');
+            if (!sample) { sample = document.createElement('section'); sample.id = 'font-policy-sample'; document.body.append(sample); }
+            sample.innerHTML = '<h2 id="font-policy-heading">长期行动计划</h2><p id="font-policy-body">中文字体固定测试</p>';
+        }, lang);
+        await window.webContents.capturePage();
+        const { root: doc } = await window.webContents.debugger.sendCommand('DOM.getDocument');
+        for (const selector of ['#font-policy-heading', '#font-policy-body']) {
+            const { nodeId } = await window.webContents.debugger.sendCommand('DOM.querySelector', { nodeId: doc.nodeId, selector });
+            const { fonts } = await window.webContents.debugger.sendCommand('CSS.getPlatformFontsForNode', { nodeId });
+            if (process.platform === 'win32') {
+                assert.ok(fonts.length > 0, 'Expected actual rendered CJK glyphs');
+                assert.ok(fonts.every(font => /^MicrosoftYaHei/i.test(font.postScriptName)), JSON.stringify(fonts));
+            }
+        }
+    }
+    await evaluate(() => { document.getElementById('font-policy-sample').remove(); document.documentElement.lang = 'en'; });
+    console.log('PASS font choice persists; actual Windows Chinese heading/body use Microsoft YaHei under English and Chinese document languages');
     if (runsRecoveryCase('sleep-modes')) {
         await navigate('plots', '.app-main', 'Synthetic sleep chart');
         await waitFor('loaded sleep preference', () => document.querySelectorAll('.sleep-average-modes button:not(:disabled)').length === 4);
