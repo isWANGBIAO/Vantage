@@ -116,8 +116,11 @@ async function runBuilder(payloadFile) {
   Object.assign(process.env, createBuildEnvironment(process.env, root));
   fs.mkdirSync(process.env.TEMP, { recursive: true });
   const { build, Platform, Arch } = require('electron-builder');
-  assert.equal(require('electron-builder/package.json').version, '26.15.3');
-  assert.equal(require('electron/package.json').version, '42.11.14');
+  const lock = require('../package-lock.json');
+  const builder = require('electron-builder/package.json').version;
+  const electron = require('electron/package.json').version;
+  assert.equal(builder, lock.packages['node_modules/electron-builder'].version);
+  assert.equal(electron, lock.packages['node_modules/electron'].version);
   const configFile = path.join(root, 'builder-config.json');
   fs.writeFileSync(configFile, JSON.stringify(payload.config));
   const options = createBuildOptions(configFile);
@@ -144,7 +147,7 @@ async function runBuilder(payloadFile) {
   }
   console.log(JSON.stringify({
     scope: 'synthetic-backend Windows unpacked and NSIS compilation only; no launch or installation',
-    builder: '26.15.3', electron: '42.11.14',
+    builder, electron,
     productionEntriesAndCliVerified: true,
     buildOnlyDependenciesExcluded: true,
     installerBytes: fs.statSync(installer).size,

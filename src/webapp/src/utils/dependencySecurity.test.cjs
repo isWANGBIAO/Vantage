@@ -63,7 +63,7 @@ test('the lockfile does not contain unpatched sprintf-js', () => {
   assert.deepEqual(instances('sprintf-js').map(([location]) => location), [])
 })
 
-test('security refresh preserves production roots and the current Electron builder toolchain', () => {
+test('production roots and the reviewed Electron builder toolchain remain unchanged', () => {
   const productionRoots = {
     echarts: '^6.1.0',
     'echarts-for-react': '^3.0.2',
@@ -76,13 +76,15 @@ test('security refresh preserves production roots and the current Electron build
   }
   assert.deepEqual(manifest.dependencies, productionRoots)
   assert.deepEqual(lock.packages[''].dependencies, productionRoots)
-  assert.equal(manifest.devDependencies.electron, '^42.11.14')
-  assert.equal(manifest.devDependencies['electron-builder'], '^26.15.3')
+  const directTools = { electron: '42.11.18', 'electron-builder': '26.18.0' }
+  for (const [name, version] of Object.entries(directTools)) {
+    assert.equal(manifest.devDependencies[name], `^${version}`)
+    assert.equal(lock.packages[''].devDependencies[name], `^${version}`)
+  }
   for (const [name, expected] of Object.entries({
-    electron: '42.11.14',
-    'electron-builder': '26.15.3',
-    'app-builder-lib': '26.15.3',
-    'dmg-builder': '26.15.3',
+    ...directTools,
+    'app-builder-lib': directTools['electron-builder'],
+    'dmg-builder': directTools['electron-builder'],
   })) {
     const installed = instances(name)
     assert.ok(installed.length > 0, `${name} must remain installed`)

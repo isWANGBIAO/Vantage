@@ -93,9 +93,10 @@ def test_python_ci_step_isolates_vantage_runtime_dirs():
 
 
 def test_frontend_workflows_pin_electron_node_runtime():
-    expected_electron_version = "42.11.14"
+    # https://releases.electronjs.org/release/v42.11.18 publishes this Node pairing.
+    expected_electron_version = "42.11.18"
     expected_electron_range = f"^{expected_electron_version}"
-    expected_node_version = "24.18.0"
+    expected_node_version = "24.19.0"
 
     package = json.loads(Path("src/webapp/package.json").read_text(encoding="utf-8"))
     package_lock = json.loads(
@@ -129,8 +130,8 @@ def test_frontend_workflows_pin_electron_node_runtime():
         )
 
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert 'alt="Node.js 24.18.0"' in readme
-    assert "Node.js-24.18.0-" in readme
+    assert f'alt="Node.js {expected_node_version}"' in readme
+    assert f"Node.js-{expected_node_version}-" in readme
     assert f'alt="Electron {expected_electron_version}"' in readme
     assert f"Electron-{expected_electron_version}-" in readme
 
@@ -234,7 +235,7 @@ def test_macos_runtime_smoke_covers_only_arm64_yunet_dependencies():
     assert "matrix:" not in macos_job
     assert "macos-15-intel" not in macos_job
     assert re.search(NODE_24_ACTION_PIN.format(action="setup-node"), macos_job)
-    assert 'node-version: "24.18.0"' in macos_job
+    assert 'node-version: "24.19.0"' in macos_job
     assert "cache-dependency-path: src/webapp/package-lock.json" in macos_job
     assert 'python-version: "3.11"' in macos_job
     assert re.search(NODE_24_ACTION_PIN.format(action="setup-python"), macos_job)
