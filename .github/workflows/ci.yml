@@ -55,7 +55,7 @@ jobs:
           lfs: false
       - uses: actions/setup-node@v4
         with:
-          node-version: "24.18.0"
+          node-version: "24.19.0"
           cache: npm
           cache-dependency-path: src/webapp/package-lock.json
       - name: Install frontend dependencies
@@ -104,7 +104,7 @@ jobs:
           lfs: false
       - uses: actions/setup-node@v4
         with:
-          node-version: "24.18.0"
+          node-version: "24.19.0"
           cache: npm
           cache-dependency-path: src/webapp/package-lock.json
       - uses: actions/setup-python@v5
