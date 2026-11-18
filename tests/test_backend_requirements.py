@@ -364,8 +364,10 @@ def test_development_requirements_keep_resolvable_cuda_and_compatibility_pins():
     ), "Keep the explicit Windows CUDA build rather than allowing a CPU fallback"
 
     expected = {
+        "contourpy": {"contourpy==1.3.3"},
         "ipykernel": {"ipykernel==6.31.0"},
         "mpmath": {"mpmath==1.4.1"},
+        "networkx": {"networkx==3.6.1"},
         "webcolors": {"webcolors==25.10.0"},
     }
     for package_name, expected_lines in expected.items():
