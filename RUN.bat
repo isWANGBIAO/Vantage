@@ -10,7 +10,8 @@ echo.
 set "PROJECT_ROOT=%~dp0"
 set "PROJECT_ROOT_ARG=%PROJECT_ROOT:~0,-1%"
 cd /d "%PROJECT_ROOT%"
-python -c "import sys; sys.exit(sys.version_info[:2] != (3, 11))" >nul 2>&1
+rem Avoid ! in the Python expression: cmd.exe strips it under delayed expansion.
+python -c "import sys; sys.exit(sys.version_info[:2] not in [(3, 11)])" >nul 2>&1
 if errorlevel 1 (
     echo       Vantage requires Python 3.11 on PATH. Activate its environment and retry.
     exit /b 1
