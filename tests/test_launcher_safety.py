@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -427,6 +428,48 @@ def test_windows_launchers_check_python311_before_cleanup_or_build():
             source,
             ("sys.version_info[:2]", "(3, 11)", "Vantage requires Python 3.11", first_step),
         )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows cmd.exe")
+@pytest.mark.parametrize(
+    ("version_override", "expected_exit"),
+    [(None, 0), ((3, 10), 1), ((3, 13), 1)],
+)
+def test_run_bat_python_guard_under_cmd(tmp_path, version_override, expected_exit):
+    source = Path("RUN.bat").read_text(encoding="utf-8")
+    preflight = source[: source.index('set "INSTALL_ROOT=')]
+    # Run the actual header, including its setlocal flags, without installing.
+    launcher = tmp_path / "preflight.bat"
+    launcher.write_text(
+        preflight + "echo PYTHON_CHECK_PASSED\nexit /b 0\n",
+        encoding="utf-8",
+        newline="\r\n",
+    )
+    cmd = Path(os.environ["COMSPEC"])
+    env = {
+        **os.environ,
+        "PATH": os.pathsep.join((str(Path(sys.executable).parent), str(cmd.parent))),
+    }
+    env.pop("PYTHONPATH", None)
+    if version_override is not None:
+        (tmp_path / "sitecustomize.py").write_text(
+            f"import sys\nsys.version_info = {version_override!r}\n",
+            encoding="utf-8",
+        )
+        env["PYTHONPATH"] = str(tmp_path)
+
+    result = subprocess.run(
+        [str(cmd), "/d", "/c", launcher.name],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == expected_exit, result.stdout + result.stderr
+    assert ("PYTHON_CHECK_PASSED" in result.stdout) == (expected_exit == 0)
+    assert ("Vantage requires Python 3.11" in result.stdout) == (expected_exit != 0)
 
 
 def test_macos_development_server_cannot_override_the_fixed_runtime_python():
