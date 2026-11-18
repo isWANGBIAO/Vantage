@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.core import backend_environment_state as backend_state
+from src.scripts import sync_backend_runtime_environment as sync_cli
 from src.core.backend_environment_state import (
     BACKEND_ENVIRONMENT_STATE_NAME,
     BACKEND_ENVIRONMENT_STATE_SCHEMA_VERSION,
@@ -43,6 +44,22 @@ CLEAN_CLOSURE = [
     "opencv-contrib-python==4.14.0.94",
     "pip==25.3",
 ]
+
+
+def test_cli_rejects_non_311_before_synchronizing(monkeypatch, capsys):
+    monkeypatch.setattr(sync_cli.sys, "version_info", (3, 13, 5))
+
+    def unexpected_sync(**_kwargs):
+        pytest.fail("Unsupported Python must not synchronize or replace an environment")
+
+    monkeypatch.setattr(sync_cli, "synchronize_backend_runtime_environment", unexpected_sync)
+    assert sync_cli.main([
+        "--project-root", ".", "--venv", ".venv-backend-runtime-gpu",
+        "--core-requirements", "requirements-core.txt",
+        "--requirements", "requirements-backend-runtime-gpu.txt",
+        "--opencv-normalizer", "src/scripts/normalize_opencv_installation.py",
+    ]) == 1
+    assert "requires Python 3.11" in capsys.readouterr().err
 
 
 def _write_requirements(project_root: Path) -> tuple[Path, Path, Path]:

@@ -1,5 +1,7 @@
 import os
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 import time
 
@@ -13,6 +15,16 @@ def _bash_function(launcher_path: Path, function_name: str) -> str:
     return launcher[start:end]
 
 
+def _synthetic_python(path: Path, version: tuple[int, int]) -> Path:
+    code = f"import sys; sys.version_info = {version!r}; exec(sys.argv[1])"
+    path.write_text(
+        f'#!/bin/bash\nexec {shlex.quote(sys.executable)} -c {shlex.quote(code)} "$2"\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def test_macos_cleanup_prefers_existing_runtime_python_under_lifecycle_lock_before_sync():
     for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
         launcher = launcher_path.read_text(encoding="utf-8")
@@ -24,6 +36,7 @@ def test_macos_cleanup_prefers_existing_runtime_python_under_lifecycle_lock_befo
 
         assert "select_backend_cleanup_python" in launcher
         assert '[[ -x "$BACKEND_RUNTIME_PYTHON" ]]' in launcher
+        assert 'python_supports_backend_venv "$BACKEND_RUNTIME_PYTHON"' in launcher
         assert '"$BACKEND_CLEANUP_PYTHON"' in launcher
         assert selector_index < cleanup_index < sync_index
         assert '"$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_LOCK_RUNNER"' in launcher[
@@ -32,35 +45,31 @@ def test_macos_cleanup_prefers_existing_runtime_python_under_lifecycle_lock_befo
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX shell process semantics")
-def test_macos_cleanup_python_selector_falls_back_only_when_runtime_is_unusable():
+def test_macos_cleanup_python_selector_falls_back_for_old_or_unusable_runtime(tmp_path):
+    runtime = _synthetic_python(tmp_path / "runtime-python", (3, 11))
+    old_runtime = _synthetic_python(tmp_path / "old-runtime-python", (3, 13))
+    bootstrap = _synthetic_python(tmp_path / "bootstrap-python", (3, 11))
     for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
-        function_source = _bash_function(
-            launcher_path,
-            "select_backend_cleanup_python",
-        )
+        selector = _bash_function(launcher_path, "select_backend_cleanup_python")
+        probe = _bash_function(launcher_path, "python_supports_backend_venv")
         harness = f"""
 set -eu
-temp_dir="$(mktemp -d "${{TMPDIR:-/tmp}}/vantage-cleanup.XXXXXX")"
-trap 'rm -rf "$temp_dir"' EXIT
-cd "$temp_dir"
-BOOTSTRAP_PYTHON="$temp_dir/bootstrap-python"
-BACKEND_RUNTIME_PYTHON="$temp_dir/runtime-python"
-: > "$BOOTSTRAP_PYTHON"
-: > "$BACKEND_RUNTIME_PYTHON"
-chmod +x "$BOOTSTRAP_PYTHON" "$BACKEND_RUNTIME_PYTHON"
-{function_source}
+BOOTSTRAP_PYTHON={shlex.quote(str(bootstrap))}
+BACKEND_RUNTIME_PYTHON={shlex.quote(str(runtime))}
+{probe}
+{selector}
 select_backend_cleanup_python
-chmod -x "$BACKEND_RUNTIME_PYTHON"
+BACKEND_RUNTIME_PYTHON={shlex.quote(str(old_runtime))}
 select_backend_cleanup_python
-rm -f "$BACKEND_RUNTIME_PYTHON"
+BACKEND_RUNTIME_PYTHON={shlex.quote(str(tmp_path / 'missing'))}
 select_backend_cleanup_python
-rm -f "$BOOTSTRAP_PYTHON"
 """
         result = subprocess.run(
             ["bash", "-s"],
             input=harness.encode("utf-8"),
             capture_output=True,
             check=False,
+            timeout=8,
         )
 
         stderr = result.stderr.decode("utf-8", errors="replace")
@@ -128,3 +137,13 @@ def test_bootstrap_probe_uses_no_unbounded_output_file_and_owns_process_group():
         assert 'kill -TERM -- "-$probe_pid"' in function_source
         assert 'kill -KILL -- "-$probe_pid"' in function_source
         assert ">/dev/null 2>&1" in function_source
+
+
+def test_macos_bootstrap_has_a_single_supported_python_minor():
+    for launcher_path in (Path("RUN.sh"), Path("RUN_DEV.sh")):
+        resolver = _bash_function(launcher_path, "resolve_bootstrap_python")
+        probe = _bash_function(launcher_path, "python_supports_backend_venv")
+        assert '(3, 11)' in probe
+        assert 'command -v python3.11' in resolver
+        assert 'Python 3.11 with venv support' in resolver
+        assert 'python3.13' not in launcher_path.read_text(encoding="utf-8")

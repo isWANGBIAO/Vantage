@@ -69,7 +69,7 @@ the platform user-data directory, not in this repository.
 
 ## Requirements
 
-- Python 3.11 recommended for local backend packaging; CI also validates Python 3.13.
+- Python 3.11 is the Vantage backend version for local development, CI, and packaging on Windows and macOS. On Windows, `python` on PATH must point to Python 3.11.
 - Node.js 24.18.0 recommended for the frontend.
 - Windows is the primary packaging target. macOS scripts are included for source
   and packaged workflows.

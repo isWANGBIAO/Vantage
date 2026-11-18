@@ -11,19 +11,15 @@ permissions:
 
 jobs:
   python:
-    name: Python tests
+    name: Python 3.11 tests
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: false
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: |
             requirements-core.txt
@@ -109,7 +105,7 @@ jobs:
           cache-dependency-path: src/webapp/package-lock.json
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: |
             requirements-core.txt
@@ -189,4 +185,4 @@ jobs:
           echo "$refresh_output"
           grep -q "signatures refreshed" <<<"$refresh_output"
       - name: Check macOS launcher syntax
-        run: bash -n RUN.sh RUN_DEV.sh
+        run: bash -n RUN.sh && bash -n RUN_DEV.sh

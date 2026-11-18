@@ -28,7 +28,7 @@ BACKEND_RUNTIME_SIGNER="${PROJECT_ROOT}/src/scripts/sign_macos_backend_runtime.p
 MACOS_ARTIFACT_SIGNER="${PROJECT_ROOT}/src/scripts/sign_macos_artifacts.py"
 BACKEND_RUNTIME_STATE="${BACKEND_RUNTIME_VENV}/.vantage-backend-runtime-state.json"
 BACKEND_RUNTIME_CODESIGN_STAMP="${BACKEND_RUNTIME_VENV}/.macos-native-codesign.sha256"
-LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.13.5/bin/python3.13"
+LOCAL_BOOTSTRAP_PYTHON="${PROJECT_ROOT}/.local-python-3.11/bin/python3.11"
 FRONTEND_ROOT="${PROJECT_ROOT}/src/webapp"
 FRONTEND_NATIVE_CODESIGN_STAMP="${FRONTEND_ROOT}/node_modules/.macos-native-codesign.sha256"
 VANTAGE_BUILD_WORKERS="${VANTAGE_BUILD_WORKERS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
@@ -42,7 +42,7 @@ python_supports_backend_venv() {
         *m*) monitor_was_enabled=1 ;;
     esac
     set -m
-    "$candidate" -c 'import pathlib, sqlite3, ssl, subprocess, venv' >/dev/null 2>&1 &
+    "$candidate" -c 'import pathlib, sqlite3, ssl, subprocess, sys, venv; sys.exit(sys.version_info[:2] != (3, 11))' >/dev/null 2>&1 &
     probe_pid=$!
     if (( monitor_was_enabled == 0 )); then
         set +m
@@ -89,7 +89,7 @@ resolve_bootstrap_python() {
     if [[ -n "${BOOTSTRAP_PYTHON:-}" ]]; then
         candidates+=("$BOOTSTRAP_PYTHON")
     fi
-    candidates+=("/opt/homebrew/bin/python3.13" "$LOCAL_BOOTSTRAP_PYTHON")
+    candidates+=("$(command -v python3.11 || true)" "/opt/homebrew/bin/python3.11" "/usr/local/bin/python3.11" "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11" "$LOCAL_BOOTSTRAP_PYTHON")
 
     local path_python
     path_python="$(command -v python3 || true)"
@@ -105,7 +105,7 @@ resolve_bootstrap_python() {
         fi
     done
 
-    echo "No usable Python found for backend runtime venv creation." >&2
+    echo "Vantage requires Python 3.11 with venv support. Install Python 3.11 or set BOOTSTRAP_PYTHON to its executable." >&2
     exit 1
 }
 
@@ -113,7 +113,7 @@ BOOTSTRAP_PYTHON="$(resolve_bootstrap_python)"
 export VANTAGE_BOOTSTRAP_PYTHON="$BOOTSTRAP_PYTHON"
 
 select_backend_cleanup_python() {
-    if [[ -x "$BACKEND_RUNTIME_PYTHON" ]]; then
+    if [[ -x "$BACKEND_RUNTIME_PYTHON" ]] && python_supports_backend_venv "$BACKEND_RUNTIME_PYTHON"; then
         printf '%s\n' "$BACKEND_RUNTIME_PYTHON"
         return 0
     fi

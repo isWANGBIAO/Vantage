@@ -901,6 +901,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
+    if sys.version_info[:2] != (3, 11):
+        print("Vantage backend environment synchronization requires Python 3.11.", file=sys.stderr)
+        return 1
     try:
         outcome = synchronize_backend_runtime_environment(
             project_root=args.project_root,

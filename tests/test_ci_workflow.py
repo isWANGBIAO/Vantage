@@ -211,7 +211,7 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert "actions/setup-node@v4" in macos_job
     assert 'node-version: "24.18.0"' in macos_job
     assert "cache-dependency-path: src/webapp/package-lock.json" in macos_job
-    assert 'python-version: "3.13"' in macos_job
+    assert 'python-version: "3.11"' in macos_job
     assert "actions/setup-python@v5" in macos_job
     assert (
         "- uses: actions/checkout@v4\n"
@@ -234,7 +234,7 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert "cv2.FaceDetectorYN_create" in macos_job
     assert "src/models/face_detection_yunet_2023mar.onnx" in macos_job
     assert "detector.detect" in macos_job
-    assert "bash -n RUN.sh RUN_DEV.sh" in macos_job
+    assert "bash -n RUN.sh && bash -n RUN_DEV.sh" in macos_job
     assert "tests/test_backend_runtime_lock.py" in macos_job
     assert "tests/test_sign_macos_backend_runtime.py" in macos_job
     assert "tests/test_sign_macos_artifacts.py" in macos_job
