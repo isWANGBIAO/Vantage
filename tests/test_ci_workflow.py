@@ -5,6 +5,32 @@ from pathlib import Path
 import pytest
 
 
+NODE_24_ACTION_PIN = (
+    r"actions/{action}@[a-f0-9]{{40}} # v(?:[7-9]|[1-9][0-9]+)\.\d+\.\d+"
+)
+
+
+def test_workflows_use_commit_pinned_node24_setup_actions():
+    setup_actions = {"checkout", "setup-node", "setup-python"}
+    used_actions = set()
+
+    for path in Path(".github/workflows").glob("*.yml"):
+        workflow = path.read_text(encoding="utf-8")
+        for spec, action in re.findall(
+            r"^[ \t]*(?:-[ \t]+)?uses:[ \t]+(actions/([^@\s]+)@[^\n]+)$",
+            workflow,
+            flags=re.MULTILINE,
+        ):
+            if action not in setup_actions:
+                continue
+            used_actions.add(action)
+            assert re.fullmatch(NODE_24_ACTION_PIN.format(action=action), spec), (
+                f"{path} must pin {action} to a Node.js 24-capable release commit"
+            )
+
+    assert used_actions == setup_actions
+
+
 @pytest.mark.parametrize("workflow_name", ["ci.yml", "codeql.yml"])
 def test_verification_workflows_allow_manual_runs_without_bypass_inputs(workflow_name):
     workflow = Path(".github/workflows", workflow_name).read_text(encoding="utf-8")
@@ -207,16 +233,17 @@ def test_macos_runtime_smoke_covers_only_arm64_yunet_dependencies():
     assert "macOS packaged runtime smoke (arm64)" in macos_job
     assert "matrix:" not in macos_job
     assert "macos-15-intel" not in macos_job
-    assert "actions/setup-node@v4" in macos_job
+    assert re.search(NODE_24_ACTION_PIN.format(action="setup-node"), macos_job)
     assert 'node-version: "24.18.0"' in macos_job
     assert "cache-dependency-path: src/webapp/package-lock.json" in macos_job
     assert 'python-version: "3.11"' in macos_job
-    assert "actions/setup-python@v5" in macos_job
-    assert (
-        "- uses: actions/checkout@v4\n"
-        "        with:\n"
-        "          lfs: false"
-    ) in macos_job
+    assert re.search(NODE_24_ACTION_PIN.format(action="setup-python"), macos_job)
+    assert re.search(
+        r"- uses: "
+        + NODE_24_ACTION_PIN.format(action="checkout")
+        + "\n        with:\n          lfs: false",
+        macos_job,
+    )
     assert (
         "cache-dependency-path: |\n"
         "            requirements-core.txt\n"
