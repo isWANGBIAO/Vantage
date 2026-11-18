@@ -105,6 +105,27 @@ def _probe_payload(closure: list[str] = CLEAN_CLOSURE) -> dict[str, object]:
     }
 
 
+def test_intel_mac_sync_leaves_existing_environment_untouched(tmp_path, monkeypatch):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+    monkeypatch.setattr(sync_cli, "current_platform_identity", lambda: {
+        "sys_platform": "darwin", "system": "Darwin", "machine": "x86_64",
+    })
+    monkeypatch.setattr(
+        sync_cli, "remove_conflicting_packaging_environment_libraries",
+        lambda *_: pytest.fail("Unsupported architecture must not modify an existing venv"),
+    )
+    state = (venv / BACKEND_ENVIRONMENT_STATE_NAME).read_bytes()
+    with pytest.raises(ValueError, match="requires native Apple Silicon"):
+        synchronize_backend_runtime_environment(
+            project_root=tmp_path, venv=venv,
+            core_requirements=core, requirements=overlay, opencv_normalizer=normalizer,
+            force=True,
+            remove_tree=lambda *_: pytest.fail("Unsupported architecture must not delete a venv"),
+            run_command=lambda *_args, **_kwargs: pytest.fail("Unsupported architecture must not launch pip"),
+        )
+    assert (venv / BACKEND_ENVIRONMENT_STATE_NAME).read_bytes() == state
+
+
 def _successful_runner(venv: Path, commands: list[list[str]]):
     def run(command, **_kwargs):
         command = [str(part) for part in command]

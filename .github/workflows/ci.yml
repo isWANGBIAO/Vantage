@@ -82,18 +82,8 @@ jobs:
         working-directory: src/webapp
 
   macos-runtime-smoke:
-    name: macOS packaged runtime smoke (${{ matrix.architecture }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            architecture: arm64
-            uname: arm64
-          - runner: macos-15-intel
-            architecture: x64
-            uname: x86_64
+    name: macOS packaged runtime smoke (arm64)
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -112,7 +102,9 @@ jobs:
             requirements-ci.txt
             requirements-backend-runtime-gpu.txt
       - name: Check runner architecture
-        run: test "$(uname -m)" = "${{ matrix.uname }}"
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(node -p process.arch)" = arm64
       - name: Exercise POSIX runtime and macOS signing safety contracts
         run: |
           python -m venv .venv-lock-test

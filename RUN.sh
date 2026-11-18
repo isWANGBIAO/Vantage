@@ -10,6 +10,14 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "RUN.sh is the macOS launcher. Use RUN.bat on Windows."
     exit 1
 fi
+if [[ "$(uname -m)" != "arm64" ]]; then
+    echo "Vantage on macOS requires Apple Silicon and a native arm64 shell (not Rosetta)." >&2
+    exit 1
+fi
+if [[ "$(node -p 'process.arch' 2>/dev/null)" != "arm64" ]]; then
+    echo "Vantage on macOS requires native arm64 Node.js on PATH." >&2
+    exit 1
+fi
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_ROOT"
@@ -42,7 +50,7 @@ python_supports_backend_venv() {
         *m*) monitor_was_enabled=1 ;;
     esac
     set -m
-    "$candidate" -c 'import pathlib, sqlite3, ssl, subprocess, sys, venv; sys.exit(sys.version_info[:2] != (3, 11))' >/dev/null 2>&1 &
+    "$candidate" -c 'import pathlib, platform, sqlite3, ssl, subprocess, sys, venv; sys.exit(sys.version_info[:2] != (3, 11) or platform.machine() != "arm64")' >/dev/null 2>&1 &
     probe_pid=$!
     if (( monitor_was_enabled == 0 )); then
         set +m
@@ -89,7 +97,7 @@ resolve_bootstrap_python() {
     if [[ -n "${BOOTSTRAP_PYTHON:-}" ]]; then
         candidates+=("$BOOTSTRAP_PYTHON")
     fi
-    candidates+=("$(command -v python3.11 || true)" "/opt/homebrew/bin/python3.11" "/usr/local/bin/python3.11" "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11" "$LOCAL_BOOTSTRAP_PYTHON")
+    candidates+=("$(command -v python3.11 || true)" "/opt/homebrew/bin/python3.11" "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11" "$LOCAL_BOOTSTRAP_PYTHON")
 
     local path_python
     path_python="$(command -v python3 || true)"
@@ -105,7 +113,7 @@ resolve_bootstrap_python() {
         fi
     done
 
-    echo "Vantage requires Python 3.11 with venv support. Install Python 3.11 or set BOOTSTRAP_PYTHON to its executable." >&2
+    echo "Vantage requires Python 3.11 with venv support running natively as arm64. Set BOOTSTRAP_PYTHON to a compatible executable." >&2
     exit 1
 }
 
@@ -322,13 +330,13 @@ step_done "Backend runtime verification complete"
 
 step_start "[6/8] Building macOS app package..."
 clean_macos_package_outputs
-npm --prefix "${FRONTEND_ROOT}" run electron:package -- --mac
+npm --prefix "${FRONTEND_ROOT}" run electron:package -- --mac --arm64
 step_done "macOS app package build complete"
 
 step_start "[7/8] Installing app into ~/Applications..."
-app_path="$(find "${FRONTEND_ROOT}/electron-dist" -maxdepth 3 -type d -name 'Vantage.app' | sort | tail -n 1)"
-if [[ -z "$app_path" ]]; then
-    echo "      Built Vantage.app not found in src/webapp/electron-dist"
+app_path="${FRONTEND_ROOT}/electron-dist/mac-arm64/Vantage.app"
+if [[ ! -d "$app_path" ]]; then
+    echo "      Built arm64 Vantage.app not found in src/webapp/electron-dist/mac-arm64"
     exit 1
 fi
 remove_installed_vantage_apps

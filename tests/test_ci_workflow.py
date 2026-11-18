@@ -197,17 +197,16 @@ def test_python_workflow_caches_include_shared_core_and_environment_overlay():
         )
 
 
-def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
+def test_macos_runtime_smoke_covers_only_arm64_yunet_dependencies():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert "  macos-runtime-smoke:" in workflow
     macos_job = workflow[workflow.index("  macos-runtime-smoke:") :]
 
-    for runner, architecture in (("macos-15", "arm64"), ("macos-15-intel", "x64")):
-        assert runner in macos_job
-        assert architecture in macos_job
-
-    assert "macos-14" not in macos_job
+    assert "runs-on: macos-15\n" in macos_job
+    assert "macOS packaged runtime smoke (arm64)" in macos_job
+    assert "matrix:" not in macos_job
+    assert "macos-15-intel" not in macos_job
     assert "actions/setup-node@v4" in macos_job
     assert 'node-version: "24.18.0"' in macos_job
     assert "cache-dependency-path: src/webapp/package-lock.json" in macos_job
@@ -251,7 +250,8 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert "cached signature" in macos_job.lower()
     assert "tamper" in macos_job.lower()
     assert "signature refresh" in macos_job.lower()
-    assert "uname -m" in macos_job
+    assert 'test "$(uname -m)" = arm64' in macos_job
+    assert 'test "$(node -p process.arch)" = arm64' in macos_job
     assert "python -m venv .venv-lock-test" in macos_job
     assert "grep -E '^pytest==[^[:space:]]+$' requirements-ci.txt" in macos_job
     assert "grep -E '^psutil==[^[:space:]]+$' requirements-core.txt" in macos_job

@@ -371,6 +371,17 @@ def test_backend_runtime_executable_and_pyinstaller_separator_are_platform_speci
     assert get_pyinstaller_add_data_separator("darwin") == ":"
 
 
+def test_intel_mac_cannot_build_backend_even_with_a_local_runtime_venv(tmp_path):
+    prefix = tmp_path / ".venv-backend-runtime-gpu"
+    error = validate_packaging_python_environment(
+        tmp_path,
+        executable=prefix / "bin" / "python",
+        prefix=prefix,
+        platform_identity={"sys_platform": "darwin", "machine": "x86_64"},
+    )
+    assert "requires native Apple Silicon (arm64)" in error
+
+
 def test_validate_packaging_environment_requires_clean_runtime_venv(tmp_path):
     dirty_python = tmp_path / "global" / "python.exe"
     clean_python = tmp_path / ".venv-backend-runtime-gpu" / "Scripts" / "python.exe"

@@ -67,7 +67,10 @@ test('package bundles the backend runtime and installer shortcuts for Windows', 
   assert.ok(packageJson.build.files.includes('src/utils/**/*.cjs'));
   assert.equal(packageJson.build.afterPack, './scripts/sign-mac-ad-hoc.cjs');
   assert.deepEqual(packageJson.build.win.target, ['nsis']);
-  assert.deepEqual(packageJson.build.mac.target, ['dmg', 'zip']);
+  assert.deepEqual(packageJson.build.mac.target, [
+    { target: 'dmg', arch: ['arm64'] },
+    { target: 'zip', arch: ['arm64'] },
+  ]);
   assert.equal(packageJson.build.mac.category, 'public.app-category.healthcare-fitness');
   assert.ok(Array.isArray(packageJson.build.extraResources));
   assert.ok(
@@ -111,6 +114,36 @@ test('package bundles the backend runtime and installer shortcuts for Windows', 
     checksum: '374cfc092fd1bd1898472df627549ecc165b0d6ba88e82deba085673aec95336',
   });
   assert.match(packageJson.build.nsis.customNsisBinary.checksum, /^[a-f0-9]{64}$/);
+});
+
+test('macOS build hook rejects Intel and mixed-architecture packages without affecting Windows', () => {
+  assert.equal(packageJson.build.beforePack, './scripts/require-macos-arm64.cjs');
+  const guard = require(packageJson.build.beforePack);
+  const { Arch } = require('electron-builder');
+  const macTarget = { electronPlatformName: 'darwin', arch: Arch.arm64 };
+  const nativeMac = {
+    hostPlatform: 'darwin',
+    hostArch: 'arm64',
+    inspectArchitectures: (binary) => {
+      assert.match(binary.replaceAll('\\', '/'), /build\/backend-runtime\/stage\/VantageBackend\/VantageBackend$/);
+      return 'arm64\n';
+    },
+  };
+  assert.doesNotThrow(() => guard(macTarget, nativeMac));
+  assert.doesNotThrow(() => guard({ electronPlatformName: 'win32', arch: Arch.x64 }));
+  assert.throws(() => guard(macTarget, { ...nativeMac, hostArch: 'x64' }), /native Apple Silicon/);
+  assert.throws(() => guard(macTarget, { ...nativeMac, hostPlatform: 'win32' }), /native Apple Silicon/);
+  for (const arch of [Arch.x64, Arch.universal]) {
+    assert.throws(() => guard({ ...macTarget, arch }, nativeMac), /arm64 target/);
+  }
+  for (const staleArchs of ['x86_64', 'x86_64 arm64']) {
+    assert.throws(() => guard(macTarget, {
+      ...nativeMac, inspectArchitectures: () => staleArchs,
+    }), /VantageBackend must be arm64-only/);
+  }
+  assert.throws(() => guard(macTarget, {
+    ...nativeMac, inspectArchitectures: () => { throw new Error('not Mach-O'); },
+  }), /Cannot verify the staged macOS VantageBackend/);
 });
 
 test('Vantage user PATH registration is reversible and preserves unrelated entries', (t) => {
