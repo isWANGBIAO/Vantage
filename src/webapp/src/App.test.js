@@ -15,7 +15,7 @@ test('header navigation hides native scrollbar controls but remains horizontally
 
 test('App passes the current theme into chart-heavy screens', () => {
   assert.ok(appSource.includes('<ExpenseSheet theme={theme} />'));
-  assert.ok(appSource.includes('<Plots theme={theme} />'));
+  assert.ok(appSource.includes("<Plots theme={theme} isVisible={activeTab === 'plots'} />"));
 });
 
 test('App code-splits and always preloads background tabs after settings load', () => {

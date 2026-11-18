@@ -127,6 +127,9 @@ function Restore-BuildInfo {
 Set-Location $ProjectRoot
 
 try {
+    Invoke-Native -FilePath "python" -ArgumentList @(
+        "-c", "import sys; sys.exit(0) if sys.version_info[:2] == (3, 11) else sys.exit('Vantage requires Python 3.11 on PATH.')"
+    )
     Write-Host "[1/7] Installing frontend dependencies"
     Invoke-Native -FilePath "node" -ArgumentList @(
         "scripts\sync-dependencies.cjs",

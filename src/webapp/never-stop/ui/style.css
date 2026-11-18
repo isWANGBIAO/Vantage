@@ -1,6 +1,6 @@
 :host {
   display: block;
-  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-main, Inter, "Segoe UI", "Microsoft YaHei", "微软雅黑", system-ui, sans-serif);
   color: #263b32;
   background: #f8f9f6;
   font-size: 14px;
@@ -648,7 +648,7 @@ footer .error-link {
   min-height: 180px;
   padding: 25px 29px;
   background: #fdfefb;
-  font-family: Consolas, "Microsoft YaHei", monospace;
+  font-family: var(--font-mono, Consolas, "Microsoft YaHei", "微软雅黑", monospace);
   font-size: 13px;
   outline: none;
 }
@@ -714,7 +714,7 @@ footer .error-link {
   background: #f0f3eb;
   padding: 15px;
   border-radius: 7px;
-  font-family: Consolas, "Microsoft YaHei", monospace;
+  font-family: var(--font-mono, Consolas, "Microsoft YaHei", "微软雅黑", monospace);
   font-size: 12px;
   line-height: 1.8;
 }
@@ -1107,7 +1107,7 @@ footer .error-link {
 }
 .live-entry-meta time {
   color: #718d79;
-  font-family: Consolas, monospace;
+  font-family: var(--font-mono, Consolas, "Microsoft YaHei", "微软雅黑", monospace);
 }
 .live-entry-meta span {
   color: #b9d1ad;
@@ -1117,7 +1117,7 @@ footer .error-link {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   margin: 0;
-  font-family: Consolas, "Microsoft YaHei", monospace;
+  font-family: var(--font-mono, Consolas, "Microsoft YaHei", "微软雅黑", monospace);
   font-size: 11px;
   line-height: 1.75;
   color: #c1d0c4;
@@ -1202,7 +1202,7 @@ footer .error-link {
   line-height: 1.2;
   letter-spacing: 1px;
   font-variant-numeric: tabular-nums;
-  font-family: Consolas, "Segoe UI", monospace;
+  font-family: var(--font-mono, Consolas, "Microsoft YaHei", "微软雅黑", monospace);
   color: #4e6f50;
 }
 @media (max-width: 1080px) {

@@ -4,6 +4,25 @@ import { readFileSync } from 'node:fs';
 
 const settingsSource = readFileSync(new URL('./Settings.jsx', import.meta.url), 'utf8');
 
+test('General settings exposes a saved local Chinese font choice independent of display language', () => {
+  assert.match(settingsSource, /chineseFontFamily: 'microsoft-yahei'/);
+  for (const id of ['microsoft-yahei', 'noto-sans-sc', 'microsoft-jhenghei', 'pingfang-sc']) {
+    assert.ok(settingsSource.includes(`value: '${id}'`), id);
+  }
+  assert.match(settingsSource, /aria-label=\{t\('settings\.general\.chinese_font'\)\}/);
+  assert.match(settingsSource, /aria-describedby="settings-chinese-font-hint"/);
+  assert.match(settingsSource, /value=\{form\.chineseFontFamily\}/);
+  assert.match(settingsSource, /chineseFontFamily: nextState\.settings\.chineseFontFamily \|\| 'microsoft-yahei'/);
+  assert.match(settingsSource, /chineseFontFamily: savedState\.settings\.chineseFontFamily \|\| 'microsoft-yahei'/);
+  assert.ok(settingsSource.includes('`chineseFontFamily=${form.chineseFontFamily}`'));
+  assert.ok(settingsSource.includes('form.chineseFontFamily,'));
+  const dropdown = settingsSource.slice(settingsSource.indexOf('<SettingsRow label={t(\'settings.general.chinese_font\')}'),
+    settingsSource.indexOf('<SettingsRow label={t(\'settings.general.theme\')}'));
+  assert.match(dropdown, /setForm\(\(prev\) => \(\{ \.\.\.prev, chineseFontFamily: event\.target\.value \}\)\)/);
+  assert.doesNotMatch(dropdown, /onSettingsApplied|saveSettingsState|dispatchEvent/);
+  assert.match(settingsSource, /await saveSettingsState\(form\)[\s\S]*?onSettingsApplied\?\.\(savedState\.settings\)/);
+});
+
 test('Settings exposes the six formal settings sections without image generation', () => {
   for (const sectionKey of [
     'settings.section.general',

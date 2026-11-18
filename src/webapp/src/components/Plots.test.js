@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const plotsSource = readFileSync(new URL('./Plots.jsx', import.meta.url), 'utf8');
+const updaterSource = readFileSync(new URL('../utils/plotsAutoUpdate.js', import.meta.url), 'utf8');
 
 test('Plots promotes sleep schedule into the health lead charts', () => {
   assert.ok(plotsSource.includes("leadIds: ['sleep-schedule', 'weight-bodyfat', 'time-allocation']"));
@@ -16,9 +17,10 @@ test('Plots routes visible shell copy through the display language layer', () =>
 });
 
 test('Plots refresh button clears the dashboard cache before reloading data', () => {
-  assert.ok(plotsSource.includes("fetchBackendJson('/api/v1/plots/refresh', {"));
-  assert.ok(plotsSource.includes("method: 'POST'"));
-  assert.ok(plotsSource.includes("retryPolicy: 'mutation'"));
+  assert.ok(plotsSource.includes('updaterRef.current?.refresh()'));
+  assert.ok(updaterSource.includes("fetchJson('/api/v1/plots/refresh', {"));
+  assert.ok(updaterSource.includes("method: 'POST'"));
+  assert.ok(updaterSource.includes("retryPolicy: 'mutation'"));
   assert.ok(!plotsSource.includes("'/api/v1/plots/data${refresh ? '?refresh=1' : ''}'"));
 });
 

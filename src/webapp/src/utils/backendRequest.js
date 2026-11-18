@@ -157,6 +157,9 @@ export async function fetchBackend(input, {
     });
 
     if (!allowHttpError && !response.ok) {
+      // Settle the response transport before retrying. Leaving an unread error
+      // stream open leaks active requests in Electron's app-protocol bridge.
+      try { await response.arrayBuffer(); } catch { /* Preserve the HTTP status. */ }
       throw new BackendRequestError(
         `Backend request failed with status ${response.status}`,
         { url, response },

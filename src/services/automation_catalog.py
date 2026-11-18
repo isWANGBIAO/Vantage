@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal, Mapping
 
-from src.core.user_config import MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES, SLEEP_CHART_MODES
+from src.core.user_config import MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES, SLEEP_CHART_MODES, CHINESE_FONT_FAMILIES
 from src.services.clothing_models import ClothingRecord
 
 
@@ -455,10 +455,13 @@ OPERATIONS: tuple[Operation, ...] = (
     ),
     Operation(
         name="plots.read",
-        description="Read the current dashboard plot data.",
+        description="Read current dashboard plot data, or return unchanged for a matching healthy source revision.",
         method="GET",
         path="/api/v1/plots/data",
-        input_schema=_EMPTY,
+        input_schema=_object_schema({"known_revision": {
+            **_string("Optional revision from the last successful full plot response."),
+            "pattern": "^[0-9a-f]{64}$",
+        }}),
         output_kind="json",
         sensitive=True,
     ),
@@ -835,6 +838,7 @@ OPERATIONS: tuple[Operation, ...] = (
                 maximum=MAX_ACTION_PLAN_CHECK_INTERVAL_MINUTES,
             ),
             "sleep_chart_mode": _string("Sleep-chart display mode; daily observations remain visible.", enum=SLEEP_CHART_MODES),
+            "chinese_font_family": _string("Explicit local Chinese font selection; no font download.", enum=CHINESE_FONT_FAMILIES),
             "clothing_workbook_path": _string("Single clothing workbook path; empty uses the existing personal data root."),
             "body_analysis_enabled": _boolean("Enable local body-analysis startup scanning when configured."),
             "body_analysis_leg_dir": _string("Local leg-photo source directory; empty clears it."),

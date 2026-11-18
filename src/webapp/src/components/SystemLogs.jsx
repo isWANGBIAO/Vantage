@@ -154,7 +154,7 @@ export default function SystemLogs({ isVisible = false }) {
                     maxHeight: 'calc(100vh - 250px)',
                     padding: '1rem',
                     background: 'var(--bg-surface)',
-                    fontFamily: 'Consolas, monospace',
+                    fontFamily: 'var(--font-mono)',
                     fontSize: '0.86rem',
                     overflow: 'auto',
                 }}

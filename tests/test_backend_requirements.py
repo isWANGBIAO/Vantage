@@ -18,8 +18,7 @@ EXPECTED_SHARED_CORE_LINES = {
     "matplotlib==3.11.2",
     "mcp==2.3.0",
     "mss==10.2.0",
-    'numpy==2.2.6; python_version < "3.12"',
-    'numpy==2.5.1; python_version >= "3.12"',
+    "numpy==2.2.6",
     "openai==1.109.1",
     "opencv-contrib-python==4.14.0.94",
     "openpyxl==3.1.5",
@@ -309,14 +308,19 @@ def test_ci_requirements_cover_tests_without_gpu_runtime():
     assert not forbidden, f"requirements-ci.txt includes heavyweight runtime packages: {sorted(forbidden)}"
 
 
-def test_ci_covers_packaging_python_and_current_python_without_incompatible_numpy():
-    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
-    requirements = "\n".join(_read_requirement_lines("requirements-ci.txt"))
-
-    assert 'python-version: ["3.11", "3.13"]' in workflow
-    assert "python-version: ${{ matrix.python-version }}" in workflow
-    assert 'numpy==2.2.6; python_version < "3.12"' in requirements
-    assert 'numpy==2.5.1; python_version >= "3.12"' in requirements
+def test_ci_and_release_use_only_python311_and_one_numpy_pin():
+    ci = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert [line.strip() for line in ci.splitlines() if "python-version:" in line] == [
+        'python-version: "3.11"',
+        'python-version: "3.11"',
+    ]
+    assert [line.strip() for line in release.splitlines() if "python-version:" in line] == [
+        'python-version: "3.11"',
+    ]
+    assert [line for line in _read_requirement_lines("requirements-ci.txt") if line.startswith("numpy==")] == [
+        "numpy==2.2.6",
+    ]
 
 
 def test_development_requirements_pin_compatible_pydantic_pair():
@@ -334,19 +338,14 @@ def test_development_requirements_pin_compatible_pydantic_pair():
     assert len(actual) == len(expected)
 
 
-def test_development_requirements_split_scipy_by_python_version():
-    expected = {
-        'scipy==1.17.1; python_version < "3.12"',
-        'scipy==1.18.1; python_version >= "3.12"',
-    }
+def test_development_requirements_pin_scipy_for_python311():
     actual = [
         line.strip()
         for line in Path("requirements.txt").read_text(encoding="utf-8").splitlines()
         if _normalize_requirement_name(line) == "scipy"
     ]
 
-    assert set(actual) == expected
-    assert len(actual) == len(expected)
+    assert actual == ["scipy==1.17.1"]
 
 
 def test_development_requirements_keep_resolvable_cuda_and_compatibility_pins():
@@ -383,10 +382,7 @@ def test_readme_recommends_environment_python_version():
     readme = Path("README.md").read_text(encoding="utf-8")
 
     assert "python=3.11" in environment
-    assert (
-        "Python 3.11 recommended for local backend packaging; CI also validates "
-        "Python 3.13."
-    ) in readme
+    assert "Python 3.11 is the Vantage backend version for local development, CI, and packaging" in readme
     assert "Python 3.12 recommended." not in readme
 
 

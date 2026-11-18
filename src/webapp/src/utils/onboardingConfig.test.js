@@ -61,6 +61,28 @@ test('sleep chart preference persists and unrelated old-dialog saves do not repl
   }
 });
 
+test('Chinese font preference persists independently of theme and display language', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'vantage-font-'));
+  const runtimePaths = Object.fromEntries(['config', 'history', 'log', 'plot', 'cache', 'runtime', 'migration', 'data'].map(key => [`${key}Dir`, path.join(root, key)]));
+  try {
+    assert.equal(loadSettings(runtimePaths).chinese_font_family, 'microsoft-yahei');
+    for (const font of ['microsoft-yahei', 'noto-sans-sc', 'microsoft-jhenghei', 'pingfang-sc']) {
+      const result = saveSettingsPayload({ runtimePaths, payload: { chineseFontFamily: font } });
+      assert.equal(result.settings.chineseFontFamily, font);
+      saveSettingsPayload({ runtimePaths, payload: { theme: 'light', displayLanguage: 'en-US' } });
+      assert.equal(loadSettings(runtimePaths).chinese_font_family, font);
+    }
+    const target = path.join(runtimePaths.configDir, 'settings.json');
+    const before = readFileSync(target, 'utf8');
+    for (const invalid of ['system', 'Arial', null, false, 0, [], {}]) {
+      assert.throws(() => saveSettingsPayload({ runtimePaths, payload: { chineseFontFamily: invalid } }), /chineseFontFamily/);
+      assert.equal(readFileSync(target, 'utf8'), before);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('sanitizeProviderConfig removes deprecated provider models', () => {
   const removedName = ['gemi', 'ni'].join('');
   const sanitized = sanitizeProviderConfig({
@@ -319,6 +341,7 @@ test('saveSettingsPayload persists general settings and provider config', () => 
     action_plan_auto_generate: false,
     action_plan_check_interval_minutes: 60,
     sleep_chart_mode: 'segments',
+    chinese_font_family: 'microsoft-yahei',
     clothing_workbook_path: '',
     voice_provider_mode: 'custom',
     voice_base_url: 'https://voice.example.invalid/v1',
@@ -695,6 +718,7 @@ test('saveOnboardingCompletion persists settings and provider config', () => {
     action_plan_auto_generate: true,
     action_plan_check_interval_minutes: 60,
     sleep_chart_mode: 'segments',
+    chinese_font_family: 'microsoft-yahei',
     clothing_workbook_path: '',
     voice_provider_mode: 'inherit_ai',
     voice_base_url: '',
@@ -792,6 +816,7 @@ test('saveOnboardingCompletion preserves every formal setting while migrating fu
     action_plan_auto_generate: false,
     action_plan_check_interval_minutes: 60,
     sleep_chart_mode: 'segments',
+    chinese_font_family: 'microsoft-yahei',
     clothing_workbook_path: '',
     voice_provider_mode: 'custom',
     voice_base_url: 'https://voice.example.invalid/v1',

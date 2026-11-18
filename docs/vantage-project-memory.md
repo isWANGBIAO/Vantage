@@ -12,6 +12,7 @@ Vantage 是公开仓库。不要将用户的私有提示词、聊天内容、照
 
 ## 架构与运行边界
 
+- Windows 和 macOS 的 Vantage 主后端统一以 Python 3.11 开发、测试和打包；CI 不再按 Python 版本重复测试。macOS 只支持 Apple Silicon（arm64），CI、启动器和 DMG/ZIP 打包均不再支持 Intel 或 Rosetta。启动器在同步专用环境前核对版本及架构；旧的项目运行环境按现有同步流程重建，不更改系统 Python 或可选模型环境。
 - 桌面端是 Electron + React；本地 FastAPI 后端承载产品 API 和业务规则。开发默认后端地址为 127.0.0.1:8000。
 - 自动化目录位于 src/services/automation_catalog.py；稳定操作名、描述、参数 JSON Schema、输出类型和可用性在这里定义。前端仍使用现有 API/Electron 能力，CLI 与 MCP 复用同一目录和 src/services/vantage_client.py，不应复制业务规则。
 - HTTP 服务和既有配置服务是设置与业务数据的权威入口。src/core/user_config.py 负责配置验证/脱敏和 JSON 持久化；src/core/config.py 根据应用模式与环境变量解析用户数据、配置、历史、日志、缓存等目录。不要假定或硬编码某台机器上的绝对路径。
@@ -66,6 +67,10 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 默认行动计划输入使用自适应前缀布局，不再按固定“最近一天/七天”判定稳定性。Markdown、Time 单日与财务单条记录按实际指纹变化保留稳定区/易变区；修改和新增进入尾部，至少三次独立观测且 24 小时未修改后才允许批量归档，归档批次至少间隔 24 小时。状态保存在已配置 history/cache-layout 下的私有 JSON，仅有指纹、排列、计数和时间，不存提示词正文。动态统计、当前时间、源顺序映射放尾部；源数据完整、最新、无旧值补丁。超预算必须报错，不得静默省略历史行。第二轮原样继承第一轮全部消息和完整回答。首次新布局需要预热，实际命中率以 provider 返回的 hit/miss tokens 为准，不承诺固定百分比。实现与验证见 docs/adaptive-prompt-cache.md；财务独立生成入口暂保留原显式格式。
 
 ## 用户可见操作映射
+
+设置→通用→中文字体通过同一settings.json的`chinese_font_family`保存，默认`microsoft-yahei`，可选`noto-sans-sc`、`microsoft-jhenghei`、`pingfang-sc`。字体选择独立于显示语言；成功保存后统一更新正文、标题、控件、代码/日志、Never Stop Shadow DOM及ECharts Canvas/HTML提示框，重开后保留。只使用本机字体，不下载或打包字体；所选字体缺失时明确后备到微软雅黑、苹方及系统字体。正常英文/数字保留Inter、Segoe UI或Consolas优先级。
+
+图表页可见时每30秒自动核对来源，切回图表页或恢复窗口焦点时立即核对；隐藏页面暂停请求，返回时补查。后端对Time.xlsx和Balance Sheet.xlsx全部内容计算版本，不只看最近记录，也覆盖文件替换、删除、重建和跨日财务口径。`plots.read`可传上次成功的`known_revision`；数据未变化返回`unchanged`，不重新计算或重绘。新数据完整读取后更新，保留显示模式和缩放；并发请求合并，变化中的工作簿不发布为完整缓存。暂时读取失败时保留原有对应图表、明确提示并重试；确定性无数据则清空相应旧图，不用过期数据冒充新结果。只在本机读取，不修改原表，也不触发AI分析。
 
 “衣服尺码”页只使用一个现有Excel、一个Sheet1作为业务数据源；默认在既有个人数据根寻找衣服尺寸工作簿，也可通过共享settings.json的`clothing_workbook_path`指定。每次先复制稳定临时快照，保存要求版本指纹一致且Excel未占用；有冲突保留草稿，禁止自动重试覆盖。原A:J历史记录不重解释或重写，K:S保存试穿记录，额外口径元数据存同表S列注释；复杂Excel结构拒绝回写，避免静默丢失。新尺寸追加，已有行仅更新试穿反馈。
 
@@ -144,6 +149,8 @@ CLI/MCP 对 settings.update、settings.display_language.update 和 onboarding.co
 | 读取首次运行引导状态 | onboarding.state.read | vantage onboarding state read |
 | 选择旧数据根目录（仅发现，不可调用；转可见 UI：首次运行引导 → 迁移数据 → 选择文件夹） | onboarding.legacy_root.pick | vantage onboarding legacy-root pick |
 | 完成首次运行引导 | onboarding.complete | vantage onboarding complete |
+
+Windows对工作簿直接读取返回PermissionError时，图表版本检查使用原生文件复制创建短期只读快照后计算摘要；原文件前后身份仍须一致，快照成功或失败都会清理。不改变文件权限，不要求关闭Excel，不把临时副本当作新的业务数据源。
 
 ## 代码与测试定位
 

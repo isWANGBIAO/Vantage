@@ -23,7 +23,8 @@
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 20px rgba(108, 92, 231, 0.3);
 
-  --font-main: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-main: Inter, "Segoe UI", "Microsoft YaHei", "微软雅黑", "PingFang SC", system-ui, -apple-system, sans-serif;
+  --font-mono: Consolas, "Microsoft YaHei", "微软雅黑", "PingFang SC", ui-monospace, monospace;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 20px;
@@ -76,6 +77,10 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+button, input, select, textarea {
+  font-family: inherit;
 }
 
 /* Utilities */
@@ -200,7 +205,7 @@ button:disabled {
   background: rgba(255, 255, 255, 0.1);
   padding: 0.2rem 0.4rem;
   border-radius: 4px;
-  font-family: 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 0.9em;
   color: #ff9f43;
 }

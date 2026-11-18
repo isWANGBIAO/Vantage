@@ -34,11 +34,13 @@ def test_refresh_invalidates_old_inflight_cache_writer(monkeypatch):
             try:
                 assert await asyncio.to_thread(started.wait, 5)
                 assert (await client.post("/api/v1/plots/refresh")).status_code == 200
-                assert (await client.get("/api/v1/plots/data")).json() == fresh
+                result = (await client.get("/api/v1/plots/data")).json()
+                assert result['charts'] == fresh['charts']
+                assert result['source_revision']
             finally:
                 release.set()
-            assert (await pending).json() == old
-            assert (await client.get("/api/v1/plots/data")).json() == fresh
+            assert (await pending).status_code == 503
+            assert (await client.get("/api/v1/plots/data")).json() == result
             assert len(calls) == 2
 
     try:

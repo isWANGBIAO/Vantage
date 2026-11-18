@@ -315,7 +315,7 @@
 }
 
 .commit-hash {
-  font-family: monospace;
+  font-family: var(--font-mono);
   background: rgba(155, 89, 182, 0.1);
   color: #9b59b6;
   padding: 2px 6px;

@@ -7,6 +7,27 @@ function nativePlatform(requestConfiguration) {
   return createPlatformAdapter({ descriptor: { kind: 'electron' }, requestConfiguration });
 }
 
+test('Chinese font choice uses the canonical JSON field and survives unrelated saves', async () => {
+  let settings = {};
+  const calls = [];
+  const platform = nativePlatform(async (method, _path, payload) => {
+    if (method === 'PUT') {
+      calls.push(payload);
+      settings = { ...settings, ...payload };
+    }
+    return { settings };
+  });
+  assert.equal((await loadSettingsState(platform)).settings.chineseFontFamily, 'microsoft-yahei');
+  for (const font of ['microsoft-yahei', 'noto-sans-sc', 'microsoft-jhenghei', 'pingfang-sc']) {
+    assert.equal((await saveSettingsState({ chineseFontFamily: font }, platform)).settings.chineseFontFamily, font);
+    assert.deepEqual(calls.at(-1), { chinese_font_family: font });
+  }
+  await saveSettingsState({ theme: 'light', displayLanguage: 'en-US' }, platform);
+  assert.equal((await loadSettingsState(platform)).settings.chineseFontFamily, 'pingfang-sc');
+  settings.chinese_font_family = 'invalid';
+  assert.equal((await loadSettingsState(platform)).settings.chineseFontFamily, 'microsoft-yahei');
+});
+
 test('settings adapter translates canonical payloads for every UI without owning persistence', async () => {
   let saved;
   const platform = nativePlatform(async (method, path, payload) => {

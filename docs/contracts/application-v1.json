@@ -1837,6 +1837,17 @@
               "title": "Sleep Chart Mode",
               "type": "string"
             },
+            "chinese_font_family": {
+              "default": "microsoft-yahei",
+              "enum": [
+                "microsoft-yahei",
+                "noto-sans-sc",
+                "microsoft-jhenghei",
+                "pingfang-sc"
+              ],
+              "title": "Chinese Font Family",
+              "type": "string"
+            },
             "clothing_workbook_path": {
               "default": "",
               "title": "Clothing Workbook Path",
@@ -3003,6 +3014,16 @@
             "rolling"
           ]
         },
+        "chinese_font_family": {
+          "type": "string",
+          "description": "Explicit local Chinese font selection; no font download.",
+          "enum": [
+            "microsoft-yahei",
+            "noto-sans-sc",
+            "microsoft-jhenghei",
+            "pingfang-sc"
+          ]
+        },
         "clothing_workbook_path": {
           "type": "string",
           "description": "Single clothing workbook path; empty uses the existing personal data root."
@@ -4009,6 +4030,17 @@
         "confirmed",
         "expected_revision"
       ]
+    },
+    "PlotsReadRequest": {
+      "type": "object",
+      "properties": {
+        "known_revision": {
+          "type": "string",
+          "description": "Optional revision from the last successful full plot response.",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

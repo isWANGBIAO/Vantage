@@ -138,6 +138,7 @@ class SettingsValues(ExtensibleModel):
     action_plan_auto_generate: bool
     action_plan_check_interval_minutes: int = Field(ge=0, le=35791)
     sleep_chart_mode: Literal["total", "segments", "monthly", "rolling"] = "segments"
+    chinese_font_family: Literal["microsoft-yahei", "noto-sans-sc", "microsoft-jhenghei", "pingfang-sc"] = "microsoft-yahei"
     clothing_workbook_path: str = ""
     body_analysis_enabled: bool
     body_analysis_leg_dir: str

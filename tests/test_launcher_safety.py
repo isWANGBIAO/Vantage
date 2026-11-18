@@ -416,6 +416,19 @@ def test_windows_launchers_strip_trailing_separator_from_project_root_arguments(
         assert '--project-root "%PROJECT_ROOT%"' not in launcher
 
 
+def test_windows_launchers_check_python311_before_cleanup_or_build():
+    for path, first_step in (
+        ("RUN.bat", "Cleaning residual source processes"),
+        ("RUN_DEV.bat", "Cleaning residual processes"),
+        ("scripts/build-release-installer.ps1", "Installing frontend dependencies"),
+    ):
+        source = Path(path).read_text(encoding="utf-8")
+        _assert_fragments_in_order(
+            source,
+            ("sys.version_info[:2]", "(3, 11)", "Vantage requires Python 3.11", first_step),
+        )
+
+
 def test_macos_development_server_cannot_override_the_fixed_runtime_python():
     run_dev_sh = Path("RUN_DEV.sh").read_text(encoding="utf-8")
 

@@ -280,7 +280,7 @@ export default function Dashboard({ isVisible = false }) {
             style={{
               fontSize: '1.6rem',
               fontWeight: 'bold',
-              fontFamily: 'monospace',
+              fontFamily: 'var(--font-mono)',
               display: 'flex',
               alignItems: 'center',
               gap: '0.8rem',

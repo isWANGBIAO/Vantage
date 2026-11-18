@@ -44,14 +44,14 @@ class PlotRefreshEndpointTests(unittest.TestCase):
     def test_plot_dashboard_data_reuses_cache_for_unchanged_sources(self):
         calls = []
 
-        async def fake_to_thread(func, *args, **kwargs):
-            calls.append(func)
+        def build():
+            calls.append(True)
             return {"charts": [], "count": len(calls)}
 
         with patch.object(_backend_plots, "_get_plot_dashboard_cache_key", return_value=(("Time.xlsx", 1, 1),)), patch.object(
-            _backend_plots.asyncio,
-            "to_thread",
-            side_effect=fake_to_thread,
+            plot_dashboard,
+            "build_plot_dashboard_data",
+            side_effect=build,
         ):
             first = asyncio.run(_backend_plots.get_plot_dashboard_data())
             second = asyncio.run(_backend_plots.get_plot_dashboard_data())
@@ -63,18 +63,18 @@ class PlotRefreshEndpointTests(unittest.TestCase):
     def test_plot_dashboard_data_rebuilds_when_source_signature_changes(self):
         calls = []
 
-        async def fake_to_thread(func, *args, **kwargs):
-            calls.append(func)
+        def build():
+            calls.append(True)
             return {"charts": [], "count": len(calls)}
 
         with patch.object(
             _backend_plots,
             "_get_plot_dashboard_cache_key",
-            side_effect=[(("Time.xlsx", 1, 1),), (("Time.xlsx", 2, 1),)],
+            side_effect=[(("Time.xlsx", 1, 1),)] * 2 + [(("Time.xlsx", 2, 1),)] * 2,
         ), patch.object(
-            _backend_plots.asyncio,
-            "to_thread",
-            side_effect=fake_to_thread,
+            plot_dashboard,
+            "build_plot_dashboard_data",
+            side_effect=build,
         ):
             first = asyncio.run(_backend_plots.get_plot_dashboard_data())
             second = asyncio.run(_backend_plots.get_plot_dashboard_data())
@@ -95,7 +95,9 @@ class PlotRefreshEndpointTests(unittest.TestCase):
             plot_dashboard.plot_module,
             "load_balance_sheet",
             side_effect=FileNotFoundError("Excel file not found: /Users/example/OneDrive/Balance Sheet.xlsx"),
-        ), patch.object(_backend_plots.asyncio, "to_thread", side_effect=fake_to_thread):
+        ), patch.object(_backend_plots, "_get_plot_dashboard_cache_key", return_value=('missing',)), patch.object(
+            _backend_plots.asyncio, "to_thread", side_effect=fake_to_thread,
+        ):
             response = asyncio.run(_backend_plots.get_plot_dashboard_data())
 
         self.assertIsInstance(response, dict)
