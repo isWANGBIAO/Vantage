@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -11,9 +12,9 @@ ENVIRONMENT_REQUIREMENT_FILES = (
 EXPECTED_SHARED_CORE_LINES = {
     "APScheduler==3.11.3",
     "SciencePlots==2.2.2",
-    "chinese-calendar==1.11.0",
+    "chinese-calendar==1.12.1",
     "cv2-enumerate-cameras==1.4.0",
-    "fastapi==0.143.2",
+    "fastapi==0.162.5",
     "matplotlib==3.11.2",
     "mcp==2.3.0",
     "mss==10.2.0",
@@ -26,10 +27,10 @@ EXPECTED_SHARED_CORE_LINES = {
     "piexif==1.1.3",
     "pillow==10.4.0",
     "psutil==6.1.1",
-    "pydantic==2.14.1",
-    "pydantic_core==2.50.1",
+    "pydantic==2.14.3",
+    "pydantic_core==2.50.4",
     "python-dotenv==1.2.4",
-    "python-multipart==0.0.32",
+    "python-multipart==0.0.33",
     "requests==2.34.2",
     "tqdm==4.70.1",
     "uvicorn==0.54.0",
@@ -320,8 +321,8 @@ def test_ci_covers_packaging_python_and_current_python_without_incompatible_nump
 
 def test_development_requirements_pin_compatible_pydantic_pair():
     expected = {
-        "pydantic==2.14.1",
-        "pydantic_core==2.50.1",
+        "pydantic==2.14.3",
+        "pydantic_core==2.50.4",
     }
     actual = [
         line.strip()
@@ -352,6 +353,17 @@ def test_development_requirements_keep_resolvable_cuda_and_compatibility_pins():
     content = Path("requirements.txt").read_text(encoding="utf-8").splitlines()
 
     assert "--extra-index-url https://download.pytorch.org/whl/cu130" in content
+    torch_lines = [
+        line.strip()
+        for line in content
+        if _normalize_requirement_name(line) == "torch"
+    ]
+    assert len(torch_lines) == 1
+    assert re.fullmatch(
+        r'torch==\d+\.\d+\.\d+\+cu130; sys_platform == "win32"',
+        torch_lines[0],
+    ), "Keep the explicit Windows CUDA build rather than allowing a CPU fallback"
+
     expected = {
         "ipykernel": {"ipykernel==6.31.0"},
         "mpmath": {"mpmath==1.4.1"},

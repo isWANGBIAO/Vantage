@@ -114,7 +114,8 @@ sympy==1.14.0
 terminado==0.18.1
 threadpoolctl==3.8.0
 tinycss2==1.5.1
-torch==2.15.0; sys_platform == "win32"
+# Keep the explicit CUDA wheel; a matching +cu130 build is required for upgrades.
+torch==2.14.1+cu130; sys_platform == "win32"
 tornado==6.6.1
 traitlets==5.16.1
 typing_extensions==4.16.0
