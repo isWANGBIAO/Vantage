@@ -443,23 +443,16 @@ def _run_checked(
     )
 
 
-def backend_install_policy(
+def backend_install_environment(
     platform_identity: Mapping[str, object],
     environment: Mapping[str, str],
-) -> tuple[list[str], dict[str, str] | None]:
-    """Keep Intel macOS crypto current without a colliding dynamic OpenSSL.
-
-    Cryptography 49+ no longer supplies Intel Mac wheels. Its documented static
-    source build uses the existing Xcode/Rust/OpenSSL toolchain. Do not silently
-    downgrade or reuse a cached wheel previously built with dynamic linkage.
-    """
+) -> dict[str, str] | None:
+    """Keep the native Mac runtime isolated from dynamic OpenSSL conflicts."""
     if platform_identity.get("sys_platform") != "darwin":
-        return [], None
-    env = dict(environment)
-    env["OPENSSL_STATIC"] = "1"
-    machine = str(platform_identity.get("machine", "")).lower()
-    flags = ["--no-binary=cryptography", "--no-cache-dir"] if machine in {"x86_64", "amd64", "i386"} else []
-    return flags, env
+        return None
+    if platform_identity.get("machine") != "arm64":
+        raise ValueError("Vantage on macOS requires native Apple Silicon (arm64) Python.")
+    return {**environment, "OPENSSL_STATIC": "1"}
 
 
 def _parse_last_json_line(output: str) -> dict[str, object]:
@@ -705,6 +698,7 @@ def _synchronize_backend_runtime_environment_locked(
     expected_platform_identity = dict(
         creator_platform_identity or current_platform_identity()
     )
+    install_env = backend_install_environment(expected_platform_identity, os.environ)
     requirements_sha256 = compute_requirements_sha256(
         resolved_core,
         resolved_requirements,
@@ -773,14 +767,12 @@ def _synchronize_backend_runtime_environment_locked(
             run_command,
             path_prefixes=subprocess_path_prefixes,
         )
-        install_flags, install_env = backend_install_policy(expected_platform_identity, os.environ)
         _run_checked(
             [
                 str(target_python),
                 "-m",
                 "pip",
                 "install",
-                *install_flags,
                 "-r",
                 str(resolved_requirements),
             ],
@@ -901,6 +893,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
+    if sys.version_info[:2] != (3, 11):
+        print("Vantage backend environment synchronization requires Python 3.11.", file=sys.stderr)
+        return 1
     try:
         outcome = synchronize_backend_runtime_environment(
             project_root=args.project_root,

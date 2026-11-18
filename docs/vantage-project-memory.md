@@ -12,6 +12,7 @@ Vantage 是公开仓库。不要将用户的私有提示词、聊天内容、照
 
 ## 架构与运行边界
 
+- Windows 和 macOS 的 Vantage 主后端统一以 Python 3.11 开发、测试和打包；CI 不再按 Python 版本重复测试。macOS 只支持 Apple Silicon（arm64），CI、启动器和 DMG/ZIP 打包均不再支持 Intel 或 Rosetta。启动器在同步专用环境前核对版本及架构；旧的项目运行环境按现有同步流程重建，不更改系统 Python 或可选模型环境。
 - 桌面端是 Electron + React；本地 FastAPI 后端承载产品 API 和业务规则。开发默认后端地址为 127.0.0.1:8000。
 - 自动化目录位于 src/services/automation_catalog.py；稳定操作名、描述、参数 JSON Schema、输出类型和可用性在这里定义。前端仍使用现有 API/Electron 能力，CLI 与 MCP 复用同一目录和 src/services/vantage_client.py，不应复制业务规则。
 - HTTP 服务和既有配置服务是设置与业务数据的权威入口。src/core/user_config.py 负责配置验证/脱敏和 JSON 持久化；src/core/config.py 根据应用模式与环境变量解析用户数据、配置、历史、日志、缓存等目录。不要假定或硬编码某台机器上的绝对路径。

@@ -5,6 +5,32 @@ from pathlib import Path
 import pytest
 
 
+NODE_24_ACTION_PIN = (
+    r"actions/{action}@[a-f0-9]{{40}} # v(?:[7-9]|[1-9][0-9]+)\.\d+\.\d+"
+)
+
+
+def test_workflows_use_commit_pinned_node24_setup_actions():
+    setup_actions = {"checkout", "setup-node", "setup-python"}
+    used_actions = set()
+
+    for path in Path(".github/workflows").glob("*.yml"):
+        workflow = path.read_text(encoding="utf-8")
+        for spec, action in re.findall(
+            r"^[ \t]*(?:-[ \t]+)?uses:[ \t]+(actions/([^@\s]+)@[^\n]+)$",
+            workflow,
+            flags=re.MULTILINE,
+        ):
+            if action not in setup_actions:
+                continue
+            used_actions.add(action)
+            assert re.fullmatch(NODE_24_ACTION_PIN.format(action=action), spec), (
+                f"{path} must pin {action} to a Node.js 24-capable release commit"
+            )
+
+    assert used_actions == setup_actions
+
+
 @pytest.mark.parametrize("workflow_name", ["ci.yml", "codeql.yml"])
 def test_verification_workflows_allow_manual_runs_without_bypass_inputs(workflow_name):
     workflow = Path(".github/workflows", workflow_name).read_text(encoding="utf-8")
@@ -197,27 +223,27 @@ def test_python_workflow_caches_include_shared_core_and_environment_overlay():
         )
 
 
-def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
+def test_macos_runtime_smoke_covers_only_arm64_yunet_dependencies():
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert "  macos-runtime-smoke:" in workflow
     macos_job = workflow[workflow.index("  macos-runtime-smoke:") :]
 
-    for runner, architecture in (("macos-15", "arm64"), ("macos-15-intel", "x64")):
-        assert runner in macos_job
-        assert architecture in macos_job
-
-    assert "macos-14" not in macos_job
-    assert "actions/setup-node@v4" in macos_job
+    assert "runs-on: macos-15\n" in macos_job
+    assert "macOS packaged runtime smoke (arm64)" in macos_job
+    assert "matrix:" not in macos_job
+    assert "macos-15-intel" not in macos_job
+    assert re.search(NODE_24_ACTION_PIN.format(action="setup-node"), macos_job)
     assert 'node-version: "24.18.0"' in macos_job
     assert "cache-dependency-path: src/webapp/package-lock.json" in macos_job
-    assert 'python-version: "3.13"' in macos_job
-    assert "actions/setup-python@v5" in macos_job
-    assert (
-        "- uses: actions/checkout@v4\n"
-        "        with:\n"
-        "          lfs: false"
-    ) in macos_job
+    assert 'python-version: "3.11"' in macos_job
+    assert re.search(NODE_24_ACTION_PIN.format(action="setup-python"), macos_job)
+    assert re.search(
+        r"- uses: "
+        + NODE_24_ACTION_PIN.format(action="checkout")
+        + "\n        with:\n          lfs: false",
+        macos_job,
+    )
     assert (
         "cache-dependency-path: |\n"
         "            requirements-core.txt\n"
@@ -234,7 +260,7 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert "cv2.FaceDetectorYN_create" in macos_job
     assert "src/models/face_detection_yunet_2023mar.onnx" in macos_job
     assert "detector.detect" in macos_job
-    assert "bash -n RUN.sh RUN_DEV.sh" in macos_job
+    assert "bash -n RUN.sh && bash -n RUN_DEV.sh" in macos_job
     assert "tests/test_backend_runtime_lock.py" in macos_job
     assert "tests/test_sign_macos_backend_runtime.py" in macos_job
     assert "tests/test_sign_macos_artifacts.py" in macos_job
@@ -251,7 +277,8 @@ def test_macos_runtime_smoke_covers_arm64_and_intel_yunet_dependencies():
     assert "cached signature" in macos_job.lower()
     assert "tamper" in macos_job.lower()
     assert "signature refresh" in macos_job.lower()
-    assert "uname -m" in macos_job
+    assert 'test "$(uname -m)" = arm64' in macos_job
+    assert 'test "$(node -p process.arch)" = arm64' in macos_job
     assert "python -m venv .venv-lock-test" in macos_job
     assert "grep -E '^pytest==[^[:space:]]+$' requirements-ci.txt" in macos_job
     assert "grep -E '^psutil==[^[:space:]]+$' requirements-core.txt" in macos_job
