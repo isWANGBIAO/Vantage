@@ -994,23 +994,35 @@ async function exerciseUi() {
     await closeWindow();
     await createWindow();
     await waitFor('Chinese workspace reopened', () => document.querySelectorAll('.app-nav a').length === 9);
-    await click('.settings-entry-button');
+    // Hydrate the settings form before editing; About diagnostics can finish
+    // while the canonical settings read is still replacing the draft values.
+    await openSettings();
     await click('.settings-sidebar button', '关于');
     await waitFor('diagnostics storage failure is visible and cannot open', () => document.querySelector('.settings-diagnostics')?.textContent.includes('不可用') && document.querySelector('.settings-diagnostics button')?.disabled === true);
     await checkErrors();
     console.log('PASS Chinese privacy copy and unavailable diagnostics without blocking UI');
     await click('.settings-sidebar button', '通用');
+    const chineseFontSaves = () => calls.filter(call => call.method === 'PUT' && call.pathname === '/api/v1/settings');
     for (const [id, family] of [['noto-sans-sc', 'Noto Sans SC'], ['microsoft-yahei', 'Microsoft YaHei']]) {
+        await waitFor(`settings ready to edit font ${id}`, () =>
+            document.querySelector('.settings-save-button')?.disabled === false
+            && Boolean(document.querySelector('.settings-chinese-font-select')));
+        const savedCount = chineseFontSaves().length;
+        const previousStack = await evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--font-main'));
         await evaluate(id => {
             const select = document.querySelector('.settings-chinese-font-select');
             select.value = id; select.dispatchEvent(new Event('change', { bubbles: true }));
         }, id);
+        assert.equal(await evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--font-main')),
+            previousStack, `Draft font ${id} must not affect the page before saving`);
         await click('.settings-save-button');
-        await waitFor('font choice applies only after shared settings save', family => {
+        await waitForFixture(`font ${id} sent in the shared settings save`, () => chineseFontSaves().length > savedCount);
+        assert.equal(chineseFontSaves()[savedCount].payload.chinese_font_family, id);
+        assert.equal(settings.chinese_font_family, id);
+        await waitFor(`saved font ${id} applies to the page`, family => {
             const value = getComputedStyle(document.documentElement).getPropertyValue('--font-main');
             return value.includes(family) && (family !== 'Microsoft YaHei' || !value.includes('Noto Sans SC'));
         }, family);
-        assert.equal(settings.chinese_font_family, id);
     }
     await closeWindow(); await createWindow();
     await waitFor('saved Chinese font survives new window', () =>
