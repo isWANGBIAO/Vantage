@@ -12,7 +12,7 @@
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="macOS Apple Silicon only" src="https://img.shields.io/badge/macOS-Apple%20Silicon-000000?style=flat-square&amp;logo=apple&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Python 3.11" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Node.js 24.19.0" src="https://img.shields.io/badge/Node.js-24.19.0-5FA04E?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/requirements-core.txt"><img alt="FastAPI 0.162.5" src="https://img.shields.io/badge/FastAPI-0.162.5-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/requirements-core.txt"><img alt="FastAPI 0.163.0" src="https://img.shields.io/badge/FastAPI-0.163.0-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="React 19.3.1" src="https://img.shields.io/badge/React-19.3.1-61DAFB?style=flat-square&amp;logo=react&amp;logoColor=black"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="Electron 42.11.18" src="https://img.shields.io/badge/Electron-42.11.18-47848F?style=flat-square&amp;logo=electron&amp;logoColor=white"></a>
 </p>

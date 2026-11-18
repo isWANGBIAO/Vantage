@@ -14,7 +14,7 @@ EXPECTED_SHARED_CORE_LINES = {
     "SciencePlots==2.2.2",
     "chinese-calendar==1.12.1",
     "cv2-enumerate-cameras==1.4.0",
-    "fastapi==0.162.5",
+    "fastapi==0.163.0",
     "matplotlib==3.11.2",
     "mcp==2.3.0",
     "mss==10.2.0",
