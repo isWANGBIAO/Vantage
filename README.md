@@ -9,10 +9,10 @@
 </p>
 <p align="center">
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Windows supported" src="https://img.shields.io/badge/Windows-supported-0078D4?style=flat-square&amp;logo=windows&amp;logoColor=white"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage#features"><img alt="macOS supported" src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&amp;logo=apple&amp;logoColor=white"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="macOS Apple Silicon only" src="https://img.shields.io/badge/macOS-Apple%20Silicon-000000?style=flat-square&amp;logo=apple&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Python 3.11" src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage#requirements"><img alt="Node.js 24.19.0" src="https://img.shields.io/badge/Node.js-24.19.0-5FA04E?style=flat-square&amp;logo=nodedotjs&amp;logoColor=white"></a>
-  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/requirements-core.txt"><img alt="FastAPI 0.143.2" src="https://img.shields.io/badge/FastAPI-0.143.2-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
+  <a href="https://github.com/isWANGBIAO/Vantage/blob/main/requirements-core.txt"><img alt="FastAPI 0.162.5" src="https://img.shields.io/badge/FastAPI-0.162.5-009688?style=flat-square&amp;logo=fastapi&amp;logoColor=white"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="React 19.3.1" src="https://img.shields.io/badge/React-19.3.1-61DAFB?style=flat-square&amp;logo=react&amp;logoColor=black"></a>
   <a href="https://github.com/isWANGBIAO/Vantage/blob/main/src/webapp/package.json"><img alt="Electron 42.11.18" src="https://img.shields.io/badge/Electron-42.11.18-47848F?style=flat-square&amp;logo=electron&amp;logoColor=white"></a>
 </p>
@@ -48,7 +48,7 @@ the platform user-data directory, not in this repository.
 
 ## Features
 
-- Windows and macOS desktop packaging through Electron.
+- Windows and Apple Silicon macOS desktop packaging through Electron.
 - FastAPI backend for data loading, plotting, chat, action plans, usage logs,
   face-analysis reports, and local media endpoints.
 - React UI for dashboard, action plan, chat, plots, usage, settings, expenses,
@@ -69,10 +69,11 @@ the platform user-data directory, not in this repository.
 
 ## Requirements
 
-- Python 3.11 recommended for local backend packaging; CI also validates Python 3.13.
+- Python 3.11 is the Vantage backend version for local development, CI, and packaging on Windows and macOS. On Windows, `python` on PATH must point to Python 3.11.
 - Node.js 24.19.0 recommended for the frontend.
-- Windows is the primary packaging target. macOS scripts are included for source
-  and packaged workflows.
+- Windows is the primary packaging target. macOS development and packaging require
+  Apple Silicon (arm64) and native arm64 Python and Node.js. Intel and Rosetta
+  toolchains are not supported.
 
 ## Development
 
@@ -135,7 +136,7 @@ The `Release` workflow builds the Windows installer, generates `SHA256SUMS.txt`,
 and publishes the assets to the matching GitHub Release. The tag must match the
 frontend package version, for example `v1.0.107` for package version `1.0.107`.
 
-macOS full build, install, and launch:
+Apple Silicon macOS full build, install, and launch:
 
 ```bash
 ./RUN.sh

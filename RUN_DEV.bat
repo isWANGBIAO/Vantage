@@ -12,6 +12,11 @@ set "PROJECT_ROOT_ARG=%PROJECT_ROOT:~0,-1%"
 cd /d "%PROJECT_ROOT%"
 set "ELECTRON_RUN_AS_NODE="
 set "BOOTSTRAP_PYTHON=python"
+"%BOOTSTRAP_PYTHON%" -c "import sys; sys.exit(sys.version_info[:2] != (3, 11))" >nul 2>&1
+if errorlevel 1 (
+    echo       Vantage requires Python 3.11 on PATH. Activate its environment and retry.
+    exit /b 1
+)
 set "BACKEND_RUNTIME_VENV=%PROJECT_ROOT%.venv-backend-runtime-gpu"
 set "BACKEND_RUNTIME_PYTHON=%BACKEND_RUNTIME_VENV%\Scripts\python.exe"
 set "BACKEND_RUNTIME_CORE_REQUIREMENTS=%PROJECT_ROOT%requirements-core.txt"
@@ -27,7 +32,10 @@ set "SERVER_LATEST_POINTER=%PROJECT_ROOT%logs\server.latest.log"
 
 echo [0/4] Cleaning residual processes...
 set "CLEANUP_PYTHON=%BOOTSTRAP_PYTHON%"
-if exist "%BACKEND_RUNTIME_PYTHON%" set "CLEANUP_PYTHON=%BACKEND_RUNTIME_PYTHON%"
+if exist "%BACKEND_RUNTIME_PYTHON%" (
+    "%BACKEND_RUNTIME_PYTHON%" -c "import sys; sys.exit(sys.version_info[:2] != (3, 11))" >nul 2>&1
+    if not errorlevel 1 set "CLEANUP_PYTHON=%BACKEND_RUNTIME_PYTHON%"
+)
 "%BOOTSTRAP_PYTHON%" "%BACKEND_RUNTIME_LOCK_RUNNER%" --project-root "%PROJECT_ROOT_ARG%" -- "%CLEANUP_PYTHON%" src\scripts\cleanup_vantage_python_processes.py --include-desktop >nul 2>&1
 echo       Cleanup complete
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 2"

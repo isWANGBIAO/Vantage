@@ -57,6 +57,7 @@
   "build": {
     "appId": "com.vantage.app",
     "productName": "Vantage",
+    "beforePack": "./scripts/require-macos-arm64.cjs",
     "afterPack": "./scripts/sign-mac-ad-hoc.cjs",
     "npmRebuild": false,
     "directories": {
@@ -101,8 +102,8 @@
     },
     "mac": {
       "target": [
-        "dmg",
-        "zip"
+        { "target": "dmg", "arch": ["arm64"] },
+        { "target": "zip", "arch": ["arm64"] }
       ],
       "category": "public.app-category.healthcare-fitness"
     },

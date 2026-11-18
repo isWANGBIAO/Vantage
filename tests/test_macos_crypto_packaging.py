@@ -1,4 +1,4 @@
-"""Prevent frozen Intel macOS runtimes mixing incompatible OpenSSL dylibs."""
+"""Require a native Mac runtime without conflicting dynamic OpenSSL dylibs."""
 
 from types import SimpleNamespace
 
@@ -7,25 +7,20 @@ import pytest
 from src.scripts import sync_backend_runtime_environment as sync
 
 
-def test_intel_mac_builds_current_crypto_statically_without_cached_dynamic_wheels():
-    inherited = {"PATH": "/toolchain", "OPENSSL_STATIC": "0"}
-    flags, env = sync.backend_install_policy(
-        {"sys_platform": "darwin", "machine": "x86_64"}, inherited,
-    )
-    assert flags == ["--no-binary=cryptography", "--no-cache-dir"]
-    assert env == {"PATH": "/toolchain", "OPENSSL_STATIC": "1"}
-    assert inherited["OPENSSL_STATIC"] == "0"
-    assert not any("cryptography==" in flag for flag in flags)
+def test_intel_or_rosetta_python_cannot_prepare_a_mac_runtime():
+    with pytest.raises(ValueError, match="requires native Apple Silicon"):
+        sync.backend_install_environment({"sys_platform": "darwin", "machine": "x86_64"}, {})
 
 
 def test_arm_mac_keeps_official_wheel_while_non_mac_installs_stay_unchanged():
-    flags, env = sync.backend_install_policy(
-        {"sys_platform": "darwin", "machine": "arm64"}, {},
+    inherited = {"OPENSSL_STATIC": "0"}
+    env = sync.backend_install_environment(
+        {"sys_platform": "darwin", "machine": "arm64"}, inherited,
     )
-    assert flags == []
     assert env == {"OPENSSL_STATIC": "1"}
+    assert inherited == {"OPENSSL_STATIC": "0"}
     for platform in ("linux", "win32"):
-        assert sync.backend_install_policy({"sys_platform": platform}, {}) == ([], None)
+        assert sync.backend_install_environment({"sys_platform": platform}, {}) is None
 
 
 @pytest.mark.parametrize("link", [

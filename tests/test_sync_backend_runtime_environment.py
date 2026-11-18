@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.core import backend_environment_state as backend_state
+from src.scripts import sync_backend_runtime_environment as sync_cli
 from src.core.backend_environment_state import (
     BACKEND_ENVIRONMENT_STATE_NAME,
     BACKEND_ENVIRONMENT_STATE_SCHEMA_VERSION,
@@ -43,6 +44,22 @@ CLEAN_CLOSURE = [
     "opencv-contrib-python==4.14.0.94",
     "pip==25.3",
 ]
+
+
+def test_cli_rejects_non_311_before_synchronizing(monkeypatch, capsys):
+    monkeypatch.setattr(sync_cli.sys, "version_info", (3, 13, 5))
+
+    def unexpected_sync(**_kwargs):
+        pytest.fail("Unsupported Python must not synchronize or replace an environment")
+
+    monkeypatch.setattr(sync_cli, "synchronize_backend_runtime_environment", unexpected_sync)
+    assert sync_cli.main([
+        "--project-root", ".", "--venv", ".venv-backend-runtime-gpu",
+        "--core-requirements", "requirements-core.txt",
+        "--requirements", "requirements-backend-runtime-gpu.txt",
+        "--opencv-normalizer", "src/scripts/normalize_opencv_installation.py",
+    ]) == 1
+    assert "requires Python 3.11" in capsys.readouterr().err
 
 
 def _write_requirements(project_root: Path) -> tuple[Path, Path, Path]:
@@ -86,6 +103,27 @@ def _probe_payload(closure: list[str] = CLEAN_CLOSURE) -> dict[str, object]:
         "platform": PLATFORM_IDENTITY,
         "distributions": closure,
     }
+
+
+def test_intel_mac_sync_leaves_existing_environment_untouched(tmp_path, monkeypatch):
+    venv, core, overlay, normalizer = _write_existing_environment(tmp_path)
+    monkeypatch.setattr(sync_cli, "current_platform_identity", lambda: {
+        "sys_platform": "darwin", "system": "Darwin", "machine": "x86_64",
+    })
+    monkeypatch.setattr(
+        sync_cli, "remove_conflicting_packaging_environment_libraries",
+        lambda *_: pytest.fail("Unsupported architecture must not modify an existing venv"),
+    )
+    state = (venv / BACKEND_ENVIRONMENT_STATE_NAME).read_bytes()
+    with pytest.raises(ValueError, match="requires native Apple Silicon"):
+        synchronize_backend_runtime_environment(
+            project_root=tmp_path, venv=venv,
+            core_requirements=core, requirements=overlay, opencv_normalizer=normalizer,
+            force=True,
+            remove_tree=lambda *_: pytest.fail("Unsupported architecture must not delete a venv"),
+            run_command=lambda *_args, **_kwargs: pytest.fail("Unsupported architecture must not launch pip"),
+        )
+    assert (venv / BACKEND_ENVIRONMENT_STATE_NAME).read_bytes() == state
 
 
 def _successful_runner(venv: Path, commands: list[list[str]]):

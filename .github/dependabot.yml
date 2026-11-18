@@ -10,7 +10,7 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
     ignore:
-      # NumPy is pinned separately for Python 3.11 and 3.12+ compatibility.
+      # NumPy upgrades require explicit validation against the Python 3.11 runtime.
       - dependency-name: numpy
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]

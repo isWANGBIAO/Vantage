@@ -260,6 +260,13 @@ def validate_packaging_python_environment(
             f"{expected_venv}. Environment state and closure validation cannot be bypassed."
         )
 
+    resolved_platform_identity = platform_identity or current_platform_identity()
+    if (
+        resolved_platform_identity.get("sys_platform") == "darwin"
+        and resolved_platform_identity.get("machine") != "arm64"
+    ):
+        return "Vantage on macOS requires native Apple Silicon (arm64) Python."
+
     try:
         requirements_sha256 = compute_requirements_sha256(
             Path(project_root).resolve() / "requirements-core.txt",
@@ -271,7 +278,6 @@ def validate_packaging_python_environment(
             else distribution_closure
         )
         resolved_python_identity = python_identity or current_python_identity()
-        resolved_platform_identity = platform_identity or current_platform_identity()
         resolved_environment_integrity = compute_backend_environment_integrity(
             expected_venv,
             platform_name=str(resolved_platform_identity.get("sys_platform") or sys.platform),
