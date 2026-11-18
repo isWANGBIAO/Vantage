@@ -365,12 +365,12 @@ def test_development_requirements_keep_resolvable_cuda_and_compatibility_pins():
 
     expected = {
         "contourpy": {"contourpy==1.3.3"},
-        "ipykernel": {"ipykernel==6.31.0"},
-        "jupyter_client": {"jupyter_client==8.10.0"},
+        "ipykernel": {"ipykernel==6.29.5"},
+        "jupyter_client": {"jupyter_client==7.4.9"},
         "mpmath": {"mpmath==1.3.0"},
         "networkx": {"networkx==3.6.1"},
         "pywin32": {'pywin32==312; sys_platform == "win32"'},
-        "pyzmq": {"pyzmq==27.3.0"},
+        "pyzmq": {"pyzmq==24.0.1"},
         "webcolors": {"webcolors==25.10.0"},
     }
     for package_name, expected_lines in expected.items():
